@@ -21,7 +21,7 @@ measurement half of the agent loop (see the vault design pod
 
 The measurement core is no longer vendored here: it ships as the
 [`@endonny/inksight`](https://www.npmjs.com/package/@endonny/inksight) package
-(source: [chronick/inksight](https://github.com/chronick/inksight)), a regular
+(source: [algonormative/inksight](https://github.com/algonormative/inksight)), a regular
 dependency of this repo. `cli/stats.ts` is a thin shim that parses flags and
 calls the package's `analyzeSvg`, so `npm run stats` keeps working unchanged.
 
@@ -120,8 +120,8 @@ heatmap, the plottability warnings, the full `StatsReport` JSON (copyable — th
 form an agent consumes), and a rendered thumbnail as a multimodal cross-check.
 Everything runs client-side; nothing is uploaded.
 
-It now lives at **<https://chronick.github.io/inksight/>** and is built from the
-[chronick/inksight](https://github.com/chronick/inksight) repo, not this one.
+It now lives at **<https://algonormative.github.io/inksight/>** and is built from the
+[algonormative/inksight](https://github.com/algonormative/inksight) repo, not this one.
 `inksight/index.html` here is a redirect stub that keeps the old
 `/hatch3d/inksight/` URL working. Same `analyzeSvg`, so identical numbers to
 `npm run stats`, same scope limits, same errors. Plot-time estimation and

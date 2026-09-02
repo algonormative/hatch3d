@@ -16,7 +16,7 @@ export default defineConfig({
     rollupOptions: {
       // Two pages: the main app, and a redirect stub at /hatch3d/inksight/
       // keeping the old InkSight URL alive now that the tool ships as
-      // @endonny/inksight and is hosted at chronick.github.io/inksight/.
+      // @endonny/inksight and is hosted at algonormative.github.io/inksight/.
       input: {
         main: entry("./index.html"),
         inksight: entry("./inksight/index.html"),
