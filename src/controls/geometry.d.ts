@@ -1,16 +1,1 @@
-export type Point3 = [number, number, number];
-export type Point2 = [number, number];
-export type CubeAxis = 'x' | 'y' | 'z';
-export type YDirection = 'up' | 'down';
-export const CUBE_VERTICES: Point3[];
-export const CUBE_EDGES: Point2[];
-export const CUBE_AXIS_TIPS: { label: string; pos: Point3 }[];
-export function clamp01(value: number): number;
-export function rotateCubePoint(x: number, y: number, z: number, theta: number, phi: number): Point3;
-export function projectCubePoint(x: number, y: number, z: number, theta: number, phi: number, size?: number): { x: number; y: number; z: number };
-export function cubeEdgeOpacity(avgZ: number): number;
-export function cubeAxisOpacity(z: number): number;
-export function cubeProjectedBasis(theta: number, phi: number): Record<CubeAxis, Point2>;
-export function solveCubePlaneDelta(dx: number, dy: number, axisA: CubeAxis, axisB: CubeAxis, theta: number, phi: number, scale?: number): Point2 | null;
-export function normalizeXY(valueX: number, valueY: number, minX: number, maxX: number, minY: number, maxY: number, yDirection?: YDirection): { x: number; y: number };
-export function denormalizeXY(nx: number, ny: number, minX: number, maxX: number, minY: number, maxY: number, yDirection?: YDirection): { x: number; y: number };
+export * from '../../packages/plot-core/src/control-geometry.js';

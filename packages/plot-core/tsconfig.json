@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2023","lib":["ES2023","DOM"],"module":"ESNext","moduleResolution":"bundler","allowJs":true,"checkJs":false,"declaration":true,"emitDeclarationOnly":true,"outDir":"dist","rootDir":"src","strict":true,"skipLibCheck":true,"noUnusedLocals":true,"noUnusedParameters":true},"include":["src/index.ts","src/planar.ts","src/spatial-api.ts"]}

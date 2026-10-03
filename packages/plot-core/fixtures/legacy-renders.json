@@ -1,0 +1,162 @@
+[
+  {
+    "name": "planar",
+    "entry": "sketches/hatch3d-2d/sketch.ts",
+    "seed": 2,
+    "identity": "8288d5c8f68451b412650306dcf0ea44de7c1acafdb287011c186523910f8bce",
+    "svgSha256": "ae398b55badd8cbb744158245783e435aec2618d7e98e9bccfe25e8d301e80e6",
+    "svgBytes": 65455,
+    "parts": [
+      {
+        "id": "circles-drawing",
+        "pen": "charcoal",
+        "pathCount": 252
+      }
+    ],
+    "stats": {
+      "pathCount": 252,
+      "pointCount": 4284,
+      "lengthMm": 1747.312,
+      "partCount": 1
+    }
+  },
+  {
+    "name": "multiPen",
+    "entry": "sketches/hatch3d-3d/sketch.ts",
+    "seed": 2,
+    "identity": "2870c5c3bdbb8855d304c81c0be869cbd4b2fdf8560da9c7b2e08c92b3541773",
+    "svgSha256": "570ba1f4576b77a83105c0eb69dbfe5a8286b58d74eb186ea953cdfe2fbdc9fb",
+    "svgBytes": 56900,
+    "parts": [
+      {
+        "id": "ringstudy-solids",
+        "pen": "rings",
+        "pathCount": 91
+      },
+      {
+        "id": "papercurve-drawing",
+        "pen": "curve",
+        "pathCount": 9
+      }
+    ],
+    "stats": {
+      "pathCount": 100,
+      "pointCount": 3939,
+      "lengthMm": 2747.611,
+      "partCount": 2
+    }
+  },
+  {
+    "name": "letteredFramed",
+    "entry": "sketches/breach-cathedral/sketch.ts",
+    "seed": 211,
+    "finishing": {
+      "border": {
+        "style": "double",
+        "pen": "carbon",
+        "inset": 12,
+        "contentGap": 0
+      }
+    },
+    "identity": "e78b00f295867636f33c739eb552a3f51c504bc586f455ab1daa4a4e0fb58f73",
+    "svgSha256": "e6849e2311d1b648f346504d29c529970af59a0ca9113d4262ae1ec783578dd0",
+    "svgBytes": 503852,
+    "parts": [
+      {
+        "id": "poster-title",
+        "pen": "carbon",
+        "pathCount": 18
+      },
+      {
+        "id": "poster-caption",
+        "pen": "carbon",
+        "pathCount": 83
+      },
+      {
+        "id": "poster-rules",
+        "pen": "carbon",
+        "pathCount": 3
+      },
+      {
+        "id": "cathedral-carbon",
+        "pen": "carbon",
+        "pathCount": 1163
+      },
+      {
+        "id": "cathedral-ultramarine",
+        "pen": "ultramarine",
+        "pathCount": 1026
+      },
+      {
+        "id": "cathedral-vermilion",
+        "pen": "vermilion",
+        "pathCount": 89
+      },
+      {
+        "id": "cathedral-acid",
+        "pen": "acid",
+        "pathCount": 29
+      },
+      {
+        "id": "cathedral-violet",
+        "pen": "violet",
+        "pathCount": 260
+      },
+      {
+        "id": "finishing-border",
+        "pen": "finishing-border",
+        "pathCount": 2
+      }
+    ],
+    "stats": {
+      "pathCount": 2673,
+      "pointCount": 30353,
+      "lengthMm": 44552.782,
+      "partCount": 9
+    }
+  },
+  {
+    "name": "sharedOcclusion",
+    "entry": "sketches/breach-cathedral/sketch.ts",
+    "seed": 2,
+    "params": {
+      "posterMode": "abstract"
+    },
+    "identity": "ace6d5ed4a7e37e9d5ea8a67c424262391cf0e344c18f6a36eed7fd7d9424ed1",
+    "svgSha256": "7f8363946bc62b3689bc2d62928028af25e25a9c13babf2f125dfb6667ebca72",
+    "svgBytes": 640551,
+    "parts": [
+      {
+        "id": "cathedral-carbon",
+        "pen": "carbon",
+        "pathCount": 1407
+      },
+      {
+        "id": "cathedral-ultramarine",
+        "pen": "ultramarine",
+        "pathCount": 1178
+      },
+      {
+        "id": "cathedral-vermilion",
+        "pen": "vermilion",
+        "pathCount": 104
+      },
+      {
+        "id": "cathedral-acid",
+        "pen": "acid",
+        "pathCount": 32
+      },
+      {
+        "id": "cathedral-violet",
+        "pen": "violet",
+        "pathCount": 275
+      }
+    ],
+    "stats": {
+      "pathCount": 2996,
+      "pointCount": 38672,
+      "lengthMm": 50572.713,
+      "partCount": 5
+    }
+  }
+]

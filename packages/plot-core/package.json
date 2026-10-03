@@ -1,0 +1,47 @@
+{
+  "name": "@hatch3d/plot-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./planar": {
+      "types": "./dist/planar.d.ts",
+      "import": "./dist/planar.js"
+    },
+    "./spatial": {
+      "types": "./dist/spatial.d.ts",
+      "import": "./dist/spatial.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "smoke": "node smoke.mjs",
+    "typecheck:compat": "tsc --project tsconfig.compat.json"
+  },
+  "peerDependencies": {
+    "three": "^0.183.1",
+    "simplex-noise": "^4.0.3",
+    "@types/three": "^0.183.1"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    },
+    "simplex-noise": {
+      "optional": true
+    },
+    "@types/three": {
+      "optional": true
+    }
+  }
+}

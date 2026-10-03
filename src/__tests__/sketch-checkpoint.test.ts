@@ -24,6 +24,7 @@ async function fixture(): Promise<{ root: string; entry: string; output: string 
     await mkdir(join(root, file, '..'), { recursive: true });
     await cp(join(project, file), join(root, file));
   }
+  await cp(join(project, 'packages/plot-core/src'), join(root, 'packages/plot-core/src'), { recursive: true });
   const entry = join(root, 'sketches/study/sketch.ts');
   await mkdir(join(root, 'sketches/study'), { recursive: true });
   await writeFile(entry, `export default {
@@ -36,7 +37,7 @@ async function fixture(): Promise<{ root: string; entry: string; output: string 
   await command(root, 'init', '-q');
   await command(root, 'config', 'user.email', 'fixture@example.invalid');
   await command(root, 'config', 'user.name', 'Fixture');
-  await command(root, 'add', '.gitignore', 'package.json', 'package-lock.json', 'cli', 'src', 'sketches');
+  await command(root, 'add', '.gitignore', 'package.json', 'package-lock.json', 'cli', 'src', 'packages', 'sketches');
   await command(root, 'commit', '-q', '-m', 'fixture');
   return { root, entry, output: join(root, 'artifacts') };
 }

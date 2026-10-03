@@ -55,6 +55,25 @@ describe('local sketch viewer', () => {
     return fetch(new URL(path, server.url), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   }
 
+  it('serves a complete browser module graph from its HTTP routes', async () => {
+    const visited = new Set<string>();
+    const pending = ['/viewer.js'];
+    while (pending.length) {
+      const path = pending.shift()!;
+      if (visited.has(path)) continue;
+      visited.add(path);
+      const response = await fetch(new URL(path, server.url));
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get('content-type'), path).toContain('text/javascript');
+      const source = await response.text();
+      for (const match of source.matchAll(/(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
+        pending.push(new URL(match[1], new URL(path, server.url)).pathname);
+      }
+    }
+    expect(visited).toContain('/control-values.js');
+    expect(visited).toContain('/control-geometry.js');
+  });
+
   it('returns metadata and preserves only compatible values after source edits', async () => {
     const response = await fetch(new URL('/api/metadata', server.url));
     expect(response.status).toBe(200);

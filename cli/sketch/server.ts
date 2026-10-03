@@ -21,8 +21,8 @@ const STATIC = new Map([
   ['/navigator-view.js', ['navigator-view.js', 'text/javascript; charset=utf-8']],
   ['/spatial-view.js', ['spatial-view.js', 'text/javascript; charset=utf-8']],
   ['/svg-controls.js', ['svg-controls.js', 'text/javascript; charset=utf-8']],
-  ['/control-geometry.js', ['../../src/controls/geometry.js', 'text/javascript; charset=utf-8']],
-  ['/control-values.js', ['../../src/sketch/control-values.js', 'text/javascript; charset=utf-8']],
+  ['/control-geometry.js', ['../../packages/plot-core/src/control-geometry.js', 'text/javascript; charset=utf-8']],
+  ['/control-values.js', ['../../packages/plot-core/src/control-values.js', 'text/javascript; charset=utf-8']],
   ['/viewer.css', ['viewer.css', 'text/css; charset=utf-8']],
 ]);
 const HERE = dirname(fileURLToPath(import.meta.url));
