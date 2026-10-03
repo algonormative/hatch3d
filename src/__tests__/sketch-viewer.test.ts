@@ -9,7 +9,7 @@ const runner = vi.hoisted(() => ({ inspectSketch: vi.fn(), renderSketch: vi.fn()
 vi.mock('../../cli/sketch/runner.js', () => runner);
 
 import { startSketchServer, type SketchServer } from '../../cli/sketch/server';
-import { isolatePartSvg, reconcileControls } from '../../cli/sketch/viewer-state.js';
+import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from '../../cli/sketch/viewer-state.js';
 
 const metadata: SketchMetadata = {
   name: 'Test study',
@@ -71,14 +71,37 @@ describe('local sketch viewer', () => {
     });
   });
 
-  it('isolates parts only in the inspection image while retaining canonical SVG bytes', () => {
-    const full = '<svg xmlns="http://www.w3.org/2000/svg"><g data-part-id="sky"><path d="M0 0"/></g><g data-part-id="street"><path d="M1 1"/></g></svg>';
-    expect(isolatePartSvg(full, '')).toBe(full);
-    const inspected = isolatePartSvg(full, 'street');
-    expect(inspected).toContain('data-part-id="sky" display="none"');
-    expect(inspected).toContain('data-part-id="street"');
-    expect(inspected).not.toContain('data-part-id="street" display="none"');
+  it('combines pen visibility and named-part isolation without changing canonical layers', () => {
+    const full = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">' +
+      '<g data-pen-id="black" inkscape:groupmode="layer" inkscape:label="1-black"><g data-part-id="sky"><path d="M0 0"/></g><g data-part-id="street"><path d="M1 1"/></g></g>' +
+      '<g data-pen-id="blue" inkscape:groupmode="layer" inkscape:label="2-blue"><g data-part-id="sea"><path d="M2 2"/></g></g>' +
+      '<g data-pen-id="red" inkscape:groupmode="layer" inkscape:label="3-red"><g data-part-id="sun"><path d="M3 3"/></g></g></svg>';
+    expect(inspectSvg(full, '', new Set())).toBe(full);
+    const inspected = new DOMParser().parseFromString(inspectSvg(full, 'street', new Set(['blue'])), 'image/svg+xml');
+    expect(inspected.querySelector('[data-pen-id="blue"]')?.getAttribute('display')).toBe('none');
+    expect(inspected.querySelector('[data-part-id="sky"]')?.getAttribute('display')).toBe('none');
+    expect(inspected.querySelector('[data-part-id="street"]')?.getAttribute('display')).toBeNull();
+    expect(inspected.querySelector('[data-part-id="sun"]')?.getAttribute('display')).toBe('none');
+    const allHidden = new DOMParser().parseFromString(inspectSvg(full, '', new Set(['black', 'blue', 'red'])), 'image/svg+xml');
+    expect([...allHidden.querySelectorAll('[data-pen-id]')].every(layer => layer.getAttribute('display') === 'none')).toBe(true);
     expect(full).not.toContain('display="none"');
+    expect(full).toContain('inkscape:label="3-red"');
+  });
+
+  it('counts plotted paths for arbitrary pens and retains hidden IDs across reordered renders', () => {
+    const pens = [
+      { id: 'black', color: '#111', width: 0.3 },
+      { id: 'blue', color: '#33f', width: 0.5 },
+      { id: 'red', color: '#f33', width: 0.2 },
+    ];
+    const parts = [
+      { id: 'a', pen: 'black', paths: [[{ x: 0, y: 0 }, { x: 1, y: 1 }], [{ x: 1, y: 1 }, { x: 2, y: 2 }]] },
+      { id: 'b', pen: 'black', paths: [[{ x: 0, y: 0 }, { x: 2, y: 2 }]] },
+      { id: 'c', pen: 'red', paths: [[{ x: 0, y: 0 }, { x: 3, y: 3 }]] },
+      { id: 'guide', pen: 'blue', diagnostic: true, paths: [[{ x: 0, y: 0 }, { x: 4, y: 4 }]] },
+    ];
+    expect(penPathCounts(pens, parts)).toEqual(new Map([['black', 3], ['blue', 0], ['red', 1]]));
+    expect([...reconcileHiddenPens(new Set(['black', 'blue']), [pens[2], pens[1], { id: 'green', color: '#0f0', width: 0.4 }])]).toEqual(['blue']);
   });
 
   it('rejects a superseded render and pins only the latest successful full SVG', async () => {
@@ -156,7 +179,80 @@ describe('local sketch viewer', () => {
   });
 });
 
+it('uses successful render pens for the sidebar and filters only the current inspection image', async () => {
+  vi.resetModules();
+  document.documentElement.innerHTML = readFileSync(join(process.cwd(), 'cli/sketch/viewer.html'), 'utf8');
+  const pens = [
+    { id: 'black', color: '#111111', width: 0.3 },
+    { id: 'blue', color: '#3344cc', width: 0.5 },
+    { id: 'red', color: '#cc4433', width: 0.2 },
+  ];
+  const layered = {
+    ...result('layered'),
+    metadata: { ...metadata, pens },
+    parts: [
+      { id: 'sky', pen: 'black', paths: [[{ x: 0, y: 0 }, { x: 1, y: 1 }]] },
+      { id: 'street', pen: 'black', paths: [[{ x: 0, y: 0 }, { x: 2, y: 2 }]] },
+      { id: 'sun', pen: 'red', paths: [[{ x: 0, y: 0 }, { x: 3, y: 3 }]] },
+      { id: 'guide', pen: 'blue', diagnostic: true, paths: [[{ x: 0, y: 0 }, { x: 4, y: 4 }]] },
+    ],
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">' +
+      '<g data-pen-id="black" inkscape:groupmode="layer"><g data-part-id="sky"><path d="M0 0"/></g><g data-part-id="street"><path d="M1 1"/></g></g>' +
+      '<g data-pen-id="blue" inkscape:groupmode="layer"></g>' +
+      '<g data-pen-id="red" inkscape:groupmode="layer"><g data-part-id="sun"><path d="M2 2"/></g></g></svg>',
+  };
+  const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  vi.stubGlobal('EventSource', class { addEventListener() {} });
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    if (url === '/api/metadata') return Promise.resolve(response(layered.metadata));
+    if (url === '/api/pins') return Promise.resolve(response([]));
+    if (url === '/api/render') return Promise.resolve(response({ requestId: 2, result: layered }));
+    throw new Error(`Unexpected fetch ${url}`);
+  }));
+  const blobs: Blob[] = [];
+  Object.defineProperty(URL, 'createObjectURL', { value: (blob: Blob) => { blobs.push(blob); return `blob:preview-${blobs.length}`; }, configurable: true });
+  Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, configurable: true });
+  const readBlob = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+  try {
+    await import('../../cli/sketch/viewer.js');
+    await vi.waitFor(() => expect(document.getElementById('pen-count')?.textContent).toBe('3 passes'));
+    expect(document.getElementById('paper-size')?.textContent).toBe('100 × 150 mm');
+    expect([...document.querySelectorAll('.pen-details')].map(row => row.textContent)).toEqual([
+      '1. black0.3 mm · 2 plotted paths', '2. blue0.5 mm · 0 plotted paths', '3. red0.2 mm · 1 plotted path',
+    ]);
+    const blue = document.querySelector<HTMLInputElement>('input[aria-label="Show blue pen layer"]')!;
+    blue.focus();
+    blue.click();
+    expect(document.activeElement).toBe(blue);
+    const part = document.getElementById('part') as HTMLSelectElement;
+    part.value = 'street';
+    part.dispatchEvent(new Event('change'));
+    const inspected = new DOMParser().parseFromString(await readBlob(blobs.at(-1)!), 'image/svg+xml');
+    expect(inspected.querySelector('[data-pen-id="blue"]')?.getAttribute('display')).toBe('none');
+    expect(inspected.querySelector('[data-part-id="sky"]')?.getAttribute('display')).toBe('none');
+    expect(inspected.querySelector('[data-part-id="street"]')?.getAttribute('display')).toBeNull();
+    expect(document.getElementById('inspection-note')?.textContent).toMatch(/1 of 3 pen layers hidden/);
+    document.querySelector<HTMLInputElement>('input[aria-label="Show black pen layer"]')!.click();
+    document.querySelector<HTMLInputElement>('input[aria-label="Show red pen layer"]')!.click();
+    expect(document.getElementById('inspection-note')?.textContent).toMatch(/all pen layers hidden/);
+    expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(false);
+    expect((document.getElementById('pin') as HTMLButtonElement).disabled).toBe(false);
+    expect(layered.svg).not.toContain('display="none"');
+  } finally {
+    vi.unstubAllGlobals();
+    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    document.body.replaceChildren();
+  }
+});
+
 it('keeps a failed new render stale when an earlier pin request completes', async () => {
+  vi.resetModules();
   document.documentElement.innerHTML = readFileSync(join(process.cwd(), 'cli/sketch/viewer.html'), 'utf8');
   let finishPin: ((value: Response) => void) | undefined;
   let renders = 0;

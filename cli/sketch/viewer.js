@@ -1,8 +1,8 @@
-import { isolatePartSvg, reconcileControls } from './viewer-state.js';
+import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from './viewer-state.js';
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
-  const state = { metadata: null, params: {}, seed: 0, result: null, stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+  const state = { metadata: null, params: {}, seed: 0, result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -117,7 +117,47 @@ if (typeof document !== 'undefined') {
   function setPage(metadata) {
     const frame = $('page-frame');
     frame.style.setProperty('--page-ratio', metadata.page.width / metadata.page.height);
-    frame.style.setProperty('--paper', metadata.page.paper || '#fffdf7');
+    frame.style.setProperty('--paper', metadata.page.paper || '#ffffff');
+  }
+
+  function renderPaperAndInks() {
+    const result = state.result;
+    if (!result) return;
+    const { page, pens } = result.metadata;
+    $('paper-swatch').style.backgroundColor = page.paper || '#ffffff';
+    $('paper-size').textContent = `${page.width} × ${page.height} mm`;
+    $('pen-count').textContent = `${pens.length} ${pens.length === 1 ? 'pass' : 'passes'}`;
+    const counts = penPathCounts(pens, result.parts);
+    const host = $('pen-layers');
+    host.replaceChildren();
+    for (const [index, pen] of pens.entries()) {
+      const row = document.createElement('label');
+      row.className = 'pen-layer';
+      row.classList.toggle('is-hidden', state.hiddenPenIds.has(pen.id));
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !state.hiddenPenIds.has(pen.id);
+      input.setAttribute('aria-label', `Show ${pen.id} pen layer`);
+      input.addEventListener('change', () => {
+        if (input.checked) state.hiddenPenIds.delete(pen.id);
+        else state.hiddenPenIds.add(pen.id);
+        row.classList.toggle('is-hidden', !input.checked);
+        showArt();
+      });
+      const swatch = document.createElement('span');
+      swatch.className = 'pen-swatch';
+      swatch.style.backgroundColor = pen.color;
+      swatch.setAttribute('aria-hidden', 'true');
+      const details = document.createElement('span');
+      details.className = 'pen-details';
+      const name = document.createElement('strong');
+      name.textContent = `${index + 1}. ${pen.id}`;
+      const spec = document.createElement('span');
+      spec.textContent = `${pen.width} mm · ${counts.get(pen.id).toLocaleString()} plotted ${counts.get(pen.id) === 1 ? 'path' : 'paths'}`;
+      details.append(name, spec);
+      row.append(input, swatch, details);
+      host.append(row);
+    }
   }
 
   function referenceOverlay() {
@@ -146,12 +186,15 @@ if (typeof document !== 'undefined') {
     const active = [];
     if ($('overlay').checked && !$('overlay').disabled) active.push('source image overlay');
     if ($('part').value) active.push(`isolated part “${$('part').value}”`);
+    const penCount = state.result?.metadata.pens.length || 0;
+    if (state.hiddenPenIds.size && penCount) active.push(state.hiddenPenIds.size === penCount ?
+      'all pen layers hidden from this preview' : `${state.hiddenPenIds.size} of ${penCount} pen layers hidden from this preview`);
     $('inspection-note').hidden = active.length === 0;
-    $('inspection-note').textContent = active.length ? `Inspection only: ${active.join(' and ')}. Pin and export keep every drawing part.` : '';
+    $('inspection-note').textContent = active.length ? `Inspection only: ${active.join(' and ')}. Pin and export keep every pen layer and drawing part.` : '';
   }
 
   function visibleSvg(result) {
-    return isolatePartSvg(result.svg, $('part').value);
+    return inspectSvg(result.svg, $('part').value, state.hiddenPenIds);
   }
 
   function showArt() {
@@ -188,7 +231,9 @@ if (typeof document !== 'undefined') {
       if (sequence !== state.sequence || payload.requestId !== sequence) return;
       state.result = payload.result;
       state.params = { ...payload.result.params };
+      state.hiddenPenIds = reconcileHiddenPens(state.hiddenPenIds, state.result.metadata.pens);
       updateParts();
+      renderPaperAndInks();
       setPage(payload.result.metadata);
       referenceOverlay();
       showArt();
@@ -251,7 +296,7 @@ if (typeof document !== 'undefined') {
     if (!id) return;
     const pin = state.pins.find(item => item.pinId === id);
     if (!pin) return;
-    $('pin-art').parentElement.style.setProperty('--paper', pin.page.paper || '#fffdf7');
+    $('pin-art').parentElement.style.setProperty('--paper', pin.page.paper || '#ffffff');
     $('pin-art').parentElement.style.setProperty('--page-ratio', pin.page.width / pin.page.height);
     $('pin-art').src = `/api/pins/${encodeURIComponent(id)}/svg`;
     $('pin-date').textContent = new Date(pin.pinnedAt).toLocaleString();

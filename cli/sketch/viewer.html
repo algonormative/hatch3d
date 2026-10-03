@@ -49,14 +49,24 @@
           <h2>Shape the study</h2>
           <p>Changes redraw the whole page. Slower controls redraw when released.</p>
         </div>
+        <section class="paper-ink" aria-labelledby="paper-ink-title">
+          <h3 id="paper-ink-title">Paper &amp; ink</h3>
+          <div class="paper-spec">
+            <span id="paper-swatch" class="paper-swatch" aria-hidden="true"></span>
+            <div><span class="spec-label">Paper stock</span><strong id="paper-size">Awaiting preview</strong></div>
+          </div>
+          <div class="layer-heading"><span class="spec-label">Pen layers</span><span id="pen-count">—</span></div>
+          <div id="pen-layers" class="pen-layers"></div>
+          <p class="layer-help">Each layer is one physical pen pass. Uncheck a layer to hide it in this preview only; pins and exports keep every layer.</p>
+        </section>
         <div id="controls" class="controls"></div>
         <div id="incompatible" class="notice" hidden></div>
         <fieldset class="inspection">
           <legend>Inspect</legend>
           <label class="check"><input id="overlay" type="checkbox"> Show source image overlay</label>
-          <label for="part">Isolate part</label>
+          <label for="part">Isolate named part</label>
           <select id="part"><option value="">Full composition</option></select>
-          <p>Inspection changes affect the view only. Export and pins keep the full SVG.</p>
+          <p>Named parts are drawing groups within pen layers. Inspection changes affect this view only.</p>
         </fieldset>
         <div class="pins">
           <label for="pin-select">Compare with a pin</label>

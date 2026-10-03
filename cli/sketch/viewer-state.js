@@ -30,12 +30,31 @@ export function reconcileControls(previousControls, previousParams, nextControls
   return { params, incompatible };
 }
 
+/** Keep a pen hidden by stable ID only while that pen exists in the new result. */
+export function reconcileHiddenPens(previousHidden, nextPens) {
+  return new Set(nextPens.map(pen => pen.id).filter(id => previousHidden.has(id)));
+}
+
+/** Count paths the runner places in each physical pen layer. */
+export function penPathCounts(pens, parts) {
+  const counts = new Map(pens.map(pen => [pen.id, 0]));
+  for (const part of parts) {
+    if (!part.diagnostic && counts.has(part.pen)) counts.set(part.pen, counts.get(part.pen) + part.paths.length);
+  }
+  return counts;
+}
+
 /** Make a temporary inspection image without changing the canonical SVG bytes. */
-export function isolatePartSvg(fullSvg, selectedPartId) {
-  if (!selectedPartId) return fullSvg;
+export function inspectSvg(fullSvg, selectedPartId, hiddenPenIds) {
+  if (!selectedPartId && hiddenPenIds.size === 0) return fullSvg;
   const document = new DOMParser().parseFromString(fullSvg, 'image/svg+xml');
-  for (const group of document.querySelectorAll('[data-part-id]')) {
-    if (group.getAttribute('data-part-id') !== selectedPartId) group.setAttribute('display', 'none');
+  for (const layer of document.querySelectorAll('[data-pen-id]')) {
+    if (hiddenPenIds.has(layer.getAttribute('data-pen-id'))) layer.setAttribute('display', 'none');
+    if (selectedPartId) {
+      for (const part of layer.querySelectorAll('[data-part-id]')) {
+        if (part.getAttribute('data-part-id') !== selectedPartId) part.setAttribute('display', 'none');
+      }
+    }
   }
   return new XMLSerializer().serializeToString(document);
 }
