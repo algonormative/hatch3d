@@ -27,9 +27,10 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 button.quiet { color: var(--ink); background: transparent; border-color: var(--border); }
 button.quiet:hover { background: #e6e3df; }
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.app { min-height: 100vh; }
+.app { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; }
 .masthead {
   display: flex;
+  flex: none;
   align-items: end;
   justify-content: space-between;
   gap: 2rem;
@@ -47,8 +48,8 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .header-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: .4rem; }
 .seed-label { display: flex; align-items: center; gap: .45rem; color: var(--muted); font: .7rem var(--mono); }
 .seed-label input { width: 7.4rem; padding: .5rem .45rem; border: 1px solid var(--border); border-radius: 2px; background: #fff; color: var(--ink); font-variant-numeric: tabular-nums; }
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: calc(100vh - 100px); }
-.art-area { padding: 1rem 1.8rem 2rem; min-width: 0; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; flex: 1; min-height: 0; }
+.art-area { padding: 1rem 1.8rem 2rem; min-width: 0; overflow-y: auto; }
 .status { min-height: 2.1rem; color: var(--muted); font: .72rem var(--mono); }
 .status.stale { color: #555; font-weight: 600; }
 .error { background: #f3e5e2; border-left: 2px solid #a34232; color: #762d22; padding: .75rem .9rem; margin: 0 0 1rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
@@ -123,12 +124,13 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 @media (max-width: 880px) {
   .masthead { align-items: start; flex-direction: column; padding: 1rem; }
   .header-actions { justify-content: start; }
-  .workspace { grid-template-columns: minmax(0, 1fr) 280px; height: calc(100vh - 165px); min-height: 390px; }
+  .workspace { grid-template-columns: minmax(0, 1fr) 280px; }
   .art-area { padding: 1rem; overflow: auto; }
   .sidebar { overflow-y: auto; }
   .page-frame { min-height: 0; max-height: calc(100vh - 275px); }
 }
 @media (max-width: 650px) {
+  .app { height: auto; min-height: 100vh; display: block; }
   .workspace { display: block; height: auto; }
   .art-area { position: sticky; top: 0; z-index: 2; background: var(--bg); max-height: 48vh; overflow: auto; border-bottom: 1px solid var(--border); }
   .sidebar { border-left: 0; overflow: visible; }
