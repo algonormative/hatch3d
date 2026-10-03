@@ -57,8 +57,44 @@
           </div>
           <div class="layer-heading"><span class="spec-label">Pen layers</span><span id="pen-count">—</span></div>
           <div id="pen-layers" class="pen-layers"></div>
-          <p class="layer-help">Each layer is one physical pen pass. Uncheck a layer to hide it in this preview only; pins and exports keep every layer.</p>
+          <p class="layer-help">Uncheck a layer to hide it in this preview only; pins and exports keep every layer.</p>
         </section>
+        <details id="finishing" class="finishing">
+          <summary>Finish &amp; export</summary>
+          <div class="finish-body">
+            <p class="finish-help">Set the plot sheet and pens after the sketch draws. Original keeps the authored page.</p>
+            <label for="finish-page">Sheet</label>
+            <select id="finish-page"><option value="original">Original sketch</option><option value="custom">Custom size</option></select>
+            <label for="finish-orientation">Orientation</label>
+            <select id="finish-orientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select>
+            <div id="finish-custom" class="finish-pair" hidden>
+              <label>Width (mm)<input id="finish-width" type="number" min="1" max="2000" step="0.1"></label>
+              <label>Height (mm)<input id="finish-height" type="number" min="1" max="2000" step="0.1"></label>
+            </div>
+            <div class="finish-pair">
+              <label>Margin (mm)<input id="finish-margin" type="number" min="0" max="500" step="0.1"></label>
+              <label>Paper color<input id="finish-paper" type="text" autocomplete="off"></label>
+            </div>
+            <label for="finish-border">Border</label>
+            <select id="finish-border"><option value="">None</option></select>
+            <label for="finish-border-pen">Border pen</label>
+            <select id="finish-border-pen"></select>
+            <div class="finish-subhead">Source pens</div>
+            <div id="finish-pens" class="finish-pens"></div>
+            <label class="check"><input id="finish-density-enabled" type="checkbox"> Limit line density</label>
+            <div id="finish-density-fields" class="finish-pair" hidden>
+              <label>Max lines per cell<input id="finish-density-max" type="number" min="1" max="100000" step="1" value="20"></label>
+              <label>Cell size (mm)<input id="finish-density-cell" type="number" min="0.1" max="500" step="0.1" value="10"></label>
+            </div>
+            <button id="finish-reset" class="quiet" type="button">Reset finishing</button>
+            <div class="finish-subhead">PNG preview export</div>
+            <div class="finish-pair">
+              <label>Theme<select id="png-theme"><option value="paper">Paper</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+              <label>Scale<select id="png-scale"></select></label>
+            </div>
+            <button id="download-png" type="button" disabled>Export PNG</button>
+          </div>
+        </details>
         <div id="controls" class="controls"></div>
         <div id="incompatible" class="notice" hidden></div>
         <fieldset class="inspection">

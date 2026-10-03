@@ -8,7 +8,15 @@ export interface Page {
   paper?: string;
 }
 
-export interface Pen { id: string; color: string; width: number }
+export interface Pen { id: string; color: string; width: number; passes?: number }
+
+/** Optional physical finishing applied after draw() and before final SVG assembly. */
+export interface FinishingOptions {
+  page?: Page;
+  border?: { style: 'simple' | 'double' | 'ticked' | 'cropmarks'; pen: string };
+  pens?: Record<string, { color?: string; width?: number; passes?: number }>;
+  density?: { maxDensity: number; cellSize: number };
+}
 
 export type Control =
   | { type: 'slider'; id: string; label: string; default: number; min: number; max: number; step: number; units?: string; expensive?: boolean }
@@ -65,6 +73,7 @@ export interface AssetMetadata extends AssetDeclaration {
 export interface SketchMetadata {
   name: string;
   page: Page;
+  sourcePage?: Page;
   pens: Pen[];
   controls: Control[];
   assets: Record<string, AssetMetadata>;
@@ -87,6 +96,7 @@ export interface RenderStats {
 export interface RenderResult {
   schemaVersion: 1;
   metadata: SketchMetadata;
+  finishing?: FinishingOptions;
   params: Params;
   seed: number;
   parts: Part[];

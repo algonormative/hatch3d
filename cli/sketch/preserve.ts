@@ -5,6 +5,7 @@ export interface PreserveChange { scope: 'page' | 'part' | 'pen' | 'boundary'; i
 export interface PreserveComparison { ok: boolean; changes: PreserveChange[] }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const samePen = (a: Pen, b: Pen): boolean => a.id === b.id && a.color === b.color && a.width === b.width && (a.passes ?? 1) === (b.passes ?? 1);
 const partById = (result: RenderResult, id: string): Part | undefined => result.parts.find(part => part.id === id);
 const penById = (result: RenderResult, id: string): Pen | undefined => result.metadata.pens.find(pen => pen.id === id);
 
@@ -28,7 +29,7 @@ export function comparePreserved(before: RenderResult, after: RenderResult, sele
     }
     const oldPen = penById(before, oldPart.pen);
     const newPen = penById(after, newPart.pen);
-    if (!oldPen || !newPen || !same(oldPen, newPen)) {
+    if (!oldPen || !newPen || !samePen(oldPen, newPen)) {
       changes.push({ scope: 'pen', id, message: `Physical pen settings changed for ${id}` });
     }
   }

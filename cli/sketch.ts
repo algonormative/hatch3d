@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Resvg } from '@resvg/resvg-js';
+import { exportSketchPng, pngOptions, type PngTheme } from './sketch/export-png.ts';
 import { createCheckpoint, replayCheckpoint } from './sketch/checkpoint.ts';
 import { comparePreserved } from './sketch/preserve.ts';
 import { inspectSketch, renderSketch, SketchRunnerError } from './sketch/runner.ts';
-import type { Params, RenderResult } from '../src/sketch/types.ts';
+import type { FinishingOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
   return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare> <entry.ts|checkpoint-dir|before-result.json> [options]. See docs/sketches.md';
@@ -14,8 +14,8 @@ function usage(): string {
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'config', 'seed', 'out', 'timeout'], open: ['port', 'out'],
-  checkpoint: ['result', 'out'], replay: ['out'], compare: ['after', 'parts', 'boundaries'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out'],
+  checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'],
 };
 
 function options(command: string, args: string[]): { entry: string; flags: Record<string, string> } {
@@ -59,13 +59,12 @@ async function loadResult(path: string): Promise<RenderResult> {
   return result as unknown as RenderResult;
 }
 
-async function writeArtifacts(result: RenderResult, outputDir: string): Promise<{ svg: string; png: string; result: string }> {
+async function writeArtifacts(result: RenderResult, outputDir: string, pngSettings: { theme: PngTheme; scale: number }): Promise<{ svg: string; png: string; result: string }> {
+  const png = exportSketchPng(result, pngSettings.theme, pngSettings.scale);
   await mkdir(outputDir, { recursive: true });
   const svgPath = resolve(outputDir, 'render.svg');
   const pngPath = resolve(outputDir, 'render.png');
   const resultPath = resolve(outputDir, 'result.json');
-  const widthPx = Math.max(1, Math.round(result.metadata.page.width / 25.4 * 150));
-  const png = new Resvg(result.svg, { background: result.metadata.page.paper ?? '#ffffff', fitTo: { mode: 'width', value: widthPx } }).render().asPng();
   await Promise.all([writeFile(svgPath, result.svg), writeFile(pngPath, png), writeFile(resultPath, JSON.stringify(result, null, 2))]);
   return { svg: svgPath, png: pngPath, result: resultPath };
 }
@@ -87,23 +86,38 @@ async function params(value: string | undefined): Promise<Params | undefined> {
   return parsed as Params;
 }
 
-async function requestConfig(path: string | undefined): Promise<{ params?: Params; seed?: number }> {
+async function finishing(value: string | undefined): Promise<FinishingOptions | undefined> {
+  if (value === undefined) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value.startsWith('@') ? await readFile(resolve(value.slice(1)), 'utf8') : value); }
+  catch { throw new SketchRunnerError('invalid_finishing', '--finishing must be a JSON object or @path/to/file.json'); }
+  if (!object(parsed)) throw new SketchRunnerError('invalid_finishing', '--finishing must be a JSON object');
+  return parsed as FinishingOptions;
+}
+
+async function requestConfig(path: string | undefined): Promise<{ params?: Params; seed?: number; finishing?: FinishingOptions }> {
   if (path === undefined) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(await readFile(resolve(path), 'utf8')); }
   catch { throw new SketchRunnerError('invalid_config', '--config must be a readable JSON request document'); }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new SketchRunnerError('invalid_config', '--config must contain an object');
   const record = parsed as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== 'params' && key !== 'seed')) throw new SketchRunnerError('invalid_config', '--config accepts only params and seed');
+  if (Object.keys(record).some((key) => key !== 'params' && key !== 'seed' && key !== 'finishing')) throw new SketchRunnerError('invalid_config', '--config accepts only params, seed, and finishing');
   if (record.params !== undefined && (typeof record.params !== 'object' || record.params === null || Array.isArray(record.params))) throw new SketchRunnerError('invalid_config', '--config params must be an object');
   if (record.seed !== undefined && (!Number.isSafeInteger(record.seed) || (record.seed as number) < 0)) throw new SketchRunnerError('invalid_config', '--config seed must be a nonnegative safe integer');
-  return { params: record.params as Params | undefined, seed: record.seed as number | undefined };
+  if (record.finishing !== undefined && !object(record.finishing)) throw new SketchRunnerError('invalid_config', '--config finishing must be an object');
+  return { params: record.params as Params | undefined, seed: record.seed as number | undefined, finishing: record.finishing as FinishingOptions | undefined };
 }
 
 export async function main(args: string[]): Promise<void> {
   const [command, ...rest] = args;
   if (!command || !Object.hasOwn(flagsByCommand, command)) throw new SketchRunnerError('usage', usage());
   const { entry, flags } = options(command, rest);
+  let pngSettings: { theme: PngTheme; scale: number } | undefined;
+  if (command === 'render' || command === 'replay') {
+    try { pngSettings = pngOptions(flags['png-theme'], flags['png-scale']); }
+    catch (error) { throw new SketchRunnerError('invalid_option', error instanceof Error ? error.message : String(error)); }
+  }
   if (command === 'checkpoint') {
     const outputDir = resolve(required(flags, 'out'));
     const result = await loadResult(required(flags, 'result'));
@@ -114,7 +128,7 @@ export async function main(args: string[]): Promise<void> {
   if (command === 'replay') {
     const outputDir = resolve(required(flags, 'out'));
     const result = await replayCheckpoint({ checkpoint: entry });
-    const paths = await writeArtifacts(result, outputDir);
+    const paths = await writeArtifacts(result, outputDir, pngSettings!);
     console.log(JSON.stringify({ identity: result.identity, ...paths, diagnostics: result.diagnostics, stats: result.stats }));
     return;
   }
@@ -143,11 +157,11 @@ export async function main(args: string[]): Promise<void> {
     process.once('SIGTERM', shutdown);
     return;
   }
-  if (flags.config && (flags.params || flags.seed)) throw new SketchRunnerError('usage', '--config cannot be combined with --params or --seed');
-  const request = flags.config ? await requestConfig(flags.config) : { params: await params(flags.params), seed: integer(flags.seed, 'seed') };
+  if (flags.config && (flags.params || flags.seed || flags.finishing)) throw new SketchRunnerError('usage', '--config cannot be combined with --params, --seed, or --finishing');
+  const request = flags.config ? await requestConfig(flags.config) : { params: await params(flags.params), seed: integer(flags.seed, 'seed'), finishing: await finishing(flags.finishing) };
   const result = await renderSketch({ entry, ...request, timeoutMs });
   const outputDir = resolve(flags.out ?? `sketch-output/${basename(entry).replace(/\.[^.]+$/, '')}`);
-  const paths = await writeArtifacts(result, outputDir);
+  const paths = await writeArtifacts(result, outputDir, pngSettings!);
   console.log(JSON.stringify({ identity: result.identity, ...paths, diagnostics: result.diagnostics, stats: result.stats }));
 }
 

@@ -5,7 +5,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { inspectSketch, renderSketch } from './runner.js';
 import { listPins, loadPin, pinFile, savePin } from './viewer-pins.js';
-import type { RenderResult } from '../../src/sketch/types.js';
+import { exportSketchPng, PNG_SCALES, pngOptions } from './export-png.js';
+import { BORDER_STYLES, PAPER_SIZES } from '../../src/utils/page-finishing.js';
+import type { FinishingOptions, RenderResult } from '../../src/sketch/types.js';
 
 export interface SketchServerOptions { entry: string; port?: number; outputDir?: string }
 export interface SketchServer { url: string; close: () => Promise<void> }
@@ -125,6 +127,10 @@ export async function startSketchServer({ entry, port = 0, outputDir }: SketchSe
         json(res, 200, await inspectSketch({ entry: absoluteEntry }));
         return;
       }
+      if (req.method === 'GET' && path === '/api/finishing-options') {
+        json(res, 200, { paperSizes: PAPER_SIZES, borderStyles: BORDER_STYLES, pngScales: PNG_SCALES });
+        return;
+      }
       if (req.method === 'GET' && path === '/api/export.svg') {
         const selected = currentGood;
         if (!selected || selected.generation !== generation || selected.result.identity !== requestUrl.searchParams.get('identity')) {
@@ -143,8 +149,30 @@ export async function startSketchServer({ entry, port = 0, outputDir }: SketchSe
         res.end(svg);
         return;
       }
+      if (req.method === 'GET' && path === '/api/export.png') {
+        const selected = currentGood;
+        if (!selected || selected.generation !== generation || selected.result.identity !== requestUrl.searchParams.get('identity')) {
+          json(res, 409, { error: 'Only the current successful render can be exported' });
+          return;
+        }
+        if ([...requestUrl.searchParams.keys()].some(key => !['identity', 'theme', 'scale'].includes(key)) ||
+          ['identity', 'theme', 'scale'].some(key => requestUrl.searchParams.getAll(key).length > 1)) throw new Error('Invalid PNG export query');
+        const { theme, scale } = pngOptions(requestUrl.searchParams.get('theme') ?? undefined, requestUrl.searchParams.get('scale') ?? undefined);
+        const bytes = exportSketchPng(selected.result, theme, scale);
+        const slug = selected.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'sketch';
+        res.writeHead(200, {
+          'content-type': 'image/png',
+          'content-disposition': `attachment; filename="${slug}-${theme}-${scale}x.png"`,
+          'content-length': bytes.length,
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(bytes);
+        return;
+      }
       if (req.method === 'POST' && path === '/api/render') {
         const body = await readJson(req);
+        if (Object.keys(body).some(key => !['requestId', 'params', 'seed', 'finishing'].includes(key))) throw new Error('Render request accepts only requestId, params, seed, and finishing');
         const id = requestId(body.requestId);
         if (!validParams(body.params)) throw new Error('Invalid params');
         if (body.seed !== undefined && (!Number.isSafeInteger(body.seed) || (body.seed as number) < 0)) throw new Error('Seed must be a nonnegative integer');
@@ -155,7 +183,7 @@ export async function startSketchServer({ entry, port = 0, outputDir }: SketchSe
         currentController = controller;
         res.on('close', () => { if (!res.writableEnded) controller.abort(); });
         try {
-          const result = await renderSketch({ entry: absoluteEntry, params: body.params, seed: body.seed as number | undefined, timeoutMs: 15000, signal: controller.signal });
+          const result = await renderSketch({ entry: absoluteEntry, params: body.params, seed: body.seed as number | undefined, finishing: body.finishing as FinishingOptions | undefined, timeoutMs: 15000, signal: controller.signal });
           if (sequence !== generation || controller.signal.aborted) { json(res, 409, { requestId: id, error: 'Superseded render' }); return; }
           currentGood = { generation: sequence, result };
           json(res, 200, { requestId: id, result });
@@ -180,7 +208,7 @@ export async function startSketchServer({ entry, port = 0, outputDir }: SketchSe
       }
       if (req.method === 'GET' && path === '/api/pins') {
         const pins = await listPins(pinsDir);
-        json(res, 200, pins.map(pin => ({ pinId: pin.pinId, pinnedAt: pin.pinnedAt, identity: pin.result.identity, name: pin.result.metadata.name, page: pin.result.metadata.page, params: pin.result.params, seed: pin.result.seed, stats: pin.result.stats })));
+        json(res, 200, pins.map(pin => ({ pinId: pin.pinId, pinnedAt: pin.pinnedAt, identity: pin.result.identity, name: pin.result.metadata.name, page: pin.result.metadata.page, pens: pin.result.metadata.pens, finishing: pin.result.finishing, params: pin.result.params, seed: pin.result.seed, stats: pin.result.stats })));
         return;
       }
       const pinMatch = /^\/api\/pins\/([^/]+)(?:\/(svg|png))?$/.exec(path);

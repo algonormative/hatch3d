@@ -83,6 +83,24 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .pen-details span { color: var(--muted); font-size: .66rem; font-variant-numeric: tabular-nums; }
 .pen-layer.is-hidden .pen-swatch, .pen-layer.is-hidden .pen-details { opacity: .43; }
 .layer-help { margin: .7rem 0 .4rem; }
+.finishing { border-top: 1px solid var(--border); padding: .9rem 0 1rem; }
+.finishing summary { cursor: pointer; list-style-position: inside; font: 600 .69rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.finishing summary:focus-visible { outline: 2px solid var(--ink); }
+.finish-body { display: grid; gap: .55rem; padding-top: .75rem; }
+.finish-help { color: var(--muted); font-size: .73rem; line-height: 1.5; margin: 0 0 .25rem; }
+.finish-body label { display: grid; gap: .28rem; font: 500 .7rem var(--mono); min-width: 0; }
+.finish-body label.check { display: flex; align-items: center; gap: .4rem; margin: .4rem 0 0; }
+.finish-body label.check input { accent-color: var(--ink); }
+.finish-body input, .finish-body select { min-width: 0; width: 100%; padding: .42rem; border: 1px solid var(--border); border-radius: 2px; background: #fff; color: var(--ink); font: .72rem var(--mono); }
+.finish-body .check input { width: auto; }
+.finish-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+.finish-pair[hidden] { display: none; }
+.finish-subhead { margin-top: .45rem; padding-top: .65rem; border-top: 1px solid var(--border); font: 600 .66rem var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.finish-pens { display: grid; gap: .45rem; }
+.finish-pen { border: 1px solid var(--border); margin: 0; padding: .5rem; min-width: 0; }
+.finish-pen legend { font: 600 .7rem var(--mono); padding: 0 .2rem; overflow-wrap: anywhere; }
+.finish-pen-fields { display: grid; grid-template-columns: 1.5fr 1fr .8fr; gap: .35rem; }
+.finish-body button { justify-self: start; }
 .control { padding: .85rem 0; border-top: 1px solid var(--border); }
 .control-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0 0 .55rem; }
 .control label, .inspection label, .pins label { font: 500 .74rem var(--mono); }

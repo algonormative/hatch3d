@@ -205,6 +205,7 @@ it('uses successful render pens for the sidebar and filters only the current ins
   vi.stubGlobal('EventSource', class { addEventListener() {} });
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     if (url === '/api/metadata') return Promise.resolve(response(layered.metadata));
+    if (url === '/api/finishing-options') return Promise.resolve(response({ paperSizes: { a4: { label: 'A4', w: 210, h: 297 } }, borderStyles: { simple: 'Simple' }, pngScales: [1, 2, 3, 4, 6, 8] }));
     if (url === '/api/pins') return Promise.resolve(response([]));
     if (url === '/api/render') return Promise.resolve(response({ requestId: 2, result: layered }));
     throw new Error(`Unexpected fetch ${url}`);
@@ -220,7 +221,7 @@ it('uses successful render pens for the sidebar and filters only the current ins
   });
   try {
     await import('../../cli/sketch/viewer.js');
-    await vi.waitFor(() => expect(document.getElementById('pen-count')?.textContent).toBe('3 passes'));
+    await vi.waitFor(() => expect(document.getElementById('pen-count')?.textContent).toBe('3 layers · 3 passes'));
     expect(document.getElementById('paper-size')?.textContent).toBe('100 × 150 mm');
     expect([...document.querySelectorAll('.pen-details')].map(row => row.textContent)).toEqual([
       '1. black0.3 mm · 2 plotted paths', '2. blue0.5 mm · 0 plotted paths', '3. red0.2 mm · 1 plotted path',
@@ -264,6 +265,7 @@ it('keeps a failed new render stale when an earlier pin request completes', asyn
   const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
   fetchMock.mockImplementation((url: string, options?: RequestInit) => {
     if (url === '/api/metadata') return Promise.resolve(response(metadata));
+    if (url === '/api/finishing-options') return Promise.resolve(response({ paperSizes: { a4: { label: 'A4', w: 210, h: 297 } }, borderStyles: { simple: 'Simple' }, pngScales: [1, 2, 3, 4, 6, 8] }));
     if (url === '/api/pins' && options?.method === 'POST') return new Promise<Response>(resolve => { finishPin = resolve; });
     if (url === '/api/pins') return Promise.resolve(response(pinSaved ? [{
       pinId: 'old-pin', pinnedAt: '2026-10-02T12:00:00.000Z', identity: 'first', name: 'Test study',
@@ -304,6 +306,124 @@ it('keeps a failed new render stale when an earlier pin request completes', asyn
     (document.getElementById('download') as HTMLButtonElement).click();
     expect(click).toHaveBeenCalledOnce();
     click.mockRestore();
+  } finally {
+    vi.unstubAllGlobals();
+    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    document.body.replaceChildren();
+  }
+});
+
+it('keeps finishing separate from sketch controls and blocks SVG and PNG exports while a finishing render is pending', async () => {
+  vi.resetModules();
+  document.documentElement.innerHTML = readFileSync(join(process.cwd(), 'cli/sketch/viewer.html'), 'utf8');
+  const source = { ...metadata, page: { width: 100, height: 150, paper: 'ivory', margin: 8 }, pens: [
+    { id: 'black', color: 'black', width: 0.3 },
+    { id: 'blue', color: 'rebeccapurple', width: 0.4 },
+    { id: 'red', color: '#c43', width: 0.2 },
+  ] };
+  const requests: Array<{ requestId: number; finishing?: Record<string, unknown> }> = [];
+  let finishRender: ((response: Response) => void) | undefined;
+  const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  vi.stubGlobal('EventSource', class { addEventListener() {} });
+  vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+    if (url === '/api/metadata') return Promise.resolve(response(source));
+    if (url === '/api/finishing-options') return Promise.resolve(response({
+      paperSizes: { a4: { label: 'A4', w: 297, h: 210 } },
+      borderStyles: { simple: 'Simple', double: 'Double' }, pngScales: [1, 2, 3, 4, 6, 8],
+    }));
+    if (url === '/api/pins') return Promise.resolve(response([]));
+    if (url === '/api/render') {
+      const request = JSON.parse(String(options?.body));
+      requests.push(request);
+      const rendered = { ...result(request.finishing ? 'finished' : 'original'), metadata: { ...source,
+        page: request.finishing?.page || source.page,
+        pens: source.pens.map(pen => ({ ...pen, ...(request.finishing?.pens?.[pen.id] || {}) })),
+      } };
+      return request.finishing ? new Promise<Response>(resolve => { finishRender = resolve; }) :
+        Promise.resolve(response({ requestId: request.requestId, result: rendered }));
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  }));
+  Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:preview', configurable: true });
+  Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, configurable: true });
+  try {
+    await import('../../cli/sketch/viewer.js');
+    await vi.waitFor(() => expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(false));
+    await vi.waitFor(() => expect((document.getElementById('finish-page') as HTMLSelectElement).options.length).toBe(3));
+    expect(requests[0].finishing).toBeUndefined();
+    expect((document.getElementById('finish-paper') as HTMLInputElement).value).toBe('ivory');
+    expect((document.querySelector('[aria-label="blue Color"]') as HTMLInputElement).value).toBe('rebeccapurple');
+    const page = document.getElementById('finish-page') as HTMLSelectElement;
+    page.value = 'a4';
+    page.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(requests.length).toBe(2), { timeout: 1000 });
+    expect((document.getElementById('finish-orientation') as HTMLSelectElement).value).toBe('portrait');
+    expect(requests.at(-1)?.finishing?.page).toEqual({ width: 210, height: 297, margin: 8, paper: 'ivory' });
+    const orientation = document.getElementById('finish-orientation') as HTMLSelectElement;
+    orientation.value = 'landscape';
+    orientation.dispatchEvent(new Event('change'));
+    const bluePasses = document.querySelector('[aria-label="blue Passes"]') as HTMLInputElement;
+    bluePasses.value = '2';
+    bluePasses.dispatchEvent(new Event('change'));
+    expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(true);
+    expect((document.getElementById('download-png') as HTMLButtonElement).disabled).toBe(true);
+    expect((document.getElementById('pin') as HTMLButtonElement).disabled).toBe(true);
+    await vi.waitFor(() => expect(requests.length).toBe(3), { timeout: 1000 });
+    expect(finishRender).toBeTypeOf('function');
+    const latest = requests.at(-1);
+    expect(latest?.finishing).toEqual({ page: { width: 297, height: 210, margin: 8, paper: 'ivory' }, pens: { blue: { passes: 2 } } });
+    finishRender!(response({ requestId: latest?.requestId, result: { ...result('finished'), metadata: {
+      ...source, page: { width: 297, height: 210, margin: 8, paper: 'ivory' },
+      pens: [source.pens[0], { ...source.pens[1], passes: 2 }, source.pens[2]],
+    } } }));
+    await vi.waitFor(() => expect((document.getElementById('download-png') as HTMLButtonElement).disabled).toBe(false));
+    expect(document.getElementById('pen-count')?.textContent).toBe('3 layers · 4 passes');
+    expect(document.querySelectorAll('.pen-details')[1].textContent).toContain('2 passes');
+    expect((document.getElementById('finish-page') as HTMLSelectElement).value).toBe('a4');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      expect(this.getAttribute('href')).toBe('/api/export.png?identity=finished&theme=dark&scale=8');
+    });
+    (document.getElementById('png-theme') as HTMLSelectElement).value = 'dark';
+    (document.getElementById('png-scale') as HTMLSelectElement).value = '8';
+    (document.getElementById('download-png') as HTMLButtonElement).click();
+    expect(click).toHaveBeenCalledOnce();
+    click.mockRestore();
+    const border = document.getElementById('finish-border') as HTMLSelectElement;
+    border.value = 'double';
+    border.dispatchEvent(new Event('change'));
+    const borderPen = document.getElementById('finish-border-pen') as HTMLSelectElement;
+    borderPen.value = 'red';
+    borderPen.dispatchEvent(new Event('change'));
+    const density = document.getElementById('finish-density-enabled') as HTMLInputElement;
+    density.checked = true;
+    density.dispatchEvent(new Event('change'));
+    const densityMax = document.getElementById('finish-density-max') as HTMLInputElement;
+    densityMax.value = '15';
+    densityMax.dispatchEvent(new Event('input'));
+    const densityCell = document.getElementById('finish-density-cell') as HTMLInputElement;
+    densityCell.value = '12';
+    densityCell.dispatchEvent(new Event('input'));
+    await vi.waitFor(() => expect(requests.length).toBe(4), { timeout: 1000 });
+    expect(requests.at(-1)?.finishing).toEqual({ ...latest?.finishing,
+      border: { style: 'double', pen: 'red' }, density: { maxDensity: 15, cellSize: 12 },
+    });
+    (document.getElementById('reset') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(requests.length).toBe(5), { timeout: 1000 });
+    expect(requests.at(-1)?.finishing).toEqual(requests[3].finishing);
+    (document.getElementById('finish-reset') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(requests.length).toBe(6), { timeout: 1000 });
+    expect(requests.at(-1)?.finishing).toBeUndefined();
+    const currentBluePasses = document.querySelector('[aria-label="blue Passes"]') as HTMLInputElement;
+    currentBluePasses.value = '';
+    currentBluePasses.dispatchEvent(new Event('input'));
+    expect((document.getElementById('download-png') as HTMLButtonElement).disabled).toBe(true);
+    const slider = document.getElementById('control-pitch') as HTMLInputElement;
+    slider.value = '3';
+    slider.dispatchEvent(new Event('input'));
+    await vi.waitFor(() => expect(document.getElementById('status')?.textContent).toMatch(/Render failed/), { timeout: 1000 });
+    expect(requests.length).toBe(6);
+    expect((document.getElementById('download-png') as HTMLButtonElement).disabled).toBe(true);
   } finally {
     vi.unstubAllGlobals();
     delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;

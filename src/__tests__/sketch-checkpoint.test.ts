@@ -20,7 +20,7 @@ async function command(cwd: string, ...args: string[]): Promise<void> {
 async function fixture(): Promise<{ root: string; entry: string; output: string }> {
   const root = await mkdtemp(join(tmpdir(), 'hatch3d-checkpoint-test-'));
   temporary.push(root);
-  for (const file of ['package.json', 'package-lock.json', 'cli/sketch/child.ts', 'cli/sketch/raster.ts', 'src/sketch/types.ts', 'src/utils/clip.ts']) {
+  for (const file of ['package.json', 'package-lock.json', 'cli/sketch/child.ts', 'cli/sketch/raster.ts', 'src/sketch/types.ts', 'src/sketch/finishing.ts', 'src/density.ts', 'src/utils/clip.ts', 'src/utils/page-finishing.ts', 'src/utils/prng.ts']) {
     await mkdir(join(root, file, '..'), { recursive: true });
     await cp(join(project, file), join(root, file));
   }
@@ -41,7 +41,7 @@ async function fixture(): Promise<{ root: string; entry: string; output: string 
   return { root, entry, output: join(root, 'artifacts') };
 }
 
-async function rendered(entry: string): Promise<RenderResult> {
+async function rendered(entry: string, finishing?: RenderResult['finishing']): Promise<RenderResult> {
   const child = fork(join(project, 'cli/sketch/child.ts'), [], {
     cwd: project, execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
@@ -55,7 +55,7 @@ async function rendered(entry: string): Promise<RenderResult> {
       child.kill();
     });
     child.on('exit', () => failure ? rejectResult(failure) : response ? resolveResult(response) : rejectResult(new Error('Render exited without result')));
-    child.send({ mode: 'render', entry, seed: 7 });
+    child.send({ mode: 'render', entry, seed: 7, ...(finishing === undefined ? {} : { finishing }) });
   });
 }
 
@@ -68,6 +68,23 @@ describe('source checkpoint', () => {
     const replay = await replayCheckpoint({ checkpoint: saved.path, repoRoot: root });
     expect(replay.svg).toBe(first.svg);
     expect(replay.identity).toBe(first.identity);
+  }, 30000);
+
+  it('records finishing and replays it from the captured manifest', async () => {
+    const { root, entry, output } = await fixture();
+    const finishing = { page: { width: 24, height: 24, margin: 2, paper: '#f4ede0' }, pens: { p: { width: 0.6, passes: 2 } } };
+    const first = await rendered(entry, finishing);
+    const saved = await createCheckpoint({ entry, result: first, outputDir: output });
+    expect(saved.manifest.finishing).toEqual(first.finishing);
+    expect((await replayCheckpoint({ checkpoint: saved.path, repoRoot: root })).identity).toBe(first.identity);
+  }, 30000);
+
+  it('keeps legacy manifests without finishing replayable', async () => {
+    const { root, entry, output } = await fixture();
+    const first = await rendered(entry);
+    const saved = await createCheckpoint({ entry, result: first, outputDir: output });
+    expect(Object.hasOwn(saved.manifest, 'finishing')).toBe(false);
+    expect((await replayCheckpoint({ checkpoint: saved.path, repoRoot: root })).svg).toBe(first.svg);
   }, 30000);
 
   it('rejects a stale render after the source changed', async () => {
@@ -127,5 +144,15 @@ describe('preservation', () => {
     const comparison = comparePreserved(first, after, { parts: ['line'], boundaries: ['line'] });
     expect(comparison.ok).toBe(false);
     expect(comparison.changes.map(change => change.scope).sort()).toEqual(['boundary', 'page', 'part', 'pen']);
+  }, 30000);
+
+  it('treats omitted passes as one and reports a real pass-count change', async () => {
+    const { entry } = await fixture();
+    const first = await rendered(entry);
+    const after = structuredClone(first);
+    after.metadata.pens[0].passes = 1;
+    expect(comparePreserved(first, after, { parts: ['line'] }).ok).toBe(true);
+    after.metadata.pens[0].passes = 2;
+    expect(comparePreserved(first, after, { parts: ['line'] }).changes).toMatchObject([{ scope: 'pen', id: 'line' }]);
   }, 30000);
 });

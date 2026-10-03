@@ -1,9 +1,9 @@
 import { fork } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Params, RenderResult, SketchMetadata } from '../../src/sketch/types.ts';
+import type { FinishingOptions, Params, RenderResult, SketchMetadata } from '../../src/sketch/types.ts';
 
-export interface RenderOptions { entry: string; params?: Params; seed?: number; timeoutMs?: number; signal?: AbortSignal }
+export interface RenderOptions { entry: string; params?: Params; seed?: number; finishing?: FinishingOptions; timeoutMs?: number; signal?: AbortSignal }
 export interface InspectOptions { entry: string; timeoutMs?: number; signal?: AbortSignal }
 
 export class SketchRunnerError extends Error {
@@ -13,7 +13,7 @@ export class SketchRunnerError extends Error {
 type ChildResponse<T> = { ok: true; value: T } | { ok: false; error: { name: string; message: string } };
 
 function run<T>(mode: 'inspect' | 'render', options: RenderOptions): Promise<T> {
-  const { entry, params, seed, signal } = options;
+  const { entry, params, seed, finishing, signal } = options;
   if (typeof entry !== 'string' || !entry.trim()) return Promise.reject(new SketchRunnerError('invalid_entry', 'Entry must be a file path'));
   const timeoutMs = options.timeoutMs ?? 30_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new SketchRunnerError('invalid_timeout', 'Timeout must be a positive number of milliseconds'));
@@ -49,7 +49,7 @@ function run<T>(mode: 'inspect' | 'render', options: RenderOptions): Promise<T> 
       const detail = stderr.trim();
       finish(new SketchRunnerError('child_exit', `Sketch child exited (${signalName ?? code})${detail ? `: ${detail}` : ''}`));
     });
-    child.send({ mode, entry: resolve(entry), params, seed }, (error) => { if (error) finish(new SketchRunnerError('ipc_error', error.message)); });
+    child.send({ mode, entry: resolve(entry), params, seed, finishing }, (error) => { if (error) finish(new SketchRunnerError('ipc_error', error.message)); });
   });
 }
 

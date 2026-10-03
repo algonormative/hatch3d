@@ -2,7 +2,10 @@ import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } fro
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
-  const state = { metadata: null, params: {}, seed: 0, result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+  const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
+    margin: null, paper: null, borderStyle: '', borderPen: null, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
+  const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
+    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -10,6 +13,7 @@ if (typeof document !== 'undefined') {
     $('current-label').textContent = stale ? (state.result ? 'Previous inputs · stale preview' : 'No current preview') : 'Current inputs';
     $('pin').disabled = stale || !state.result;
     $('download').disabled = stale || !state.result;
+    $('download-png').disabled = stale || !state.result;
     state.stale = stale;
   }
 
@@ -18,7 +22,11 @@ if (typeof document !== 'undefined') {
     $('error').hidden = false;
   }
 
-  function clearError() { $('error').hidden = true; $('error').textContent = ''; }
+  function clearError() {
+    if (state.finishOptionsError) { showError(state.finishOptionsError); return; }
+    $('error').hidden = true;
+    $('error').textContent = '';
+  }
 
   function markDirty(message = 'Rendering current settings…') {
     clearTimeout(state.timer);
@@ -34,6 +42,181 @@ if (typeof document !== 'undefined') {
 
   function formatValue(control, value) {
     return `${value}${control.units ? ` ${control.units}` : ''}`;
+  }
+
+  function finishNumber(value, label, minimum, maximum) {
+    const number = Number(value);
+    if (value === '' || !Number.isFinite(number) || number < minimum || number > maximum) {
+      throw new Error(`${label} must be between ${minimum} and ${maximum}.`);
+    }
+    return number;
+  }
+
+  function finishRequest() {
+    if (!state.metadata) return undefined;
+    if (state.invalidFinishing.size) throw new Error(state.invalidFinishing.values().next().value.message);
+    const finish = state.finishing;
+    const source = state.metadata.page;
+    const request = {};
+    if (finish.pageMode !== 'original' || finish.orientation !== null || finish.margin !== null || finish.paper !== null) {
+      let width = source.width;
+      let height = source.height;
+      if (finish.pageMode === 'custom') {
+        width = finishNumber(finish.customWidth, 'Custom width', 1, 2000);
+        height = finishNumber(finish.customHeight, 'Custom height', 1, 2000);
+      } else if (finish.pageMode !== 'original') {
+        const preset = state.finishOptions?.paperSizes?.[finish.pageMode];
+        if (!preset) throw new Error(`Unknown sheet preset: ${finish.pageMode}.`);
+        width = preset.w;
+        height = preset.h;
+      }
+      const orientation = finish.orientation || (source.width > source.height ? 'landscape' : 'portrait');
+      if (finish.pageMode !== 'custom' && orientation === 'portrait') [width, height] = [Math.min(width, height), Math.max(width, height)];
+      if (finish.pageMode !== 'custom' && orientation === 'landscape') [width, height] = [Math.max(width, height), Math.min(width, height)];
+      request.page = { ...source, width, height };
+      if (finish.margin !== null) request.page.margin = finishNumber(finish.margin, 'Margin', 0, 500);
+      if (finish.paper !== null) {
+        if (!finish.paper.trim()) throw new Error('Paper color cannot be empty.');
+        request.page.paper = finish.paper.trim();
+      }
+    }
+    if (finish.borderStyle) {
+      const sourcePens = state.metadata.pens.map(pen => pen.id);
+      const pen = finish.borderPen || sourcePens[0];
+      if (!sourcePens.includes(pen)) throw new Error(`Border pen “${pen}” is no longer in the sketch.`);
+      request.border = { style: finish.borderStyle, pen };
+    }
+    const penOverrides = {};
+    for (const [id, override] of Object.entries(finish.pens)) {
+      if (Object.keys(override).length) penOverrides[id] = override;
+    }
+    if (Object.keys(penOverrides).length) request.pens = penOverrides;
+    if (finish.densityEnabled) request.density = {
+      maxDensity: finishNumber(finish.maxDensity, 'Maximum lines per cell', 1, 100000),
+      cellSize: finishNumber(finish.cellSize, 'Cell size', 0.1, 500),
+    };
+    return Object.keys(request).length ? request : undefined;
+  }
+
+  function queueFinishingRender() {
+    try {
+      finishRequest();
+      clearError();
+      queueRender(false);
+    } catch (error) {
+      state.sequence++;
+      state.pending?.abort();
+      markDirty('Finishing settings need correction.');
+      showError(error.message || String(error));
+    }
+  }
+
+  function fillFinishChoices() {
+    const options = state.finishOptions;
+    if (!options) return;
+    const page = $('finish-page');
+    const selectedPage = state.finishing.pageMode;
+    page.replaceChildren(new Option('Original sketch', 'original'));
+    for (const [id, size] of Object.entries(options.paperSizes)) page.add(new Option(size.label, id));
+    page.add(new Option('Custom size', 'custom'));
+    page.value = selectedPage;
+    const border = $('finish-border');
+    border.replaceChildren(new Option('None', ''));
+    for (const [id, label] of Object.entries(options.borderStyles)) border.add(new Option(label, id));
+    border.value = state.finishing.borderStyle;
+    const scale = $('png-scale');
+    scale.replaceChildren(...options.pngScales.map(value => new Option(`${value}×`, String(value))));
+    scale.value = '6';
+  }
+
+  function renderFinishingControls() {
+    if (!state.metadata) return;
+    const finish = state.finishing;
+    const source = state.metadata;
+    const currentPage = $('finish-page').value;
+    if (currentPage !== finish.pageMode) $('finish-page').value = finish.pageMode;
+    $('finish-orientation').value = finish.orientation || (source.page.width > source.page.height ? 'landscape' : 'portrait');
+    $('finish-custom').hidden = finish.pageMode !== 'custom';
+    $('finish-width').value = finish.customWidth ?? source.page.width;
+    $('finish-height').value = finish.customHeight ?? source.page.height;
+    $('finish-margin').value = finish.margin ?? source.page.margin ?? '';
+    $('finish-paper').value = finish.paper ?? source.page.paper ?? '#ffffff';
+    $('finish-border').value = finish.borderStyle;
+    const borderPen = $('finish-border-pen');
+    borderPen.replaceChildren(...source.pens.map(pen => new Option(pen.id, pen.id)));
+    borderPen.value = finish.borderPen || source.pens[0]?.id || '';
+    borderPen.disabled = !finish.borderStyle;
+    $('finish-density-enabled').checked = finish.densityEnabled;
+    $('finish-density-fields').hidden = !finish.densityEnabled;
+    $('finish-density-max').value = finish.maxDensity;
+    $('finish-density-cell').value = finish.cellSize;
+    const host = $('finish-pens');
+    host.replaceChildren();
+    for (const pen of source.pens) {
+      const row = document.createElement('fieldset');
+      row.className = 'finish-pen';
+      const legend = document.createElement('legend');
+      legend.textContent = pen.id;
+      row.append(legend);
+      const fields = document.createElement('div');
+      fields.className = 'finish-pen-fields';
+      for (const [key, label, type, min, max, step] of [
+        ['color', 'Color', 'text', null, null, null],
+        ['width', 'Width mm', 'number', '0.01', '10', '0.01'],
+        ['passes', 'Passes', 'number', '1', '100', '1'],
+      ]) {
+        const wrapper = document.createElement('label');
+        wrapper.textContent = label;
+        const input = document.createElement('input');
+        input.type = type;
+        input.dataset.penId = pen.id;
+        input.dataset.penField = key;
+        input.setAttribute('aria-label', `${pen.id} ${label}`);
+        if (min) input.min = min;
+        if (max) input.max = max;
+        if (step) input.step = step;
+        const errorKey = `pen:${pen.id}:${key}`;
+        input.value = state.invalidFinishing.has(errorKey) ? state.invalidFinishing.get(errorKey).value :
+          finish.pens[pen.id]?.[key] ?? pen[key] ?? 1;
+        let lastInput = input.value;
+        const applyPenChange = () => {
+          if (input.value === lastInput) return;
+          lastInput = input.value;
+          const baseline = pen[key] ?? 1;
+          let value = input.value;
+          if (key !== 'color') {
+            try { value = finishNumber(value, `${pen.id} ${label}`, Number(min), Number(max)); }
+            catch (error) {
+              state.invalidFinishing.set(errorKey, { value: input.value, message: error.message });
+              queueFinishingRender();
+              return;
+            }
+            if (key === 'passes' && !Number.isInteger(value)) {
+              state.invalidFinishing.set(errorKey, { value: input.value, message: `${pen.id} passes must be a whole number.` });
+              queueFinishingRender();
+              return;
+            }
+          } else if (!value.trim()) {
+            state.invalidFinishing.set(errorKey, { value: input.value, message: `${pen.id} color cannot be empty.` });
+            queueFinishingRender();
+            return;
+          }
+          state.invalidFinishing.delete(errorKey);
+          const override = { ...(finish.pens[pen.id] || {}) };
+          if (value === baseline) delete override[key];
+          else override[key] = value;
+          if (Object.keys(override).length) finish.pens[pen.id] = override;
+          else delete finish.pens[pen.id];
+          queueFinishingRender();
+        };
+        input.addEventListener('input', applyPenChange);
+        input.addEventListener('change', applyPenChange);
+        wrapper.append(input);
+        fields.append(wrapper);
+      }
+      row.append(fields);
+      host.append(row);
+    }
   }
 
   function renderControls() {
@@ -126,7 +309,8 @@ if (typeof document !== 'undefined') {
     const { page, pens } = result.metadata;
     $('paper-swatch').style.backgroundColor = page.paper || '#ffffff';
     $('paper-size').textContent = `${page.width} × ${page.height} mm`;
-    $('pen-count').textContent = `${pens.length} ${pens.length === 1 ? 'pass' : 'passes'}`;
+    const passes = pens.reduce((sum, pen) => sum + (pen.passes ?? 1), 0);
+    $('pen-count').textContent = `${pens.length} ${pens.length === 1 ? 'layer' : 'layers'} · ${passes} ${passes === 1 ? 'pass' : 'passes'}`;
     const counts = penPathCounts(pens, result.parts);
     const host = $('pen-layers');
     host.replaceChildren();
@@ -153,7 +337,7 @@ if (typeof document !== 'undefined') {
       const name = document.createElement('strong');
       name.textContent = `${index + 1}. ${pen.id}`;
       const spec = document.createElement('span');
-      spec.textContent = `${pen.width} mm · ${counts.get(pen.id).toLocaleString()} plotted ${counts.get(pen.id) === 1 ? 'path' : 'paths'}`;
+      spec.textContent = `${pen.width} mm${(pen.passes ?? 1) > 1 ? ` · ${pen.passes} passes` : ''} · ${counts.get(pen.id).toLocaleString()} plotted ${counts.get(pen.id) === 1 ? 'path' : 'paths'}`;
       details.append(name, spec);
       row.append(input, swatch, details);
       host.append(row);
@@ -224,9 +408,10 @@ if (typeof document !== 'undefined') {
     state.pending = controller;
     markDirty('Rendering current settings…');
     try {
+      const finishing = finishRequest();
       const payload = await api('/api/render', {
         method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ requestId: sequence, params: state.params, seed: state.seed }),
+        body: JSON.stringify({ requestId: sequence, params: state.params, seed: state.seed, ...(finishing ? { finishing } : {}) }),
       });
       if (sequence !== state.sequence || payload.requestId !== sequence) return;
       state.result = payload.result;
@@ -266,6 +451,7 @@ if (typeof document !== 'undefined') {
       document.title = `${next.name} · Sketch study`;
       setPage(state.result?.metadata || next);
       renderControls();
+      renderFinishingControls();
       referenceOverlay();
       const notice = $('incompatible');
       notice.hidden = reconciliation.incompatible.length === 0;
@@ -300,8 +486,90 @@ if (typeof document !== 'undefined') {
     $('pin-art').parentElement.style.setProperty('--page-ratio', pin.page.width / pin.page.height);
     $('pin-art').src = `/api/pins/${encodeURIComponent(id)}/svg`;
     $('pin-date').textContent = new Date(pin.pinnedAt).toLocaleString();
-    $('pin-detail').textContent = `Seed ${pin.seed} · ${pin.stats.pathCount.toLocaleString()} paths · ${Object.entries(pin.params).map(([key, value]) => `${key}: ${value}`).join(' · ')}`;
+    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.stats.pathCount.toLocaleString()} paths · ${Object.entries(pin.params).map(([key, value]) => `${key}: ${value}`).join(' · ')}`;
   }
+
+  async function loadFinishingOptions() {
+    try {
+      state.finishOptions = await api('/api/finishing-options');
+      state.finishOptionsError = null;
+      fillFinishChoices();
+      renderFinishingControls();
+    } catch (error) {
+      state.finishOptionsError = `Could not load finishing choices: ${error.message || error}`;
+      showError(state.finishOptionsError);
+    }
+  }
+
+  function bindFinish(id, field, event = 'change', convert = value => value) {
+    $(id).addEventListener(event, () => {
+      state.finishing[field] = convert($(id).value);
+      renderFinishingControls();
+      queueFinishingRender();
+    });
+  }
+
+  $('finish-page').addEventListener('change', () => {
+    const finish = state.finishing;
+    finish.pageMode = $('finish-page').value;
+    if (finish.pageMode === 'original') finish.orientation = null;
+    if (finish.pageMode === 'custom') {
+      const width = Number(finish.customWidth ?? state.metadata?.page.width);
+      const height = Number(finish.customHeight ?? state.metadata?.page.height);
+      const orientation = finish.orientation || (state.metadata.page.width > state.metadata.page.height ? 'landscape' : 'portrait');
+      finish.customWidth = orientation === 'portrait' ? Math.min(width, height) : Math.max(width, height);
+      finish.customHeight = orientation === 'portrait' ? Math.max(width, height) : Math.min(width, height);
+    }
+    renderFinishingControls();
+    queueFinishingRender();
+  });
+  $('finish-orientation').addEventListener('change', () => {
+    state.finishing.orientation = $('finish-orientation').value;
+    if (state.finishing.pageMode === 'custom') {
+      const width = Number(state.finishing.customWidth ?? state.metadata?.page.width);
+      const height = Number(state.finishing.customHeight ?? state.metadata?.page.height);
+      if (Number.isFinite(width) && Number.isFinite(height)) {
+        state.finishing.customWidth = state.finishing.orientation === 'portrait' ? Math.min(width, height) : Math.max(width, height);
+        state.finishing.customHeight = state.finishing.orientation === 'portrait' ? Math.max(width, height) : Math.min(width, height);
+        renderFinishingControls();
+      }
+    }
+    queueFinishingRender();
+  });
+  for (const [id, field] of [['finish-width', 'customWidth'], ['finish-height', 'customHeight'],
+    ['finish-margin', 'margin'], ['finish-paper', 'paper'], ['finish-density-max', 'maxDensity'], ['finish-density-cell', 'cellSize']]) {
+    const update = () => {
+      const authored = field === 'margin' ? state.metadata?.page.margin : field === 'paper' ? (state.metadata?.page.paper ?? '#ffffff') : undefined;
+      const value = (field === 'margin' || field === 'paper') && ($(id).value === '' || $(id).value === String(authored ?? '')) ?
+        null : $(id).value;
+      if (state.finishing[field] === value) return;
+      state.finishing[field] = value;
+      if (field === 'customWidth' || field === 'customHeight') {
+        const width = Number(state.finishing.customWidth ?? state.metadata?.page.width);
+        const height = Number(state.finishing.customHeight ?? state.metadata?.page.height);
+        if (width > 0 && height > 0 && width !== height) {
+          state.finishing.orientation = width > height ? 'landscape' : 'portrait';
+          $('finish-orientation').value = state.finishing.orientation;
+        }
+      }
+      queueFinishingRender();
+    };
+    $(id).addEventListener('input', update);
+    $(id).addEventListener('change', update);
+  }
+  bindFinish('finish-border', 'borderStyle');
+  bindFinish('finish-border-pen', 'borderPen');
+  $('finish-density-enabled').addEventListener('change', () => {
+    state.finishing.densityEnabled = $('finish-density-enabled').checked;
+    renderFinishingControls();
+    queueFinishingRender();
+  });
+  $('finish-reset').addEventListener('click', () => {
+    state.finishing = emptyFinish();
+    state.invalidFinishing.clear();
+    renderFinishingControls();
+    queueFinishingRender();
+  });
 
   $('overlay').addEventListener('change', referenceOverlay);
   $('part').addEventListener('change', showArt);
@@ -336,6 +604,16 @@ if (typeof document !== 'undefined') {
     anchor.click();
     anchor.remove();
   });
+  $('download-png').addEventListener('click', () => {
+    if (state.stale || !state.result) return;
+    const anchor = document.createElement('a');
+    const query = new URLSearchParams({ identity: state.result.identity, theme: $('png-theme').value, scale: $('png-scale').value || '6' });
+    anchor.href = `/api/export.png?${query}`;
+    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}.png`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  });
   $('pin').addEventListener('click', async () => {
     if (state.stale || !state.result) return;
     const sequence = state.sequence;
@@ -352,6 +630,7 @@ if (typeof document !== 'undefined') {
   });
   const events = new EventSource('/api/events');
   events.addEventListener('source-change', () => loadMetadata(true));
+  loadFinishingOptions();
   loadMetadata();
   refreshPins().catch(error => showError(`Could not load pins: ${error.message || error}`));
 }

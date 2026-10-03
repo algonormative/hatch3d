@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { Params, RenderResult } from '../../src/sketch/types.ts';
+import type { FinishingOptions, Params, RenderResult } from '../../src/sketch/types.ts';
 
 const git = promisify(execFile);
 const MANIFEST = 'checkpoint.json';
@@ -25,6 +25,7 @@ export interface CheckpointManifest {
   sourceFiles: SourceFile[];
   params: Params;
   seed: number;
+  finishing?: FinishingOptions;
   identity: string;
   canonicalSvgSha256: string;
 }
@@ -142,7 +143,9 @@ export async function createCheckpoint({ entry, result, outputDir }: CreateCheck
     version: VERSION, createdAt: new Date().toISOString(), originRepo: root, revision,
     sketchDir: sketchDir.split(sep).join('/'), entry: relativeEntry.split(sep).join('/'),
     nodeVersion: process.version, lockSha256: sha256(lock), sourceFiles,
-    params: { ...result.params }, seed: result.seed, identity: result.identity,
+    params: { ...result.params }, seed: result.seed,
+    ...(result.finishing === undefined ? {} : { finishing: structuredClone(result.finishing) }),
+    identity: result.identity,
     canonicalSvgSha256: sha256(result.svg),
   };
   await mkdir(absoluteOutput, { recursive: true });
@@ -168,7 +171,8 @@ export async function createCheckpoint({ entry, result, outputDir }: CreateCheck
 
 async function loadManifest(checkpoint: string): Promise<CheckpointManifest> {
   const value = JSON.parse(await readFile(join(checkpoint, MANIFEST), 'utf8')) as CheckpointManifest;
-  if (value?.version !== VERSION || !safeRelative(value.sketchDir) || !safeRelative(value.entry) || !/^[0-9a-f]{40}$/.test(value.revision) || !Array.isArray(value.sourceFiles)) {
+  if (value?.version !== VERSION || !safeRelative(value.sketchDir) || !safeRelative(value.entry) || !/^[0-9a-f]{40}$/.test(value.revision) || !Array.isArray(value.sourceFiles) ||
+    (value.finishing !== undefined && (typeof value.finishing !== 'object' || value.finishing === null || Array.isArray(value.finishing)))) {
     throw new Error('Invalid checkpoint manifest');
   }
   return value;
@@ -183,7 +187,7 @@ async function verifyCapture(checkpoint: string, manifest: CheckpointManifest): 
   if (JSON.stringify(files) !== JSON.stringify(manifest.sourceFiles)) throw new Error('Captured sketch source bytes changed');
 }
 
-async function renderCaptured(root: string, entry: string, params: Params, seed: number): Promise<RenderResult> {
+async function renderCaptured(root: string, entry: string, params: Params, seed: number, finishing?: FinishingOptions): Promise<RenderResult> {
   const child = fork(join(root, 'cli/sketch/child.ts'), [], {
     cwd: root, execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
@@ -208,7 +212,7 @@ async function renderCaptured(root: string, entry: string, params: Params, seed:
     });
     child.on('error', error => finish(error));
     child.on('exit', code => finish(new Error(`Captured runner exited ${code}: ${stderr.slice(-1000)}`)));
-    child.send({ mode: 'render', entry, params, seed }, error => { if (error) finish(error); });
+    child.send({ mode: 'render', entry, params, seed, ...(finishing === undefined ? {} : { finishing }) }, error => { if (error) finish(error); });
   });
 }
 
@@ -237,7 +241,7 @@ export async function replayCheckpoint({ checkpoint, repoRoot }: ReplayCheckpoin
     await symlink(join(origin, 'node_modules'), join(isolated, 'node_modules'), 'dir');
     const entry = join(sourceTarget, manifest.entry);
     if (!within(sourceTarget, entry)) throw new Error('Entrypoint escapes captured sketch');
-    const result = await renderCaptured(isolated, entry, manifest.params, manifest.seed);
+    const result = await renderCaptured(isolated, entry, manifest.params, manifest.seed, manifest.finishing);
     if (sha256(result.svg) !== manifest.canonicalSvgSha256 || result.identity !== manifest.identity) {
       throw new Error('Checkpoint replay differs from canonical SVG or render identity');
     }
