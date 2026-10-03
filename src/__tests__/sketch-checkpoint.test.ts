@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCheckpoint, replayCheckpoint } from '../../cli/sketch/checkpoint.ts';
 import { comparePreserved } from '../../cli/sketch/preserve.ts';
-import type { RenderResult } from '../sketch/types.ts';
+import type { Params, RenderResult } from '../sketch/types.ts';
 
 const exec = promisify(execFile);
 const project = resolve(import.meta.dirname, '../..');
@@ -20,7 +20,7 @@ async function command(cwd: string, ...args: string[]): Promise<void> {
 async function fixture(): Promise<{ root: string; entry: string; output: string }> {
   const root = await mkdtemp(join(tmpdir(), 'hatch3d-checkpoint-test-'));
   temporary.push(root);
-  for (const file of ['package.json', 'package-lock.json', 'cli/sketch/child.ts', 'cli/sketch/raster.ts', 'src/sketch/types.ts', 'src/sketch/finishing.ts', 'src/density.ts', 'src/utils/clip.ts', 'src/utils/page-finishing.ts', 'src/utils/prng.ts']) {
+  for (const file of ['package.json', 'package-lock.json', 'cli/sketch/child.ts', 'cli/sketch/raster.ts', 'src/sketch/types.ts', 'src/sketch/control-values.js', 'src/sketch/control-values.d.ts', 'src/sketch/finishing.ts', 'src/density.ts', 'src/utils/clip.ts', 'src/utils/page-finishing.ts', 'src/utils/prng.ts']) {
     await mkdir(join(root, file, '..'), { recursive: true });
     await cp(join(project, file), join(root, file));
   }
@@ -41,7 +41,7 @@ async function fixture(): Promise<{ root: string; entry: string; output: string 
   return { root, entry, output: join(root, 'artifacts') };
 }
 
-async function rendered(entry: string, finishing?: RenderResult['finishing']): Promise<RenderResult> {
+async function rendered(entry: string, finishing?: RenderResult['finishing'], params?: Params): Promise<RenderResult> {
   const child = fork(join(project, 'cli/sketch/child.ts'), [], {
     cwd: project, execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
@@ -55,7 +55,7 @@ async function rendered(entry: string, finishing?: RenderResult['finishing']): P
       child.kill();
     });
     child.on('exit', () => failure ? rejectResult(failure) : response ? resolveResult(response) : rejectResult(new Error('Render exited without result')));
-    child.send({ mode: 'render', entry, seed: 7, ...(finishing === undefined ? {} : { finishing }) });
+    child.send({ mode: 'render', entry, seed: 7, ...(finishing === undefined ? {} : { finishing }), ...(params === undefined ? {} : { params }) });
   });
 }
 
@@ -77,6 +77,28 @@ describe('source checkpoint', () => {
     const saved = await createCheckpoint({ entry, result: first, outputDir: output });
     expect(saved.manifest.finishing).toEqual(first.finishing);
     expect((await replayCheckpoint({ checkpoint: saved.path, repoRoot: root })).identity).toBe(first.identity);
+  }, 30000);
+
+  it('replays macro renders from raw checkpoint params', async () => {
+    const { root, entry, output } = await fixture();
+    await writeFile(entry, `export default {
+      name: 'Macro checkpoint', page: { width: 30, height: 30 },
+      pens: [{ id: 'p', color: '#222222', width: 0.3 }],
+      controls: [
+        { type: 'slider', id: 'drive', label: 'Drive', min: 0, max: 10, step: 1, default: 5 },
+        { type: 'slider', id: 'x', label: 'X', min: 0, max: 10, step: 1, default: 2 }
+      ],
+      macros: [{ control: 'drive', targets: [{ control: 'x', amount: 6 }] }],
+      draw(ctx) { return [{ id: 'line', pen: 'p', paths: [[{x:3,y:8},{x:10+ctx.params.x,y:8}]] }]; }
+    };`);
+    const first = await rendered(entry, undefined, { drive: 10 });
+    expect(first.params).toEqual({ drive: 10, x: 2 });
+    expect(first.effectiveParams).toEqual({ drive: 10, x: 5 });
+    const saved = await createCheckpoint({ entry, result: first, outputDir: output });
+    const replay = await replayCheckpoint({ checkpoint: saved.path, repoRoot: root });
+    expect(replay.params).toEqual(first.params);
+    expect(replay.effectiveParams).toEqual(first.effectiveParams);
+    expect(replay.identity).toBe(first.identity);
   }, 30000);
 
   it('keeps legacy manifests without finishing replayable', async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -28,6 +28,9 @@ describe('sketch runner', () => {
     expect(a.parts).toEqual(b.parts);
     expect(a.svg).toBe(b.svg);
     expect(a.identity).toBe(b.identity);
+    expect(Object.hasOwn(a.metadata, 'navigators')).toBe(false);
+    expect(Object.hasOwn(a.metadata, 'macros')).toBe(false);
+    expect(Object.hasOwn(a, 'effectiveParams')).toBe(false);
     expect(c.identity).not.toBe(a.identity);
     expect(a.svg).toContain('inkscape:groupmode="layer"');
     expect(a.svg).toContain('data-part-id="one"');
@@ -68,6 +71,67 @@ describe('sketch runner', () => {
       [controls.replace("control:'mode'", "control:'depth'"), /Invalid showWhen reference/],
     ] as const) {
       await sketch(source(invalid));
+      await expect(inspectSketch({ entry })).rejects.toThrow(message);
+    }
+  });
+
+  it('exposes native navigation metadata and passes effective macro values only to draw', async () => {
+    const controls = `[{type:'slider',id:'drive',label:'Drive',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'x',label:'X',min:0,max:10,step:1,default:2},` +
+      `{type:'slider',id:'y',label:'Y',min:0,max:10,step:1,default:2},` +
+      `{type:'slider',id:'z',label:'Z',min:0,max:10,step:1,default:2}]`;
+    const source = `${base.replace(/controls:\[.*\]$/, `controls:${controls}`)},navigators:[{id:'space',label:'Space',axes:['x','y','z']}],macros:[{control:'drive',targets:[{control:'x',amount:6}]}],draw(ctx){return [{id:'line',pen:'ink',paths:[[{x:10,y:10},{x:20+ctx.params.x,y:20}]]}]}`;
+    await sketch(source);
+    const metadata = await inspectSketch({ entry });
+    expect(metadata.navigators).toEqual([{ id: 'space', label: 'Space', axes: ['x', 'y', 'z'] }]);
+    expect(metadata.macros).toEqual([{ control: 'drive', targets: [{ control: 'x', amount: 6 }] }]);
+    const neutral = await renderSketch({ entry });
+    expect(neutral.params.x).toBe(2);
+    expect(neutral.effectiveParams?.x).toBe(2);
+    const moved = await renderSketch({ entry, params: { drive: 10 } });
+    expect(moved.params).toEqual({ drive: 10, x: 2, y: 2, z: 2 });
+    expect(moved.effectiveParams).toEqual({ drive: 10, x: 5, y: 2, z: 2 });
+    expect(moved.parts[0].paths[0][1].x).toBe(25);
+    expect(moved.identity).not.toBe(neutral.identity);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const output = join(dir, 'macro-render');
+      await sketchCli(['render', entry, '--params', '{"drive":10}', '--out', output]);
+      const cliResult = JSON.parse(await readFile(join(output, 'result.json'), 'utf8'));
+      expect(cliResult.params).toEqual(moved.params);
+      expect(cliResult.effectiveParams).toEqual(moved.effectiveParams);
+      expect(cliResult.identity).toBe(moved.identity);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('rejects invalid navigator and macro references before rendering', async () => {
+    const controls = `[{type:'slider',id:'a',label:'A',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'b',label:'B',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'c',label:'C',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'d',label:'D',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'flat',label:'Flat',min:1,max:1,step:1,default:1},` +
+      `{type:'toggle',id:'flag',label:'Flag',default:false}]`;
+    const source = (extra: string) => `${base.replace(/controls:\[.*\]$/, `controls:${controls}`)},${extra},draw(){return []}`;
+    for (const [extra, message] of [
+      [`navigators:[{id:'nav',label:'Nav',axes:['a','b']}]`, /3-8 axes/],
+      [`navigators:[{id:'nav',label:'Nav',axes:['a','b','b']}]`, /Invalid navigator axis/],
+      [`navigators:[{id:'nav',label:'Nav',axes:['a','b','missing']}]`, /Invalid navigator axis/],
+      [`navigators:[{id:'nav',label:'Nav',axes:['a','b','flag']}]`, /Invalid navigator axis/],
+      [`navigators:[{id:'nav',label:'Nav',axes:['a','b','c']},{id:'nav',label:'Again',axes:['a','b','c']}]`, /Duplicate navigator id/],
+      [`macros:[{control:'flag',targets:[{control:'b',amount:1}]}]`, /Invalid macro source/],
+      [`macros:[{control:'missing',targets:[{control:'b',amount:1}]}]`, /Invalid macro source/],
+      [`macros:[{control:'a',targets:[{control:'flag',amount:1}]}]`, /Invalid macro target/],
+      [`macros:[{control:'a',targets:[{control:'flat',amount:1}]}]`, /Invalid macro target/],
+      [`macros:[{control:'flat',targets:[{control:'b',amount:1}]}]`, /Invalid macro source/],
+      [`macros:[{control:'a',targets:[{control:'missing',amount:1}]}]`, /Invalid macro target/],
+      [`macros:[{control:'a',targets:[{control:'b',amount:Infinity}]}]`, /Invalid macro target/],
+      [`macros:[{control:'a',targets:[{control:'b',amount:1},{control:'b',amount:2}]}]`, /Duplicate macro target/],
+      [`macros:[{control:'a',targets:[{control:'b',amount:1}]},{control:'a',targets:[{control:'c',amount:1}]}]`, /Duplicate macro source/],
+      [`macros:[{control:'a',targets:[{control:'b',amount:1}]},{control:'b',targets:[{control:'c',amount:1}]}]`, /Invalid macro target/],
+    ] as const) {
+      await sketch(source(extra));
       await expect(inspectSketch({ entry })).rejects.toThrow(message);
     }
   });

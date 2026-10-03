@@ -1,11 +1,13 @@
 import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from './viewer-state.js';
+import { createRadarNavigator } from './radar-view.js';
+import { resolveMacroParams } from './control-values.js';
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
     margin: null, paper: null, borderStyle: '', borderPen: null, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
-    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), radarNavigators: [], stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -230,10 +232,86 @@ if (typeof document !== 'undefined') {
       panel.hidden = count === 0;
       panel.querySelector('summary').textContent = `${panel.dataset.group} · ${count} ${count === 1 ? 'control' : 'controls'}`;
     }
+    for (const { navigator, view } of state.radarNavigators) {
+      view.setAvailable(navigator.axes.every(id => !document.getElementById(`control-row-${id}`)?.hidden));
+    }
+  }
+
+  function syncControlViews() {
+    if (!state.metadata) return;
+    let effective = state.params;
+    let macroError = null;
+    try {
+      if (state.metadata.macros?.length) effective = resolveMacroParams(state.metadata.controls, state.params, state.metadata.macros);
+    } catch (error) {
+      macroError = error.message || String(error);
+      showError(`Could not preview sketch macros: ${macroError}`);
+    }
+    for (const control of state.metadata.controls) {
+      const input = $(`control-${control.id}`);
+      if (!input) continue;
+      if (control.type === 'toggle') input.checked = Boolean(state.params[control.id]);
+      else input.value = state.params[control.id];
+      if (control.type === 'slider') {
+        const row = $(`control-row-${control.id}`);
+        row.querySelector('.value').textContent = formatValue(control, state.params[control.id]);
+        const macroValue = row.querySelector('.macro-value');
+        if (macroValue) {
+          if (macroError) macroValue.textContent = `Base ${formatValue(control, state.params[control.id])} · With sketch macros unavailable`;
+          else {
+            const value = Number(effective[control.id]);
+            const limit = value === control.min ? ' · at min' : value === control.max ? ' · at max' : '';
+            macroValue.textContent = `Base ${formatValue(control, state.params[control.id])} · With sketch macros ${formatValue(control, value)}${limit}`;
+          }
+        }
+      }
+    }
+    for (const { view } of state.radarNavigators) view.update();
+  }
+
+  function applyControlValue(control, value) {
+    if (state.params[control.id] === value) return;
+    state.params[control.id] = value;
+    queueRender(Boolean(control.expensive));
+    syncControlViews();
+    updateControlVisibility();
+  }
+
+  function renderNavigators(focusedAxis = document.activeElement?.closest?.('.radar-handle')?.dataset.axisId) {
+    for (const { view } of state.radarNavigators) view.release();
+    const host = $('navigators');
+    host.replaceChildren();
+    state.radarNavigators = [];
+    const navigators = state.metadata?.navigators || [];
+    host.hidden = navigators.length === 0;
+    if (!navigators.length) {
+      if (focusedAxis) $('reset').focus();
+      return;
+    }
+    const heading = document.createElement('h2');
+    heading.textContent = 'Shape map';
+    host.append(heading);
+    for (const navigator of navigators) {
+      const view = createRadarNavigator(host, navigator, state.metadata.controls, id => state.params[id], (id, value) => {
+        const control = state.metadata.controls.find(item => item.id === id);
+        if (control) applyControlValue(control, value);
+      }, () => scheduleRender(0));
+      state.radarNavigators.push({ navigator, view });
+    }
+    if (state.metadata.macros?.length) {
+      const note = document.createElement('p');
+      note.className = 'radar-macro-note';
+      note.textContent = '“With sketch macros” previews slider effects. Sketch code may transform values further.';
+      host.append(note);
+    }
+    updateControlVisibility();
+    if (focusedAxis && !state.radarNavigators.some(({ view }) => view.focusAxis(focusedAxis))) $('reset').focus();
   }
 
   function renderControls() {
     const host = $('controls');
+    const focusedControl = document.activeElement?.id?.startsWith('control-') ? document.activeElement.id : null;
+    const focusedGroup = document.activeElement?.closest?.('.control-group')?.dataset.group;
     host.replaceChildren();
     const groups = new Map();
     for (const control of state.metadata.controls) {
@@ -252,11 +330,14 @@ if (typeof document !== 'undefined') {
           const reset = document.createElement('button');
           reset.type = 'button';
           reset.className = 'quiet control-group-reset';
+          reset.dataset.groupReset = control.group;
           reset.textContent = `Reset ${control.group}`;
           reset.addEventListener('click', () => {
             for (const member of state.metadata.controls.filter(item => item.group === control.group)) state.params[member.id] = member.default;
             $('incompatible').hidden = true;
             renderControls();
+            syncControlViews();
+            updateControlVisibility();
             queueRender(false);
           });
           body.append(reset);
@@ -278,8 +359,9 @@ if (typeof document !== 'undefined') {
         input.checked = Boolean(state.params[control.id]);
         input.addEventListener('change', () => {
           state.params[control.id] = input.checked;
-          updateControlVisibility();
           queueRender(false);
+          syncControlViews();
+          updateControlVisibility();
         });
         label.append(input, document.createTextNode(control.label));
         row.append(label);
@@ -295,6 +377,7 @@ if (typeof document !== 'undefined') {
           value.className = 'value';
           value.textContent = formatValue(control, state.params[control.id]);
           heading.append(value);
+          const influenced = state.metadata.macros?.some(macro => macro.targets.some(target => target.control === control.id));
           const input = document.createElement('input');
           input.id = `control-${control.id}`;
           input.type = 'range';
@@ -303,10 +386,7 @@ if (typeof document !== 'undefined') {
           input.step = control.step;
           input.value = state.params[control.id];
           input.addEventListener('input', () => {
-            state.params[control.id] = Number(input.value);
-            value.textContent = formatValue(control, input.value);
-            updateControlVisibility();
-            queueRender(Boolean(control.expensive));
+            applyControlValue(control, Number(input.value));
           });
           if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
           const range = document.createElement('div');
@@ -316,7 +396,13 @@ if (typeof document !== 'undefined') {
           minimum.textContent = formatValue(control, control.min);
           maximum.textContent = formatValue(control, control.max);
           range.append(minimum, maximum);
-          row.append(heading, input, range);
+          row.append(heading);
+          if (influenced) {
+            const macroValue = document.createElement('div');
+            macroValue.className = 'macro-value';
+            row.append(macroValue);
+          }
+          row.append(input, range);
         } else {
           const input = document.createElement('select');
           input.id = `control-${control.id}`;
@@ -329,8 +415,9 @@ if (typeof document !== 'undefined') {
           input.value = state.params[control.id];
           input.addEventListener('change', () => {
             state.params[control.id] = input.value;
-            updateControlVisibility();
             queueRender(false);
+            syncControlViews();
+            updateControlVisibility();
           });
           row.append(heading, input);
         }
@@ -338,6 +425,10 @@ if (typeof document !== 'undefined') {
       parent.append(row);
     }
     updateControlVisibility();
+    syncControlViews();
+    if (focusedControl && $(focusedControl) && !$(focusedControl).closest('.control')?.hidden) $(focusedControl).focus();
+    else if (focusedGroup) [...host.querySelectorAll('[data-group-reset]')].find(button => button.dataset.groupReset === focusedGroup)?.focus();
+    else if (focusedControl) $('reset').focus();
   }
 
   function queueRender(expensive) {
@@ -472,6 +563,8 @@ if (typeof document !== 'undefined') {
       if (sequence !== state.sequence || payload.requestId !== sequence) return;
       state.result = payload.result;
       state.params = { ...payload.result.params };
+      syncControlViews();
+      updateControlVisibility();
       state.hiddenPenIds = reconcileHiddenPens(state.hiddenPenIds, state.result.metadata.pens);
       updateParts();
       renderPaperAndInks();
@@ -498,6 +591,7 @@ if (typeof document !== 'undefined') {
     try {
       const next = await api('/api/metadata');
       if (sequence !== state.sequence) return;
+      const focusedAxis = document.activeElement?.closest?.('.radar-handle')?.dataset.axisId;
       const previous = state.metadata;
       const reconciliation = previous ? reconcileControls(previous.controls, state.params, next.controls) :
         { params: Object.fromEntries(next.controls.map(control => [control.id, control.default])), incompatible: [] };
@@ -507,6 +601,7 @@ if (typeof document !== 'undefined') {
       document.title = `${next.name} · Sketch study`;
       setPage(state.result?.metadata || next);
       renderControls();
+      renderNavigators(focusedAxis);
       renderFinishingControls();
       referenceOverlay();
       const notice = $('incompatible');
@@ -635,6 +730,8 @@ if (typeof document !== 'undefined') {
     state.params = Object.fromEntries(state.metadata.controls.map(control => [control.id, control.default]));
     $('incompatible').hidden = true;
     renderControls();
+    syncControlViews();
+    updateControlVisibility();
     queueRender(false);
   });
   $('reseed').addEventListener('click', () => {

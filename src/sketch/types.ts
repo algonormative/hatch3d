@@ -42,6 +42,10 @@ export interface RasterAsset {
 }
 
 export type Params = Record<string, number | boolean | string>;
+/** A direct axis view over existing numeric sliders. */
+export interface Navigator { id: string; label: string; axes: string[] }
+/** Amount is target slider units per full normalized travel of the source control. */
+export interface Macro { control: string; targets: { control: string; amount: number }[] }
 export interface SketchContext {
   params: Params;
   seed: number;
@@ -65,6 +69,8 @@ export interface Sketch {
   page: Page;
   pens: Pen[];
   controls: Control[];
+  navigators?: Navigator[];
+  macros?: Macro[];
   assets?: Record<string, AssetDeclaration>;
   draw(ctx: SketchContext): Part[] | Promise<Part[]>;
 }
@@ -81,6 +87,8 @@ export interface SketchMetadata {
   sourcePage?: Page;
   pens: Pen[];
   controls: Control[];
+  navigators?: Navigator[];
+  macros?: Macro[];
   assets: Record<string, AssetMetadata>;
 }
 
@@ -103,6 +111,8 @@ export interface RenderResult {
   metadata: SketchMetadata;
   finishing?: FinishingOptions;
   params: Params;
+  /** Values passed to draw(); present only for sketches declaring macros. */
+  effectiveParams?: Params;
   seed: number;
   parts: Part[];
   svg: string;

@@ -103,6 +103,30 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .finish-pen-fields { display: grid; grid-template-columns: 1.5fr 1fr .8fr; gap: .35rem; }
 .finish-body button { justify-self: start; }
 .control-group { border: 1px solid var(--border); border-radius: 2px; margin: .7rem 0; background: #fff; }
+.navigators { border-top: 1px solid var(--border); margin-top: .8rem; padding-top: .9rem; }
+.navigators[hidden], .radar-chart[hidden], .radar-axis-labels[hidden], .radar-unavailable[hidden] { display: none; }
+.navigators h2 { font: 600 .69rem var(--mono); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 .75rem; }
+.radar-card { background: #fffdf9; border: 1px solid var(--border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
+.radar-card h3 { font: 600 .76rem var(--mono); margin: 0; }
+.radar-help, .radar-unavailable, .radar-macro-note { color: var(--muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
+.radar-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
+.radar-grid polygon { fill: none; stroke: #ded7ca; stroke-width: 1; }
+.radar-grid line { stroke: #ded7ca; stroke-width: 1; }
+.radar-shape { fill: #a6653430; stroke: #925522; stroke-width: 2; pointer-events: none; }
+.radar-tracks line { stroke: transparent; stroke-width: 18; cursor: crosshair; }
+.radar-handle { cursor: grab; }
+.radar-handle:active { cursor: grabbing; }
+.radar-hit { fill: transparent; }
+.radar-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
+.radar-chart-label { fill: #3b352f; font: 600 12px var(--mono); cursor: pointer; }
+.radar-chart-value { fill: #8a5b34; font-weight: 500; }
+.radar-handle:focus-visible { outline: none; }
+.radar-handle:focus-visible .radar-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
+.radar-handle:focus-visible .radar-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
+.radar-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
+.radar-axis-label { border-color: var(--border); background: #fff; color: var(--ink); padding: .3rem .42rem; font: .63rem var(--mono); }
+.radar-axis-label:hover { background: #f3ece2; }
+.macro-value { color: #775331; font: .65rem/1.45 var(--mono); margin: -.25rem 0 .4rem; }
 .control-group[hidden], .control[hidden] { display: none; }
 .control-group > summary { cursor: pointer; padding: .72rem .85rem; font: 600 .74rem var(--mono); }
 .control-group-body { padding: 0 .85rem .35rem; }

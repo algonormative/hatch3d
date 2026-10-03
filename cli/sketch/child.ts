@@ -5,7 +5,8 @@ import { performance } from 'node:perf_hooks';
 import { clipPolylineToRect } from '../../src/utils/clip.ts';
 import { applyFinishing, mapFinishingAssetMetadata, resolveFinishing, type ResolvedFinishing } from '../../src/sketch/finishing.ts';
 import { loadRasterAssets } from './raster.ts';
-import type { AssetDeclaration, Control, Diagnostic, FinishingOptions, Page, Params, Part, Pen, Point, RenderResult, Sketch, SketchMetadata } from '../../src/sketch/types.ts';
+import { resolveMacroParams } from '../../src/sketch/control-values.js';
+import type { AssetDeclaration, Control, Diagnostic, FinishingOptions, Macro, Navigator, Page, Params, Part, Pen, Point, RenderResult, Sketch, SketchMetadata } from '../../src/sketch/types.ts';
 
 type Request = { mode: 'inspect' | 'render'; entry: string; params?: Params; seed?: number; finishing?: FinishingOptions };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -67,6 +68,42 @@ function validateSketch(value: unknown): Sketch {
       assert(!visited.has(current.id), `Cyclic showWhen reference for ${control.id}`);
       visited.add(current.id);
       current = controlsById.get(current.showWhen.control);
+    }
+  }
+  if (value.navigators !== undefined) {
+    assert(Array.isArray(value.navigators), 'Sketch navigators must be an array');
+    const navigatorIds = new Set<string>();
+    for (const navigator of value.navigators as Navigator[]) {
+      assert(object(navigator) && validId(navigator.id) && nonempty(navigator.label) && Array.isArray(navigator.axes) && navigator.axes.length >= 3 && navigator.axes.length <= 8, 'Navigator needs a safe id, label, and 3-8 axes');
+      assert(!navigatorIds.has(navigator.id), `Duplicate navigator id: ${navigator.id}`);
+      navigatorIds.add(navigator.id);
+      const axes = new Set<string>();
+      for (const axis of navigator.axes) {
+        const control = controlsById.get(axis);
+        assert(validId(axis) && !axes.has(axis) && control?.type === 'slider' && control.max > control.min, `Invalid navigator axis: ${String(axis)}`);
+        axes.add(axis);
+      }
+    }
+  }
+  if (value.macros !== undefined) {
+    assert(Array.isArray(value.macros), 'Sketch macros must be an array');
+    const macroSources = new Set<string>();
+    for (const macro of value.macros as Macro[]) {
+      assert(object(macro) && validId(macro.control) && Array.isArray(macro.targets) && macro.targets.length > 0, 'Macro needs a source control and targets');
+      const source = controlsById.get(macro.control);
+      assert(source?.type === 'slider' && source.max > source.min, `Invalid macro source: ${macro.control}`);
+      assert(!macroSources.has(macro.control), `Duplicate macro source: ${macro.control}`);
+      macroSources.add(macro.control);
+    }
+    for (const macro of value.macros as Macro[]) {
+      const targets = new Set<string>();
+      for (const target of macro.targets) {
+        assert(object(target) && validId(target.control) && finite(target.amount), `Invalid macro target for ${macro.control}`);
+        const control = controlsById.get(target.control);
+        assert(control?.type === 'slider' && control.max > control.min && target.control !== macro.control && !macroSources.has(target.control), `Invalid macro target: ${target.control}`);
+        assert(!targets.has(target.control), `Duplicate macro target: ${target.control}`);
+        targets.add(target.control);
+      }
     }
   }
   assert(value.assets === undefined || object(value.assets), 'Sketch assets must be a record');
@@ -173,7 +210,7 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   const sketch = validateSketch(imported.default);
   const finishing = request.mode === 'render' && request.finishing !== undefined ? resolveFinishing(sketch.page, sketch.pens, request.finishing) : undefined;
   const { assets, metadata: assetMetadata } = await loadRasterAssets(entry, sketch.assets ?? {}, sketch.page.paper);
-  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata };
+  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata, ...(sketch.navigators === undefined ? {} : { navigators: sketch.navigators.map(navigator => ({ ...navigator, axes: [...navigator.axes] })) }), ...(sketch.macros === undefined ? {} : { macros: sketch.macros.map(macro => ({ ...macro, targets: macro.targets.map(target => ({ ...target })) })) }) };
   if (request.mode === 'inspect') return metadata;
   if (finishing) {
     metadata.page = { ...finishing.page };
@@ -182,9 +219,10 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
     metadata.assets = mapFinishingAssetMetadata(assetMetadata, finishing);
   }
   const params = resolveParams(sketch.controls, request.params);
+  const effectiveParams = sketch.macros?.length ? resolveMacroParams(sketch.controls, params, sketch.macros) : undefined;
   const seed = request.seed ?? 0;
   assert(Number.isSafeInteger(seed) && seed >= 0, 'Seed must be a nonnegative safe integer');
-  const parts = finalParts(await sketch.draw({ params, seed, assets, random: (id: string) => { assert(nonempty(id), 'Random stream id must be nonempty'); return randomStream(seed, id); } }), sketch, finishing, seed);
+  const parts = finalParts(await sketch.draw({ params: effectiveParams ?? params, seed, assets, random: (id: string) => { assert(nonempty(id), 'Random stream id must be nonempty'); return randomStream(seed, id); } }), sketch, finishing, seed);
   const svg = svgFor(metadata, parts);
   let pathCount = 0; let pointCount = 0; let lengthMm = 0;
   for (const part of parts) if (!part.diagnostic) for (const path of part.paths) {
@@ -193,8 +231,8 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   }
   const diagnostics: Diagnostic[] = [];
   if (pathCount > 100_000) diagnostics.push({ level: 'warning', code: 'many_paths', message: `${pathCount} paths may be expensive to plot` });
-  const identity = createHash('sha256').update(JSON.stringify({ metadata, params, seed, parts, svg, ...(finishing ? { finishing: request.finishing } : {}) })).digest('hex');
-  return { schemaVersion: 1, metadata, ...(finishing ? { finishing: request.finishing } : {}), params, seed, parts, svg, identity, diagnostics, stats: { pathCount, pointCount, lengthMm: quantize(lengthMm), partCount: parts.filter((part) => !part.diagnostic).length }, durationMs: quantize(performance.now() - started) };
+  const identity = createHash('sha256').update(JSON.stringify({ metadata, params, ...(effectiveParams ? { effectiveParams } : {}), seed, parts, svg, ...(finishing ? { finishing: request.finishing } : {}) })).digest('hex');
+  return { schemaVersion: 1, metadata, ...(finishing ? { finishing: request.finishing } : {}), params, ...(effectiveParams ? { effectiveParams } : {}), seed, parts, svg, identity, diagnostics, stats: { pathCount, pointCount, lengthMm: quantize(lengthMm), partCount: parts.filter((part) => !part.diagnostic).length }, durationMs: quantize(performance.now() - started) };
 }
 
 process.on('message', (message: Request) => {

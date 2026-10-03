@@ -16,6 +16,8 @@ const STATIC = new Map([
   ['/', ['viewer.html', 'text/html; charset=utf-8']],
   ['/viewer.js', ['viewer.js', 'text/javascript; charset=utf-8']],
   ['/viewer-state.js', ['viewer-state.js', 'text/javascript; charset=utf-8']],
+  ['/radar-view.js', ['radar-view.js', 'text/javascript; charset=utf-8']],
+  ['/control-values.js', ['../../src/sketch/control-values.js', 'text/javascript; charset=utf-8']],
   ['/viewer.css', ['viewer.css', 'text/css; charset=utf-8']],
 ]);
 const HERE = dirname(fileURLToPath(import.meta.url));

@@ -4,6 +4,8 @@ A sketch is an ordinary TypeScript module with one default `Sketch` object. Page
 
 Existing hatch3d 2D and 3D compositions can be used through the [Sketch adapters](sketch-hatch3d.md), with runnable examples and physical pen parts.
 
+For slider groups, composition navigators, and sketch macros, see [Sketch controls and composition navigation](sketch-controls.md).
+
 ```ts
 import type { Sketch } from '../../src/sketch/types.ts';
 
