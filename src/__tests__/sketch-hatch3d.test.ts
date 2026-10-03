@@ -28,6 +28,7 @@ describe('hatch3d Sketch adapters', () => {
       generate: () => [],
     };
     const pack = legacyControlPack(composition, 's');
+    expect(pack.navigators).toEqual([{ id: 's__control__position__xy', label: 'Position', type: 'xy', axes: ['s__control__position__x', 's__control__position__y'] }]);
     expect(pack.controls.find((control) => control.id === 's__control__position__x')?.showWhen).toEqual({ control: 's__control__mode', equals: 'on' });
     expect(pack.controls.find((control) => control.id === 's__control__mode')).toMatchObject({ options: ['on', 'off'], optionLabels: { on: 'On', off: 'Off' } });
     expect(pack.values({ s__control__mode: 'off', s__control__gain: 2, s__control__position__x: 0.3, s__control__position__y: -0.2, s__macro__boost: 1 }, {}, 0)).toMatchObject({ gain: 4, position: [0.3, -0.2] });
@@ -41,6 +42,7 @@ describe('hatch3d Sketch adapters', () => {
     const moved = (await twoD.draw(context(twoD, { circles__transform__panX: 10 }))) as typeof base;
     expect(again).toEqual(base);
     expect(seeded).not.toEqual(base);
+    expect(twoD.navigators).toContainEqual({ id: 'circles__transform__panXY', label: 'Placement pan', type: 'xy', axes: ['circles__transform__panX', 'circles__transform__panY'], yDirection: 'down' });
     expect(base[0].pen).toBe('charcoal');
     expect(base[0].paths.length).toBeGreaterThan(20);
     const point = base[0].paths[0][0];
@@ -56,6 +58,9 @@ describe('hatch3d Sketch adapters', () => {
     const moved = (await mixed.draw(context(mixed, { ringstudy__control__ringSpacing: 2.3 }))) as typeof base;
     const mesh = (await mixed.draw(context(mixed, { ringstudy__view__showMesh: true }))) as typeof base;
     expect(again).toEqual(base);
+    expect(mixed.navigators).toContainEqual({ id: 'ringstudy__view__panXY', label: 'Camera pan', type: 'xy', axes: ['ringstudy__view__panX', 'ringstudy__view__panY'], yDirection: 'up' });
+    expect(mixed.navigators).toContainEqual({ id: 'ringstudy__control__ringOffset__xy', label: 'Ring Offset', type: 'xy', axes: ['ringstudy__control__ringOffset__x', 'ringstudy__control__ringOffset__y'], axisLabels: ['X', 'Z'] });
+    expect(mixed.navigators).toContainEqual({ id: 'ringstudy__upperRingBase', label: 'Upper ring base position · mirrored pair', type: 'xyz', axes: ['ringstudy__control__ringOffset__x', 'ringstudy__control__ringSpacing', 'ringstudy__control__ringOffset__y'], axisLabels: ['World X', 'World Y', 'World Z'] });
     expect(base.map((part) => part.pen)).toEqual(['rings', 'curve']);
     expect(base[0].paths.length).toBeGreaterThan(0);
     expect(base[1].paths).toEqual(unoccluded[1].paths);
@@ -73,6 +78,7 @@ describe('hatch3d Sketch adapters', () => {
       canvas: { width: 100, height: 100 },
     });
     const part = layer.draw({ params: {}, seed: 0, assets: {}, random: () => () => 0.5 });
+    expect(layer.navigators).toEqual([]);
     expect(layer.pen.id).toBe('ink');
     expect(part.paths[0]).toEqual([{ x: 43, y: 12 }, { x: 167, y: 136 }]);
   });

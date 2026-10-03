@@ -74,7 +74,24 @@ function validateSketch(value: unknown): Sketch {
     assert(Array.isArray(value.navigators), 'Sketch navigators must be an array');
     const navigatorIds = new Set<string>();
     for (const navigator of value.navigators as Navigator[]) {
-      assert(object(navigator) && validId(navigator.id) && nonempty(navigator.label) && Array.isArray(navigator.axes) && navigator.axes.length >= 3 && navigator.axes.length <= 8, 'Navigator needs a safe id, label, and 3-8 axes');
+      assert(object(navigator) && validId(navigator.id) && nonempty(navigator.label) && Array.isArray(navigator.axes), 'Navigator needs a safe id, label, and axes');
+      const type = navigator.type === undefined ? 'radar' : navigator.type;
+      assert(type === 'radar' || type === 'xy' || type === 'xyz', `Unknown navigator type: ${String(type)}`);
+      const expectedAxes = type === 'xy' ? 2 : type === 'xyz' ? 3 : undefined;
+      assert(expectedAxes === undefined ? navigator.axes.length >= 3 && navigator.axes.length <= 8 : navigator.axes.length === expectedAxes,
+        `${type === 'radar' ? 'Radar navigator needs 3-8 axes' : `${type.toUpperCase()} navigator needs ${expectedAxes} axes`}: ${navigator.id}`);
+      const options = navigator as unknown as Record<string, unknown>;
+      if (type === 'xy') {
+        assert(options.yDirection === undefined || options.yDirection === 'up' || options.yDirection === 'down', `Invalid navigator yDirection: ${navigator.id}`);
+      } else {
+        assert(options.yDirection === undefined, `Invalid navigator yDirection: ${navigator.id}`);
+      }
+      if (type === 'radar') {
+        assert(options.axisLabels === undefined, `Invalid navigator axisLabels: ${navigator.id}`);
+      } else {
+        assert(options.axisLabels === undefined || (Array.isArray(options.axisLabels) && options.axisLabels.length === expectedAxes && options.axisLabels.every(nonempty)),
+          `Invalid navigator axisLabels: ${navigator.id}`);
+      }
       assert(!navigatorIds.has(navigator.id), `Duplicate navigator id: ${navigator.id}`);
       navigatorIds.add(navigator.id);
       const axes = new Set<string>();
@@ -210,7 +227,7 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   const sketch = validateSketch(imported.default);
   const finishing = request.mode === 'render' && request.finishing !== undefined ? resolveFinishing(sketch.page, sketch.pens, request.finishing) : undefined;
   const { assets, metadata: assetMetadata } = await loadRasterAssets(entry, sketch.assets ?? {}, sketch.page.paper);
-  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata, ...(sketch.navigators === undefined ? {} : { navigators: sketch.navigators.map(navigator => ({ ...navigator, axes: [...navigator.axes] })) }), ...(sketch.macros === undefined ? {} : { macros: sketch.macros.map(macro => ({ ...macro, targets: macro.targets.map(target => ({ ...target })) })) }) };
+  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata, ...(sketch.navigators === undefined ? {} : { navigators: sketch.navigators.map(navigator => structuredClone(navigator)) }), ...(sketch.macros === undefined ? {} : { macros: sketch.macros.map(macro => ({ ...macro, targets: macro.targets.map(target => ({ ...target })) })) }) };
   if (request.mode === 'inspect') return metadata;
   if (finishing) {
     metadata.page = { ...finishing.page };

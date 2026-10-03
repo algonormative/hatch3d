@@ -26,7 +26,19 @@ const sketch: Sketch = {
 export default sketch;
 ```
 
-`navigators` is optional. Each navigator has an ID, a label, and 3–8 axes naming existing slider control IDs. An axis can be a macro source or an ordinary fine control. A navigator changes those same control values; it does not introduce a second set of parameters. The viewer offers **Base** and **With sketch macros** views so you can see the raw fine controls alongside their resolved values. Resetting a macro source returns it to its declared default, where its contribution is zero.
+`navigators` is optional. It declares views over existing numeric sliders; it never creates another parameter set. A radar navigator (the default type) names 3–8 axes. An XY navigator names exactly two axes, horizontal then vertical. An XYZ navigator names exactly three, X/Y/Z in the displayed cube. Every axis remains an independently editable slider, including macro sources. Navigator IDs must be unique and their axes must reference distinct slider IDs.
+
+```ts
+navigators: [
+  { id: 'shape', label: 'Shape', axes: ['density', 'bend', 'rests'] }, // radar
+  { id: 'placement', label: 'Placement', type: 'xy', axes: ['panX', 'panY'], yDirection: 'down' },
+  { id: 'volume', label: 'Volume', type: 'xyz', axes: ['width', 'height', 'depth'], axisLabels: ['X', 'Y', 'Z'] },
+]
+```
+
+XY and XYZ views normalize **each slider against its own declared range**. A combined position expresses control values, not equal world-space distances or a new transform. XY uses positive Y upward by default; set `yDirection: 'down'` when increasing the vertical slider moves an object down the page. `axisLabels` gives physical names when a control ID's suffix is misleading. The XYZ cube uses the original hatch3d orbit-cube projection for orientation; dragging a displayed plane edits its two bound sliders. The original XY pad's value mapping and cube's projection are shared with the viewer through `src/controls/geometry.js`.
+
+An axis can be a macro source or an ordinary fine control. The viewer offers **Base** and **With sketch macros** views so you can see raw controls alongside resolved values. Resetting a macro source returns it to its declared default, where its contribution is zero.
 
 `macros` is optional. Each macro names an existing slider source and one or more existing base slider targets. The `amount` is a signed change in the **target's units** over the source's full normalized span, not a multiplier. For source value `v`, default `d`, and range `min…max`, its contribution to a target is `amount × ((v - min) / (max - min) - (d - min) / (max - min))`. In the example, moving `density` from its default `0.5` to `1` lowers `pitch` from 3 to 2 mm; moving it to `0` raises `pitch` to 4 mm. A negative amount therefore reverses the direction of the target. Source defaults need not be `0.5`, but their contributions are always zero at their own defaults.
 

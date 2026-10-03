@@ -42,8 +42,11 @@ export interface RasterAsset {
 }
 
 export type Params = Record<string, number | boolean | string>;
-/** A direct axis view over existing numeric sliders. */
-export interface Navigator { id: string; label: string; axes: string[] }
+/** Direct views over existing numeric sliders; axis order is horizontal/vertical for XY and X/Y/Z for XYZ. */
+export type Navigator =
+  | { id: string; label: string; type?: 'radar'; axes: string[] }
+  | { id: string; label: string; type: 'xy'; axes: [string, string]; yDirection?: 'up' | 'down'; axisLabels?: [string, string] }
+  | { id: string; label: string; type: 'xyz'; axes: [string, string, string]; axisLabels?: [string, string, string] };
 /** Amount is target slider units per full normalized travel of the source control. */
 export interface Macro { control: string; targets: { control: string; amount: number }[] }
 export interface SketchContext {

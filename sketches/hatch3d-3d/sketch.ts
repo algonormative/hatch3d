@@ -8,6 +8,14 @@ export default createHatch3d3DSketch({
   page: { width: 210, height: 148, margin: 12, paper: '#f7f4ec' },
   pen: { id: 'rings', color: '#28353c', width: 0.28 },
   prefix: 'ringstudy',
+  xyAxisLabels: { ringOffset: ['X', 'Z'] },
+  navigators: [{
+    id: 'ringstudy__upperRingBase',
+    label: 'Upper ring base position · mirrored pair',
+    type: 'xyz',
+    axes: ['ringstudy__control__ringOffset__x', 'ringstudy__control__ringSpacing', 'ringstudy__control__ringOffset__y'],
+    axisLabels: ['World X', 'World Y', 'World Z'],
+  }],
   viewDefaults: { camDist: 5.5 },
   paper: {
     composition: spirograph,

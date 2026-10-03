@@ -106,6 +106,55 @@ describe('sketch runner', () => {
     }
   });
 
+  it('preserves spatial navigator metadata while rendering from unchanged scalar params', async () => {
+    const controls = `[{type:'slider',id:'x',label:'X',min:-2,max:2,step:0.5,default:0},` +
+      `{type:'slider',id:'y',label:'Y',min:0,max:10,step:1,default:2},` +
+      `{type:'slider',id:'z',label:'Z',min:-5,max:5,step:1,default:0}]`;
+    await sketch(`${base.replace(/controls:\[.*\]$/, `controls:${controls}`)},navigators:[` +
+      `{id:'plane',label:'Placement',type:'xy',axes:['x','z'],yDirection:'down',axisLabels:['X','Z']},` +
+      `{id:'cube',label:'Position',type:'xyz',axes:['x','y','z'],axisLabels:['X','Y','Z']},` +
+      `{id:'shape',label:'Shape',axes:['x','y','z']}],` +
+      `draw(ctx){return [{id:'line',pen:'ink',paths:[[{x:10,y:10},{x:20+ctx.params.x,y:20+ctx.params.y}]]}]}`);
+    const metadata = await inspectSketch({ entry });
+    expect(metadata.navigators).toEqual([
+      { id: 'plane', label: 'Placement', type: 'xy', axes: ['x', 'z'], yDirection: 'down', axisLabels: ['X', 'Z'] },
+      { id: 'cube', label: 'Position', type: 'xyz', axes: ['x', 'y', 'z'], axisLabels: ['X', 'Y', 'Z'] },
+      { id: 'shape', label: 'Shape', axes: ['x', 'y', 'z'] },
+    ]);
+    const rendered = await renderSketch({ entry, params: { x: 1, z: -3 } });
+    expect(rendered.metadata.navigators).toEqual(metadata.navigators);
+    expect(rendered.params).toEqual({ x: 1, y: 2, z: -3 });
+    expect(Object.hasOwn(rendered, 'effectiveParams')).toBe(false);
+    expect(rendered.parts[0].paths[0][1]).toEqual({ x: 21, y: 22 });
+  });
+
+  it('validates spatial navigator kind, dimensions, labels, and slider references', async () => {
+    const controls = `[{type:'slider',id:'a',label:'A',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'b',label:'B',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'c',label:'C',min:0,max:10,step:1,default:5},` +
+      `{type:'slider',id:'flat',label:'Flat',min:1,max:1,step:1,default:1},` +
+      `{type:'toggle',id:'flag',label:'Flag',default:false}]`;
+    const source = (navigation: string) => `${base.replace(/controls:\[.*\]$/, `controls:${controls}`)},navigators:[${navigation}],draw(){return []}`;
+    for (const [navigation, message] of [
+      [`{id:'n',label:'N',type:'polar',axes:['a','b','c']}`, /Unknown navigator type/],
+      [`{id:'n',label:'N',type:null,axes:['a','b','c']}`, /Unknown navigator type/],
+      [`{id:'n',label:'N',type:'xy',axes:['a','b','c']}`, /2 axes/],
+      [`{id:'n',label:'N',type:'xyz',axes:['a','b']}`, /3 axes/],
+      [`{id:'n',label:'N',type:'radar',axes:['a','b']}`, /3-8 axes/],
+      [`{id:'n',label:'N',type:'xy',axes:['a','b'],yDirection:'left'}`, /yDirection/],
+      [`{id:'n',label:'N',type:'xyz',axes:['a','b','c'],yDirection:'down'}`, /yDirection/],
+      [`{id:'n',label:'N',type:'xy',axes:['a','b'],axisLabels:['X']}`, /axisLabels/],
+      [`{id:'n',label:'N',type:'xyz',axes:['a','b','c'],axisLabels:['X',' ','Z']}`, /axisLabels/],
+      [`{id:'n',label:'N',axes:['a','b','c'],axisLabels:['X','Y','Z']}`, /axisLabels/],
+      [`{id:'n',label:'N',type:'xy',axes:['a','a']}`, /Invalid navigator axis/],
+      [`{id:'n',label:'N',type:'xy',axes:['a','flat']}`, /Invalid navigator axis/],
+      [`{id:'n',label:'N',type:'xyz',axes:['a','b','flag']}`, /Invalid navigator axis/],
+    ] as const) {
+      await sketch(source(navigation));
+      await expect(inspectSketch({ entry })).rejects.toThrow(message);
+    }
+  });
+
   it('rejects invalid navigator and macro references before rendering', async () => {
     const controls = `[{type:'slider',id:'a',label:'A',min:0,max:10,step:1,default:5},` +
       `{type:'slider',id:'b',label:'B',min:0,max:10,step:1,default:5},` +

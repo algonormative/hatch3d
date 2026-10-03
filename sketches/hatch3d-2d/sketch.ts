@@ -9,4 +9,5 @@ export default createHatch3d2DSketch({
   prefix: 'circles',
   defaults: { gridCols: 18, gridRows: 14, circleSegments: 16 },
   seedValueKey: 'noiseSeed',
+  // The adapter provides a 2D placement navigator for its pan sliders.
 });

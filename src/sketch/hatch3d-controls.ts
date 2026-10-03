@@ -1,7 +1,7 @@
 import { getControlDefaults, getMacroDefaults, resolveValues } from '../compositions/helpers.ts';
 import type { CompositionMetadata, ControlDef, HatchGroupConfig } from '../compositions/types.ts';
 import { HATCH_GROUP_DEFAULT } from '../compositions/types.ts';
-import type { AssetDeclaration, Control, Params, RasterAsset } from './types.ts';
+import type { AssetDeclaration, Control, Navigator, Params, RasterAsset } from './types.ts';
 
 const FAMILIES = ['inherit', 'u', 'v', 'diagonal', 'rings', 'hex', 'crosshatch', 'spiral'];
 const safe = (value: string): string => value.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -19,6 +19,7 @@ function stepFor(min: number, value: number, requested?: number): number {
 
 export interface LegacyControlPack {
   controls: Control[];
+  navigators: Navigator[];
   values(params: Params, assets: Record<string, RasterAsset>, seed: number): Record<string, unknown>;
 }
 
@@ -31,9 +32,11 @@ export function legacyControlPack(
     assets?: Record<string, AssetDeclaration>;
     imageBindings?: Record<string, string>;
     seedValueKey?: string;
+    xyAxisLabels?: Record<string, [string, string]>;
   } = {},
 ): LegacyControlPack {
   const controls: Control[] = [];
+  const navigators: Navigator[] = [];
   const defs = composition.controls ?? {};
   const defaults = options.defaults ?? {};
   const used = new Set<string>();
@@ -67,6 +70,7 @@ export function legacyControlPack(
       for (const [axis, value] of [['x', pair[0]], ['y', pair[1]]] as const) {
         add({ type: 'slider', id: `${controlId}__${axis}`, label: `${def.label} ${axis.toUpperCase()}`, default: value, min: def.min, max: def.max, step: stepFor(def.min, value), ...common });
       }
+      navigators.push({ id: `${controlId}__xy`, label: def.label, type: 'xy', axes: [`${controlId}__x`, `${controlId}__y`], ...(options.xyAxisLabels?.[key] ? { axisLabels: options.xyAxisLabels[key] } : {}) });
     } else {
       const assetId = options.imageBindings?.[key];
       if (!assetId || !options.assets?.[assetId]) throw new Error(`Image control ${key} in ${composition.name} needs an explicit Sketch asset binding`);
@@ -78,6 +82,7 @@ export function legacyControlPack(
 
   return {
     controls,
+    navigators,
     values(params, assets, seed) {
       const base = getControlDefaults(defs);
       for (const [key, def] of Object.entries(defs)) {

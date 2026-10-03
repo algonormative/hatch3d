@@ -1,14 +1,8 @@
 import { snapSliderValue } from './control-values.js';
+import { formatSliderValue, pointerSession, sliderKeyValue, svgElement, svgPoint } from './svg-controls.js';
 
-const NS = 'http://www.w3.org/2000/svg';
 const CENTER = 150;
 const RADIUS = 95;
-
-function svgElement(tag, attributes = {}) {
-  const element = document.createElementNS(NS, tag);
-  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
-  return element;
-}
 
 function point(index, count, fraction) {
   const angle = -Math.PI / 2 + index * 2 * Math.PI / count;
@@ -44,7 +38,16 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
   svg.append(grid, shape);
   const handles = [];
   const chartLabels = [];
-  let active = null;
+  const pointer = pointerSession(svg, (event, active) => {
+    const control = axes[active.index];
+    const value = pointerValue(event, active.index);
+    if (value !== Number(readValue(control.id))) {
+      active.changed = true;
+      onChange(control.id, value, Boolean(control.expensive));
+    }
+  }, active => {
+    if (active.changed && active.expensive) onRelease();
+  });
 
   function update() {
     shape.setAttribute('points', axes.map((control, index) => {
@@ -58,48 +61,25 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
       const [x, y] = point(index, axes.length, fraction);
       handle.setAttribute('transform', `translate(${x} ${y})`);
       handle.setAttribute('aria-valuenow', String(value));
-      handle.setAttribute('aria-valuetext', `${value}${control.units ? ` ${control.units}` : ''}`);
-      chartLabels[index].lastElementChild.textContent = `${value}${control.units ? ` ${control.units}` : ''}`;
+      handle.setAttribute('aria-valuetext', formatSliderValue(control, value));
+      chartLabels[index].lastElementChild.textContent = formatSliderValue(control, value);
     });
   }
 
   function pointerValue(event, index) {
-    const rect = svg.getBoundingClientRect();
-    if (!rect.width || !rect.height) return Number(readValue(axes[index].id));
-    const x = (event.clientX - rect.left) * 300 / rect.width - CENTER;
-    const y = (event.clientY - rect.top) * 300 / rect.height - CENTER;
+    const position = svgPoint(svg, event, 300, 300);
+    if (!position) return Number(readValue(axes[index].id));
+    const x = position.x - CENTER;
+    const y = position.y - CENTER;
     const angle = -Math.PI / 2 + index * 2 * Math.PI / axes.length;
     const fraction = Math.max(0, Math.min(1, (x * Math.cos(angle) + y * Math.sin(angle)) / RADIUS));
     const control = axes[index];
     return snapSliderValue(control, control.min + fraction * (control.max - control.min));
   }
 
-  function finish() {
-    if (!active) return;
-    const { changed, expensive, pointerId } = active;
-    active = null;
-    if (svg.hasPointerCapture?.(pointerId)) svg.releasePointerCapture(pointerId);
-    if (changed && expensive) onRelease();
-  }
-
   function begin(index, event) {
-    if (event.button !== 0 || active) return;
-    event.preventDefault();
     const control = axes[index];
-    active = { index, pointerId: event.pointerId, changed: false, expensive: Boolean(control.expensive) };
-    svg.setPointerCapture?.(event.pointerId);
-    move(event);
-    handles[index].focus();
-  }
-
-  function move(event) {
-    if (!active || event.pointerId !== active.pointerId) return;
-    const control = axes[active.index];
-    const value = pointerValue(event, active.index);
-    if (value !== Number(readValue(control.id))) {
-      active.changed = true;
-      onChange(control.id, value, Boolean(control.expensive));
-    }
+    if (pointer.begin(event, { index, expensive: Boolean(control.expensive) })) handles[index].focus();
   }
 
   const trackLayer = svgElement('g', { class: 'radar-tracks', 'aria-hidden': 'true' });
@@ -112,19 +92,15 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
   svg.append(trackLayer);
   axes.forEach((control, index) => {
     const handle = svgElement('g', { class: 'radar-handle', role: 'slider', tabindex: '0', 'data-axis-id': control.id,
+      'data-navigator-id': navigator.id,
       'aria-label': `${navigator.label}: ${control.label}`, 'aria-valuemin': control.min, 'aria-valuemax': control.max });
     handle.append(svgElement('circle', { class: 'radar-hit', r: 14 }), svgElement('circle', { class: 'radar-dot', r: 5 }));
     handle.addEventListener('pointerdown', event => begin(index, event));
     handle.addEventListener('keydown', event => {
-      let proposed;
       const current = Number(readValue(control.id));
-      if (event.key === 'ArrowUp' || event.key === 'ArrowRight') proposed = current + control.step;
-      else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') proposed = current - control.step;
-      else if (event.key === 'Home') proposed = control.min;
-      else if (event.key === 'End') proposed = control.max;
-      else return;
+      const value = sliderKeyValue(control, current, event.key);
+      if (value === null) return;
       event.preventDefault();
-      const value = snapSliderValue(control, proposed);
       if (value !== current) {
         onChange(control.id, value, Boolean(control.expensive));
         if (control.expensive) onRelease();
@@ -150,10 +126,6 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
     chartLabels.push(label);
     svg.append(label);
   });
-  svg.addEventListener('pointermove', move);
-  svg.addEventListener('pointerup', event => { if (active?.pointerId === event.pointerId) finish(); });
-  svg.addEventListener('pointercancel', event => { if (active?.pointerId === event.pointerId) finish(); });
-  svg.addEventListener('lostpointercapture', event => { if (active?.pointerId === event.pointerId) finish(); });
   const labels = document.createElement('div');
   labels.className = 'radar-axis-labels';
   axes.forEach((control, index) => {
@@ -171,7 +143,7 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
   return {
     update,
     setAvailable(available) {
-      if (!available) finish();
+      if (!available) pointer.release();
       svg.toggleAttribute('hidden', !available);
       labels.hidden = !available;
       unavailable.hidden = available;
@@ -182,6 +154,8 @@ export function createRadarNavigator(host, navigator, controls, readValue, onCha
       handles[index].focus();
       return true;
     },
-    release: finish,
+    release: pointer.release,
+    cancel: pointer.cancel,
+    dispose: pointer.dispose,
   };
 }

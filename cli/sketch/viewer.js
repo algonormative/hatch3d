@@ -1,5 +1,5 @@
 import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from './viewer-state.js';
-import { createRadarNavigator } from './radar-view.js';
+import { createNavigatorView } from './navigator-view.js';
 import { resolveMacroParams } from './control-values.js';
 
 if (typeof document !== 'undefined') {
@@ -7,7 +7,7 @@ if (typeof document !== 'undefined') {
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
     margin: null, paper: null, borderStyle: '', borderPen: null, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
-    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), radarNavigators: [], stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), navigatorViews: [], stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -232,8 +232,11 @@ if (typeof document !== 'undefined') {
       panel.hidden = count === 0;
       panel.querySelector('summary').textContent = `${panel.dataset.group} · ${count} ${count === 1 ? 'control' : 'controls'}`;
     }
-    for (const { navigator, view } of state.radarNavigators) {
-      view.setAvailable(navigator.axes.every(id => !document.getElementById(`control-row-${id}`)?.hidden));
+    for (const { navigator, view } of state.navigatorViews) {
+      view.setAvailable(navigator.axes.every(id => {
+        const row = document.getElementById(`control-row-${id}`);
+        return row && !row.hidden;
+      }));
     }
   }
 
@@ -266,37 +269,42 @@ if (typeof document !== 'undefined') {
         }
       }
     }
-    for (const { view } of state.radarNavigators) view.update();
+    for (const { view } of state.navigatorViews) view.update();
   }
 
-  function applyControlValue(control, value) {
-    if (state.params[control.id] === value) return;
-    state.params[control.id] = value;
-    queueRender(Boolean(control.expensive));
+  function applyControlValues(patch, expensive = false) {
+    const changed = Object.entries(patch).filter(([id, value]) => state.params[id] !== value);
+    if (!changed.length) return;
+    for (const [id, value] of changed) state.params[id] = value;
+    queueRender(expensive);
     syncControlViews();
     updateControlVisibility();
   }
 
-  function renderNavigators(focusedAxis = document.activeElement?.closest?.('.radar-handle')?.dataset.axisId) {
-    for (const { view } of state.radarNavigators) view.release();
+  function focusedNavigator() {
+    const handle = document.activeElement?.closest?.('.radar-handle, .spatial-handle');
+    if (!handle) return null;
+    return { id: handle.dataset.navigatorId, axisId: handle.dataset.axisId };
+  }
+
+  function renderNavigators(focus = focusedNavigator()) {
+    for (const { view } of state.navigatorViews) view.dispose();
     const host = $('navigators');
     host.replaceChildren();
-    state.radarNavigators = [];
+    state.navigatorViews = [];
     const navigators = state.metadata?.navigators || [];
     host.hidden = navigators.length === 0;
     if (!navigators.length) {
-      if (focusedAxis) $('reset').focus();
+      if (focus) $('reset').focus();
       return;
     }
     const heading = document.createElement('h2');
     heading.textContent = 'Shape map';
     host.append(heading);
     for (const navigator of navigators) {
-      const view = createRadarNavigator(host, navigator, state.metadata.controls, id => state.params[id], (id, value) => {
-        const control = state.metadata.controls.find(item => item.id === id);
-        if (control) applyControlValue(control, value);
-      }, () => scheduleRender(0));
-      state.radarNavigators.push({ navigator, view });
+      const view = createNavigatorView(host, navigator, state.metadata.controls, id => state.params[id],
+        (patch, expensive) => applyControlValues(patch, expensive), () => scheduleRender(0));
+      state.navigatorViews.push({ navigator, view });
     }
     if (state.metadata.macros?.length) {
       const note = document.createElement('p');
@@ -305,7 +313,7 @@ if (typeof document !== 'undefined') {
       host.append(note);
     }
     updateControlVisibility();
-    if (focusedAxis && !state.radarNavigators.some(({ view }) => view.focusAxis(focusedAxis))) $('reset').focus();
+    if (focus && !state.navigatorViews.some(({ navigator, view }) => navigator.id === focus.id && view.focusAxis(focus.axisId))) $('reset').focus();
   }
 
   function renderControls() {
@@ -333,6 +341,7 @@ if (typeof document !== 'undefined') {
           reset.dataset.groupReset = control.group;
           reset.textContent = `Reset ${control.group}`;
           reset.addEventListener('click', () => {
+            for (const { view } of state.navigatorViews) view.cancel();
             for (const member of state.metadata.controls.filter(item => item.group === control.group)) state.params[member.id] = member.default;
             $('incompatible').hidden = true;
             renderControls();
@@ -386,7 +395,7 @@ if (typeof document !== 'undefined') {
           input.step = control.step;
           input.value = state.params[control.id];
           input.addEventListener('input', () => {
-            applyControlValue(control, Number(input.value));
+            applyControlValues({ [control.id]: Number(input.value) }, Boolean(control.expensive));
           });
           if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
           const range = document.createElement('div');
@@ -585,13 +594,14 @@ if (typeof document !== 'undefined') {
   }
 
   async function loadMetadata(sourceChanged = false) {
+    for (const { view } of state.navigatorViews) view.cancel();
     const sequence = ++state.sequence;
     state.pending?.abort();
     markDirty(sourceChanged ? 'Source changed. Checking controls…' : 'Loading sketch…');
     try {
       const next = await api('/api/metadata');
       if (sequence !== state.sequence) return;
-      const focusedAxis = document.activeElement?.closest?.('.radar-handle')?.dataset.axisId;
+      const focus = focusedNavigator();
       const previous = state.metadata;
       const reconciliation = previous ? reconcileControls(previous.controls, state.params, next.controls) :
         { params: Object.fromEntries(next.controls.map(control => [control.id, control.default])), incompatible: [] };
@@ -601,7 +611,7 @@ if (typeof document !== 'undefined') {
       document.title = `${next.name} · Sketch study`;
       setPage(state.result?.metadata || next);
       renderControls();
-      renderNavigators(focusedAxis);
+      renderNavigators(focus);
       renderFinishingControls();
       referenceOverlay();
       const notice = $('incompatible');
@@ -727,6 +737,7 @@ if (typeof document !== 'undefined') {
   $('pin-select').addEventListener('change', event => selectPin(event.target.value));
   $('reset').addEventListener('click', () => {
     if (!state.metadata) return;
+    for (const { view } of state.navigatorViews) view.cancel();
     state.params = Object.fromEntries(state.metadata.controls.map(control => [control.id, control.default]));
     $('incompatible').hidden = true;
     renderControls();

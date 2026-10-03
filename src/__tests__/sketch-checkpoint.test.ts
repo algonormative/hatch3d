@@ -101,6 +101,35 @@ describe('source checkpoint', () => {
     expect(replay.identity).toBe(first.identity);
   }, 30000);
 
+  it('replays spatial navigators with their authored metadata and raw slider values', async () => {
+    const { root, entry, output } = await fixture();
+    await writeFile(entry, `export default {
+      name: 'Spatial checkpoint', page: { width: 30, height: 30 },
+      pens: [{ id: 'p', color: '#222222', width: 0.3 }],
+      controls: [
+        { type: 'slider', id: 'x', label: 'X', min: -5, max: 5, step: 1, default: 0 },
+        { type: 'slider', id: 'y', label: 'Y', min: 0, max: 10, step: 1, default: 5 },
+        { type: 'slider', id: 'z', label: 'Z', min: -5, max: 5, step: 1, default: 0 }
+      ],
+      navigators: [
+        { id: 'plane', label: 'XZ plane', type: 'xy', axes: ['x', 'z'], yDirection: 'up', axisLabels: ['X', 'Z'] },
+        { id: 'cube', label: 'Position', type: 'xyz', axes: ['x', 'y', 'z'] },
+        { id: 'shape', label: 'Shape', axes: ['x', 'y', 'z'] }
+      ],
+      draw(ctx) { return [{ id: 'line', pen: 'p', paths: [[{x:3,y:8},{x:10+ctx.params.x,y:8+ctx.params.y}]] }]; }
+    };`);
+    await command(root, 'add', 'sketches/study/sketch.ts');
+    await command(root, 'commit', '-q', '-m', 'spatial fixture');
+    const first = await rendered(entry, undefined, { x: 2, z: -3 });
+    expect(first.params).toEqual({ x: 2, y: 5, z: -3 });
+    expect(Object.hasOwn(first, 'effectiveParams')).toBe(false);
+    const saved = await createCheckpoint({ entry, result: first, outputDir: output });
+    const replay = await replayCheckpoint({ checkpoint: saved.path, repoRoot: root });
+    expect(replay.metadata.navigators).toEqual(first.metadata.navigators);
+    expect(replay.params).toEqual(first.params);
+    expect(replay.identity).toBe(first.identity);
+  }, 30000);
+
   it('keeps legacy manifests without finishing replayable', async () => {
     const { root, entry, output } = await fixture();
     const first = await rendered(entry);

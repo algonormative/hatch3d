@@ -104,7 +104,8 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .finish-body button { justify-self: start; }
 .control-group { border: 1px solid var(--border); border-radius: 2px; margin: .7rem 0; background: #fff; }
 .navigators { border-top: 1px solid var(--border); margin-top: .8rem; padding-top: .9rem; }
-.navigators[hidden], .radar-chart[hidden], .radar-axis-labels[hidden], .radar-unavailable[hidden] { display: none; }
+.navigators[hidden], .radar-chart[hidden], .radar-axis-labels[hidden], .radar-unavailable[hidden],
+.spatial-chart[hidden], .spatial-axis-labels[hidden], .spatial-unavailable[hidden] { display: none; }
 .navigators h2 { font: 600 .69rem var(--mono); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 .75rem; }
 .radar-card { background: #fffdf9; border: 1px solid var(--border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
 .radar-card h3 { font: 600 .76rem var(--mono); margin: 0; }
@@ -126,6 +127,32 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .radar-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
 .radar-axis-label { border-color: var(--border); background: #fff; color: var(--ink); padding: .3rem .42rem; font: .63rem var(--mono); }
 .radar-axis-label:hover { background: #f3ece2; }
+.spatial-card { background: #fffdf9; border: 1px solid var(--border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
+.spatial-card h3 { font: 600 .76rem var(--mono); margin: 0; }
+.spatial-help, .spatial-unavailable { color: var(--muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
+.spatial-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
+.xy-frame { fill: #fbf7ef; stroke: #d7ccba; stroke-width: 1.5; }
+.xy-midline { stroke: #ded7ca; stroke-width: 1; stroke-dasharray: 3 5; }
+.xy-crosshair { stroke: #b08058; stroke-width: 1; pointer-events: none; }
+.xy-hit { fill: transparent; cursor: crosshair; }
+.xy-position-dot { fill: #925522; stroke: #fff9ef; stroke-width: 2; cursor: grab; }
+.xyz-edges line { stroke: #c7b7a3; stroke-width: 1.5; }
+.xyz-axis-arm { stroke: #925522; stroke-width: 2; pointer-events: none; }
+.xyz-plane-arm { stroke: #b08058; stroke-width: 1.5; stroke-dasharray: 3 2; pointer-events: none; }
+.xyz-position-dot { fill: #3b352f; stroke: #fff9ef; stroke-width: 2; }
+.spatial-handle { cursor: grab; }
+.spatial-handle:active, .xyz-plane-handle:active { cursor: grabbing; }
+.spatial-hit, .xyz-plane-hit { fill: transparent; }
+.spatial-axis-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
+.xyz-plane-handle { cursor: grab; }
+.xyz-plane-diamond { fill: #a66534; stroke: #fff9ef; stroke-width: 1.5; }
+.spatial-handle:focus-visible { outline: none; }
+.spatial-handle:focus-visible .spatial-axis-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
+.spatial-handle:focus-visible .spatial-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
+.spatial-readout { fill: #3b352f; font: 600 12px var(--mono); }
+.spatial-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
+.spatial-axis-label { border-color: var(--border); background: #fff; color: var(--ink); padding: .3rem .42rem; font: .63rem var(--mono); }
+.spatial-axis-label:hover { background: #f3ece2; }
 .macro-value { color: #775331; font: .65rem/1.45 var(--mono); margin: -.25rem 0 .4rem; }
 .control-group[hidden], .control[hidden] { display: none; }
 .control-group > summary { cursor: pointer; padding: .72rem .85rem; font: 600 .74rem var(--mono); }

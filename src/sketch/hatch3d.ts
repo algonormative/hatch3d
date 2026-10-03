@@ -6,7 +6,7 @@ import { runPipeline } from '../workers/render-pipeline.ts';
 import type { RenderRequest } from '../workers/render-worker.types.ts';
 import { renderDepthBufferCPU } from './depth-buffer.ts';
 import { hatchGroupPack, legacyControlPack } from './hatch3d-controls.ts';
-import type { AssetDeclaration, Control, Page, Part, Pen, Point, Sketch, SketchContext } from './types.ts';
+import type { AssetDeclaration, Control, Navigator, Page, Part, Pen, Point, Sketch, SketchContext } from './types.ts';
 
 export interface CanvasSize { width: number; height: number }
 export interface Legacy2DOptions {
@@ -21,6 +21,10 @@ export interface Legacy2DOptions {
   /** Add ctx.seed to this numeric legacy value after macros are applied. */
   seedValueKey?: string;
   transform?: boolean;
+  /** Additional views over the same scalar controls. */
+  navigators?: Navigator[];
+  /** Physical axis names for a known legacy XY tuple. */
+  xyAxisLabels?: Record<string, [string, string]>;
 }
 
 export interface Legacy3DOptions {
@@ -34,6 +38,10 @@ export interface Legacy3DOptions {
   surfaceParams?: Record<string, number>;
   /** Override defaults for the native hatch/camera/occlusion controls. */
   viewDefaults?: Record<string, number | boolean | string>;
+  /** Additional views over the same scalar controls. */
+  navigators?: Navigator[];
+  /** Physical axis names for a known legacy XY tuple. */
+  xyAxisLabels?: Record<string, [string, string]>;
   /** Optional independent paper-space composition, emitted as a separate pen part. */
   paper?: Omit<Legacy2DOptions, 'page'>;
 }
@@ -92,7 +100,7 @@ function transformControls(prefix: string): Control[] {
   ];
 }
 
-export interface Hatch3d2DLayer { controls: Control[]; draw(ctx: SketchContext): Part; pen: Pen; assets?: Record<string, AssetDeclaration> }
+export interface Hatch3d2DLayer { controls: Control[]; navigators: Navigator[]; draw(ctx: SketchContext): Part; pen: Pen; assets?: Record<string, AssetDeclaration> }
 /** Composable 2D adapter for use alongside hand-authored Sketch parts. */
 export function createHatch3d2DLayer(options: Legacy2DOptions): Hatch3d2DLayer {
   const prefix = options.prefix ?? safe(options.composition.id);
@@ -100,6 +108,11 @@ export function createHatch3d2DLayer(options: Legacy2DOptions): Hatch3d2DLayer {
   const legacy = legacyControlPack(options.composition, prefix, options);
   return {
     controls: [...legacy.controls, ...(options.transform === false ? [] : transformControls(prefix))],
+    navigators: [
+      ...legacy.navigators,
+      ...(options.transform === false ? [] : [{ id: controlId(prefix, 'transform__panXY'), label: 'Placement pan', type: 'xy' as const, axes: [controlId(prefix, 'transform__panX'), controlId(prefix, 'transform__panY')] as [string, string], yDirection: 'down' as const }]),
+      ...(options.navigators ?? []),
+    ],
     pen: options.pen,
     assets: options.assets,
     draw(ctx) {
@@ -118,6 +131,7 @@ export function createHatch3d2DSketch(options: Legacy2DOptions): Sketch {
     page: options.page,
     pens: [options.pen],
     controls: bundle.controls,
+    navigators: bundle.navigators,
     ...(bundle.assets ? { assets: bundle.assets } : {}),
     draw(ctx) { return [bundle.draw(ctx)]; },
   };
@@ -170,7 +184,7 @@ function pathsFromSvg(svgPaths: string[], page: Page, canvas: CanvasSize): Point
 export function createHatch3d3DSketch(options: Legacy3DOptions): Sketch {
   const prefix = options.prefix ?? safe(options.composition.id);
   const canvas = canvasFor(options.page, options.canvas);
-  const legacy = legacyControlPack(options.composition, prefix, { defaults: options.defaults });
+  const legacy = legacyControlPack(options.composition, prefix, { defaults: options.defaults, xyAxisLabels: options.xyAxisLabels });
   const hatchGroups = hatchGroupPack(options.composition.hatchGroups, prefix);
   const paper = options.paper ? createHatch3d2DLayer({ ...options.paper, page: options.page, prefix: options.paper.prefix ?? `${prefix}_paper` }) : undefined;
   if (paper && options.paper!.pen.id === options.pen.id) throw new Error('Mixed 2D and 3D parts need distinct pen ids');
@@ -187,6 +201,12 @@ export function createHatch3d3DSketch(options: Legacy3DOptions): Sketch {
     page: options.page,
     pens: [options.pen, ...(paper ? [options.paper!.pen] : [])],
     controls,
+    navigators: [
+      ...legacy.navigators,
+      { id: controlId(prefix, 'view__panXY'), label: 'Camera pan', type: 'xy', axes: [controlId(prefix, 'view__panX'), controlId(prefix, 'view__panY')], yDirection: 'up' },
+      ...(paper?.navigators ?? []),
+      ...(options.navigators ?? []),
+    ],
     ...(paper?.assets ? { assets: paper.assets } : {}),
     draw(ctx) {
       const hatchParams = {
