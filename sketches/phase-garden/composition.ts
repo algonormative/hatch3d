@@ -82,6 +82,18 @@ export function concertLettering(options: LetteringOptions): Part[] {
   ];
 }
 
+export function posterArtTransform(ctx: SketchContext, page: Page) {
+  const margin = page.margin ?? 18;
+  const abstract = ctx.params.posterMode === 'abstract';
+  const target: Rect = abstract
+    ? { x: margin, y: margin, width: page.width - 2 * margin, height: page.height - 2 * margin }
+    : { x: margin, y: 76, width: page.width - 2 * margin, height: page.height - 136 };
+  const scale = Math.min(target.width / AUTHORED_ART.width, target.height / AUTHORED_ART.height);
+  const dx = target.x + (target.width - AUTHORED_ART.width * scale) / 2 - AUTHORED_ART.x * scale;
+  const dy = target.y + (target.height - AUTHORED_ART.height * scale) / 2 - AUTHORED_ART.y * scale;
+  return { target, scale, dx, dy, inverse: (p: Point): Point => ({ x: (p.x - dx) / scale, y: (p.y - dy) / scale }) };
+}
+
 function fitParts(parts: Part[], source: Rect, target: Rect): Part[] {
   if (![source.x, source.y, source.width, source.height, target.x, target.y, target.width, target.height].every(Number.isFinite)
     || source.width <= 0 || source.height <= 0 || target.width <= 0 || target.height <= 0) {
@@ -105,12 +117,8 @@ export interface ComposePosterOptions {
 /** Fit the fixed authored envelope without cropping or stretching; abstract centers it in the full sheet interior. */
 export function composePoster(ctx: SketchContext, art: Part[], options: ComposePosterOptions): Part[] {
   const page = options.page;
-  const margin = page.margin ?? 18;
   const abstract = ctx.params.posterMode === 'abstract';
-  const target: Rect = abstract
-    ? { x: margin, y: margin, width: page.width - 2 * margin, height: page.height - 2 * margin }
-    : { x: margin, y: 76, width: page.width - 2 * margin, height: page.height - 136 };
-  const mapped = fitParts(art, AUTHORED_ART, target);
+  const mapped = fitParts(art, AUTHORED_ART, posterArtTransform(ctx, page).target);
   if (abstract) return mapped;
   return [
     ...concertLettering({

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { inspectSketch, renderSketch } from '../../cli/sketch/runner.ts';
-import { drawBridge } from '../../sketches/load-bearing-silence/geometry.ts';
+import { drawBridge, gapField, lightRuns } from '../../sketches/load-bearing-silence/geometry.ts';
 import { mulberry32 } from '../utils/prng.ts';
 import type { Params, Point, SketchContext } from '../sketch/types.ts';
 
@@ -45,8 +45,9 @@ describe('Load Bearing Silence', () => {
     expect(first.metadata.pens.map(pen => pen.id)).toEqual(['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'cyan', 'coral', 'gold']);
     for (const pen of ['cyan', 'coral', 'gold']) {
       expect(first.parts.filter(part => part.pen === pen).some(part => part.paths.length > 0)).toBe(true);
-      expect(count(first, `ribbon-${pen}`)).toBeGreaterThan(0);
     }
+    expect(count(first, 'ribbon-cyan')).toBeGreaterThan(0);
+    expect(count(first, 'ribbon-cyan')).toBeGreaterThan(count(first, 'ribbon-coral') + count(first, 'ribbon-gold'));
     for (const pen of ['acid', 'violet']) expect(count(first, `bridge-${pen}`)).toBeGreaterThan(0);
     for (const part of first.parts) for (const path of part.paths) for (const point of path) {
       expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBe(true);
@@ -81,6 +82,57 @@ describe('Load Bearing Silence', () => {
     expect(count(powerNoRays, 'ribbon-')).toBeGreaterThan(0);
   }, 30000);
 
+
+  it('uses a coherent gap field and splits missing samples without bridging them', () => {
+    const field = gapField(geometryContext({}, 211), 0.55);
+    const repeated = gapField(geometryContext({}, 211), 0.55);
+    const points = Array.from({ length: 401 }, (_, x) => ({ x, y: 80 }));
+    expect(points.map(field)).toEqual(points.map(repeated));
+    const near = points.reduce((sum, point) => sum + Math.abs(field(point) - field({ x: point.x, y: 81 })), 0);
+    const far = points.reduce((sum, point) => sum + Math.abs(field(point) - field({ x: point.x, y: 125 })), 0);
+    expect(near).toBeLessThan(far * 0.2);
+    const runs = lightRuns(points, 0.7, field);
+    expect(runs.length).toBeGreaterThan(1);
+    for (const run of runs) for (let i = 1; i < run.length; i++) expect(run[i].x - run[i - 1].x).toBe(1);
+    expect(runs.flat().length).toBeLessThan(points.length * 0.8);
+    for (let i = 1; i < runs.length; i++) expect(runs[i][0].x - runs[i - 1].at(-1)!.x).toBeGreaterThan(1);
+  });
+
+  it('shades by line occupancy and lets each light family reach the frame without moving structure', async () => {
+    const finishing = { border: { style: 'double' as const, pen: 'carbon', inset: 12, contentGap: 0 } };
+    const base = { posterMode: 'abstract', singularityPower: 1, lightGapAmount: 0, ribbonShade: 0, ribbonEdgeReach: 0, rayEdgeReach: 0 };
+    const uniform = await renderSketch({ entry, seed: 211, params: { ...base, ribbonShade: 0 }, finishing });
+    const shaded = await renderSketch({ entry, seed: 211, params: { ...base, ribbonShade: 1 }, finishing });
+    const length = (parts: typeof uniform.parts) => parts.flatMap(part => part.paths).reduce((total, path) =>
+      total + path.slice(1).reduce((sum, point, i) => sum + Math.hypot(point.x - path[i].x, point.y - path[i].y), 0), 0);
+    expect(length(art(shaded, 'ribbon-'))).toBeLessThan(length(art(uniform, 'ribbon-')) * 0.9);
+    expect(art(shaded, 'bridge-')).toEqual(art(uniform, 'bridge-'));
+    const ribbonEdge = await renderSketch({ entry, seed: 211, params: { ...base, ribbonEdgeReach: 1, rayEdgeReach: 0 }, finishing });
+    const rayEdge = await renderSketch({ entry, seed: 211, params: { ...base, ribbonEdgeReach: 0, rayEdgeReach: 1 }, finishing });
+    const extent = (parts: typeof uniform.parts) => parts.flatMap(part => part.paths).flat();
+    expect(Math.min(...extent(art(ribbonEdge, 'ribbon-')).map(point => point.y))).toBeLessThan(15);
+    expect(Math.max(...extent(art(rayEdge, 'ray-')).map(point => point.y))).toBeGreaterThan(416);
+    expect(art(ribbonEdge, 'bridge-')).toEqual(art(uniform, 'bridge-'));
+    expect(art(rayEdge, 'bridge-')).toEqual(art(uniform, 'bridge-'));
+    expect(art(ribbonEdge, 'ray-')).toEqual(art(uniform, 'ray-'));
+    expect(art(rayEdge, 'ribbon-')).toEqual(art(uniform, 'ribbon-'));
+    for (const result of [ribbonEdge, rayEdge]) for (const point of extent(result.parts.filter(part => part.id !== 'finishing-border'))) {
+      expect(point.x).toBeGreaterThanOrEqual(14.25);
+      expect(point.x).toBeLessThanOrEqual(265.15);
+      expect(point.y).toBeGreaterThanOrEqual(14.25);
+      expect(point.y).toBeLessThanOrEqual(417.55);
+    }
+  }, 30000);
+
+  it('keeps lettered light below the header and above the footer at full frame reach', async () => {
+    const result = await renderSketch({ entry, seed: 211, params: {
+      posterMode: 'lettered', ribbonEdgeReach: 1, rayEdgeReach: 1, lightGapAmount: 0,
+    }, finishing: { border: { style: 'double', pen: 'carbon', inset: 12, contentGap: 0 } } });
+    const light = art(result, 'ribbon-').concat(art(result, 'ray-')).flatMap(part => part.paths).flat();
+    expect(Math.min(...light.map(point => point.y))).toBeGreaterThan(70);
+    expect(Math.max(...light.map(point => point.y))).toBeLessThan(380);
+  }, 30000);
+
   it('makes seed change architectural silhouette and control changes move the shared core', async () => {
     const base = await renderSketch({ entry, seed: 17, params: { posterMode: 'abstract' } });
     const alternate = await renderSketch({ entry, seed: 23, params: { posterMode: 'abstract' } });
@@ -95,7 +147,7 @@ describe('Load Bearing Silence', () => {
   it('exposes reachable shape extremes and renders finite geometry at their bounds', async () => {
     const metadata = await inspectSketch({ entry });
     expect(metadata.navigators[0]).toMatchObject({ id: 'composition', axes: ['load', 'tension', 'singularityPower'] });
-    for (const id of ['beamWidth', 'hatchPitch', 'portalScale', 'routeWarp', 'gapWidth', 'ribbonWidth', 'rayCount', 'rayLength', 'rayCurve', 'branchCount', 'branchReach']) {
+    for (const id of ['beamWidth', 'hatchPitch', 'portalScale', 'routeWarp', 'gapWidth', 'ribbonWidth', 'rayCount', 'rayLength', 'rayCurve', 'ribbonShade', 'lightGapAmount', 'lightGapScale', 'ribbonEdgeReach', 'rayEdgeReach', 'branchCount', 'branchReach']) {
       const control = metadata.controls.find(control => control.id === id);
       expect(control?.type).toBe('slider');
       if (control?.type === 'slider') expect(control.max - control.min).toBeGreaterThan(0);

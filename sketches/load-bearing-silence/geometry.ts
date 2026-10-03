@@ -17,6 +17,7 @@ const VIEW_WIDTH = PAGE.width * PIXELS_PER_MM;
 const VIEW_HEIGHT = PAGE.height * PIXELS_PER_MM;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'cyan', 'coral', 'gold'];
 const LIGHT_INKS: Ink[] = ['cyan', 'coral', 'gold'];
+type LightBounds = { xMin: number; xMax: number; yMin: number; yMax: number };
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -350,8 +351,53 @@ function orbitalFragments(route: BridgeRoute, ctx: SketchContext, view: THREE.Or
   }
 }
 
+/** Extend only the outer end of a light path toward the safe authored envelope. */
+function extendLight(point: PagePoint, center: PagePoint, bounds: LightBounds, reach: number, progress: number): PagePoint {
+  const dx = point.x - center.x, dy = point.y - center.y;
+  const tx = Math.abs(dx) < 1e-9 ? Infinity : ((dx > 0 ? bounds.xMax : bounds.xMin) - center.x) / dx;
+  const ty = Math.abs(dy) < 1e-9 ? Infinity : ((dy > 0 ? bounds.yMax : bounds.yMin) - center.y) / dy;
+  const t = Math.min(tx, ty);
+  if (!Number.isFinite(t) || t <= 0) return point;
+  const eased = reach * progress * progress * progress;
+  return { x: lerp(point.x, center.x + dx * t, eased), y: lerp(point.y, center.y + dy * t, eased) };
+}
+
+/** A seeded, smooth two-dimensional field leaves related gaps across neighboring rails. */
+export function gapField(ctx: SketchContext, scale: number): (point: PagePoint) => number {
+  const seed = Math.floor(ctx.random('silence-gap-field')() * 0xffffffff);
+  const size = lerp(10, 42, scale);
+  const hash = (x: number, y: number) => {
+    let n = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + seed) | 0;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 0xffffffff;
+  };
+  return point => {
+    const x = point.x / size, y = point.y / size;
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const sx = (x - ix) ** 2 * (3 - 2 * (x - ix));
+    const sy = (y - iy) ** 2 * (3 - 2 * (y - iy));
+    return lerp(lerp(hash(ix, iy), hash(ix + 1, iy), sx),
+      lerp(hash(ix, iy + 1), hash(ix + 1, iy + 1), sx), sy);
+  };
+}
+
+export function lightRuns(points: PagePoint[], gapAmount: number, noise: (point: PagePoint) => number): PagePoint[][] {
+  if (gapAmount <= 0) return [points];
+  const runs: PagePoint[][] = [];
+  let run: PagePoint[] = [];
+  const threshold = 0.14 + gapAmount * 0.52;
+  for (const point of points) {
+    if (noise(point) < threshold) {
+      if (run.length >= 2) runs.push(run);
+      run = [];
+    } else run.push(point);
+  }
+  if (run.length >= 2) runs.push(run);
+  return runs;
+}
+
 /** Image-plane light shares the solid depth pass but never becomes an occluder. */
-function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, strokes: Stroke[]): PagePoint {
+function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, strokes: Stroke[], bounds: LightBounds): PagePoint {
   const middle = (route.leftGap + route.rightGap) / 2;
   const anchor = route.point(middle, 0, 14).project(view);
   const center = {
@@ -374,16 +420,22 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
   const sharedDrift = (random() - 0.5) * irregularity * 11;
   const twist = (random() - 0.5) * irregularity * 0.24;
   const kinks = [random() * 2 - 1, random() * 2 - 1];
-  const colorShift = (random() - 0.5) * palette * 0.22;
-  const colorOrder: Ink[] = random() < 0.5 ? ['cyan', 'coral', 'gold'] : ['cyan', 'gold', 'coral'];
+  const shade = numeric(ctx, 'ribbonShade', 0.68, 0, 1);
+  const gapAmount = numeric(ctx, 'lightGapAmount', 0.2, 0, 1);
+  const noise = gapField(ctx, numeric(ctx, 'lightGapScale', 0.48, 0, 1));
+  const ribbonTone = ctx.random('silence-ribbon-tone');
+  const ribbonInk = ctx.random('silence-ribbon-ink');
+  const ribbonReach = numeric(ctx, 'ribbonEdgeReach', 0.22, 0, 1);
   for (let rail = 0; rail < rails; rail++) {
-    const lane = rails === 1 ? 0 : (rail / (rails - 1) - 0.5) * 2;
+    const uniformLane = rails === 1 ? 0 : (rail / (rails - 1) - 0.5) * 2;
+    const lane = uniformLane * (1 - 0.38 * shade * (1 - Math.abs(uniformLane)));
+    if (ribbonTone() < shade * 0.72 * Math.abs(uniformLane) ** 1.5) continue;
     for (const half of [-1, 1]) {
       // Lane-dependent termination preserves an unmarked paper core.
       const coreRadius = 0.045 + Math.abs(lane) * 0.025 + (half === 1 ? 0.009 : 0);
-      const points: THREE.Vector3[] = [];
-      for (let sample = 0; sample <= 42; sample++) {
-        const u = sample / 42;
+      const points: PagePoint[] = [];
+      for (let sample = 0; sample <= 120; sample++) {
+        const u = sample / 120;
         const t = half < 0 ? lerp(-1, -coreRadius, u) : lerp(coreRadius, 1, u);
         const breadth = Math.max(width * (1 - pinch * (1 - Math.abs(t))), 0.34 * (rails - 1));
         const field = bend * Math.sin(Math.PI * t) + sharedDrift * t + irregularity * 9 *
@@ -399,11 +451,11 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
         const endRadius = 8.5 + Math.abs(lane) * 3.5;
         x = lerp(x, center.x + Math.cos(endAngle) * endRadius, eased);
         y = lerp(y, center.y + Math.sin(endAngle) * endRadius, eased);
-        points.push(onPlane({ x, y }));
+        points.push(extendLight({ x, y }, center, bounds, ribbonReach, half < 0 ? 1 - u : u));
       }
-      const band = (rail + 0.5) / rails + colorShift;
-      const pen = palette < 0.05 || band < 0.64 ? 'cyan' : band < 0.86 ? colorOrder[1] : colorOrder[2];
-      strokes.push({ pen, points, light: 'ribbon' });
+      const pick = ribbonInk();
+      const pen: Ink = pick < 1 - palette * 0.18 ? 'cyan' : pick < 1 - palette * 0.07 ? 'coral' : 'gold';
+      for (const run of lightRuns(points, gapAmount, noise)) strokes.push({ pen, points: run.map(onPlane), light: 'ribbon' });
     }
   }
 
@@ -413,6 +465,7 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
   const rayCurve = numeric(ctx, 'rayCurve', 0.25, -1.5, 1.5);
   const rayDensity = numeric(ctx, 'rayDensity', 0.62, 0, 1);
   const rayRandom = ctx.random('silence-rays');
+  const rayReach = numeric(ctx, 'rayEdgeReach', 0.18, 0, 1);
   const fanCount = Math.max(2, Math.round(3 + 4 * irregularity));
   const fans = Array.from({ length: fanCount }, (_, i) => ({
     angle: -Math.PI * 0.75 + (i + 0.5) / fanCount * raySpread + (rayRandom() - 0.5) * 0.4,
@@ -428,17 +481,17 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
     const length = rayLength * (0.25 + (0.45 + 0.75 * rayDensity) * rayRandom()) *
       (0.55 + power * 0.8) * (0.35 + 0.65 * fan.strength);
     const curvature = rayCurve * (0.6 + rayRandom() * 0.8) + (rayRandom() - 0.5) * irregularity * 0.55;
-    const points: THREE.Vector3[] = [];
-    for (let sample = 0; sample <= 26; sample++) {
-      const u = sample / 26;
+    const points: PagePoint[] = [];
+    for (let sample = 0; sample <= 80; sample++) {
+      const u = sample / 80;
       const radius = inner + length * u;
       const curve = curvature * length * u * u * 0.44;
-      points.push(onPlane({ x: center.x + direction.x * radius + normal.x * curve,
-        y: center.y + direction.y * radius + normal.y * curve }));
+      points.push(extendLight({ x: center.x + direction.x * radius + normal.x * curve,
+        y: center.y + direction.y * radius + normal.y * curve }, center, bounds, rayReach, u));
     }
     const pick = rayRandom();
-    const pen: Ink = palette < 0.05 || pick < 0.59 ? 'cyan' : pick < 0.86 ? 'coral' : 'gold';
-    strokes.push({ pen, points, light: 'ray' });
+    const pen: Ink = pick < 1 - palette * 0.22 ? 'cyan' : pick < 1 - palette * 0.08 ? 'coral' : 'gold';
+    for (const run of lightRuns(points, gapAmount, noise)) strokes.push({ pen, points: run.map(onPlane), light: 'ray' });
   }
   return center;
 }
@@ -475,7 +528,7 @@ export interface BridgeStats { candidateSegments: number; visibleSegments: numbe
 export interface BridgeDrawing { parts: Part[]; stats: BridgeStats }
 
 /** One software depth pass handles every solid bridge member before line classification. */
-export function drawBridge(ctx: SketchContext): BridgeDrawing {
+export function drawBridge(ctx: SketchContext, lightBounds: LightBounds = ART): BridgeDrawing {
   const route = new BridgeRoute(ctx);
   const meshes: THREE.BufferGeometry[] = [];
   const strokes: Stroke[] = [];
@@ -500,7 +553,7 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
   branches(route, ctx, meshes, strokes);
   const view = camera();
   orbitalFragments(route, ctx, view, meshes, strokes);
-  const projectedSingularityCenter = lightGeometry(route, ctx, view, strokes);
+  const projectedSingularityCenter = lightGeometry(route, ctx, view, strokes, lightBounds);
   try {
     const midpoint = route.point((route.leftGap + route.rightGap) / 2, 0, 6).project(view);
     const projectedGapCenter = { x: (midpoint.x * 0.5 + 0.5) * PAGE.width, y: (-midpoint.y * 0.5 + 0.5) * PAGE.height };
@@ -521,13 +574,34 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
         for (const visible of visibleRuns) {
           visibleSegments += visible.length - 1;
           const page = visible.map(point => ({ x: point.x / PIXELS_PER_MM, y: point.y / PIXELS_PER_MM }));
-          for (const bounded of clipPolylineToRect(page, ART)) {
+          for (const bounded of clipPolylineToRect(page, source.light ? lightBounds : ART)) {
             if (pathLength(bounded) >= 0.55) {
               const destination = source.light === 'ribbon' ? ribbonByPen : source.light === 'ray' ? rayByPen : pathsByPen;
               destination.get(pen)!.push(economical(bounded));
             }
           }
         }
+      }
+    }
+    // The image-plane light can extend past the depth camera's fixed viewport.
+    // There are no structural occluders there; retain those outer fragments so
+    // the poster fit and finishing can crop them at the true framed boundary.
+    const outside = [
+      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: lightBounds.yMin, yMax: 0 },
+      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: PAGE.height - 1 / PIXELS_PER_MM, yMax: lightBounds.yMax },
+      { xMin: lightBounds.xMin, xMax: 0, yMin: 0, yMax: PAGE.height },
+      { xMin: PAGE.width - 1 / PIXELS_PER_MM, xMax: lightBounds.xMax, yMin: 0, yMax: PAGE.height },
+    ].filter(rect => rect.xMax > rect.xMin && rect.yMax > rect.yMin);
+    for (const source of strokes) {
+      if (!source.light) continue;
+      const page = source.points.map(point => {
+        const projected = point.clone().project(view);
+        return { x: (projected.x * 0.5 + 0.5) * PAGE.width,
+          y: (-projected.y * 0.5 + 0.5) * PAGE.height };
+      });
+      const destination = source.light === 'ribbon' ? ribbonByPen : rayByPen;
+      for (const strip of outside) for (const bounded of clipPolylineToRect(page, strip)) {
+        if (pathLength(bounded) >= 0.55) destination.get(source.pen)!.push(economical(bounded));
       }
     }
     const parts: Part[] = [

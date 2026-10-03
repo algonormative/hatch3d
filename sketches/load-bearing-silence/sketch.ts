@@ -1,5 +1,5 @@
 import type { Sketch } from '../../src/sketch/types.ts';
-import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
+import { TABLOID_PAGE, composePoster, posterControls, posterArtTransform } from '../phase-garden/poster.ts';
 import { drawBridge } from './geometry.ts';
 
 /** A bridge with its structural center removed, then a living support system at one end. */
@@ -12,9 +12,9 @@ const sketch: Sketch = {
     { id: 'vermilion', color: '#d04b3c', width: 0.25 },
     { id: 'acid', color: '#a5a938', width: 0.25 },
     { id: 'violet', color: '#776090', width: 0.25 },
-    { id: 'cyan', color: '#0797ad', width: 0.25 },
-    { id: 'coral', color: '#e34f72', width: 0.25 },
-    { id: 'gold', color: '#c7a448', width: 0.25 },
+    { id: 'cyan', color: '#6b8491', width: 0.25 },
+    { id: 'coral', color: '#a48b8c', width: 0.25 },
+    { id: 'gold', color: '#a69d84', width: 0.25 },
   ],
   controls: [
     ...posterControls('LOAD BEARING SILENCE', '03'),
@@ -31,6 +31,11 @@ const sketch: Sketch = {
     { type: 'slider', id: 'gapWidth', label: 'Missing span', default: 0.28, min: 0.12, max: 0.48, step: 0.01, group: 'Bridge' },
     { type: 'slider', id: 'singularityPower', label: 'Singularity power', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'paletteVariation', label: 'Palette variation', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Composition' },
+    { type: 'slider', id: 'ribbonShade', label: 'Tonal shading', default: 0.68, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
+    { type: 'slider', id: 'lightGapAmount', label: 'Noisy gap amount', default: 0.2, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
+    { type: 'slider', id: 'lightGapScale', label: 'Noisy gap scale', default: 0.48, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
+    { type: 'slider', id: 'ribbonEdgeReach', label: 'Ribbon frame reach', default: 0.22, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
+    { type: 'slider', id: 'rayEdgeReach', label: 'Ray frame reach', default: 0.18, min: 0, max: 1, step: 0.01, group: 'Singularity / Rays' },
     { type: 'slider', id: 'lightIrregularity', label: 'Light irregularity', default: 0.48, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
     { type: 'toggle', id: 'ribbonEnabled', label: 'Draw ribbon sheet', default: true, group: 'Ribbon' },
     { type: 'slider', id: 'lightRibbons', label: 'Ribbon amount', default: 0.42, min: 0, max: 1, step: 0.01, group: 'Ribbon' },
@@ -68,7 +73,10 @@ const sketch: Sketch = {
     { control: 'singularityPower', targets: [{ control: 'lightRibbons', amount: 0.9 }, { control: 'ribbonWidth', amount: 30 }, { control: 'rayCount', amount: 100 }, { control: 'rayLength', amount: 80 }, { control: 'rayDensity', amount: 0.5 }] },
   ],
   draw(ctx) {
-    return composePoster(ctx, drawBridge(ctx).parts, {
+    const fit = posterArtTransform(ctx, TABLOID_PAGE);
+    const a = fit.inverse({ x: fit.target.x, y: fit.target.y });
+    const b = fit.inverse({ x: fit.target.x + fit.target.width, y: fit.target.y + fit.target.height });
+    return composePoster(ctx, drawBridge(ctx, { xMin: a.x, xMax: b.x, yMin: a.y, yMax: b.y }).parts, {
       page: TABLOID_PAGE, subtitle: 'LOAD BEARING SILENCE', edition: '03',
     });
   },
