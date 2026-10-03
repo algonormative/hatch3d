@@ -17,6 +17,13 @@ function distanceToSegment(point: Point, from: Point, to: Point): number {
   return Math.hypot(point.x - from.x - t * dx, point.y - from.y - t * dy);
 }
 
+function segmentDistance(a: Point, b: Point, c: Point, d: Point): number {
+  const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  if (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0) return 0;
+  return Math.min(distanceToSegment(a, c, d), distanceToSegment(b, c, d),
+    distanceToSegment(c, a, b), distanceToSegment(d, a, b));
+}
+
 function geometryContext(params: Params, seed: number): SketchContext {
   return {
     params, seed, assets: {},
@@ -45,7 +52,8 @@ describe('Load Bearing Silence', () => {
     expect(first.parts.map(part => part.id)).toEqual([
       'poster-title', 'poster-caption', 'poster-rules',
       'bridge-carbon', 'bridge-ultramarine', 'bridge-vermilion', 'bridge-acid', 'bridge-violet',
-      'light-ultramarine', 'light-acid', 'light-violet',
+      'ribbon-ultramarine', 'ribbon-acid', 'ribbon-violet',
+      'ray-ultramarine', 'ray-acid', 'ray-violet',
     ]);
     const parts = bridgeParts(first);
     expect(parts.every(part => part.paths.length >= 10)).toBe(true);
@@ -67,13 +75,50 @@ describe('Load Bearing Silence', () => {
     expect(gapClearance(bridge)).toBeGreaterThan(18);
   }, 30000);
 
-  it('lets the light disappear without changing the structural drawing', async () => {
-    const baseline = await renderSketch({ entry, seed: 211, params: { lightRibbons: 0 } });
-    const lit = await renderSketch({ entry, seed: 211 });
-    expect(bridgeParts(lit)).toEqual(bridgeParts(baseline));
-    expect(baseline.parts.filter(part => part.id.startsWith('light-')).every(part => part.paths.length === 0)).toBe(true);
-    expect(lit.parts.filter(part => part.id.startsWith('light-')).reduce((count, part) => count + part.paths.length, 0)).toBeGreaterThanOrEqual(6);
-    expect(lit.diagnostics).toEqual([]);
+  it('places an open ribbon upper left to lower right, with independently switchable rays', async () => {
+    const combined = await renderSketch({ entry, seed: 211, params: { posterMode: 'abstract' } });
+    const ribbonOnly = await renderSketch({ entry, seed: 211, params: { posterMode: 'abstract', rayCount: 0 } });
+    const raysOnly = await renderSketch({ entry, seed: 211, params: { posterMode: 'abstract', lightRibbons: 0 } });
+    const neither = await renderSketch({ entry, seed: 211, params: { posterMode: 'abstract', lightRibbons: 0, rayCount: 0 } });
+    const parts = (result: typeof combined, prefix: string) => result.parts.filter(part => part.id.startsWith(prefix));
+    expect(bridgeParts(combined)).toEqual(bridgeParts(neither));
+    expect(parts(combined, 'ribbon-')).toEqual(parts(ribbonOnly, 'ribbon-'));
+    expect(parts(combined, 'ray-')).toEqual(parts(raysOnly, 'ray-'));
+    expect(parts(neither, 'ribbon-').every(part => part.paths.length === 0)).toBe(true);
+    expect(parts(neither, 'ray-').every(part => part.paths.length === 0)).toBe(true);
+    const drawing = drawBridge(geometryContext({ ...(combined.effectiveParams ?? combined.params), occlusion: false }, 211));
+    const ribbonPaths = drawing.parts.filter(part => part.id.startsWith('ribbon-')).flatMap(part => part.paths);
+    const ribbonPoints = ribbonPaths.flat();
+    const rayPoints = drawing.parts.filter(part => part.id.startsWith('ray-')).flatMap(part => part.paths.flat());
+    expect(ribbonPoints.length).toBeGreaterThan(100);
+    expect(rayPoints.length).toBeGreaterThan(20);
+    const center = drawing.stats.projectedSingularityCenter;
+    expect(ribbonPoints.some(point => point.x < center.x - 40 && point.y < center.y - 50)).toBe(true);
+    expect(ribbonPoints.some(point => point.x > center.x + 40 && point.y > center.y + 50)).toBe(true);
+    expect(ribbonPaths.every(path => path.slice(1).every((point, index) =>
+      distanceToSegment(center, path[index], point) > 3))).toBe(true);
+    expect(combined.diagnostics).toEqual([]);
+  }, 30000);
+
+  it('keeps the narrowest six ribbon rails separated after poster fitting', async () => {
+    const rendered = await renderSketch({ entry, seed: 17, params: {
+      posterMode: 'abstract', lightRibbons: 1, ribbonWidth: 2, ribbonPinch: 0.95,
+      ribbonBend: 32, ribbonExtent: 65, rayCount: 0, occlusion: false,
+    } });
+    const paths = rendered.parts.filter(part => part.id.startsWith('ribbon-')).flatMap(part => part.paths);
+    expect(paths).toHaveLength(12);
+    let closest = Infinity;
+    for (let first = 0; first < paths.length; first++) {
+      for (let second = first + 1; second < paths.length; second++) {
+        for (let i = 1; i < paths[first].length; i++) {
+          for (let j = 1; j < paths[second].length; j++) {
+            closest = Math.min(closest, segmentDistance(paths[first][i - 1], paths[first][i],
+              paths[second][j - 1], paths[second][j]));
+          }
+        }
+      }
+    }
+    expect(closest).toBeGreaterThan(0.25);
   }, 30000);
 
   it('keeps radar macros in effective params and makes seed and 3D placement materially change the drawing', async () => {
@@ -81,6 +126,7 @@ describe('Load Bearing Silence', () => {
     expect(metadata.navigators).toMatchObject([
       { id: 'composition', axes: ['load', 'tension', 'disintegration'] },
       { id: 'branch-root', type: 'xy', axes: ['branchRootX', 'branchRootY'] },
+      { id: 'singularity', type: 'xy', axes: ['singularityX', 'singularityY'] },
       { id: 'world-position', type: 'xyz', axes: ['worldX', 'worldY', 'worldZ'] },
     ]);
     const baseline = await renderSketch({ entry, seed: 17 });
