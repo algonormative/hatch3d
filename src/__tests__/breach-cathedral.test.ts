@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
+import { slabs } from '../../sketches/breach-cathedral/geometry.ts';
 
 const entry = resolve('sketches/breach-cathedral/sketch.ts');
 
@@ -20,6 +21,16 @@ function overlap(a: Set<string>, b: Set<string>): number {
 }
 
 describe('Breach Cathedral', () => {
+  it('keeps split slab widths positive at the narrowest reach and widest breach', () => {
+    for (const roll of [0.001, 0.25, 0.5, 0.75, 0.999]) {
+      const architecture = slabs({
+        params: { cantilever: 0, breach: 1, levels: 13 }, seed: 0, assets: {},
+        random: () => () => roll,
+      });
+      expect(Math.min(...architecture.map(slab => slab.w))).toBeGreaterThan(0);
+    }
+  });
+
   it('replays, reshuffles with seed, and keeps every ink finite within the art field', async () => {
     const first = await renderSketch({ entry, seed: 17 });
     const replay = await renderSketch({ entry, seed: 17 });
@@ -89,4 +100,23 @@ describe('Breach Cathedral', () => {
     expect(after.x - before.x).toBeGreaterThan(5);
     expect(Math.abs(after.y - before.y)).toBeGreaterThan(5);
   });
+  it('exposes a useful sparse-to-dense hatch range without losing the art aperture', async () => {
+    const sparse = await renderSketch({ entry, seed: 0, params: { hatchDensity: 0, occlusion: false } });
+    const dense = await renderSketch({ entry, seed: 0, params: { hatchDensity: 1, occlusion: false } });
+    expect(dense.stats.pathCount).toBeGreaterThan(sparse.stats.pathCount * 1.5);
+    for (const result of [sparse, dense]) {
+      expect(result.diagnostics).toEqual([]);
+      expect(result.stats.pointCount).toBeLessThan(200_000);
+      for (const part of result.parts.filter(p => p.id.startsWith('cathedral-'))) {
+        for (const path of part.paths) for (const point of path) {
+          expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBe(true);
+          expect(point.x).toBeGreaterThanOrEqual(18 - 1e-8);
+          expect(point.x).toBeLessThanOrEqual(261.4 + 1e-8);
+          expect(point.y).toBeGreaterThanOrEqual(76 - 1e-8);
+          expect(point.y).toBeLessThanOrEqual(371.8 + 1e-8);
+        }
+      }
+    }
+  });
+
 });

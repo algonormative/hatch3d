@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { clipPolylineToRect } from '../../src/utils/clip.ts';
 
-type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
+type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'cyan' | 'coral' | 'gold';
 type PagePoint = { x: number; y: number };
 type Stroke = { pen: Ink; points: THREE.Vector3[]; light?: 'ribbon' | 'ray' };
 type Face = [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
@@ -15,7 +15,8 @@ const ART = { xMin: 18, xMax: 279, yMin: 76, yMax: 357 };
 const PIXELS_PER_MM = 2;
 const VIEW_WIDTH = PAGE.width * PIXELS_PER_MM;
 const VIEW_HEIGHT = PAGE.height * PIXELS_PER_MM;
-const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'cyan', 'coral', 'gold'];
+const LIGHT_INKS: Ink[] = ['cyan', 'coral', 'gold'];
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -50,18 +51,18 @@ class BridgeRoute {
     const variation = ctx.random('bridge-route');
     this.start = { x: 38 + 7 * variation(), y: 323 + 8 * variation() };
     this.end = { x: 252 + 8 * variation(), y: 113 + 8 * variation() };
-    const warp = numeric(ctx, 'routeWarp', 0, -16, 16);
+    const warp = numeric(ctx, 'routeWarp', 0, -38, 38);
     this.chirality = variation() < 0.5 ? -1 : 1;
     this.bend = { x: 144 + warp + this.chirality * (10 + variation() * 10), y: 206 + warp * 0.36 + this.chirality * (8 + variation() * 10) };
-    const gapWidth = numeric(ctx, 'gapWidth', 0.26, 0.18, 0.34);
+    const gapWidth = numeric(ctx, 'gapWidth', 0.28, 0.12, 0.48);
     const gapCenter = 0.49 + (variation() - 0.5) * 0.08;
     this.leftGap = gapCenter - gapWidth / 2;
     this.rightGap = gapCenter + gapWidth / 2;
-    this.width = numeric(ctx, 'beamWidth', 24, 18, 30);
-    this.portalScale = numeric(ctx, 'portalScale', 1, 0.7, 1.3);
-    this.hatchPitch = numeric(ctx, 'hatchPitch', 1.45, 0.85, 2.3);
-    this.branchReach = numeric(ctx, 'branchReach', 1, 0.65, 1.35);
-    this.branchCount = Math.round(numeric(ctx, 'branchCount', 6, 4, 9));
+    this.width = numeric(ctx, 'beamWidth', 25, 10, 48);
+    this.portalScale = numeric(ctx, 'portalScale', 1.15, 0.35, 2.2);
+    this.hatchPitch = numeric(ctx, 'hatchPitch', 1.35, 0.5, 4.2);
+    this.branchReach = numeric(ctx, 'branchReach', 1, 0.25, 2);
+    this.branchCount = Math.round(numeric(ctx, 'branchCount', 6, 0, 15));
     this.branchOffset = {
       x: numeric(ctx, 'branchRootX', 0, -14, 14),
       y: numeric(ctx, 'branchRootY', 0, -14, 14),
@@ -91,8 +92,8 @@ class BridgeRoute {
   /** A compressed root, heavy rupture shoulders, and alternating cantilevers break the rectangular outline. */
   halfWidth(t: number): number {
     const profile: [number, number][] = [
-      [0.1, 0.72], [0.17, 0.95], [0.23, 1.28], [0.27, 0.84], [this.leftGap, 1.2],
-      [this.rightGap, 1.28], [0.71, 0.88], [0.78, 1.35], [0.85, 0.78], [0.96, 0.98],
+      [0.1, 0.72], [0.17, 0.95], [this.leftGap - 0.02, 1.28], [this.leftGap, 1.2],
+      [this.rightGap, 1.28], [this.rightGap + 0.04, 0.88], [0.85, 1.35], [0.96, 0.98],
     ];
     for (let index = 1; index < profile.length; index++) {
       if (t > profile[index][0]) continue;
@@ -292,11 +293,64 @@ function branches(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGe
   }
 }
 
-/**
- * Light is drawn in the camera's image plane at the depth of the missing span.
- * Its page diagonal is therefore stable under the oblique view, while every
- * stroke still passes through the same solid-depth test as the bridge.
- */
+/** Broken satellites share one center but differ in orbit, shear, and depth. */
+function orbitalFragments(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, meshes: THREE.BufferGeometry[], strokes: Stroke[]): void {
+  const random = ctx.random('orbital-topology');
+  const middle = (route.leftGap + route.rightGap) / 2;
+  const center = route.center(middle);
+  const anchor = route.point(middle, 0, 14).project(view);
+  const centerProjection = { x: (anchor.x * 0.5 + 0.5) * PAGE.width, y: (-anchor.y * 0.5 + 0.5) * PAGE.height };
+  const onPlane = (x: number, y: number) => new THREE.Vector3(x / PAGE.width * 2 - 1, 1 - y / PAGE.height * 2, anchor.z).unproject(view);
+  const orbitShift = onPlane(centerProjection.x + numeric(ctx, 'singularityX', 0, -12, 12),
+    centerProjection.y + numeric(ctx, 'singularityY', 0, -12, 12)).sub(onPlane(centerProjection.x, centerProjection.y));
+  const fragmentation = numeric(ctx, 'orbitalFragmentation', 0.52, 0, 1);
+  const irregularity = numeric(ctx, 'structuralIrregularity', 0.48, 0, 1);
+  const density = numeric(ctx, 'structureDensity', 0.55, 0, 1);
+  const palette = numeric(ctx, 'paletteVariation', 0.55, 0, 1);
+  const count = Math.round(2 + density * 9 + fragmentation * 5);
+  const phase = random() * Math.PI * 2;
+  const point = (x: number, y: number, z: number) => route.pagePoint({ x, y }, z).add(orbitShift);
+  for (let i = 0; i < count; i++) {
+    const angle = phase + (i + (random() - 0.5) * irregularity * 0.8) * Math.PI * 2 / count;
+    const radius = 43 + 31 * random() + 13 * fragmentation;
+    const x = center.x + Math.cos(angle) * radius;
+    const y = center.y + Math.sin(angle) * radius;
+    const tangent = angle + Math.PI / 2 + (random() - 0.5) * irregularity * 1.5;
+    const radial = angle + (random() - 0.5) * 0.6;
+    const length = 13 + random() * (18 + 24 * density);
+    const width = 3.8 + random() * (4 + 7 * density);
+    const tx = Math.cos(tangent), ty = Math.sin(tangent);
+    const nx = Math.cos(radial), ny = Math.sin(radial);
+    const shear = (random() - 0.5) * irregularity * 11;
+    const z = -9 + random() * 23;
+    const face: Face = [
+      point(x - tx * length / 2 - nx * width / 2, y - ty * length / 2 - ny * width / 2, z),
+      point(x + tx * length / 2 - nx * width / 2 + shear, y + ty * length / 2 - ny * width / 2, z + 2),
+      point(x + tx * length / 2 + nx * width / 2 + shear, y + ty * length / 2 + ny * width / 2, z + 2),
+      point(x - tx * length / 2 + nx * width / 2, y - ty * length / 2 + ny * width / 2, z),
+    ];
+    const pen: Ink = random() < palette * 0.55 ? LIGHT_INKS[Math.floor(random() * LIGHT_INKS.length)] : i % 3 === 0 ? 'vermilion' : 'ultramarine';
+    faceDrawing(meshes, strokes, face, pen, Math.round(5 + density * 13));
+    if (i % 3 !== 1) {
+      const thickness = 3 + random() * (3 + density * 7);
+      faceDrawing(meshes, strokes, [face[1], face[2], face[2].clone().add(new THREE.Vector3(0, 0, -thickness)),
+        face[1].clone().add(new THREE.Vector3(0, 0, -thickness))], i % 2 ? 'carbon' : pen, 3 + Math.round(density * 5));
+    }
+    // Interrupted orbit inscriptions make each slab face the same absent load.
+    const arcRadius = radius + width * 1.7;
+    const span = (0.20 + random() * 0.28) * (0.6 + density * 0.7);
+    for (let rail = 0; rail < Math.round(1 + density * 4); rail++) {
+      const rr = arcRadius + rail * 1.05;
+      const points = Array.from({ length: 13 }, (_, k) => {
+        const a = angle + (k / 12 - 0.5) * span;
+        return point(center.x + Math.cos(a) * rr, center.y + Math.sin(a) * rr, z + 0.4);
+      });
+      stroke(strokes, rail % 3 === 0 && palette > 0.25 ? LIGHT_INKS[i % 3] : 'carbon', points);
+    }
+  }
+}
+
+/** Image-plane light shares the solid depth pass but never becomes an occluder. */
 function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, strokes: Stroke[]): PagePoint {
   const middle = (route.leftGap + route.rightGap) / 2;
   const anchor = route.point(middle, 0, 14).project(view);
@@ -308,64 +362,82 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
     point.x / PAGE.width * 2 - 1, 1 - point.y / PAGE.height * 2, anchor.z,
   ).unproject(view);
   const random = ctx.random('silence-ribbon');
-  const amount = numeric(ctx, 'lightRibbons', 0.67, 0, 1);
-  const rails = Math.round(amount * 6);
-  const width = numeric(ctx, 'ribbonWidth', 6, 2, 11);
-  const bend = numeric(ctx, 'ribbonBend', 18, -32, 32);
-  const pinch = numeric(ctx, 'ribbonPinch', 0.75, 0.35, 0.95);
-  const extent = numeric(ctx, 'ribbonExtent', 97, 65, 108);
-  const sharedDrift = (random() - 0.5) * 0.8;
-  // t runs from upper left to lower right. The two halves stop around a
-  // small paper core; their ends are staggered so they never form a knot.
+  const amount = numeric(ctx, 'lightRibbons', 0.42, 0, 1);
+  const power = numeric(ctx, 'singularityPower', 0.55, 0, 1);
+  const palette = numeric(ctx, 'paletteVariation', 0.55, 0, 1);
+  const rails = ctx.params.ribbonEnabled === false || amount <= 0 ? 0 : Math.round(2 + amount * (25 + 47 * power));
+  const width = numeric(ctx, 'ribbonWidth', 18, 3, 48);
+  const bend = numeric(ctx, 'ribbonBend', 32, -85, 85);
+  const pinch = numeric(ctx, 'ribbonPinch', 0.55, 0, 0.92);
+  const extent = numeric(ctx, 'ribbonExtent', 118, 40, 160);
+  const irregularity = numeric(ctx, 'lightIrregularity', 0.48, 0, 1);
+  const sharedDrift = (random() - 0.5) * irregularity * 11;
+  const twist = (random() - 0.5) * irregularity * 0.24;
+  const kinks = [random() * 2 - 1, random() * 2 - 1];
+  const colorShift = (random() - 0.5) * palette * 0.22;
+  const colorOrder: Ink[] = random() < 0.5 ? ['cyan', 'coral', 'gold'] : ['cyan', 'gold', 'coral'];
   for (let rail = 0; rail < rails; rail++) {
     const lane = rails === 1 ? 0 : (rail / (rails - 1) - 0.5) * 2;
     for (const half of [-1, 1]) {
-      const coreRadius = 0.043 + rail * 0.004 + (half === 1 ? 0.006 : 0);
+      // Lane-dependent termination preserves an unmarked paper core.
+      const coreRadius = 0.045 + Math.abs(lane) * 0.025 + (half === 1 ? 0.009 : 0);
       const points: THREE.Vector3[] = [];
-      for (let sample = 0; sample <= 40; sample++) {
-        const u = sample / 40;
+      for (let sample = 0; sample <= 42; sample++) {
+        const u = sample / 42;
         const t = half < 0 ? lerp(-1, -coreRadius, u) : lerp(coreRadius, 1, u);
-        // Authored rails retain at least 0.5 mm spacing at the tightest
-        // controls, allowing for poster scaling and the angled bend.
-        const breadth = Math.max(
-          width * (1 - pinch * (1 - Math.abs(t))) * (0.74 + 0.26 * Math.sin(Math.PI * Math.abs(t))),
-          0.25 * (rails - 1),
-        );
-        const twist = lane * breadth + sharedDrift * Math.abs(t);
-        const point = {
-          x: center.x + t * extent * 0.77 + (bend * Math.sin(Math.PI * t) + twist) * 0.79,
-          y: center.y + t * extent - (bend * Math.sin(Math.PI * t) + twist) * 0.61,
-        };
-        points.push(onPlane(point));
+        const breadth = Math.max(width * (1 - pinch * (1 - Math.abs(t))), 0.34 * (rails - 1));
+        const field = bend * Math.sin(Math.PI * t) + sharedDrift * t + irregularity * 9 *
+          (kinks[0] * Math.sin(2 * Math.PI * t) + kinks[1] * Math.sin(3 * Math.PI * t) * 0.4);
+        const displaced = lane * breadth + field + lane * twist * extent * t;
+        let x = center.x + t * extent * 0.77 + displaced * 0.79;
+        let y = center.y + t * extent - displaced * 0.61;
+        // The last quarter of each rail curves around the paper core; each
+        // termination lands at a distinct angle instead of on a cut line.
+        const curl = clamp((0.28 - Math.abs(t)) / 0.235, 0, 1);
+        const eased = curl * curl * (3 - 2 * curl);
+        const endAngle = (half < 0 ? -2.38 : 0.76) + lane * (0.68 + irregularity * 0.14);
+        const endRadius = 8.5 + Math.abs(lane) * 3.5;
+        x = lerp(x, center.x + Math.cos(endAngle) * endRadius, eased);
+        y = lerp(y, center.y + Math.sin(endAngle) * endRadius, eased);
+        points.push(onPlane({ x, y }));
       }
-      const pen: Ink = rail % 3 === 0 ? 'ultramarine' : rail % 3 === 1 ? 'acid' : 'violet';
+      const band = (rail + 0.5) / rails + colorShift;
+      const pen = palette < 0.05 || band < 0.64 ? 'cyan' : band < 0.86 ? colorOrder[1] : colorOrder[2];
       strokes.push({ pen, points, light: 'ribbon' });
     }
   }
 
-  const rayCount = Math.round(numeric(ctx, 'rayCount', 6, 0, 10));
-  const rayLength = numeric(ctx, 'rayLength', 34, 16, 54);
-  const raySpread = numeric(ctx, 'raySpread', 300, 90, 360) * Math.PI / 180;
-  const rayCurve = numeric(ctx, 'rayCurve', 0.2, -0.6, 0.6);
+  const rayCount = ctx.params.raysEnabled === false ? 0 : Math.round(numeric(ctx, 'rayCount', 34, 0, 120));
+  const rayLength = numeric(ctx, 'rayLength', 66, 8, 125);
+  const raySpread = numeric(ctx, 'raySpread', 310, 25, 360) * Math.PI / 180;
+  const rayCurve = numeric(ctx, 'rayCurve', 0.25, -1.5, 1.5);
+  const rayDensity = numeric(ctx, 'rayDensity', 0.62, 0, 1);
   const rayRandom = ctx.random('silence-rays');
+  const fanCount = Math.max(2, Math.round(3 + 4 * irregularity));
+  const fans = Array.from({ length: fanCount }, (_, i) => ({
+    angle: -Math.PI * 0.75 + (i + 0.5) / fanCount * raySpread + (rayRandom() - 0.5) * 0.4,
+    strength: 0.18 + rayRandom() * 0.82,
+    width: 0.08 + rayRandom() * (0.18 + irregularity * 0.16),
+  }));
   for (let ray = 0; ray < rayCount; ray++) {
-    const position = (ray + 0.5) / rayCount;
-    const angle = -Math.PI * 0.75 + (position - 0.5) * raySpread + (rayRandom() - 0.5) * 0.13;
+    const fan = fans[Math.floor(rayRandom() * fans.length)];
+    const angle = fan.angle + (rayRandom() - 0.5) * fan.width;
     const direction = { x: Math.cos(angle), y: Math.sin(angle) };
     const normal = { x: -direction.y, y: direction.x };
-    const inner = 5.4 + ray * 0.43 + rayRandom() * 0.8;
-    const length = rayLength * (0.78 + 0.34 * rayRandom());
+    const inner = 8 + rayRandom() * 12;
+    const length = rayLength * (0.25 + (0.45 + 0.75 * rayDensity) * rayRandom()) *
+      (0.55 + power * 0.8) * (0.35 + 0.65 * fan.strength);
+    const curvature = rayCurve * (0.6 + rayRandom() * 0.8) + (rayRandom() - 0.5) * irregularity * 0.55;
     const points: THREE.Vector3[] = [];
-    for (let sample = 0; sample <= 24; sample++) {
-      const u = sample / 24;
+    for (let sample = 0; sample <= 26; sample++) {
+      const u = sample / 26;
       const radius = inner + length * u;
-      const curve = rayCurve * length * u * u * 0.44;
-      points.push(onPlane({
-        x: center.x + direction.x * radius + normal.x * curve,
-        y: center.y + direction.y * radius + normal.y * curve,
-      }));
+      const curve = curvature * length * u * u * 0.44;
+      points.push(onPlane({ x: center.x + direction.x * radius + normal.x * curve,
+        y: center.y + direction.y * radius + normal.y * curve }));
     }
-    const pen: Ink = ray % 3 === 0 ? 'acid' : ray % 3 === 1 ? 'violet' : 'ultramarine';
+    const pick = rayRandom();
+    const pen: Ink = palette < 0.05 || pick < 0.59 ? 'cyan' : pick < 0.86 ? 'coral' : 'gold';
     strokes.push({ pen, points, light: 'ray' });
   }
   return center;
@@ -427,6 +499,7 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
   brokenEnd(route, meshes, strokes, route.rightGap, -1);
   branches(route, ctx, meshes, strokes);
   const view = camera();
+  orbitalFragments(route, ctx, view, meshes, strokes);
   const projectedSingularityCenter = lightGeometry(route, ctx, view, strokes);
   try {
     const midpoint = route.point((route.leftGap + route.rightGap) / 2, 0, 6).project(view);
@@ -459,8 +532,8 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
     }
     const parts: Part[] = [
       ...INKS.map(pen => ({ id: `bridge-${pen}`, pen, paths: pathsByPen.get(pen)! })),
-      ...(['ultramarine', 'acid', 'violet'] as Ink[]).map(pen => ({ id: `ribbon-${pen}`, pen, paths: ribbonByPen.get(pen)! })),
-      ...(['ultramarine', 'acid', 'violet'] as Ink[]).map(pen => ({ id: `ray-${pen}`, pen, paths: rayByPen.get(pen)! })),
+      ...LIGHT_INKS.map(pen => ({ id: `ribbon-${pen}`, pen, paths: ribbonByPen.get(pen)! })),
+      ...LIGHT_INKS.map(pen => ({ id: `ray-${pen}`, pen, paths: rayByPen.get(pen)! })),
     ];
     return { parts, stats: { candidateSegments, visibleSegments, hiddenSegments: candidateSegments - visibleSegments, meshCount: meshes.length, gap: [route.leftGap, route.rightGap], projectedGapCenter, projectedSingularityCenter } };
   } finally {

@@ -19,12 +19,12 @@ const sketch: Sketch = {
     { type: 'slider', id: 'rupture', label: 'Rupture', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'focusX', label: 'Crater X', default: 0.5, min: 0.16, max: 0.84, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'focusY', label: 'Crater Y', default: 0.5, min: 0.16, max: 0.84, step: 0.01, group: 'Composition' },
-    { type: 'slider', id: 'lobeCount', label: 'Cell lobes', default: 6, min: 5, max: 8, step: 1, group: 'Shell' },
-    { type: 'slider', id: 'lamellaPitch', label: 'Lamella spacing', default: 2.05, min: 1.55, max: 3, step: 0.05, units: 'mm', group: 'Shell' },
+    { type: 'slider', id: 'lobeCount', label: 'Cell lobes', default: 6, min: 3, max: 12, step: 1, group: 'Shell' },
+    { type: 'slider', id: 'lamellaPitch', label: 'Lamella spacing', default: 2.05, min: 0.9, max: 5.5, step: 0.05, units: 'mm', group: 'Shell' },
     { type: 'slider', id: 'shellWarp', label: 'Shell warp', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Shell' },
-    { type: 'slider', id: 'terraceCount', label: 'Terrace count', default: 4, min: 3, max: 6, step: 1, group: 'Architecture' },
-    { type: 'slider', id: 'terraceDepth', label: 'Terrace width', default: 1, min: 0.65, max: 1.5, step: 0.01, group: 'Architecture' },
-    { type: 'slider', id: 'filamentDensity', label: 'Rhythmic ribs', default: 54, min: 24, max: 64, step: 1, group: 'Detail' },
+    { type: 'slider', id: 'terraceCount', label: 'Terrace count', default: 4, min: 2, max: 8, step: 1, group: 'Architecture' },
+    { type: 'slider', id: 'terraceDepth', label: 'Terrace width', default: 1, min: 0.35, max: 1.85, step: 0.01, group: 'Architecture' },
+    { type: 'slider', id: 'filamentDensity', label: 'Rhythmic ribs', default: 54, min: 8, max: 64, step: 1, group: 'Detail' },
     { type: 'slider', id: 'rhythmGap', label: 'Grouped rests', default: 0.45, min: 0, max: 1, step: 0.01, group: 'Detail' },
   ],
   navigators: [
@@ -32,9 +32,9 @@ const sketch: Sketch = {
     { id: 'crater-position', label: 'Crater position', type: 'xy', axes: ['focusX', 'focusY'], axisLabels: ['X', 'Y'] },
   ],
   macros: [
-    { control: 'pressure', targets: [{ control: 'lamellaPitch', amount: -0.75 }, { control: 'filamentDensity', amount: 18 }] },
-    { control: 'cellularity', targets: [{ control: 'lobeCount', amount: 2 }, { control: 'shellWarp', amount: 0.45 }] },
-    { control: 'rupture', targets: [{ control: 'terraceDepth', amount: 0.55 }, { control: 'rhythmGap', amount: 0.5 }] },
+    { control: 'pressure', targets: [{ control: 'lamellaPitch', amount: -2.1 }, { control: 'filamentDensity', amount: 36 }] },
+    { control: 'cellularity', targets: [{ control: 'lobeCount', amount: 6 }, { control: 'shellWarp', amount: 0.8 }] },
+    { control: 'rupture', targets: [{ control: 'terraceDepth', amount: 1.2 }, { control: 'rhythmGap', amount: 0.8 }] },
   ],
   draw(ctx) {
     return composePoster(ctx, drawChamber(ctx), { page: TABLOID_PAGE, subtitle: 'CHAMBER BLOOM', edition: '02' });

@@ -31,18 +31,18 @@ function camera(): THREE.OrthographicCamera {
 
 function line(ink: Ink, ...points: THREE.Vector3[]): Stroke { return { ink, points }; }
 
-function slabs(ctx: SketchContext): Slab[] {
+export function slabs(ctx: SketchContext): Slab[] {
   const rng = ctx.random('cathedral-topology');
   const reach = n(ctx, 'cantilever', 0.55, 0, 1);
   const breach = n(ctx, 'breach', 0.5, 0, 1);
-  const count = Math.round(n(ctx, 'levels', 9, 7, 11));
+  const count = Math.round(n(ctx, 'levels', 9, 5, 13));
   const out: Slab[] = [];
   const phase = rng() < 0.5 ? -1 : 1;
   for (let i = 0; i < count; i++) {
     const y = -6.5 + i * 13 / (count - 1) + (rng() - 0.5) * 0.24;
     // Each level is a weighted, asymmetrical counterpoint around the void.
     const sign = (i % 3 === 1 ? -phase : phase) * (rng() < 0.2 ? -1 : 1);
-    const width = 2.5 + reach * 1.85 + rng() * 0.95;
+    const width = 2.5 + reach * 1.85 + (reach - 0.55) * 2.2 + rng() * 0.95;
     const x = sign * (1.68 + rng() * 0.58);
     const z = (rng() - 0.5) * 0.48;
     const h = 0.74 + rng() * 0.50;
@@ -50,8 +50,10 @@ function slabs(ctx: SketchContext): Slab[] {
     // Open slots are built from separated solids, so the shell may really
     // appear through them in the common depth pass.
     if (i % 4 === 2) {
-      const gap = 0.58 + 0.2 * breach;
       const left = width * (0.43 + rng() * 0.08);
+      // Leave a positive right-hand pier even at minimum reach and maximum opening.
+      const gap = Math.min(width * 0.5, width - left - 0.12,
+        0.58 + 0.2 * breach + (breach - 0.5) * 0.76);
       const right = width - gap - left;
       out.push({ x: x - width / 2 + left / 2, y, z, w: left, h, d, beat: i });
       out.push({ x: x + width / 2 - right / 2, y, z, w: right, h, d, beat: i });
@@ -86,6 +88,12 @@ function slabGeometry(s: Slab): THREE.BufferGeometry {
   return mesh;
 }
 
+function densityPitch(density: number, sparse: number, neutral: number, dense: number): number {
+  return density < 0.55
+    ? sparse + (neutral - sparse) * density / 0.55
+    : neutral + (dense - neutral) * (density - 0.55) / 0.45;
+}
+
 function slabStrokes(s: Slab, density: number, interrupt: boolean): Stroke[] {
   const out: Stroke[] = [];
   const x0 = s.x - s.w / 2, x1 = s.x + s.w / 2;
@@ -96,7 +104,7 @@ function slabStrokes(s: Slab, density: number, interrupt: boolean): Stroke[] {
   out.push(line('carbon', p(x0, y1), p(x0, y1, zb), p(x1, y1, zb), p(x1, y1)));
   out.push(line('carbon', p(x1, y0), p(x1, y0, zb)));
   // Open hatch packets are deliberately interrupted at selected beats.
-  const pitch = 0.055 - density * 0.020;
+  const pitch = density === 0.55 ? 0.055 - density * 0.020 : densityPitch(density, 0.12, 0.044, 0.027);
   const margin = 0.07;
   const across = Math.floor((s.w - 2 * margin) / pitch);
   for (let j = 0; j <= across; j++) {
@@ -106,7 +114,7 @@ function slabStrokes(s: Slab, density: number, interrupt: boolean): Stroke[] {
     out.push(line(j % 4 === 0 ? 'ultramarine' : 'carbon', p(x, ycut), p(Math.min(x + 0.20, x1 - margin), y1 - margin)));
   }
   if (s.w > 2.2 && s.beat % 3 !== 1) {
-    const rows = Math.ceil(s.h / 0.12);
+    const rows = Math.ceil(s.h / densityPitch(density, 0.28, 0.12, 0.07));
     for (let j = 1; j < rows; j++) {
       const y = y0 + j * s.h / rows;
       const inset = 0.13 + (j % 3) * 0.035;
@@ -114,7 +122,7 @@ function slabStrokes(s: Slab, density: number, interrupt: boolean): Stroke[] {
     }
   }
   if (s.h > 0.35) {
-    const sideRows = Math.ceil(s.h / 0.065);
+    const sideRows = Math.ceil(s.h / densityPitch(density, 0.17, 0.065, 0.045));
     for (let j = 1; j < sideRows; j++) {
       const y = y0 + j * s.h / sideRows;
       out.push(line(j % 4 === 0 ? 'ultramarine' : 'carbon',
@@ -127,7 +135,7 @@ function slabStrokes(s: Slab, density: number, interrupt: boolean): Stroke[] {
     out.push(line(k === 2 ? 'ultramarine' : 'carbon', p(x0 + 0.09, y), p(x1 - 0.09, y)));
   }
   // Top planes remain open, with a few blue depth scores rather than raster fill.
-  const topRows = Math.ceil(s.w / 0.12);
+  const topRows = Math.ceil(s.w / densityPitch(density, 0.28, 0.12, 0.07));
   for (let k = 1; k < topRows; k++) {
     const x = x0 + k * s.w / topRows;
     out.push(line('ultramarine', p(x, y1, zb + 0.03), p(x, y1, zf - 0.03)));
@@ -157,7 +165,7 @@ function shell(ctx: SketchContext): Shell {
   return {
     phase: random() * Math.PI * 2,
     twist: n(ctx, 'shellTwist', 0.62, 0, 1),
-    width: n(ctx, 'shellWidth', 1.75, 0.8, 2.7),
+    width: n(ctx, 'shellWidth', 1.75, 0.4, 3.7),
     focusX: n(ctx, 'focusX', 0.5, 0, 1),
     focusY: n(ctx, 'focusY', 0.5, 0, 1),
     x: n(ctx, 'worldX', 0, -1.5, 1.5),
@@ -178,7 +186,8 @@ function shellPoint(s: Shell, u: number, v: number): THREE.Vector3 {
   const cx = rx * Math.cos(a) + meander;
   const cy = ry * Math.sin(a) + 0.36 * Math.sin(2 * a + s.phase * 0.3);
   const baseZ = 0.78 + 1.58 * Math.sin(2.4 * a + s.phase * 0.27) + s.z;
-  const roll = s.twist * (0.9 * Math.sin(2.3 * a + s.phase) + 0.5 * Math.cos(4.5 * a));
+  const twist = s.twist <= 0.62 ? s.twist : 0.62 + (s.twist - 0.62) * 1.8;
+  const roll = twist * (0.9 * Math.sin(2.3 * a + s.phase) + 0.5 * Math.cos(4.5 * a));
   const taper = 0.16 + 0.93 * Math.sin(Math.PI * u) ** 0.58;
   const width = s.width * taper * (0.86 + 0.17 * Math.sin(7 * a + s.phase));
   const localX = cx + v * width * Math.cos(a) * Math.cos(roll);
@@ -200,7 +209,8 @@ function shellStrokes(s: Shell, density: number, interruption: number, ctx: Sket
   const rng = ctx.random('lamellar-64-beat');
   for (const v of [-1, 1]) out.push(trace('vermilion', 192, t => shellPoint(s, t, v)));
   const barGates = Array.from({ length: 8 }, (_, bar) => bar === 0 || bar === 7 || rng() > interruption * 0.73);
-  const contours = Math.round(84 + density * 42);
+  const contours = density === 0.55 ? Math.round(84 + density * 42)
+    : Math.round(densityPitch(density, 24, 107, 156));
   for (let j = 0; j < contours; j++) {
     const v = -0.975 + 1.95 * (j + 0.5) / contours;
     const ink: Ink = j % 13 === 0 ? 'vermilion' : j % 4 === 0 ? 'violet' : 'ultramarine';
@@ -212,7 +222,8 @@ function shellStrokes(s: Shell, density: number, interruption: number, ctx: Sket
     }
   }
   out.push(trace('acid', 192, t => shellPoint(s, t, 0)));
-  const ribs = Math.round(52 + density * 20);
+  const ribs = density === 0.55 ? Math.round(52 + density * 20)
+    : Math.round(densityPitch(density, 16, 63, 90));
   for (let i = 0; i <= ribs; i++) {
     const u = i / ribs;
     const group = Math.floor(i / 8);
@@ -273,7 +284,8 @@ export function drawCathedral(ctx: SketchContext): Part[] {
   const architecture = slabs(ctx);
   const organism = shell(ctx);
   const density = n(ctx, 'hatchDensity', 0.55, 0, 1);
-  const interruption = n(ctx, 'interruption', 0.32, 0, 0.8);
+  const rawInterruption = n(ctx, 'interruption', 0.32, 0, 1);
+  const interruption = rawInterruption <= 0.32 ? rawInterruption : 0.32 + (rawInterruption - 0.32) * 1.6;
   const rng = ctx.random('slab-interruptions');
   const beats = Array.from({ length: 64 }, () => rng() < interruption);
   const strokes: Stroke[] = architecture.flatMap(s => slabStrokes(s, density, beats[(s.beat * 7) % 64]));

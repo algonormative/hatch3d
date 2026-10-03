@@ -54,4 +54,31 @@ describe('Chamber Bloom', () => {
     expect(ruptured.parts.find(part => part.id === 'stepped-terraces')?.paths).not.toEqual(base.parts.find(part => part.id === 'stepped-terraces')?.paths);
     expect(ruptured.effectiveParams?.terraceDepth).toBeGreaterThan(base.effectiveParams?.terraceDepth as number);
   });
+  it('opens the shell and varies lobe and buttress topology at the expanded endpoints', async () => {
+    const open = await renderSketch({ entry, seed: 17, params: {
+      lobeCount: 3, terraceCount: 2, terraceDepth: 0.35, lamellaPitch: 5.5, filamentDensity: 8,
+    } });
+    const packed = await renderSketch({ entry, seed: 17, params: {
+      lobeCount: 12, terraceCount: 8, terraceDepth: 1.85, lamellaPitch: 0.9, filamentDensity: 64,
+    } });
+    expect(packed.stats.pathCount).toBeGreaterThan(open.stats.pathCount * 2);
+    expect(packed.parts.find(p => p.id === 'stepped-terraces')?.paths.length)
+      .toBeGreaterThan(open.parts.find(p => p.id === 'stepped-terraces')!.paths.length);
+    expect(packed.parts.find(p => p.id === 'blue-shell')?.paths)
+      .not.toEqual(open.parts.find(p => p.id === 'blue-shell')?.paths);
+    for (const result of [open, packed]) {
+      expect(result.diagnostics).toEqual([]);
+      expect(result.stats.pointCount).toBeLessThan(200_000);
+      for (const part of result.parts.filter(p => !p.id.startsWith('poster-'))) {
+        for (const path of part.paths) for (const point of path) {
+          expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBe(true);
+          expect(point.x).toBeGreaterThanOrEqual(art.left);
+          expect(point.x).toBeLessThanOrEqual(art.right);
+          expect(point.y).toBeGreaterThanOrEqual(art.top);
+          expect(point.y).toBeLessThanOrEqual(art.bottom);
+        }
+      }
+    }
+  });
+
 });

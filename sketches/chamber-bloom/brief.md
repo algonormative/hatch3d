@@ -15,3 +15,10 @@ The **Composition** radar controls pressure (shell spacing and rib count), cellu
 Carbon gives the masonry and paired lips their load; ultramarine carries most shell contours; vermilion warms the inner pressure and registration marks; acid punctuates ribs; violet adds sparse counter-rhythm. Their densities intentionally differ. Matched seed 17 and 211 renders were inspected before and after the masonry pass: both now contrast broader rectilinear slabs with the fluid shell. The outer lobes intentionally meet the art aperture; the crater remains open. Software checks cover bounded deterministic paths and ink presence, while physical pen density still needs a test plot.
 
 Run `node --import tsx cli/sketch.ts render sketches/chamber-bloom/sketch.ts --seed 17 --out .sketch-output/phase-garden/chamber-bloom/seed-17` for a deterministic SVG, PNG, and JSON export. The preview establishes screen composition and physical line intent; it is not a test plot.
+
+
+## Expanded control study
+
+The neutral seed-17 lettered export is unchanged at the path level. Direct ranges now permit three to twelve lobes, two to eight terraces, terrace width multipliers of 0.35–1.85, shell lamella spacing of 0.9–5.5 mm, and eight to sixty-four lattice steps. The lobe generator's internal clamp follows the exposed range; high warp and grouped rests have stronger end behavior. The three composition axes reach farther into their direct controls. Crater XY, the page, and pen assignments retain their prior ranges.
+
+Matched seed-17 whole-sheet previews show the open endpoint as a calm crater with two narrow buttresses and broad cellular intervals. The packed endpoint gives the shell many folds and eight wide buttresses while preserving an empty crater and clipped page aperture. The crowded masonry and close lamellae are an intentional pressure extreme, not the neutral balance. Software checks confirm finite bounded paths, five ink layers, and a bounded point count; the 0.9 mm contour setting still needs physical pen and paper review.

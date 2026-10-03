@@ -105,7 +105,7 @@ function makeLayout(ctx: SketchContext): Layout {
   const layout: Layout = {
     cx: 132 + n(ctx, 'focusX') * 50 + (place() - 0.5) * 24,
     cy: 170 + n(ctx, 'focusY') * 48 + (place() - 0.5) * 25,
-    lobes: clamp(Math.round(n(ctx, 'lobeCount') + (anatomy() - 0.5) * 2.1), 4, 9),
+    lobes: clamp(Math.round(n(ctx, 'lobeCount') + (anatomy() - 0.5) * 2.1), 3, 12),
     chirality: anatomy() < 0.5 ? -1 : 1,
     phase: anatomy() * TAU,
     tilt: mix(-0.42, 0.2, anatomy()),
@@ -128,8 +128,9 @@ function makeLayout(ctx: SketchContext): Layout {
 function shellPoint(layout: Layout, theta: number, radius: number, warp: number): Point {
   const p = polar(layout, theta, radius);
   const t = clamp((radius - 39) / 102, 0, 1);
-  p.x += warp * (0.4 + t) * Math.sin(theta * 3 + radius / 29 + layout.phase) * 3.2;
-  p.y += warp * (0.4 + t) * Math.cos(theta * 2 - radius / 35 + layout.phase) * 3.6;
+  const amplitude = warp <= 0.55 ? warp : 0.55 + (warp - 0.55) * 2.5;
+  p.x += amplitude * (0.4 + t) * Math.sin(theta * 3 + radius / 29 + layout.phase) * 3.2;
+  p.y += amplitude * (0.4 + t) * Math.cos(theta * 2 - radius / 35 + layout.phase) * 3.6;
   return p;
 }
 
@@ -151,7 +152,8 @@ export function drawChamber(ctx: SketchContext): Part[] {
       const theta = j / 576 * TAU;
       const step = Math.floor(j / 9);
       const group = mod(step + layout.rhythm + Math.floor(lane / 4) * 3, 64);
-      const rest = lane % 4 === 2 && ((RESTS.has(group) && gap >= 0.2) || (EXTRA_RESTS.has(group) && gap >= 0.6));
+      const rest = lane % 4 === 2 && ((RESTS.has(group) && gap >= 0.2) || (EXTRA_RESTS.has(group) && gap >= 0.6)
+        || (gap >= 0.8 && (group === 3 || group === 24 || group === 43 || group === 56)));
       source.push(rest ? { x: NaN, y: NaN } : shellPoint(layout, theta, radius, warp));
     }
     collect(source, keep, rings[pen]);
