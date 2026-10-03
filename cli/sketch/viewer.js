@@ -5,7 +5,7 @@ if (typeof document !== 'undefined') {
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
     margin: null, paper: null, borderStyle: '', borderPen: null, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
-    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -219,19 +219,68 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  function updateControlVisibility() {
+    if (!state.metadata) return;
+    for (const control of state.metadata.controls) {
+      const row = document.getElementById(`control-row-${control.id}`);
+      if (row) row.hidden = Boolean(control.showWhen && state.params[control.showWhen.control] !== control.showWhen.equals);
+    }
+    for (const panel of $('controls').querySelectorAll('.control-group')) {
+      const count = [...panel.querySelectorAll('.control')].filter(row => !row.hidden).length;
+      panel.hidden = count === 0;
+      panel.querySelector('summary').textContent = `${panel.dataset.group} · ${count} ${count === 1 ? 'control' : 'controls'}`;
+    }
+  }
+
   function renderControls() {
     const host = $('controls');
     host.replaceChildren();
+    const groups = new Map();
     for (const control of state.metadata.controls) {
+      let parent = host;
+      if (control.group) {
+        if (!groups.has(control.group)) {
+          const panel = document.createElement('details');
+          panel.className = 'control-group';
+          panel.dataset.group = control.group;
+          panel.open = state.groupCollapsed.has(control.group) ? !state.groupCollapsed.get(control.group) : groups.size === 0;
+          panel.addEventListener('toggle', () => state.groupCollapsed.set(control.group, !panel.open));
+          const summary = document.createElement('summary');
+          summary.textContent = control.group;
+          const body = document.createElement('div');
+          body.className = 'control-group-body';
+          const reset = document.createElement('button');
+          reset.type = 'button';
+          reset.className = 'quiet control-group-reset';
+          reset.textContent = `Reset ${control.group}`;
+          reset.addEventListener('click', () => {
+            for (const member of state.metadata.controls.filter(item => item.group === control.group)) state.params[member.id] = member.default;
+            $('incompatible').hidden = true;
+            renderControls();
+            queueRender(false);
+          });
+          body.append(reset);
+          panel.append(summary, body);
+          host.append(panel);
+          groups.set(control.group, body);
+        }
+        parent = groups.get(control.group);
+      }
       const row = document.createElement('div');
       row.className = 'control';
+      row.id = `control-row-${control.id}`;
       if (control.type === 'toggle') {
         const label = document.createElement('label');
         label.className = 'check';
         const input = document.createElement('input');
+        input.id = `control-${control.id}`;
         input.type = 'checkbox';
         input.checked = Boolean(state.params[control.id]);
-        input.addEventListener('change', () => { state.params[control.id] = input.checked; queueRender(false); });
+        input.addEventListener('change', () => {
+          state.params[control.id] = input.checked;
+          updateControlVisibility();
+          queueRender(false);
+        });
         label.append(input, document.createTextNode(control.label));
         row.append(label);
       } else {
@@ -256,6 +305,7 @@ if (typeof document !== 'undefined') {
           input.addEventListener('input', () => {
             state.params[control.id] = Number(input.value);
             value.textContent = formatValue(control, input.value);
+            updateControlVisibility();
             queueRender(Boolean(control.expensive));
           });
           if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
@@ -273,16 +323,21 @@ if (typeof document !== 'undefined') {
           for (const optionValue of control.options) {
             const option = document.createElement('option');
             option.value = optionValue;
-            option.textContent = optionValue;
+            option.textContent = control.optionLabels && Object.hasOwn(control.optionLabels, optionValue) ? control.optionLabels[optionValue] : optionValue;
             input.append(option);
           }
           input.value = state.params[control.id];
-          input.addEventListener('change', () => { state.params[control.id] = input.value; queueRender(false); });
+          input.addEventListener('change', () => {
+            state.params[control.id] = input.value;
+            updateControlVisibility();
+            queueRender(false);
+          });
           row.append(heading, input);
         }
       }
-      host.append(row);
+      parent.append(row);
     }
+    updateControlVisibility();
   }
 
   function queueRender(expensive) {
@@ -370,6 +425,7 @@ if (typeof document !== 'undefined') {
     const active = [];
     if ($('overlay').checked && !$('overlay').disabled) active.push('source image overlay');
     if ($('part').value) active.push(`isolated part “${$('part').value}”`);
+    if (!$('part').value && state.result?.parts.some(part => part.diagnostic && part.paths.length && !state.hiddenPenIds.has(part.pen))) active.push('diagnostic geometry preview only, excluded from pin and export');
     const penCount = state.result?.metadata.pens.length || 0;
     if (state.hiddenPenIds.size && penCount) active.push(state.hiddenPenIds.size === penCount ?
       'all pen layers hidden from this preview' : `${state.hiddenPenIds.size} of ${penCount} pen layers hidden from this preview`);
@@ -378,7 +434,7 @@ if (typeof document !== 'undefined') {
   }
 
   function visibleSvg(result) {
-    return inspectSvg(result.svg, $('part').value, state.hiddenPenIds);
+    return inspectSvg(result.svg, $('part').value, state.hiddenPenIds, result.parts, result.metadata.pens);
   }
 
   function showArt() {
@@ -486,7 +542,7 @@ if (typeof document !== 'undefined') {
     $('pin-art').parentElement.style.setProperty('--page-ratio', pin.page.width / pin.page.height);
     $('pin-art').src = `/api/pins/${encodeURIComponent(id)}/svg`;
     $('pin-date').textContent = new Date(pin.pinnedAt).toLocaleString();
-    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.stats.pathCount.toLocaleString()} paths · ${Object.entries(pin.params).map(([key, value]) => `${key}: ${value}`).join(' · ')}`;
+    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.stats.pathCount.toLocaleString()} paths · ${Object.keys(pin.params).length} saved controls`;
   }
 
   async function loadFinishingOptions() {

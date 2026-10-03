@@ -46,6 +46,32 @@ describe('sketch runner', () => {
     await expect(inspectSketch({ entry })).rejects.toThrow(/Duplicate pen/);
   });
 
+  it('validates grouped and conditional control metadata while retaining hidden values', async () => {
+    const controls = `[{type:'select',id:'mode',label:'Mode',default:'flat',options:['flat','deep'],optionLabels:{flat:'Flat study',deep:'Deep study'},group:'Composition'},` +
+      `{type:'slider',id:'depth',label:'Depth',min:0,max:10,step:1,default:2,group:'Details',showWhen:{control:'mode',equals:'deep'}}]`;
+    const source = (definition: string) => `${base.replace(/controls:\[.*\]$/, `controls:${definition}`)},draw(ctx){return [{id:'line',pen:'ink',paths:[[{x:10,y:10},{x:20+Number(ctx.params.depth),y:20}]]}]}`;
+    await sketch(source(controls));
+    const meta = await inspectSketch({ entry });
+    expect(meta.controls[0]).toMatchObject({ group: 'Composition', optionLabels: { flat: 'Flat study' } });
+    expect(meta.controls[1]).toMatchObject({ group: 'Details', showWhen: { control: 'mode', equals: 'deep' } });
+    const hidden = await renderSketch({ entry, params: { mode: 'flat', depth: 8 } });
+    expect(hidden.params).toEqual({ mode: 'flat', depth: 8 });
+    expect(hidden.parts[0].paths[0][1].x).toBe(28);
+    await expect(renderSketch({ entry, params: { mode: 'flat', depth: 8.5 } })).rejects.toThrow(/step/);
+
+    for (const [invalid, message] of [
+      [controls.replace("group:'Details'", "group:'   '"), /Invalid group/],
+      [controls.replace("control:'mode'", "control:'missing'"), /Invalid showWhen reference/],
+      [controls.replace("equals:'deep'", 'equals:2'), /Invalid value for select/],
+      [controls.replace("equals:'deep'", "equals:'absent'"), /Invalid value for select/],
+      [controls.replace("flat:'Flat study'", "absent:'Absent'"), /Invalid option labels/],
+      [controls.replace("control:'mode'", "control:'depth'"), /Invalid showWhen reference/],
+    ] as const) {
+      await sketch(source(invalid));
+      await expect(inspectSketch({ entry })).rejects.toThrow(message);
+    }
+  });
+
   it('clips actual page geometry and retains a sketch-created hole', async () => {
     const helper = pathToFileURL(resolve('src/patch/region-hatch.ts')).href;
     await writeFile(entry, `import { hatchRegion } from ${JSON.stringify(helper)}; export default {${base},draw(){const outer=[{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}];const hole=[{x:30,y:30},{x:70,y:30},{x:70,y:70},{x:30,y:70}];return [{id:'hatch',pen:'ink',boundary:[outer,hole],paths:hatchRegion([outer,hole],0,10)}]}};`);

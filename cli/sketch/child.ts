@@ -39,6 +39,8 @@ function validateSketch(value: unknown): Sketch {
     controlIds.add(control.id);
     assert(control.units === undefined || typeof control.units === 'string', `Invalid units for ${control.id}`);
     assert(control.expensive === undefined || typeof control.expensive === 'boolean', `Invalid expensive flag for ${control.id}`);
+    assert(control.group === undefined || nonempty(control.group), `Invalid group for ${control.id}`);
+    assert(control.showWhen === undefined || (object(control.showWhen) && validId(control.showWhen.control)), `Invalid showWhen for ${control.id}`);
     if (control.type === 'slider') {
       assert(finite(control.min) && finite(control.max) && finite(control.step) && control.min <= control.max && control.step > 0, `Invalid slider range: ${control.id}`);
       validateControlValue(control, control.default);
@@ -47,8 +49,24 @@ function validateSketch(value: unknown): Sketch {
     } else if (control.type === 'select') {
       assert(Array.isArray(control.options) && control.options.length > 0 && control.options.every(nonempty) && new Set(control.options).size === control.options.length, `Invalid select options: ${control.id}`);
       validateControlValue(control, control.default);
+      assert(control.optionLabels === undefined || (object(control.optionLabels) && Object.entries(control.optionLabels).every(([key, label]) => control.options.includes(key) && nonempty(label))), `Invalid option labels for ${control.id}`);
     } else {
       throw new Error(`Unknown control type: ${String((control as { type: unknown }).type)}`);
+    }
+  }
+  const controls = value.controls as Control[];
+  const controlsById = new Map(controls.map((control) => [control.id, control]));
+  for (const control of controls) {
+    if (!control.showWhen) continue;
+    const gate = controlsById.get(control.showWhen.control);
+    assert(gate && gate.id !== control.id, `Invalid showWhen reference for ${control.id}`);
+    validateControlValue(gate, control.showWhen.equals);
+    const visited = new Set([control.id]);
+    let current: Control | undefined = gate;
+    while (current?.showWhen) {
+      assert(!visited.has(current.id), `Cyclic showWhen reference for ${control.id}`);
+      visited.add(current.id);
+      current = controlsById.get(current.showWhen.control);
     }
   }
   assert(value.assets === undefined || object(value.assets), 'Sketch assets must be a record');
@@ -155,7 +173,7 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   const sketch = validateSketch(imported.default);
   const finishing = request.mode === 'render' && request.finishing !== undefined ? resolveFinishing(sketch.page, sketch.pens, request.finishing) : undefined;
   const { assets, metadata: assetMetadata } = await loadRasterAssets(entry, sketch.assets ?? {}, sketch.page.paper);
-  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.type === 'select' ? { options: [...c.options] } : {}) })), assets: assetMetadata };
+  const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata };
   if (request.mode === 'inspect') return metadata;
   if (finishing) {
     metadata.page = { ...finishing.page };

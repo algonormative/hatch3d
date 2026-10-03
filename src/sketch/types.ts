@@ -18,10 +18,15 @@ export interface FinishingOptions {
   density?: { maxDensity: number; cellSize: number };
 }
 
+export interface ControlPresentation {
+  group?: string;
+  showWhen?: { control: string; equals: string | number | boolean };
+}
+
 export type Control =
-  | { type: 'slider'; id: string; label: string; default: number; min: number; max: number; step: number; units?: string; expensive?: boolean }
-  | { type: 'toggle'; id: string; label: string; default: boolean; units?: string; expensive?: boolean }
-  | { type: 'select'; id: string; label: string; default: string; options: string[]; units?: string; expensive?: boolean };
+  | (ControlPresentation & { type: 'slider'; id: string; label: string; default: number; min: number; max: number; step: number; units?: string; expensive?: boolean })
+  | (ControlPresentation & { type: 'toggle'; id: string; label: string; default: boolean; units?: string; expensive?: boolean })
+  | (ControlPresentation & { type: 'select'; id: string; label: string; default: string; options: string[]; optionLabels?: Record<string, string>; units?: string; expensive?: boolean });
 
 export interface Box { x: number; y: number; width: number; height: number }
 export interface AssetDeclaration { path: string; box: Box; fit: 'contain' | 'cover' }

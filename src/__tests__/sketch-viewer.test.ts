@@ -81,11 +81,25 @@ describe('local sketch viewer', () => {
     expect(inspected.querySelector('[data-pen-id="blue"]')?.getAttribute('display')).toBe('none');
     expect(inspected.querySelector('[data-part-id="sky"]')?.getAttribute('display')).toBe('none');
     expect(inspected.querySelector('[data-part-id="street"]')?.getAttribute('display')).toBeNull();
+    expect(inspected.querySelector('[data-inspection-diagnostics]')).toBeNull(); // isolating a plotted part hides diagnostics
     expect(inspected.querySelector('[data-part-id="sun"]')?.getAttribute('display')).toBe('none');
     const allHidden = new DOMParser().parseFromString(inspectSvg(full, '', new Set(['black', 'blue', 'red'])), 'image/svg+xml');
     expect([...allHidden.querySelectorAll('[data-pen-id]')].every(layer => layer.getAttribute('display') === 'none')).toBe(true);
     expect(full).not.toContain('display="none"');
     expect(full).toContain('inkscape:label="3-red"');
+  });
+
+  it('adds diagnostic paths only to the inspection image', () => {
+    const full = '<svg xmlns="http://www.w3.org/2000/svg"><g data-pen-id="ink"><g data-part-id="marks"><path d="M1,1L2,2"/></g></g></svg>';
+    const parts = [{ id: 'mesh', pen: 'ink', diagnostic: true, paths: [[{ x: 3, y: 4 }, { x: 5, y: 6 }]] }];
+    const pens = [{ id: 'ink', color: '#123456', width: 0.3 }];
+    const image = inspectSvg(full, '', new Set(), parts, pens);
+    const parsed = new DOMParser().parseFromString(image, 'image/svg+xml');
+    expect(parsed.querySelector('[data-inspection-diagnostics] [data-diagnostic-part-id="mesh"] path')?.getAttribute('d')).toBe('M3,4L5,6');
+    expect(parsed.querySelector('[data-inspection-diagnostics] [data-diagnostic-part-id="mesh"]')?.getAttribute('stroke')).toBe('#123456');
+    expect(inspectSvg(full, '', new Set(['ink']), parts, pens)).not.toContain('data-inspection-diagnostics');
+    expect(inspectSvg(full, 'marks', new Set(), parts, pens)).not.toContain('data-inspection-diagnostics');
+    expect(full).not.toContain('mesh');
   });
 
   it('counts plotted paths for arbitrary pens and retains hidden IDs across reordered renders', () => {
@@ -223,6 +237,9 @@ it('uses successful render pens for the sidebar and filters only the current ins
     await import('../../cli/sketch/viewer.js');
     await vi.waitFor(() => expect(document.getElementById('pen-count')?.textContent).toBe('3 layers · 3 passes'));
     expect(document.getElementById('paper-size')?.textContent).toBe('100 × 150 mm');
+    const initialPreview = new DOMParser().parseFromString(await readBlob(blobs.at(-1)!), 'image/svg+xml');
+    expect(initialPreview.querySelector('[data-diagnostic-part-id="guide"] path')?.getAttribute('d')).toBe('M0,0L4,4');
+    expect(document.getElementById('inspection-note')?.textContent).toMatch(/diagnostic geometry preview only, excluded from pin and export/);
     expect([...document.querySelectorAll('.pen-details')].map(row => row.textContent)).toEqual([
       '1. black0.3 mm · 2 plotted paths', '2. blue0.5 mm · 0 plotted paths', '3. red0.2 mm · 1 plotted path',
     ]);
@@ -237,12 +254,17 @@ it('uses successful render pens for the sidebar and filters only the current ins
     expect(inspected.querySelector('[data-pen-id="blue"]')?.getAttribute('display')).toBe('none');
     expect(inspected.querySelector('[data-part-id="sky"]')?.getAttribute('display')).toBe('none');
     expect(inspected.querySelector('[data-part-id="street"]')?.getAttribute('display')).toBeNull();
+    expect(inspected.querySelector('[data-inspection-diagnostics]')).toBeNull(); // isolating a plotted part hides diagnostics
     expect(document.getElementById('inspection-note')?.textContent).toMatch(/1 of 3 pen layers hidden/);
     document.querySelector<HTMLInputElement>('input[aria-label="Show black pen layer"]')!.click();
     document.querySelector<HTMLInputElement>('input[aria-label="Show red pen layer"]')!.click();
     expect(document.getElementById('inspection-note')?.textContent).toMatch(/all pen layers hidden/);
     expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(false);
     expect((document.getElementById('pin') as HTMLButtonElement).disabled).toBe(false);
+    const previewWithDiagnostics = new DOMParser().parseFromString(await readBlob(blobs.at(-1)!), 'image/svg+xml');
+    expect(previewWithDiagnostics.querySelector('[data-inspection-diagnostics]')).toBeNull(); // all pens are hidden
+    expect(layered.svg).not.toContain('data-inspection-diagnostics');
+    expect(layered.svg).not.toContain('data-part-id="guide"');
     expect(layered.svg).not.toContain('display="none"');
   } finally {
     vi.unstubAllGlobals();
@@ -424,6 +446,84 @@ it('keeps finishing separate from sketch controls and blocks SVG and PNG exports
     await vi.waitFor(() => expect(document.getElementById('status')?.textContent).toMatch(/Render failed/), { timeout: 1000 });
     expect(requests.length).toBe(6);
     expect((document.getElementById('download-png') as HTMLButtonElement).disabled).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    document.body.replaceChildren();
+  }
+});
+
+it('groups controls, changes conditional visibility without replacing a focused slider, and preserves group state on reload', async () => {
+  vi.resetModules();
+  document.documentElement.innerHTML = readFileSync(join(process.cwd(), 'cli/sketch/viewer.html'), 'utf8');
+  const controls: SketchMetadata['controls'] = [
+    { type: 'select', id: 'mode', label: 'Mode', default: 'flat', options: ['flat', 'deep'], optionLabels: { flat: 'Flat study', deep: 'Deep study' }, group: 'Composition' },
+    { type: 'slider', id: 'pitch', label: 'Pitch', default: 2, min: 1, max: 5, step: 1, group: 'Composition' },
+    { type: 'slider', id: 'detail', label: 'Detail', default: 1, min: 1, max: 5, step: 1, group: 'Details', showWhen: { control: 'pitch', equals: 3 } },
+    { type: 'toggle', id: 'accent', label: 'Accent', default: false, group: 'Details', showWhen: { control: 'mode', equals: 'deep' } },
+  ];
+  let source: SketchMetadata = { ...metadata, controls };
+  let sourceChanged: (() => void) | undefined;
+  const requests: Array<{ requestId: number; params: Record<string, string | number | boolean> }> = [];
+  const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  vi.stubGlobal('EventSource', class {
+    addEventListener(name: string, callback: () => void) { if (name === 'source-change') sourceChanged = callback; }
+  });
+  vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+    if (url === '/api/metadata') return Promise.resolve(response(source));
+    if (url === '/api/finishing-options') return Promise.resolve(response({ paperSizes: {}, borderStyles: {}, pngScales: [6] }));
+    if (url === '/api/pins') return Promise.resolve(response([]));
+    if (url === '/api/render') {
+      const request = JSON.parse(String(options?.body));
+      requests.push(request);
+      return Promise.resolve(response({ requestId: request.requestId, result: { ...result(`render-${requests.length}`), metadata: source, params: request.params } }));
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  }));
+  Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:preview', configurable: true });
+  Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, configurable: true });
+  try {
+    await import('../../cli/sketch/viewer.js');
+    await vi.waitFor(() => expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(false));
+    const composition = document.querySelector<HTMLDetailsElement>('.control-group[data-group="Composition"]')!;
+    const details = document.querySelector<HTMLDetailsElement>('.control-group[data-group="Details"]')!;
+    expect(composition.open).toBe(true);
+    expect(details.hidden).toBe(true);
+    expect((document.getElementById('control-mode') as HTMLSelectElement).selectedOptions[0].textContent).toBe('Flat study');
+    const mode = document.getElementById('control-mode') as HTMLSelectElement;
+    mode.value = 'deep';
+    mode.dispatchEvent(new Event('change'));
+    expect(details.hidden).toBe(false);
+    expect(details.open).toBe(false);
+    details.open = true;
+    const pitch = document.getElementById('control-pitch') as HTMLInputElement;
+    pitch.focus();
+    pitch.value = '3';
+    pitch.dispatchEvent(new Event('input'));
+    expect(document.getElementById('control-pitch')).toBe(pitch);
+    expect(document.activeElement).toBe(pitch);
+    expect(document.getElementById('control-row-detail')?.hidden).toBe(false);
+    await vi.waitFor(() => expect(requests.at(-1)?.params).toMatchObject({ mode: 'deep', pitch: 3, detail: 1, accent: false }));
+    const detail = document.getElementById('control-detail') as HTMLInputElement;
+    detail.value = '4';
+    detail.dispatchEvent(new Event('input'));
+    await vi.waitFor(() => expect(requests.at(-1)?.params.detail).toBe(4));
+    const prior = requests.length;
+    details.querySelector<HTMLButtonElement>('.control-group-reset')!.click();
+    expect((document.getElementById('download') as HTMLButtonElement).disabled).toBe(true);
+    expect(details.open).toBe(true);
+    await vi.waitFor(() => expect(requests.length).toBe(prior + 1));
+    expect(requests.at(-1)?.params).toMatchObject({ mode: 'deep', pitch: 3, detail: 1, accent: false });
+    composition.open = false;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    source = { ...source, controls: controls.map(control => control.id === 'pitch' && control.type === 'slider' ? { ...control, max: 6 } : control) };
+    sourceChanged!();
+    await vi.waitFor(() => expect((document.getElementById('control-pitch') as HTMLInputElement).max).toBe('6'));
+    expect(document.querySelector<HTMLDetailsElement>('.control-group[data-group="Composition"]')?.open).toBe(false);
+    expect(document.querySelector<HTMLDetailsElement>('.control-group[data-group="Details"]')?.open).toBe(true);
+    expect((document.getElementById('control-mode') as HTMLSelectElement).value).toBe('deep');
+    expect((document.getElementById('control-pitch') as HTMLInputElement).value).toBe('3');
   } finally {
     vi.unstubAllGlobals();
     delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;

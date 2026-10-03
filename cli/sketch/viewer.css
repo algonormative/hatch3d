@@ -102,6 +102,11 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .finish-pen legend { font: 600 .7rem var(--mono); padding: 0 .2rem; overflow-wrap: anywhere; }
 .finish-pen-fields { display: grid; grid-template-columns: 1.5fr 1fr .8fr; gap: .35rem; }
 .finish-body button { justify-self: start; }
+.control-group { border: 1px solid var(--border); border-radius: 2px; margin: .7rem 0; background: #fff; }
+.control-group[hidden], .control[hidden] { display: none; }
+.control-group > summary { cursor: pointer; padding: .72rem .85rem; font: 600 .74rem var(--mono); }
+.control-group-body { padding: 0 .85rem .35rem; }
+.control-group-reset { margin: .25rem 0 .35rem; font: .66rem var(--mono); }
 .control { padding: .85rem 0; border-top: 1px solid var(--border); }
 .control-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0 0 .55rem; }
 .control label, .inspection label, .pins label { font: 500 .74rem var(--mono); }

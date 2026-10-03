@@ -2,6 +2,8 @@
 
 A sketch is an ordinary TypeScript module with one default `Sketch` object. Page and path coordinates, margins, and pen widths are millimeters from the top-left of the page. The runner starts a fresh Node process for every render, so changes to local imports appear on the next render. Seed defaults to `0` and each named `ctx.random(partId)` stream is repeatable.
 
+Existing hatch3d 2D and 3D compositions can be used through the [Sketch adapters](sketch-hatch3d.md), with runnable examples and physical pen parts.
+
 ```ts
 import type { Sketch } from '../../src/sketch/types.ts';
 

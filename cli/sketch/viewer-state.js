@@ -45,8 +45,9 @@ export function penPathCounts(pens, parts) {
 }
 
 /** Make a temporary inspection image without changing the canonical SVG bytes. */
-export function inspectSvg(fullSvg, selectedPartId, hiddenPenIds) {
-  if (!selectedPartId && hiddenPenIds.size === 0) return fullSvg;
+export function inspectSvg(fullSvg, selectedPartId, hiddenPenIds, parts = [], pens = []) {
+  const diagnostics = selectedPartId ? [] : parts.filter(part => part.diagnostic && part.paths.length && !hiddenPenIds.has(part.pen));
+  if (!selectedPartId && hiddenPenIds.size === 0 && diagnostics.length === 0) return fullSvg;
   const document = new DOMParser().parseFromString(fullSvg, 'image/svg+xml');
   for (const layer of document.querySelectorAll('[data-pen-id]')) {
     if (hiddenPenIds.has(layer.getAttribute('data-pen-id'))) layer.setAttribute('display', 'none');
@@ -55,6 +56,28 @@ export function inspectSvg(fullSvg, selectedPartId, hiddenPenIds) {
         if (part.getAttribute('data-part-id') !== selectedPartId) part.setAttribute('display', 'none');
       }
     }
+  }
+  if (diagnostics.length) {
+    const namespace = 'http://www.w3.org/2000/svg';
+    const overlay = document.createElementNS(namespace, 'g');
+    overlay.setAttribute('data-inspection-diagnostics', '');
+    overlay.setAttribute('fill', 'none');
+    overlay.setAttribute('stroke-dasharray', '1.5 1.5');
+    overlay.setAttribute('opacity', '0.6');
+    for (const part of diagnostics) {
+      const pen = pens.find(candidate => candidate.id === part.pen);
+      const group = document.createElementNS(namespace, 'g');
+      group.setAttribute('data-diagnostic-part-id', part.id);
+      group.setAttribute('stroke', pen?.color || '#666666');
+      group.setAttribute('stroke-width', String(pen?.width || 0.2));
+      for (const points of part.paths) {
+        const path = document.createElementNS(namespace, 'path');
+        path.setAttribute('d', points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(''));
+        group.append(path);
+      }
+      overlay.append(group);
+    }
+    document.documentElement.append(overlay);
   }
   return new XMLSerializer().serializeToString(document);
 }
