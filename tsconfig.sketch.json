@@ -1,10 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
@@ -13,5 +18,18 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["cli/sketch.ts", "cli/sketch/**/*.ts", "src/sketch/**/*.ts", "src/utils/clip.ts", "sketches/civic-weather/**/*.ts", "sketches/fault-choir/**/*.ts", "sketches/hatch3d-2d/**/*.ts", "sketches/hatch3d-3d/**/*.ts"]
+  "include": [
+    "cli/sketch.ts",
+    "cli/sketch/**/*.ts",
+    "src/sketch/**/*.ts",
+    "src/utils/clip.ts",
+    "sketches/civic-weather/**/*.ts",
+    "sketches/fault-choir/**/*.ts",
+    "sketches/hatch3d-2d/**/*.ts",
+    "sketches/hatch3d-3d/**/*.ts",
+    "sketches/phase-garden/**/*.ts",
+    "sketches/breach-cathedral/**/*.ts",
+    "sketches/chamber-bloom/**/*.ts",
+    "sketches/load-bearing-silence/**/*.ts"
+  ]
 }

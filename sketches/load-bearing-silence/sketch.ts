@@ -1,0 +1,49 @@
+import type { Sketch } from '../../src/sketch/types.ts';
+import { posterFrame } from '../phase-garden/poster.ts';
+import { drawBridge } from './geometry.ts';
+
+/** A bridge with its structural center removed, then a living support system at one end. */
+const sketch: Sketch = {
+  name: 'Load Bearing Silence',
+  page: { width: 297, height: 420, margin: 18, paper: '#f4f0e6' },
+  pens: [
+    { id: 'carbon', color: '#22282c', width: 0.25 },
+    { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
+    { id: 'vermilion', color: '#d04b3c', width: 0.25 },
+    { id: 'acid', color: '#a5a938', width: 0.25 },
+    { id: 'violet', color: '#776090', width: 0.25 },
+  ],
+  controls: [
+    { type: 'slider', id: 'load', label: 'Architectural load', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
+    { type: 'slider', id: 'tension', label: 'Portal tension', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
+    { type: 'slider', id: 'disintegration', label: 'Disintegration', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
+    { type: 'slider', id: 'hatchPitch', label: 'Beam hatch spacing', default: 1.45, min: 0.85, max: 2.3, step: 0.05, units: 'mm', group: 'Bridge' },
+    { type: 'slider', id: 'beamWidth', label: 'Beam width', default: 24, min: 18, max: 30, step: 1, units: 'mm', group: 'Bridge' },
+    { type: 'slider', id: 'portalScale', label: 'Portal scale', default: 1, min: 0.7, max: 1.3, step: 0.05, group: 'Bridge' },
+    { type: 'slider', id: 'routeWarp', label: 'Route bend', default: 0, min: -16, max: 16, step: 1, units: 'mm', group: 'Bridge' },
+    { type: 'slider', id: 'gapWidth', label: 'Missing span', default: 0.26, min: 0.18, max: 0.34, step: 0.01, group: 'Bridge' },
+    { type: 'slider', id: 'branchCount', label: 'Branch roots', default: 6, min: 4, max: 9, step: 1, group: 'Growth' },
+    { type: 'slider', id: 'branchReach', label: 'Branch reach', default: 1, min: 0.65, max: 1.35, step: 0.05, group: 'Growth' },
+    { type: 'slider', id: 'branchRootX', label: 'Branch root X', default: 0, min: -14, max: 14, step: 1, units: 'mm', group: 'Growth' },
+    { type: 'slider', id: 'branchRootY', label: 'Branch root Y', default: 0, min: -14, max: 14, step: 1, units: 'mm', group: 'Growth' },
+    { type: 'slider', id: 'worldX', label: 'Bridge world X', default: 0, min: -12, max: 12, step: 1, units: 'mm', group: 'Placement' },
+    { type: 'slider', id: 'worldY', label: 'Bridge world Y', default: 0, min: -12, max: 12, step: 1, units: 'mm', group: 'Placement' },
+    { type: 'slider', id: 'worldZ', label: 'Bridge world Z', default: 0, min: -10, max: 10, step: 1, units: 'mm', group: 'Placement' },
+    { type: 'toggle', id: 'occlusion', label: 'Hide occluded bridge lines', default: true, group: 'Placement' },
+  ],
+  navigators: [
+    { id: 'composition', label: 'Composition', axes: ['load', 'tension', 'disintegration'] },
+    { id: 'branch-root', label: 'Branch root', type: 'xy', axes: ['branchRootX', 'branchRootY'], yDirection: 'down', axisLabels: ['X', 'Y'] },
+    { id: 'world-position', label: 'Bridge world position', type: 'xyz', axes: ['worldX', 'worldY', 'worldZ'], axisLabels: ['X', 'Y', 'Z'] },
+  ],
+  macros: [
+    { control: 'load', targets: [{ control: 'hatchPitch', amount: -0.6 }, { control: 'beamWidth', amount: 4 }] },
+    { control: 'tension', targets: [{ control: 'portalScale', amount: 0.4 }, { control: 'routeWarp', amount: 8 }] },
+    { control: 'disintegration', targets: [{ control: 'gapWidth', amount: 0.12 }, { control: 'branchReach', amount: 0.4 }] },
+  ],
+  draw(ctx) {
+    return [...posterFrame({ subtitle: 'LOAD BEARING SILENCE', edition: '03' }), ...drawBridge(ctx).parts];
+  },
+};
+
+export default sketch;
