@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sketch study</title>
+  <link rel="stylesheet" href="/viewer.css">
+</head>
+<body>
+  <div class="app">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Plotter sketch</p>
+        <h1 id="title">Opening sketch…</h1>
+        <p id="summary" class="summary">Loading controls and page.</p>
+      </div>
+      <div class="header-actions">
+        <label class="seed-label" for="seed">Seed <input id="seed" type="number" min="0" max="2147483647" step="1" value="0"></label>
+        <button id="reseed" type="button" class="quiet">New seed</button>
+        <button id="reset" type="button" class="quiet">Reset controls</button>
+        <button id="pin" type="button" disabled>Pin this version</button>
+        <button id="download" type="button" disabled>Export full SVG</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <main class="art-area" aria-label="Sketch previews">
+        <div id="status" class="status" role="status" aria-live="polite">Preparing preview…</div>
+        <div id="error" class="error" role="alert" hidden></div>
+        <div id="comparison" class="comparison">
+          <section class="preview-panel">
+            <div class="panel-heading"><h2>Current study</h2><span id="current-label">Waiting for render</span></div>
+            <div id="page-frame" class="page-frame">
+              <img id="art" alt="Rendered plotter sketch" hidden>
+              <div id="reference-layer" class="reference-layer" hidden></div>
+            </div>
+            <p id="inspection-note" class="inspection-note" hidden></p>
+          </section>
+          <section id="pin-panel" class="preview-panel pin-panel" hidden>
+            <div class="panel-heading"><h2>Pinned version</h2><span id="pin-date"></span></div>
+            <div class="page-frame"><img id="pin-art" alt="Pinned plotter sketch"></div>
+            <p id="pin-detail" class="pin-detail"></p>
+          </section>
+        </div>
+      </main>
+
+      <aside class="sidebar" aria-label="Sketch controls">
+        <div class="sidebar-intro">
+          <h2>Shape the study</h2>
+          <p>Changes redraw the whole page. Slower controls redraw when released.</p>
+        </div>
+        <div id="controls" class="controls"></div>
+        <div id="incompatible" class="notice" hidden></div>
+        <fieldset class="inspection">
+          <legend>Inspect</legend>
+          <label class="check"><input id="overlay" type="checkbox"> Show source image overlay</label>
+          <label for="part">Isolate part</label>
+          <select id="part"><option value="">Full composition</option></select>
+          <p>Inspection changes affect the view only. Export and pins keep the full SVG.</p>
+        </fieldset>
+        <div class="pins">
+          <label for="pin-select">Compare with a pin</label>
+          <select id="pin-select"><option value="">No comparison</option></select>
+          <p>Pin keeps the image and render settings. Source checkpoints are separate.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <script type="module" src="/viewer.js"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+/** Public contract for a single executable sketch. Coordinates and widths are millimeters. */
+export interface Point { x: number; y: number }
+
+export interface Page {
+  width: number;
+  height: number;
+  margin?: number;
+  paper?: string;
+}
+
+export interface Pen { id: string; color: string; width: number }
+
+export type Control =
+  | { type: 'slider'; id: string; label: string; default: number; min: number; max: number; step: number; units?: string; expensive?: boolean }
+  | { type: 'toggle'; id: string; label: string; default: boolean; units?: string; expensive?: boolean }
+  | { type: 'select'; id: string; label: string; default: string; options: string[]; units?: string; expensive?: boolean };
+
+export interface Box { x: number; y: number; width: number; height: number }
+export interface AssetDeclaration { path: string; box: Box; fit: 'contain' | 'cover' }
+
+export interface RasterAsset {
+  width: number;
+  height: number;
+  brightness: Float32Array;
+  box: Box;
+  fit: 'contain' | 'cover';
+  /** White/paper outside the placed image. Coordinates are page millimeters. */
+  sample(xMm: number, yMm: number): number;
+}
+
+export type Params = Record<string, number | boolean | string>;
+export interface SketchContext {
+  params: Params;
+  seed: number;
+  assets: Record<string, RasterAsset>;
+  /** Independent deterministic stream for one named part. */
+  random(partId: string): () => number;
+}
+
+export interface Part {
+  id: string;
+  pen: string;
+  paths: Point[][];
+  /** Preservation metadata: first polygon is the outer region, later polygons are holes. Draw code clips its own regions. */
+  boundary?: Point[][];
+  /** Returned for inspection, excluded from canonical SVG and plot statistics. */
+  diagnostic?: boolean;
+}
+
+export interface Sketch {
+  name: string;
+  page: Page;
+  pens: Pen[];
+  controls: Control[];
+  assets?: Record<string, AssetDeclaration>;
+  draw(ctx: SketchContext): Part[] | Promise<Part[]>;
+}
+
+export interface AssetMetadata extends AssetDeclaration {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
+export interface SketchMetadata {
+  name: string;
+  page: Page;
+  pens: Pen[];
+  controls: Control[];
+  assets: Record<string, AssetMetadata>;
+}
+
+export interface Diagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  message: string;
+  partId?: string;
+}
+
+export interface RenderStats {
+  pathCount: number;
+  pointCount: number;
+  lengthMm: number;
+  partCount: number;
+}
+
+export interface RenderResult {
+  schemaVersion: 1;
+  metadata: SketchMetadata;
+  params: Params;
+  seed: number;
+  parts: Part[];
+  svg: string;
+  identity: string;
+  diagnostics: Diagnostic[];
+  stats: RenderStats;
+  durationMs: number;
+}

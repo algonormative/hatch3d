@@ -1,0 +1,9 @@
+# Civic weather — first study
+
+An original A5 landscape study of a low civic arcade under a small offset tower. Five open arches are the main negative shapes. A rigid wall of diagonal pen hatching is crossed by two related currents: light sky wind and a fuller, locally disturbed foreground flow. The tower's left placement and the wide empty sky keep the composition off center and quiet.
+
+The source image is an authored color/value SVG in `reference.svg`, rasterized to `reference.png` at 6 pixels/mm. It was drawn for this sketch; it is not an imported artwork or artist reference. Its warm shadow on the right side of the arcade and tower decides which interleaved hatch rows survive. Geometry and arch openings come from named polygons in `regions.ts`; the raster is a tone guide, not an automatic contour trace. The broad blue source swash becomes separate pen currents. This is a first study, not evidence that the result succeeds as art.
+
+Two existing Liner corpus briefs inform the mechanism only: [compression and release in a ruled field](/Users/chronick-mbp/git/liner/output/briefs/compression-release-ruled-field-2026-07-08.md) suggests establishing regularity before a local disturbance; [negative space across media](/Users/chronick-mbp/git/liner/output/briefs/negative-space-cross-media-2026-07-18.md) treats budgeted blankness as active composition. Neither is a visual verification of this study or a source for its fictional architecture.
+
+The visual mechanism is order under local disturbance: equal arch intervals and steady masonry scanlines meet flowing curves that compress toward a narrow center beneath the fourth arch, then recover their spacing. Keep the five arch openings, tower position, page margins, and the sky and arcade paths fixed when revising foreground marks. Next compare whole sheets at physical 0.25 and 0.35 mm pen widths, then make one deliberate foreground edit and judge it without the rationale first.

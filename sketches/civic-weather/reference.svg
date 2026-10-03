@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="888" viewBox="0 0 210 148">
+  <title>Civic weather, original color and value study</title>
+  <desc>Author-drawn arcade, offset tower, five arched openings, quiet sky and foreground current. The pen sketch interprets these regions rather than tracing these marks.</desc>
+  <rect width="210" height="148" fill="#f7f4ed"/>
+  <g fill="none" stroke="#d2dedd" stroke-width="2.6" stroke-linecap="round">
+    <path d="M17 22 C62 16 99 22 143 24 S184 22 196 20"/>
+    <path d="M14 32 C64 25 102 30 147 32 S185 30 197 29"/>
+    <path d="M19 44 C68 36 105 41 149 43 S182 41 194 40"/>
+    <path d="M13 53 C59 48 99 51 141 54 S185 51 197 49"/>
+  </g>
+  <path d="M36 58 H180 V114 H36 Z" fill="#d4c8b6"/>
+  <path d="M114 58 H180 V114 H137 L117 89 Z" fill="#8f8273"/>
+  <path d="M39 31 H73 V35 H69 V58 H43 V35 H39 Z" fill="#baaa97"/>
+  <path d="M56 31 H73 V35 H69 V58 H56 Z" fill="#81766a"/>
+  <g fill="#f7f4ed">
+    <path d="M48 114 V86 Q57.5 64 67 86 V114 Z"/>
+    <path d="M73 114 V86 Q82.5 64 92 86 V114 Z"/>
+    <path d="M98 114 V86 Q107.5 64 117 86 V114 Z"/>
+    <path d="M123 114 V86 Q132.5 64 142 86 V114 Z"/>
+    <path d="M148 114 V86 Q157.5 64 167 86 V114 Z"/>
+    <path d="M50 40 H54 V51 H50 Z"/>
+    <path d="M60 40 H64 V51 H60 Z"/>
+  </g>
+  <path d="M13 121 C56 111 88 127 118 120 S171 120 197 116 V136 H13 Z" fill="#e0e9e5"/>
+  <path d="M23 132 C61 117 83 128 111 123 S168 126 191 120 V129 C161 135 130 128 106 132 S47 132 23 136 Z" fill="#a5bfc0"/>
+  <path d="M58 134 C88 125 100 134 122 127 S157 134 178 127" fill="none" stroke="#6c9aa2" stroke-width="3.1" stroke-linecap="round"/>
+</svg>
