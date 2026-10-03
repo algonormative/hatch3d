@@ -1,11 +1,11 @@
 import type { Sketch } from '../../src/sketch/types.ts';
-import { posterFrame } from '../phase-garden/poster.ts';
+import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { drawBridge } from './geometry.ts';
 
 /** A bridge with its structural center removed, then a living support system at one end. */
 const sketch: Sketch = {
   name: 'Load Bearing Silence',
-  page: { width: 297, height: 420, margin: 18, paper: '#f4f0e6' },
+  page: TABLOID_PAGE,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -14,6 +14,7 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
+    ...posterControls('LOAD BEARING SILENCE', '03'),
     { type: 'slider', id: 'load', label: 'Architectural load', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'tension', label: 'Portal tension', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'disintegration', label: 'Disintegration', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
@@ -42,7 +43,9 @@ const sketch: Sketch = {
     { control: 'disintegration', targets: [{ control: 'gapWidth', amount: 0.12 }, { control: 'branchReach', amount: 0.4 }] },
   ],
   draw(ctx) {
-    return [...posterFrame({ subtitle: 'LOAD BEARING SILENCE', edition: '03' }), ...drawBridge(ctx).parts];
+    return composePoster(ctx, drawBridge(ctx).parts, {
+      page: TABLOID_PAGE, subtitle: 'LOAD BEARING SILENCE', edition: '03',
+    });
   },
 };
 

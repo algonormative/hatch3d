@@ -43,9 +43,9 @@ describe('Breach Cathedral', () => {
         for (const path of part.paths) for (const p of path) {
           expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
           expect(p.x).toBeGreaterThanOrEqual(18 - 1e-8);
-          expect(p.x).toBeLessThanOrEqual(279 + 1e-8);
+          expect(p.x).toBeLessThanOrEqual(261.4 + 1e-8);
           expect(p.y).toBeGreaterThanOrEqual(76 - 1e-8);
-          expect(p.y).toBeLessThanOrEqual(357 + 1e-8);
+          expect(p.y).toBeLessThanOrEqual(371.8 + 1e-8);
         }
       }
     }

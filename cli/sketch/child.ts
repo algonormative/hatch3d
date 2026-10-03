@@ -51,6 +51,9 @@ function validateSketch(value: unknown): Sketch {
       assert(Array.isArray(control.options) && control.options.length > 0 && control.options.every(nonempty) && new Set(control.options).size === control.options.length, `Invalid select options: ${control.id}`);
       validateControlValue(control, control.default);
       assert(control.optionLabels === undefined || (object(control.optionLabels) && Object.entries(control.optionLabels).every(([key, label]) => control.options.includes(key) && nonempty(label))), `Invalid option labels for ${control.id}`);
+    } else if (control.type === 'text') {
+      assert(Number.isSafeInteger(control.maxLength) && control.maxLength >= 1 && control.maxLength <= 256, `Invalid text maxLength: ${control.id}`);
+      validateControlValue(control, control.default);
     } else {
       throw new Error(`Unknown control type: ${String((control as { type: unknown }).type)}`);
     }
@@ -139,8 +142,10 @@ function validateControlValue(control: Control, value: unknown): void {
     assert(Math.abs(steps - Math.round(steps)) < 1e-7, `Value for slider ${control.id} does not align to step`);
   } else if (control.type === 'toggle') {
     assert(typeof value === 'boolean', `Invalid value for toggle ${control.id}`);
-  } else {
+  } else if (control.type === 'select') {
     assert(typeof value === 'string' && control.options.includes(value), `Invalid value for select ${control.id}`);
+  } else {
+    assert(typeof value === 'string' && value.length <= control.maxLength, `Invalid value for text ${control.id}: maximum ${control.maxLength} UTF-16 units`);
   }
 }
 

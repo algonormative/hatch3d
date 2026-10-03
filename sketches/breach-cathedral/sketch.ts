@@ -1,10 +1,10 @@
 import type { Sketch } from '../../src/sketch/types.ts';
-import { posterFrame } from '../phase-garden/poster.ts';
+import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { drawCathedral } from './geometry.ts';
 
 const sketch: Sketch = {
   name: 'Breach Cathedral',
-  page: { width: 297, height: 420, margin: 18, paper: '#f4f0e6' },
+  page: TABLOID_PAGE,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -13,6 +13,7 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
+    ...posterControls('BREACH CATHEDRAL', '01'),
     { type: 'slider', id: 'mass', label: 'Harmonic mass', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'rupture', label: 'Breach rhythm', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'growth', label: 'Membrane growth', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Composition' },
@@ -40,7 +41,9 @@ const sketch: Sketch = {
     { control: 'rupture', targets: [{ control: 'interruption', amount: 0.55 }, { control: 'breach', amount: 0.58 }] },
     { control: 'growth', targets: [{ control: 'shellWidth', amount: 1.3 }, { control: 'shellTwist', amount: 0.52 }] },
   ],
-  draw(ctx) { return [...posterFrame({ subtitle: 'BREACH CATHEDRAL', edition: '01' }), ...drawCathedral(ctx)]; },
+  draw(ctx) { return composePoster(ctx, drawCathedral(ctx), {
+    page: TABLOID_PAGE, subtitle: 'BREACH CATHEDRAL', edition: '01',
+  }); },
 };
 
 export default sketch;

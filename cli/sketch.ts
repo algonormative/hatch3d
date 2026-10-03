@@ -8,13 +8,13 @@ import { inspectSketch, renderSketch, SketchRunnerError } from './sketch/runner.
 import type { FinishingOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
-  return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare> <entry.ts|checkpoint-dir|before-result.json> [options]. See docs/sketches.md';
+  return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare> <entry.ts|checkpoint-dir|before-result.json> [options]. open accepts --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'finishing', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload'],
   checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'],
 };
 
@@ -22,12 +22,14 @@ function options(command: string, args: string[]): { entry: string; flags: Recor
   const [entry, ...rest] = args;
   if (!entry || entry.startsWith('--')) throw new SketchRunnerError('usage', usage());
   const flags: Record<string, string> = {};
-  for (let i = 0; i < rest.length; i += 2) {
+  for (let i = 0; i < rest.length; i++) {
     const flag = rest[i];
-    const value = rest[i + 1];
-    if (!flag?.startsWith('--') || value === undefined || value.startsWith('--')) throw new SketchRunnerError('usage', usage());
+    if (!flag?.startsWith('--')) throw new SketchRunnerError('usage', usage());
     const key = flag.slice(2);
     if (!flagsByCommand[command].includes(key) || key in flags) throw new SketchRunnerError('usage', `Unknown or repeated option ${flag} for ${command}. ${usage()}`);
+    if (key === 'plotter-upload') { flags[key] = 'enabled'; continue; }
+    const value = rest[++i];
+    if (value === undefined || value.startsWith('--')) throw new SketchRunnerError('usage', usage());
     flags[key] = value;
   }
   return { entry, flags };
@@ -150,7 +152,8 @@ export async function main(args: string[]): Promise<void> {
   if (command === 'open') {
     const port = integer(flags.port, 'port');
     const { startSketchServer } = await import('./sketch/server.ts');
-    const server = await startSketchServer({ entry, ...(port === undefined ? {} : { port }), ...(flags.out === undefined ? {} : { outputDir: resolve(flags.out) }) });
+    const server = await startSketchServer({ entry, ...(port === undefined ? {} : { port }), ...(flags.out === undefined ? {} : { outputDir: resolve(flags.out) }),
+      ...(flags['plotter-upload'] ? { plotterUpload: { baseUrl: process.env.FEED_API_URL ?? '', token: process.env.FEED_API_TOKEN ?? '' } } : {}) });
     console.log(JSON.stringify({ url: server.url }));
     const shutdown = () => { void server.close().then(() => process.exit(0)); };
     process.once('SIGINT', shutdown);

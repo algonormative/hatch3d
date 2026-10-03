@@ -6,7 +6,7 @@ const RESTS = new Set([5, 6, 16, 17, 18, 29, 38, 39, 48, 49, 50, 51, 60]);
 const RIM_RADII = [44.4, 45.1, 47.1, 47.8, 123.1, 123.8, 127.2, 127.9, 132.2, 132.9, 137.2, 137.9];
 const EXTRA_RESTS = new Set([4, 7, 15, 19, 28, 30, 37, 40, 47, 52, 59, 61]);
 
-type Terrace = { center: number; width: number; phase: number; left: Point[]; right: Point[]; polygon: Point[] };
+type Terrace = { center: number; width: number; phase: number; dominant: boolean; left: Point[]; right: Point[]; polygon: Point[] };
 type Layout = { cx: number; cy: number; lobes: number; chirality: number; phase: number; tilt: number; terraces: Terrace[]; rhythm: number };
 const n = (ctx: SketchContext, id: string): number => ctx.params[id] as number;
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -76,16 +76,24 @@ function polar(layout: Layout, theta: number, radius: number): Point {
 }
 
 function terracePolygon(layout: Layout, center: number, width: number, phase: number, depth: number): Pick<Terrace, 'left' | 'right' | 'polygon'> {
-  const inner = 49 + depth * 8;
-  const outer = 145;
-  const rungs = 7;
+  // Each slab has one straight local axis. Short station pairs create square
+  // setbacks rather than following the scalloped shell's polar curvature.
+  const origin = polar(layout, center, 56 + depth * 5);
+  const far = polar(layout, center, 134);
+  const distance = Math.hypot(far.x - origin.x, far.y - origin.y);
+  const along = { x: (far.x - origin.x) / distance, y: (far.y - origin.y) / distance };
+  const across = { x: -along.y, y: along.x };
+  const stations = [0, 0.15, 0.158, 0.34, 0.348, 0.53, 0.538, 0.72, 0.728, 0.9, 0.908, 1];
+  const profile = [0.78, 0.78, 1.17, 1.17, 0.91, 0.91, 1.29, 1.29, 0.94, 0.94, 1.08, 1.08];
+  const stagger = Math.sin(phase) * 2.6;
   const left: Point[] = [], right: Point[] = [];
-  for (let i = 0; i <= rungs; i++) {
-    const r = mix(inner, outer, i / rungs);
-    const step = (i % 3 === 0 ? -0.12 : i % 3 === 1 ? 0.08 : 0.02) * depth;
-    const shift = 0.08 * Math.sin(i * 1.7 + phase);
-    left.push(polar(layout, center - width * (0.55 + step) + shift, r));
-    right.push(polar(layout, center + width * (0.55 - step) + shift, r));
+  for (let i = 0; i < stations.length; i++) {
+    const travel = stations[i] * (distance + 16);
+    const half = width * profile[i] * 0.5;
+    const offset = stagger * (0.4 + stations[i] * 0.6);
+    const middle = { x: origin.x + along.x * travel + across.x * offset, y: origin.y + along.y * travel + across.y * offset };
+    left.push({ x: middle.x - across.x * half, y: middle.y - across.y * half });
+    right.push({ x: middle.x + across.x * half, y: middle.y + across.y * half });
   }
   return { left, right, polygon: [...left, ...[...right].reverse()] };
 }
@@ -105,12 +113,14 @@ function makeLayout(ctx: SketchContext): Layout {
     rhythm: Math.floor(rhythm() * 64),
   };
   const count = Math.round(n(ctx, 'terraceCount'));
+  const dominant = Math.floor(ctx.random('terrace-dominance')() * count);
   for (let i = 0; i < count; i++) {
     const r = ctx.random(`terrace-${i}`);
     const center = (i + 0.37 + (r() - 0.5) * 0.37) * TAU / count;
-    const width = (0.21 + r() * 0.12) * n(ctx, 'terraceDepth');
+    const large = i === dominant;
+    const width = (large ? 36 + r() * 7 : 18 + r() * 8) * n(ctx, 'terraceDepth');
     const phase = r() * TAU;
-    layout.terraces.push({ center, width, phase, ...terracePolygon(layout, center, width, phase, n(ctx, 'terraceDepth')) });
+    layout.terraces.push({ center, width, phase, dominant: large, ...terracePolygon(layout, center, width, phase, n(ctx, 'terraceDepth')) });
   }
   return layout;
 }
@@ -223,17 +233,20 @@ export function drawChamber(ctx: SketchContext): Part[] {
       const steps = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.6));
       collect(Array.from({ length: steps + 1 }, (_, j) => ({ x: mix(a.x, b.x, j / steps), y: mix(a.y, b.y, j / steps) })), insideArt, output);
     };
-    for (let bay = 0; bay < 7; bay++) {
+    for (let bay = 0; bay < terrace.left.length - 1; bay++) {
       if (bay > 0) stroke(terrace.left[bay], terrace.right[bay], terraceLines);
-      // A narrow, densely engraved structural face occupies one side of each slab.
-      const hatchCount = 10 + (bay % 3);
+      // Engraved concrete faces get denser on the dominant buttress. The
+      // short station pairs are abrupt masonry setbacks, not hatch bays.
+      const run = Math.hypot(terrace.left[bay + 1].x - terrace.left[bay].x, terrace.left[bay + 1].y - terrace.left[bay].y);
+      if (run < 2) continue;
+      const hatchCount = terrace.dominant ? 20 + (bay % 4) : 13 + (bay % 3);
       for (let h = 1; h < hatchCount; h++) {
         if (h % 11 === 7 || h % 11 === 8) continue;
         const v = h / hatchCount;
-        stroke(section(bay, v, 0.075), section(bay, v + 0.035, 0.48), sideface);
+        stroke(section(bay, v, 0.045), section(bay, Math.min(0.98, v + 0.05), terrace.dominant ? 0.7 : 0.56), sideface);
       }
-      if (bay === 1 || bay === 3 || bay === 5) {
-        const slit = [section(bay, 0.24, 0.67), section(bay, 0.73, 0.67), section(bay, 0.73, 0.81), section(bay, 0.24, 0.81)];
+      if (bay === 1 || bay === 5 || bay === 9) {
+        const slit = [section(bay, 0.24, 0.73), section(bay, 0.73, 0.73), section(bay, 0.73, 0.86), section(bay, 0.24, 0.86)];
         for (let k = 0; k < slit.length; k++) stroke(slit[k], slit[(k + 1) % slit.length], slits);
         stroke(section(bay, 0.19, 0.9), section(bay, 0.78, 0.9), registration);
       }

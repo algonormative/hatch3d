@@ -1,10 +1,10 @@
 import type { Sketch } from '../../src/sketch/types.ts';
-import { posterFrame } from '../phase-garden/poster.ts';
+import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { drawChamber } from './geometry.ts';
 
 const sketch: Sketch = {
   name: 'Chamber Bloom',
-  page: { width: 297, height: 420, margin: 18, paper: '#f4f0e6' },
+  page: TABLOID_PAGE,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -13,6 +13,7 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
+    ...posterControls('CHAMBER BLOOM', '02'),
     { type: 'slider', id: 'pressure', label: 'Pressure', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'cellularity', label: 'Cellularity', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
     { type: 'slider', id: 'rupture', label: 'Rupture', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Composition' },
@@ -36,7 +37,7 @@ const sketch: Sketch = {
     { control: 'rupture', targets: [{ control: 'terraceDepth', amount: 0.55 }, { control: 'rhythmGap', amount: 0.5 }] },
   ],
   draw(ctx) {
-    return [...posterFrame({ subtitle: 'CHAMBER BLOOM', edition: '02' }), ...drawChamber(ctx)];
+    return composePoster(ctx, drawChamber(ctx), { page: TABLOID_PAGE, subtitle: 'CHAMBER BLOOM', edition: '02' });
   },
 };
 

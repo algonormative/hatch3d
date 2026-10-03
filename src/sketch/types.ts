@@ -13,7 +13,7 @@ export interface Pen { id: string; color: string; width: number; passes?: number
 /** Optional physical finishing applied after draw() and before final SVG assembly. */
 export interface FinishingOptions {
   page?: Page;
-  border?: { style: 'simple' | 'double' | 'ticked' | 'cropmarks'; pen: string };
+  border?: { style: 'simple' | 'double' | 'ticked' | 'cropmarks'; pen: string; inset?: number; contentGap?: number };
   pens?: Record<string, { color?: string; width?: number; passes?: number }>;
   density?: { maxDensity: number; cellSize: number };
 }
@@ -26,7 +26,8 @@ export interface ControlPresentation {
 export type Control =
   | (ControlPresentation & { type: 'slider'; id: string; label: string; default: number; min: number; max: number; step: number; units?: string; expensive?: boolean })
   | (ControlPresentation & { type: 'toggle'; id: string; label: string; default: boolean; units?: string; expensive?: boolean })
-  | (ControlPresentation & { type: 'select'; id: string; label: string; default: string; options: string[]; optionLabels?: Record<string, string>; units?: string; expensive?: boolean });
+  | (ControlPresentation & { type: 'select'; id: string; label: string; default: string; options: string[]; optionLabels?: Record<string, string>; units?: string; expensive?: boolean })
+  | (ControlPresentation & { type: 'text'; id: string; label: string; default: string; maxLength: number; units?: string; expensive?: boolean });
 
 export interface Box { x: number; y: number; width: number; height: number }
 export interface AssetDeclaration { path: string; box: Box; fit: 'contain' | 'cover' }

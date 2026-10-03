@@ -19,7 +19,11 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const between = (a: PagePoint, b: PagePoint, t: number): PagePoint => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
+const cubic = (a: PagePoint, b: PagePoint, c: PagePoint, d: PagePoint, t: number): PagePoint => {
+  const u = 1 - t;
+  return { x: u*u*u*a.x + 3*u*u*t*b.x + 3*u*t*t*c.x + t*t*t*d.x,
+    y: u*u*u*a.y + 3*u*u*t*b.y + 3*u*t*t*c.y + t*t*t*d.y };
+};
 
 function numeric(ctx: SketchContext, id: string, fallback: number, low: number, high: number): number {
   const value = ctx.params[id];
@@ -224,52 +228,67 @@ function brokenEnd(route: BridgeRoute, meshes: THREE.BufferGeometry[], strokes: 
 
 function branches(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGeometry[], strokes: Stroke[]): void {
   const random = ctx.random('branch-growth');
-  const recurse = (start: PagePoint, angle: number, length: number, generation: number, group: number): void => {
-    const bend = (random() - 0.5) * 0.36;
-    const finish = { x: start.x + Math.cos(angle) * length, y: start.y + Math.sin(angle) * length };
-    const mid = between(start, finish, 0.5);
-    const curve: PagePoint[] = [start, between(start, mid, 0.5), { x: mid.x + Math.sin(angle) * bend * length, y: mid.y - Math.cos(angle) * bend * length }, between(mid, finish, 0.5), finish];
-    const pen: Ink = generation === 0 ? 'carbon' : generation === 1 ? 'violet' : group % 3 === 0 ? 'acid' : 'ultramarine';
-    const depth = -11 + generation * 1.1;
-    stroke(strokes, pen, curve.map(point => route.pagePoint(point, depth + 0.15)));
-    if (generation <= 1) {
-      const width = (generation === 0 ? 5.5 : 2.2) * (0.75 + 0.5 * random());
-      for (let index = 0; index < curve.length - 1; index++) {
-        const a = curve[index], b = curve[index + 1];
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const distance = Math.hypot(dx, dy);
-        const nx = -dy / distance, ny = dx / distance;
-        const wa = width * (1 - index / 5), wb = width * (1 - (index + 1) / 5);
-        const ribbon: Face = [
-          route.pagePoint({ x: a.x - nx * wa, y: a.y - ny * wa }, depth),
-          route.pagePoint({ x: b.x - nx * wb, y: b.y - ny * wb }, depth + 1.2),
-          route.pagePoint({ x: b.x + nx * wb, y: b.y + ny * wb }, depth + 1.2),
-          route.pagePoint({ x: a.x + nx * wa, y: a.y + ny * wa }, depth),
-        ];
-        faceDrawing(meshes, strokes, ribbon, generation === 0 ? 'violet' : 'ultramarine', generation === 0 ? 5 : 3, false);
-        for (const side of [-1, 1]) stroke(strokes, generation === 0 ? 'carbon' : 'violet', [
-          route.pagePoint({ x: a.x + side * nx * wa, y: a.y + side * ny * wa }, depth + 0.2),
-          route.pagePoint({ x: b.x + side * nx * wb, y: b.y + side * ny * wb }, depth + 1.4),
-        ]);
-      }
+  const ribbon = (start: PagePoint, angle: number, length: number, halfWidth: number, curvature: number, daughter: boolean): PagePoint => {
+    const direction = (turn: number) => ({ x: Math.cos(angle + turn), y: Math.sin(angle + turn) });
+    const first = direction(-curvature * 1.2), middle = direction(curvature * 1.55), last = direction(-curvature * 0.25);
+    const controlA = { x: start.x + first.x * length * 0.36, y: start.y + first.y * length * 0.36 };
+    const controlB = { x: start.x + middle.x * length * 0.81, y: start.y + middle.y * length * 0.81 };
+    const end = { x: start.x + last.x * length, y: start.y + last.y * length };
+    const divisions = 40;
+    const section: { left: PagePoint; right: PagePoint; center: PagePoint; depth: number }[] = [];
+    for (let index = 0; index <= divisions; index++) {
+      const u = index / divisions;
+      const center = cubic(start, controlA, controlB, end, u);
+      const before = cubic(start, controlA, controlB, end, Math.max(0, u - 0.004));
+      const after = cubic(start, controlA, controlB, end, Math.min(1, u + 0.004));
+      const dx = after.x - before.x, dy = after.y - before.y;
+      const norm = Math.max(0.00001, Math.hypot(dx, dy));
+      const breadth = Math.max(0.2, halfWidth * Math.pow(Math.sin(Math.PI * (0.045 + u * 0.955)), 0.8));
+      const nx = -dy / norm, ny = dx / norm;
+      const depth = -11 + 8 * u + 1.4 * Math.sin(u * Math.PI);
+      section.push({ center, depth,
+        left: { x: center.x - nx * breadth, y: center.y - ny * breadth },
+        right: { x: center.x + nx * breadth, y: center.y + ny * breadth } });
     }
-    if (generation >= 3) return;
-    const nextLength = length * (0.47 + 0.12 * random());
-    const spread = (0.25 + 0.28 * random()) * (generation % 2 === 0 ? 1 : 0.8);
-    recurse(finish, angle - spread, nextLength, generation + 1, group);
-    recurse(finish, angle + spread * 0.88, nextLength * 0.88, generation + 1, group);
+    for (let index = 0; index < divisions; index++) {
+      const a = section[index], b = section[index + 1];
+      meshes.push(quadMesh([
+        route.pagePoint(a.left, a.depth), route.pagePoint(b.left, b.depth),
+        route.pagePoint(b.right, b.depth), route.pagePoint(a.right, a.depth),
+      ]));
+    }
+    for (const side of ['left', 'right'] as const) {
+      stroke(strokes, daughter ? 'violet' : 'carbon', section.map(item => route.pagePoint(item[side], item.depth + 0.27)));
+    }
+    const contourCount = daughter ? 11 : 30;
+    for (let contour = 1; contour <= contourCount; contour++) {
+      const fraction = contour / (contourCount + 1);
+      const pen: Ink = daughter ? 'acid' : contour % 5 === 0 ? 'violet' : 'ultramarine';
+      stroke(strokes, pen, section.map(item => route.pagePoint({
+        x: lerp(item.left.x, item.right.x, fraction), y: lerp(item.left.y, item.right.y, fraction),
+      }, item.depth + 0.3)));
+    }
+    for (let mark = 1; mark <= 5; mark++) {
+      const index = Math.round(mark * divisions / 6);
+      const item = section[index];
+      stroke(strokes, daughter ? 'violet' : 'acid', [route.pagePoint(item.left, item.depth + 0.32), route.pagePoint(item.center, item.depth + 0.34), route.pagePoint(item.right, item.depth + 0.32)]);
+    }
+    return cubic(start, controlA, controlB, end, 0.62);
   };
   for (let group = 0; group < route.branchCount; group++) {
     const fan = group / Math.max(1, route.branchCount - 1);
-    const t = lerp(0.135, route.leftGap - 0.025, fan) + (random() - 0.5) * 0.015;
+    const t = lerp(0.15, route.leftGap - 0.025, fan) + (random() - 0.5) * 0.014;
     const center = route.center(t), normal = route.normal(t);
     const start = {
       x: center.x + normal.x * (route.halfWidth(t) + 1) + route.branchOffset.x,
       y: center.y + normal.y * (route.halfWidth(t) + 1) + route.branchOffset.y,
     };
-    const angle = Math.atan2(normal.y, normal.x) + (fan - 0.5) * 0.65 + (random() - 0.5) * 0.24;
-    const length = (29 + random() * 17) * route.branchReach;
-    recurse(start, angle, length, 0, group);
+    const angle = Math.atan2(normal.y, normal.x) + (fan - 0.5) * 0.9 + (random() - 0.5) * 0.16;
+    const length = (53 + fan * 26 + random() * 10) * route.branchReach;
+    const width = (8 + random() * 3) * (group % 3 === 1 ? 1.2 : 1);
+    const curvature = route.chirality * (group % 2 === 0 ? 1 : -1) * (0.32 + random() * 0.22);
+    const offshoot = ribbon(start, angle, length, width, curvature, false);
+    if (group % 2 === 1) ribbon(offshoot, angle - 0.35 * route.chirality, length * 0.5, width * 0.48, -curvature * 1.2, true);
   }
 }
 

@@ -1,14 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { btnStyle, tagStyle } from "./styles";
 import { PNG_SCALE_OPTIONS, DEFAULT_PNG_SCALE } from "../utils/export-png";
-import { isPrintQueueEnabled } from "../utils/print-queue-client";
 
 export interface ExportModalProps {
   open: boolean;
   onClose: () => void;
   onExportSVG: () => void;
   onExportPNG: (theme: "light" | "dark", scale: number) => void;
-  onSendToQueue?: () => Promise<void>;
   currentTheme: "auto" | "light" | "dark";
 }
 
@@ -30,24 +28,14 @@ function loadScale(): number {
   return DEFAULT_PNG_SCALE;
 }
 
-export function ExportModal({ open, onClose, onExportSVG, onExportPNG, onSendToQueue, currentTheme }: ExportModalProps) {
+export function ExportModal({ open, onClose, onExportSVG, onExportPNG, currentTheme }: ExportModalProps) {
   const [pngScale, setPngScale] = useState(loadScale);
   const [pngTheme, setPngTheme] = useState<"light" | "dark">(resolveTheme(currentTheme));
-  const [queueStatus, setQueueStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const [queueError, setQueueError] = useState("");
 
   // Sync default PNG theme when app theme changes
   useEffect(() => {
     setPngTheme(resolveTheme(currentTheme));
   }, [currentTheme]);
-
-  // Reset queue status when modal opens
-  useEffect(() => {
-    if (open) {
-      setQueueStatus("idle");
-      setQueueError("");
-    }
-  }, [open]);
 
   // Persist scale preference
   useEffect(() => {
@@ -73,18 +61,6 @@ export function ExportModal({ open, onClose, onExportSVG, onExportPNG, onSendToQ
     onExportSVG();
     onClose();
   }, [onExportSVG, onClose]);
-
-  const handleSendToQueue = useCallback(async () => {
-    if (!onSendToQueue) return;
-    setQueueStatus("sending");
-    try {
-      await onSendToQueue();
-      setQueueStatus("sent");
-    } catch (err) {
-      setQueueStatus("error");
-      setQueueError(err instanceof Error ? err.message : "Unknown error");
-    }
-  }, [onSendToQueue]);
 
   if (!open) return null;
 
@@ -209,31 +185,6 @@ export function ExportModal({ open, onClose, onExportSVG, onExportPNG, onSendToQ
           </button>
         </div>
 
-        {/* Print Queue section (only in local dev with env vars set) */}
-        {isPrintQueueEnabled && onSendToQueue && (
-          <div style={{ ...sectionStyle, marginTop: 20 }}>
-            <div style={labelStyle}>PRINT QUEUE</div>
-            <button
-              onClick={handleSendToQueue}
-              disabled={queueStatus === "sending" || queueStatus === "sent"}
-              style={{
-                ...btnStyle,
-                width: "100%",
-                background: queueStatus === "sent" ? "#4f8" : "var(--fg)",
-                color: "var(--bg-canvas)",
-                opacity: queueStatus === "sending" ? 0.6 : 1,
-              }}
-            >
-              {queueStatus === "idle" && "SEND TO PRINT QUEUE"}
-              {queueStatus === "sending" && "SENDING..."}
-              {queueStatus === "sent" && "QUEUED!"}
-              {queueStatus === "error" && "RETRY"}
-            </button>
-            {queueStatus === "error" && (
-              <div style={{ fontSize: 10, color: "#f44", marginTop: 4 }}>{queueError}</div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

@@ -73,6 +73,18 @@ describe('sketch finishing', () => {
     }
   });
 
+  it('fits artwork inside an independent border inset and clear content gap', () => {
+    const options = { border: { style: 'double', pen: 'ink', inset: 12, contentGap: 6 } } as FinishingOptions;
+    const resolved = resolveFinishing(sourcePage, pens, options);
+    expect(resolved.contentRect).toEqual({ xMin: 20.3, yMin: 20.3, xMax: 79.7, yMax: 79.7 });
+    const parts = applyFinishing([{ id: 'art', pen: 'ink', paths: [[{ x: 10, y: 50 }, { x: 90, y: 50 }]] }], resolved, 0);
+    expect(parts[0].paths[0]).toEqual([{ x: 20.3, y: 50 }, { x: 79.7, y: 50 }]);
+    expect(parts[1].paths[0][0]).toEqual({ x: 12, y: 12 });
+    expect(parts[1].paths[1][0]).toEqual({ x: 14, y: 14 });
+    expect(() => resolveFinishing(sourcePage, pens, { border: { style: 'cropmarks', pen: 'ink', inset: 9, contentGap: 6 } })).toThrow(/inset/);
+    expect(() => resolveFinishing(sourcePage, pens, { border: { style: 'simple', pen: 'ink', inset: 12, contentGap: -1 } })).toThrow(/contentGap/);
+  });
+
   it('rejects invalid physical values, unknown keys and pen references before processing', () => {
     const invalid: unknown[] = [
       { bogus: true }, { page: { width: 210 } }, { page: { width: Infinity, height: 297 } },

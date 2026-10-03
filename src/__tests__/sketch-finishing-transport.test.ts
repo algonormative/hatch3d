@@ -76,7 +76,7 @@ describe('finishing transport', () => {
     expect(options.pngScales).toEqual([1, 2, 3, 4, 6, 8]);
     expect(options.paperSizes).toHaveProperty('a4');
     expect(options.borderStyles).toHaveProperty('double');
-    const finishing = { pens: { black: { passes: 2 } } };
+    const finishing = { border: { style: 'double', pen: 'black', inset: 12, contentGap: 6 }, pens: { black: { passes: 2 } } };
     const response = await post(new URL('/api/render', server.url).href, { requestId: 1, params: {}, finishing });
     expect(response.status).toBe(200);
     expect(runner.renderSketch).toHaveBeenCalledWith(expect.objectContaining({ finishing }));
@@ -111,7 +111,7 @@ describe('CLI finishing request', () => {
     const entry = join(temporary, 'sketch.ts');
     const output = join(temporary, 'out');
     await writeFile(entry, 'export default {}');
-    const finishing = { page: { width: 12, height: 8 }, pens: { black: { width: 0.5 } } };
+    const finishing = { page: { width: 12, height: 8 }, border: { style: 'simple', pen: 'black', inset: 1, contentGap: 1 }, pens: { black: { width: 0.5 } } };
     const file = join(temporary, 'finishing.json');
     await writeFile(file, JSON.stringify(finishing));
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});

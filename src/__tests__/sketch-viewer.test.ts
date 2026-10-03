@@ -417,6 +417,14 @@ it('keeps finishing separate from sketch controls and blocks SVG and PNG exports
     const borderPen = document.getElementById('finish-border-pen') as HTMLSelectElement;
     borderPen.value = 'red';
     borderPen.dispatchEvent(new Event('change'));
+    const borderInset = document.getElementById('finish-border-inset') as HTMLInputElement;
+    const contentGap = document.getElementById('finish-content-gap') as HTMLInputElement;
+    expect(document.getElementById('finish-border-spacing')?.hidden).toBe(false);
+    expect((document.getElementById('finish-margin') as HTMLInputElement).disabled).toBe(true);
+    borderInset.value = '16';
+    borderInset.dispatchEvent(new Event('input'));
+    contentGap.value = '9';
+    contentGap.dispatchEvent(new Event('input'));
     const density = document.getElementById('finish-density-enabled') as HTMLInputElement;
     density.checked = true;
     density.dispatchEvent(new Event('change'));
@@ -428,7 +436,7 @@ it('keeps finishing separate from sketch controls and blocks SVG and PNG exports
     densityCell.dispatchEvent(new Event('input'));
     await vi.waitFor(() => expect(requests.length).toBe(4), { timeout: 1000 });
     expect(requests.at(-1)?.finishing).toEqual({ ...latest?.finishing,
-      border: { style: 'double', pen: 'red' }, density: { maxDensity: 15, cellSize: 12 },
+      border: { style: 'double', pen: 'red', inset: 16, contentGap: 9 }, density: { maxDensity: 15, cellSize: 12 },
     });
     (document.getElementById('reset') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(requests.length).toBe(5), { timeout: 1000 });

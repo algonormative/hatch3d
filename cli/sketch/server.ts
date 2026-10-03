@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { inspectSketch, renderSketch } from './runner.js';
 import { listPins, loadPin, pinFile, savePin } from './viewer-pins.js';
 import { exportSketchPng, PNG_SCALES, pngOptions } from './export-png.js';
+import { queueSketchRender, validatePlotterUploadConfig, PlotterUploadError, type PlotterUploadConfig } from './plugins/plotter-upload.js';
 import { BORDER_STYLES, PAPER_SIZES } from '../../src/utils/page-finishing.js';
 import type { FinishingOptions, RenderResult } from '../../src/sketch/types.js';
 
-export interface SketchServerOptions { entry: string; port?: number; outputDir?: string }
+export interface SketchServerOptions { entry: string; port?: number; outputDir?: string; plotterUpload?: PlotterUploadConfig }
 export interface SketchServer { url: string; close: () => Promise<void> }
 
 const STATIC = new Map([
@@ -61,11 +62,12 @@ function requestId(value: unknown): string | number {
 function validParams(value: unknown): value is Record<string, number | string | boolean> {
   return value === undefined || (value !== null && typeof value === 'object' && !Array.isArray(value) &&
     Object.entries(value).every(([key, item]) => key.length <= 100 && /^(?!__)[A-Za-z][\w-]*$/.test(key) &&
-      (typeof item === 'string' && item.length <= 100 || typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item))));
+      (typeof item === 'string' && item.length <= 512 || typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item))));
 }
 
-export async function startSketchServer({ entry, port = 0, outputDir }: SketchServerOptions): Promise<SketchServer> {
+export async function startSketchServer({ entry, port = 0, outputDir, plotterUpload }: SketchServerOptions): Promise<SketchServer> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid server port');
+  if (plotterUpload) validatePlotterUploadConfig(plotterUpload);
   const absoluteEntry = await realpath(resolve(entry));
   const sketchRoot = dirname(absoluteEntry);
   const desiredOutput = resolve(outputDir ?? join(HERE, '..', '..', '.sketch-output', basename(sketchRoot), 'pins'));
@@ -119,7 +121,40 @@ export async function startSketchServer({ entry, port = 0, outputDir }: SketchSe
       if (req.method === 'GET' && STATIC.has(path)) {
         const [file, mime] = STATIC.get(path)!;
         res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
-        res.end(await readFile(join(HERE, file)));
+        const bytes = await readFile(join(HERE, file));
+        res.end(path === '/' && plotterUpload
+          ? bytes.toString('utf8').replace('</body>', '<script type="module" src="/plotter-upload-view.js"></script></body>')
+          : bytes);
+        return;
+      }
+      if (req.method === 'GET' && path === '/plotter-upload-view.js' && plotterUpload) {
+        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        res.end(await readFile(join(HERE, 'plugins/plotter-upload-view.js')));
+        return;
+      }
+      if (plotterUpload && req.method === 'POST' && path === '/api/plugins/plotter-upload') {
+        const origin = req.headers.origin;
+        if (!origin || ![...allowedHosts].some(host => origin === `http://${host}`) || req.headers['x-sketch-action'] !== 'plotter-upload') {
+          json(res, 403, { error: 'Local upload action required' });
+          return;
+        }
+        const body = await readJson(req);
+        if (Object.keys(body).length !== 1 || typeof body.identity !== 'string' || body.identity.length > 256) {
+          json(res, 400, { error: 'Expected current render identity' });
+          return;
+        }
+        const selected = currentGood;
+        if (!selected || selected.generation !== generation || selected.result.identity !== body.identity) {
+          json(res, 409, { error: 'Only the current successful render can be uploaded' });
+          return;
+        }
+        try {
+          const id = await queueSketchRender(selected.result, plotterUpload);
+          json(res, 201, { ok: true, id });
+        } catch (error) {
+          if (error instanceof PlotterUploadError && error.kind === 'upstream') json(res, 502, { error: error.message });
+          else json(res, 400, { error: 'Could not prepare plotter upload' });
+        }
         return;
       }
       if (req.method === 'GET' && path === '/api/events') {

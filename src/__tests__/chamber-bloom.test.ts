@@ -5,7 +5,7 @@ import type { Point } from '../sketch/types.ts';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 
 const entry = resolve('sketches/chamber-bloom/sketch.ts');
-const art = { left: 18, right: 279, top: 76, bottom: 357 };
+const art = { left: 18, right: 261.4, top: 76, bottom: 371.8 };
 
 describe('Chamber Bloom', () => {
   it('splits long ribs at interior masks even when both endpoints are visible', () => {

@@ -61,10 +61,12 @@ export function resolveFinishing(sourcePage: Page, sourcePens: Pen[], input: unk
   let border: FinishingOptions['border'];
   if (input.border !== undefined) {
     assert(object(input.border), 'Finishing border must be an object');
-    onlyKeys(input.border, ['style', 'pen'], 'finishing border');
+    onlyKeys(input.border, ['style', 'pen', 'inset', 'contentGap'], 'finishing border');
     assert(typeof input.border.style === 'string' && ['simple', 'double', 'ticked', 'cropmarks'].includes(input.border.style), 'Unknown finishing border style');
     const borderPen = input.border.pen;
     assert(typeof borderPen === 'string' && sourcePens.some((p) => p.id === borderPen), 'Finishing border pen must reference a declared pen');
+    assert(input.border.inset === undefined || (finite(input.border.inset) && input.border.inset >= 0), 'Finishing border inset must be nonnegative finite millimeters');
+    assert(input.border.contentGap === undefined || (finite(input.border.contentGap) && input.border.contentGap >= 0), 'Finishing border contentGap must be nonnegative finite millimeters');
     assert(!sourcePens.some((p) => p.id === BORDER_ID), `Border pen id collision: ${BORDER_ID}`);
     border = input.border as NonNullable<FinishingOptions['border']>;
   }
@@ -101,20 +103,34 @@ export function resolveFinishing(sourcePage: Page, sourcePens: Pen[], input: unk
   }
   const sourceMargin = sourcePage.margin ?? 0;
   const margin = page.margin ?? 0;
-  const inset = border?.style === 'double' ? DOUBLE_BORDER_INSET : 0;
-  assert(2 * (margin + inset) < Math.min(page.width, page.height), 'Double border leaves no printable content area');
+  const legacyInnerInset = border?.style === 'double' ? DOUBLE_BORDER_INSET : 0;
+  const explicitBorderSpacing = border !== undefined && (border.inset !== undefined || border.contentGap !== undefined);
+  let borderInset = margin;
+  let contentInset = margin + legacyInnerInset;
+  if (explicitBorderSpacing && border) {
+    borderInset = border.inset ?? margin;
+    const borderWidth = pens.find(pen => pen.id === BORDER_ID)!.width;
+    const contentWidth = Math.max(...pens.filter(pen => pen.id !== BORDER_ID).map(pen => pen.width));
+    const outsideReach = border.style === 'cropmarks' ? 10 : border.style === 'ticked' ? 2 : 0;
+    assert(borderInset >= outsideReach + borderWidth / 2, 'Finishing border inset cannot contain the full border stroke on the paper');
+    contentInset = borderInset + legacyInnerInset + (border.contentGap ?? 0) + (borderWidth + contentWidth) / 2;
+  }
+  assert(2 * contentInset < Math.min(page.width, page.height), explicitBorderSpacing
+    ? 'Finishing border and content gap leave no printable content area'
+    : 'Double border leaves no printable content area');
   const sourceW = sourcePage.width - 2 * sourceMargin;
   const sourceH = sourcePage.height - 2 * sourceMargin;
-  const targetW = page.width - 2 * margin;
-  const targetH = page.height - 2 * margin;
+  const targetMargin = explicitBorderSpacing ? contentInset : margin;
+  const targetW = page.width - 2 * targetMargin;
+  const targetH = page.height - 2 * targetMargin;
   const scale = Math.min(targetW / sourceW, targetH / sourceH);
   assert(finite(scale) && scale > 0, 'Finishing page fit is invalid');
-  const offsetX = margin + (targetW - sourceW * scale) / 2 - sourceMargin * scale;
-  const offsetY = margin + (targetH - sourceH * scale) / 2 - sourceMargin * scale;
+  const offsetX = targetMargin + (targetW - sourceW * scale) / 2 - sourceMargin * scale;
+  const offsetY = targetMargin + (targetH - sourceH * scale) / 2 - sourceMargin * scale;
   return {
     options, sourcePage: { ...sourcePage }, page, pens, border, density, scale, offsetX, offsetY,
     sourceRect: { xMin: sourceMargin, yMin: sourceMargin, xMax: sourcePage.width - sourceMargin, yMax: sourcePage.height - sourceMargin },
-    contentRect: { xMin: margin + inset, yMin: margin + inset, xMax: page.width - margin - inset, yMax: page.height - margin - inset },
+    contentRect: { xMin: contentInset, yMin: contentInset, xMax: page.width - contentInset, yMax: page.height - contentInset },
   };
 }
 
@@ -197,7 +213,7 @@ export function applyFinishing(rawParts: Part[], finishing: ResolvedFinishing, s
   }
   if (finishing.border) {
     const sheet: Rect = { xMin: 0, yMin: 0, xMax: finishing.page.width, yMax: finishing.page.height };
-    const paths = cleanPaths(generateBorderPolylines(finishing.border.style, finishing.page.width, finishing.page.height, finishing.page.margin ?? 0)
+    const paths = cleanPaths(generateBorderPolylines(finishing.border.style, finishing.page.width, finishing.page.height, finishing.border.inset ?? finishing.page.margin ?? 0)
       .flatMap((path) => clipPolylineToRect(path, sheet)), 'Finishing border');
     parts.push({ id: BORDER_ID, pen: BORDER_ID, paths });
   }

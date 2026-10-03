@@ -15,6 +15,8 @@ export function reconcileControls(previousControls, previousParams, nextControls
       compatible = typeof value === 'boolean';
     } else if (compatible && control.type === 'select') {
       compatible = typeof value === 'string' && control.options.includes(value);
+    } else if (compatible && control.type === 'text') {
+      compatible = typeof value === 'string' && value.length <= control.maxLength;
     }
     if (compatible) params[control.id] = value;
     else {

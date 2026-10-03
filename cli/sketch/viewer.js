@@ -5,7 +5,7 @@ import { resolveMacroParams } from './control-values.js';
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
-    margin: null, paper: null, borderStyle: '', borderPen: null, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
+    margin: null, paper: null, borderStyle: '', borderPen: null, borderInset: 12, contentGap: 6, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
     result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), navigatorViews: [], stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
@@ -15,6 +15,8 @@ if (typeof document !== 'undefined') {
     $('current-label').textContent = stale ? (state.result ? 'Previous inputs · stale preview' : 'No current preview') : 'Current inputs';
     $('pin').disabled = stale || !state.result;
     $('download').disabled = stale || !state.result;
+    // Read-only handoff for optional local plugins; never expose a stale render identity.
+    $('download').dataset.identity = !stale && state.result ? state.result.identity : '';
     $('download-png').disabled = stale || !state.result;
     state.stale = stale;
   }
@@ -86,7 +88,11 @@ if (typeof document !== 'undefined') {
       const sourcePens = state.metadata.pens.map(pen => pen.id);
       const pen = finish.borderPen || sourcePens[0];
       if (!sourcePens.includes(pen)) throw new Error(`Border pen “${pen}” is no longer in the sketch.`);
-      request.border = { style: finish.borderStyle, pen };
+      request.border = {
+        style: finish.borderStyle, pen,
+        inset: finishNumber(finish.borderInset, 'Border inset', 0, 500),
+        contentGap: finishNumber(finish.contentGap, 'Artwork gap inside border', 0, 500),
+      };
     }
     const penOverrides = {};
     for (const [id, override] of Object.entries(finish.pens)) {
@@ -142,8 +148,12 @@ if (typeof document !== 'undefined') {
     $('finish-width').value = finish.customWidth ?? source.page.width;
     $('finish-height').value = finish.customHeight ?? source.page.height;
     $('finish-margin').value = finish.margin ?? source.page.margin ?? '';
+    $('finish-margin').disabled = !!finish.borderStyle;
     $('finish-paper').value = finish.paper ?? source.page.paper ?? '#ffffff';
     $('finish-border').value = finish.borderStyle;
+    $('finish-border-spacing').hidden = !finish.borderStyle;
+    $('finish-border-inset').value = finish.borderInset;
+    $('finish-content-gap').value = finish.contentGap;
     const borderPen = $('finish-border-pen');
     borderPen.replaceChildren(...source.pens.map(pen => new Option(pen.id, pen.id)));
     borderPen.value = finish.borderPen || source.pens[0]?.id || '';
@@ -412,6 +422,18 @@ if (typeof document !== 'undefined') {
             row.append(macroValue);
           }
           row.append(input, range);
+        } else if (control.type === 'text') {
+          const input = document.createElement('input');
+          input.id = `control-${control.id}`;
+          input.type = 'text';
+          input.maxLength = control.maxLength;
+          input.value = state.params[control.id];
+          input.addEventListener('input', () => {
+            state.params[control.id] = input.value;
+            queueRender(Boolean(control.expensive));
+          });
+          if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
+          row.append(heading, input);
         } else {
           const input = document.createElement('select');
           input.id = `control-${control.id}`;
@@ -698,7 +720,8 @@ if (typeof document !== 'undefined') {
     queueFinishingRender();
   });
   for (const [id, field] of [['finish-width', 'customWidth'], ['finish-height', 'customHeight'],
-    ['finish-margin', 'margin'], ['finish-paper', 'paper'], ['finish-density-max', 'maxDensity'], ['finish-density-cell', 'cellSize']]) {
+    ['finish-margin', 'margin'], ['finish-paper', 'paper'], ['finish-border-inset', 'borderInset'], ['finish-content-gap', 'contentGap'],
+    ['finish-density-max', 'maxDensity'], ['finish-density-cell', 'cellSize']]) {
     const update = () => {
       const authored = field === 'margin' ? state.metadata?.page.margin : field === 'paper' ? (state.metadata?.page.paper ?? '#ffffff') : undefined;
       const value = (field === 'margin' || field === 'paper') && ($(id).value === '' || $(id).value === String(authored ?? '')) ?

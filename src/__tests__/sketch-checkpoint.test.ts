@@ -72,7 +72,8 @@ describe('source checkpoint', () => {
 
   it('records finishing and replays it from the captured manifest', async () => {
     const { root, entry, output } = await fixture();
-    const finishing = { page: { width: 24, height: 24, margin: 2, paper: '#f4ede0' }, pens: { p: { width: 0.6, passes: 2 } } };
+    const finishing = { page: { width: 24, height: 24, margin: 2, paper: '#f4ede0' },
+      border: { style: 'double' as const, pen: 'p', inset: 3, contentGap: 1 }, pens: { p: { width: 0.6, passes: 2 } } };
     const first = await rendered(entry, finishing);
     const saved = await createCheckpoint({ entry, result: first, outputDir: output });
     expect(saved.manifest.finishing).toEqual(first.finishing);

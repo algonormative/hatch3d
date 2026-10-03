@@ -40,7 +40,7 @@ describe('Load Bearing Silence', () => {
     expect(first.identity).toBe(repeated.identity);
     expect(first.parts).toEqual(repeated.parts);
     expect(first.diagnostics).toEqual([]);
-    expect(first.metadata.page).toEqual({ width: 297, height: 420, margin: 18, paper: '#f4f0e6' });
+    expect(first.metadata.page).toEqual({ width: 279.4, height: 431.8, margin: 18, paper: '#f4f0e6' });
     expect(first.metadata.pens.map(pen => pen.id)).toEqual(['carbon', 'ultramarine', 'vermilion', 'acid', 'violet']);
     expect(first.parts.map(part => part.id)).toEqual([
       'poster-title', 'poster-caption', 'poster-rules',
@@ -54,9 +54,9 @@ describe('Load Bearing Silence', () => {
       for (const point of path) {
         expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBe(true);
         expect(point.x).toBeGreaterThanOrEqual(18);
-        expect(point.x).toBeLessThanOrEqual(279);
+        expect(point.x).toBeLessThanOrEqual(261.4);
         expect(point.y).toBeGreaterThanOrEqual(76);
-        expect(point.y).toBeLessThanOrEqual(357);
+        expect(point.y).toBeLessThanOrEqual(371.8);
       }
     }
     expect(first.stats.pointCount).toBeLessThan(200_000);

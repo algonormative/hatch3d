@@ -54,3 +54,5 @@ npm run sketch -- render sketches/civic-weather/sketch.ts --params '{"compositio
 ```
 
 `--params` also accepts `@path/to/params.json`. Omitted controls use their defaults. Save the exact raw parameter map when sharing an edit; the rendered result records its resolved counterpart.
+
+Text controls use `{ type: 'text', id, label, default, maxLength }`. The viewer exposes a bounded text input, and the runner checks the same UTF-16 `maxLength` for defaults and render requests. Text controls can be grouped and gated with `showWhen` like other controls. For plotted lettering, `src/sketch/stroke-text.ts` offers `measureStrokeText`, `strokeText`, and `strokeTextOnPath`. The latter maps glyph strokes along the arclength and tangent of any finite polyline. Its two original faces are `wire` and `matrix`; unsupported characters raise an explicit error, and neither face emits an SVG `<text>` element. The [Phase Garden sketches](../sketches/phase-garden/brief.md) show editable poster text and a text-free abstract mode on the shared 11 × 17 inch page.
