@@ -29,7 +29,7 @@ function geometryContext(params: Params, seed: number): SketchContext {
 
 function gapClearance(drawing: BridgeDrawing): number {
   const center = drawing.stats.projectedGapCenter;
-  return Math.min(...drawing.parts.flatMap(part => part.paths.flatMap(path =>
+  return Math.min(...drawing.parts.filter(part => part.id.startsWith('bridge-')).flatMap(part => part.paths.flatMap(path =>
     path.slice(1).map((point, index) => distanceToSegment(center, path[index], point)))));
 }
 
@@ -45,6 +45,7 @@ describe('Load Bearing Silence', () => {
     expect(first.parts.map(part => part.id)).toEqual([
       'poster-title', 'poster-caption', 'poster-rules',
       'bridge-carbon', 'bridge-ultramarine', 'bridge-vermilion', 'bridge-acid', 'bridge-violet',
+      'light-ultramarine', 'light-acid', 'light-violet',
     ]);
     const parts = bridgeParts(first);
     expect(parts.every(part => part.paths.length >= 10)).toBe(true);
@@ -62,8 +63,17 @@ describe('Load Bearing Silence', () => {
     expect(first.stats.pointCount).toBeLessThan(200_000);
     expect(first.durationMs).toBeLessThan(5_000);
     const bridge = drawBridge(geometryContext(first.effectiveParams ?? first.params, 17));
-    expect(bridge.parts.map(part => part.paths.length)).toEqual(parts.map(part => part.paths.length));
+    expect(bridge.parts.filter(part => part.id.startsWith('bridge-')).map(part => part.paths.length)).toEqual(parts.map(part => part.paths.length));
     expect(gapClearance(bridge)).toBeGreaterThan(18);
+  }, 30000);
+
+  it('lets the light disappear without changing the structural drawing', async () => {
+    const baseline = await renderSketch({ entry, seed: 211, params: { lightRibbons: 0 } });
+    const lit = await renderSketch({ entry, seed: 211 });
+    expect(bridgeParts(lit)).toEqual(bridgeParts(baseline));
+    expect(baseline.parts.filter(part => part.id.startsWith('light-')).every(part => part.paths.length === 0)).toBe(true);
+    expect(lit.parts.filter(part => part.id.startsWith('light-')).reduce((count, part) => count + part.paths.length, 0)).toBeGreaterThanOrEqual(6);
+    expect(lit.diagnostics).toEqual([]);
   }, 30000);
 
   it('keeps radar macros in effective params and makes seed and 3D placement materially change the drawing', async () => {
@@ -95,7 +105,7 @@ describe('Load Bearing Silence', () => {
       const effective = resolveMacroParams(metadata.controls, result.params, metadata.macros);
       expect(result.effectiveParams).toEqual(effective);
       const drawing = drawBridge(geometryContext(effective, 109));
-      expect(drawing.parts.map(part => part.paths.length)).toEqual(bridgeParts(result).map(part => part.paths.length));
+      expect(drawing.parts.filter(part => part.id.startsWith('bridge-')).map(part => part.paths.length)).toEqual(bridgeParts(result).map(part => part.paths.length));
       expect(drawing.stats.projectedGapCenter.x).toBeGreaterThan(100);
       expect(drawing.stats.projectedGapCenter.x).toBeLessThan(190);
       expect(drawing.stats.projectedGapCenter.y).toBeGreaterThan(165);

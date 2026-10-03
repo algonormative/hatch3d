@@ -7,7 +7,7 @@ import { clipPolylineToRect } from '../../src/utils/clip.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 type PagePoint = { x: number; y: number };
-type Stroke = { pen: Ink; points: THREE.Vector3[] };
+type Stroke = { pen: Ink; points: THREE.Vector3[]; light?: boolean };
 type Face = [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
 
 const PAGE = { width: 297, height: 420 };
@@ -292,6 +292,61 @@ function branches(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGe
   }
 }
 
+/** Open, tapering contours imply light travelling through the absent load path. */
+function lightRibbons(route: BridgeRoute, ctx: SketchContext, strokes: Stroke[]): void {
+  const intensity = numeric(ctx, 'lightRibbons', 0.67, 0, 1);
+  const count = Math.round(intensity * 6);
+  if (count === 0) return;
+  const random = ctx.random('silence-light');
+  const middle = (route.leftGap + route.rightGap) / 2;
+  const core = route.center(middle);
+  const normal = route.normal(middle);
+  const tangent = { x: normal.y, y: -normal.x };
+  const focusOffset = 2 + random() * 1.1;
+  const focus = { x: core.x + normal.x * focusOffset, y: core.y + normal.y * focusOffset };
+  for (let index = 0; index < count; index++) {
+    const fromLeft = index % 2 === 0;
+    const sideIndex = Math.floor(index / 2);
+    const lane = sideIndex === 0 ? -1 : sideIndex === 1 ? 1 : 0;
+    const t = fromLeft ? route.leftGap - 0.002 : route.rightGap + 0.002;
+    const root = route.center(t);
+    const rootNormal = route.normal(t);
+    const spread = lane * route.halfWidth(t) * 0.42;
+    const start = { x: root.x + rootNormal.x * spread, y: root.y + rootNormal.y * spread };
+    const approach = fromLeft ? -1 : 1;
+    const endOffset = lane * (2.1 + random() * 0.4);
+    const coreRadius = 3.2 + random() * 0.45;
+    const end = {
+      x: focus.x + normal.x * endOffset + approach * tangent.x * coreRadius,
+      y: focus.y + normal.y * endOffset + approach * tangent.y * coreRadius,
+    };
+    const bend = lane * (5.2 + random() * 1.6);
+    const controlA = { x: lerp(start.x, end.x, 0.27) + rootNormal.x * bend, y: lerp(start.y, end.y, 0.27) + rootNormal.y * bend };
+    // The last quarter turns along the rim instead of striking one common point.
+    const curl = 7.5 + random() * 1.3;
+    const controlB = {
+      x: end.x + approach * tangent.x * curl * 0.38 - normal.x * lane * curl * 0.92,
+      y: end.y + approach * tangent.y * curl * 0.38 - normal.y * lane * curl * 0.92,
+    };
+    const pen: Ink = index % 3 === 0 ? 'acid' : index % 3 === 1 ? 'violet' : 'ultramarine';
+    const rootWidth = 1.05 + 0.35 * random();
+    for (const edge of [-1, 1]) {
+      const points: THREE.Vector3[] = [];
+      for (let sample = 0; sample <= 28; sample++) {
+        const u = sample / 28;
+        const center = cubic(start, controlA, controlB, end, u);
+        const before = cubic(start, controlA, controlB, end, Math.max(0, u - 0.004));
+        const after = cubic(start, controlA, controlB, end, Math.min(1, u + 0.004));
+        const dx = after.x - before.x, dy = after.y - before.y;
+        const length = Math.max(0.00001, Math.hypot(dx, dy));
+        const width = rootWidth * Math.pow(1 - u, 1.6) + 0.07;
+        points.push(route.pagePoint({ x: center.x - edge * dy / length * width, y: center.y + edge * dx / length * width }, 8.5 + 3.5 * u));
+      }
+      strokes.push({ pen, points, light: true });
+    }
+  }
+}
+
 function camera(): THREE.OrthographicCamera {
   const view = new THREE.OrthographicCamera(-PAGE.width / 2, PAGE.width / 2, PAGE.height / 2, -PAGE.height / 2, 0.1, 1000);
   view.position.set(185, -135, 330);
@@ -347,6 +402,7 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
   brokenEnd(route, meshes, strokes, route.leftGap, 1);
   brokenEnd(route, meshes, strokes, route.rightGap, -1);
   branches(route, ctx, meshes, strokes);
+  lightRibbons(route, ctx, strokes);
 
   const view = camera();
   try {
@@ -355,10 +411,12 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
     const depth = renderDepthBufferCPU(meshes, view, VIEW_WIDTH, VIEW_HEIGHT);
     const projection = projectPolylinesClipped(strokes.map(item => item.points), view, VIEW_WIDTH, VIEW_HEIGHT);
     const pathsByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
+    const lightByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
     let candidateSegments = 0;
     let visibleSegments = 0;
     for (let index = 0; index < projection.polylines.length; index++) {
-      const pen = strokes[projection.sourceIndices[index]].pen;
+      const source = strokes[projection.sourceIndices[index]];
+      const pen = source.pen;
       for (const clipped of clipProjectedPolyline(projection.polylines[index], VIEW_WIDTH, VIEW_HEIGHT)) {
         const dense = densifyProjectedPolyline(clipped);
         candidateSegments += dense.length - 1;
@@ -367,12 +425,15 @@ export function drawBridge(ctx: SketchContext): BridgeDrawing {
           visibleSegments += visible.length - 1;
           const page = visible.map(point => ({ x: point.x / PIXELS_PER_MM, y: point.y / PIXELS_PER_MM }));
           for (const bounded of clipPolylineToRect(page, ART)) {
-            if (pathLength(bounded) >= 0.55) pathsByPen.get(pen)!.push(economical(bounded));
+            if (pathLength(bounded) >= 0.55) (source.light ? lightByPen : pathsByPen).get(pen)!.push(economical(bounded));
           }
         }
       }
     }
-    const parts: Part[] = INKS.map(pen => ({ id: `bridge-${pen}`, pen, paths: pathsByPen.get(pen)! }));
+    const parts: Part[] = [
+      ...INKS.map(pen => ({ id: `bridge-${pen}`, pen, paths: pathsByPen.get(pen)! })),
+      ...(['ultramarine', 'acid', 'violet'] as Ink[]).map(pen => ({ id: `light-${pen}`, pen, paths: lightByPen.get(pen)! })),
+    ];
     return { parts, stats: { candidateSegments, visibleSegments, hiddenSegments: candidateSegments - visibleSegments, meshCount: meshes.length, gap: [route.leftGap, route.rightGap], projectedGapCenter } };
   } finally {
     for (const mesh of meshes) mesh.dispose();

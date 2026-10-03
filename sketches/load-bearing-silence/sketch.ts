@@ -23,6 +23,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'portalScale', label: 'Portal scale', default: 1, min: 0.7, max: 1.3, step: 0.05, group: 'Bridge' },
     { type: 'slider', id: 'routeWarp', label: 'Route bend', default: 0, min: -16, max: 16, step: 1, units: 'mm', group: 'Bridge' },
     { type: 'slider', id: 'gapWidth', label: 'Missing span', default: 0.26, min: 0.18, max: 0.34, step: 0.01, group: 'Bridge' },
+    { type: 'slider', id: 'lightRibbons', label: 'Light ribbons', default: 0.67, min: 0, max: 1, step: 0.01, group: 'Bridge' },
     { type: 'slider', id: 'branchCount', label: 'Branch roots', default: 6, min: 4, max: 9, step: 1, group: 'Growth' },
     { type: 'slider', id: 'branchReach', label: 'Branch reach', default: 1, min: 0.65, max: 1.35, step: 0.05, group: 'Growth' },
     { type: 'slider', id: 'branchRootX', label: 'Branch root X', default: 0, min: -14, max: 14, step: 1, units: 'mm', group: 'Growth' },
