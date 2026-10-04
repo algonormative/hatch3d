@@ -6,6 +6,7 @@ import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, wri
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { FinishingOptions, Params, RenderResult } from '../../src/sketch/types.ts';
+import { createExternalCheckpoint, findExternalProject, readBounded, replayExternalCheckpoint, type ExternalCheckpointManifest } from './checkpoint-external.ts';
 
 const git = promisify(execFile);
 const MANIFEST = 'checkpoint.json';
@@ -29,7 +30,7 @@ export interface CheckpointManifest {
   identity: string;
   canonicalSvgSha256: string;
 }
-export interface CreatedCheckpoint { path: string; manifest: CheckpointManifest }
+export interface CreatedCheckpoint { path: string; manifest: CheckpointManifest | ExternalCheckpointManifest }
 export interface CreateCheckpointOptions { entry: string; result: RenderResult; outputDir: string }
 export interface ReplayCheckpointOptions { checkpoint: string; repoRoot?: string }
 
@@ -126,7 +127,7 @@ function verifyResult(result: RenderResult): void {
 }
 
 /** Capture local source bytes, then regenerate from the capture before publishing. */
-export async function createCheckpoint({ entry, result, outputDir }: CreateCheckpointOptions): Promise<CreatedCheckpoint> {
+async function createCheckpointV1({ entry, result, outputDir }: CreateCheckpointOptions): Promise<CreatedCheckpoint> {
   verifyResult(result);
   const { root, revision, sketchDir, relativeEntry } = await checkedRepo(entry);
   const sketchRoot = join(root, sketchDir);
@@ -159,7 +160,7 @@ export async function createCheckpoint({ entry, result, outputDir }: CreateCheck
     await writeFile(join(pending, 'canonical.svg'), result.svg, { flag: 'wx' });
     await writeFile(join(pending, MANIFEST), JSON.stringify(manifest, null, 2), { flag: 'wx' });
     // A stale preview paired with newer source is rejected here, before the directory is published.
-    const regenerated = await replayCheckpoint({ checkpoint: pending, repoRoot: root });
+    const regenerated = await replayCheckpointV1({ checkpoint: pending, repoRoot: root });
     if (regenerated.identity !== result.identity || regenerated.svg !== result.svg) throw new Error('Captured source does not reproduce the supplied render identity');
     await rename(pending, final);
     return { path: final, manifest };
@@ -217,7 +218,7 @@ async function renderCaptured(root: string, entry: string, params: Params, seed:
 }
 
 /** Replay the captured sketch against its recorded local Git revision. */
-export async function replayCheckpoint({ checkpoint, repoRoot }: ReplayCheckpointOptions): Promise<RenderResult> {
+async function replayCheckpointV1({ checkpoint, repoRoot }: ReplayCheckpointOptions): Promise<RenderResult> {
   const directory = resolve(checkpoint);
   const manifest = await loadManifest(directory);
   await verifyCapture(directory, manifest);
@@ -249,4 +250,20 @@ export async function replayCheckpoint({ checkpoint, repoRoot }: ReplayCheckpoin
   } finally {
     await rm(isolated, { recursive: true, force: true });
   }
+}
+
+/** Capture the legacy in-repository format or an installed external family. */
+export async function createCheckpoint(options: CreateCheckpointOptions): Promise<CreatedCheckpoint> {
+  const external = await findExternalProject(options.entry);
+  return external ? createExternalCheckpoint(external, options.result, options.outputDir) : createCheckpointV1(options);
+}
+
+/** Version dispatch keeps v1 replay independent of external package resolution. */
+export async function replayCheckpoint(options: ReplayCheckpointOptions): Promise<RenderResult> {
+  const value: unknown = JSON.parse((await readBounded(join(resolve(options.checkpoint), MANIFEST), 16 * 1024 * 1024)).toString('utf8'));
+  if (typeof value !== 'object' || value === null) throw new Error('Invalid checkpoint manifest');
+  const version = (value as { version?: unknown }).version;
+  if (version === 1) return replayCheckpointV1(options);
+  if (version === 2) return replayExternalCheckpoint(options.checkpoint);
+  throw new Error(`Unsupported checkpoint version ${String(version)}`);
 }

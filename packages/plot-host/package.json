@@ -16,6 +16,7 @@
   "dependencies": {
     "@hatch3d/plot-core": "0.1.0",
     "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.27.3",
     "pngjs": "^7.0.0",
     "tsx": "^4.21.0"
   }

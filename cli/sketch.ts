@@ -125,7 +125,7 @@ export async function main(args: string[]): Promise<void> {
     const outputDir = resolve(required(flags, 'out'));
     const result = await loadResult(required(flags, 'result'));
     const saved = await createCheckpoint({ entry, result, outputDir });
-    console.log(JSON.stringify({ checkpoint: saved.path, identity: saved.manifest.identity, revision: saved.manifest.revision }));
+    console.log(JSON.stringify({ checkpoint: saved.path, identity: saved.manifest.identity, version: saved.manifest.version, ...(saved.manifest.version === 1 ? { revision: saved.manifest.revision } : { toolkit: saved.manifest.toolkit }) }));
     return;
   }
   if (command === 'replay') {
