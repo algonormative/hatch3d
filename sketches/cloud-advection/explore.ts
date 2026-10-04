@@ -10,7 +10,7 @@
  * steps): a candidate's frames are start, start + delta, start + 2 delta, capped at
  * min(240, the sketch's `step` slider max) by a deterministic repair (shrink delta
  * toward its range minimum, then lower start). `steps` is the fallback when they are
- * not in `ranges`.
+ * not in `ranges`. `profile` selects the scoring profile (`default` or `precise`).
  *
  * Candidate c000 is the base params; c001..cNNN are n seeded Latin-hypercube points.
  * Each candidate is rendered at every step plus once with cloudEnabled false (the
@@ -29,9 +29,13 @@ import { exportSketchPng } from '../../cli/sketch/export-png.ts';
 import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import type { FinishingOptions, Params } from '../../src/sketch/types.ts';
 import sketch from './sketch.ts';
+import { studyContext } from './evidence.ts';
+import { buildStudy } from './study.ts';
+import { vortexStateAt } from './sim.ts';
+import { CORE_CENTER } from './layout.ts';
 import {
-  frameGeometry, frameMetrics, jaccardDistance, latinHypercube, occupancy, score, structureInkM,
-  type FrameMetrics, type Score,
+  frameGeometry, frameMetrics, jaccardDistance, latinHypercube, occupancy, score, structureInkM, sunGeometry,
+  type FrameMetrics, type ProfileId, type Score,
 } from './aesthetics.ts';
 
 const entry = resolve('sketches/cloud-advection/sketch.ts');
@@ -43,6 +47,8 @@ export interface Space {
   seed: number;
   ranges: Record<string, [number, number]>;
   steps: number[];
+  /** Scoring profile (aesthetics.ts PROFILES); default 'default'. Use 'precise' for the sun. */
+  profile?: ProfileId;
 }
 export interface Candidate { id: string; params: Params; varied: Record<string, number>; steps: number[] }
 export interface ResultRecord {
@@ -50,6 +56,7 @@ export interface ResultRecord {
   params: Params;
   varied: Record<string, number>;
   steps: number[];
+  profile?: ProfileId;
   metrics?: { frames: FrameMetrics[]; change01: number; change12: number };
   score?: Score;
   /** Sum of child-process render durations for this candidate, seconds. */
@@ -67,6 +74,7 @@ const CLOUD_ONLY = new Set([
   'sourceX', 'sourceY', 'sourceSize', 'sourceEnabled', 'frontAmplitude', 'frontScale', 'frontCoverage', 'fillInterior',
   'referenceDensity', 'cloudHatchPitch', 'markStyle', 'cloudPen', 'streakPen', 'streakSpacing', 'obscure',
   'coreRadius', 'coreX', 'coreY', 'cloudEnabled',
+  'eddyDrift', 'trainEnabled', 'trainPeriod', 'trainCirculation', 'trainCore', 'trainAlternate', 'trainJitter',
 ]);
 
 const stable = (value: unknown): string => JSON.stringify(value, (_k, v) =>
@@ -167,7 +175,10 @@ async function evaluate(candidate: Candidate, ctx: RunContext): Promise<ResultRe
   const { space } = ctx;
   const started = Date.now();
   const finishing = resolveFinishing(sketch.page, sketch.pens, space.base.finishing ?? {});
+  const study = buildStudy(studyContext({ seed: space.base.seed, params: candidate.params }));
   const geometry = frameGeometry(sketch.page, finishing, candidate.params);
+  const sunLayout = study.layout === 'sun';
+  if (sunLayout) geometry.sun = sunGeometry(study.config.transforms.worldToPage, finishing, candidate.params, CORE_CENTER);
   const timeoutMs = 180_000;
   const request = { entry, seed: space.base.seed, finishing: space.base.finishing, timeoutMs };
   let renderSeconds = 0;
@@ -187,12 +198,19 @@ async function evaluate(candidate: Candidate, ctx: RunContext): Promise<ResultRe
   for (const step of candidate.steps) {
     const result = await renderSketch({ ...request, params: { ...candidate.params, step } });
     renderSeconds += result.durationMs / 1000;
-    frames.push(frameMetrics({ parts: result.parts, geometry, cloudHatchPitch: pitch }, offInk));
+    const metrics = frameMetrics({ parts: result.parts, geometry, cloudHatchPitch: pitch }, offInk);
+    if (sunLayout) {
+      // Report only: nearest active train eddy to the sun centre, in metres.
+      const trains = vortexStateAt(study.config, step).filter(v => v.key.startsWith('train-'));
+      metrics.eddyNear = trains.length ? Math.min(...trains.map(v => Math.hypot(v.center.x - CORE_CENTER.x, v.center.y - CORE_CENTER.y))) : null;
+    }
+    frames.push(metrics);
     grids.push(occupancy(result.parts, geometry.content));
   }
   const metrics = { frames, change01: jaccardDistance(grids[0], grids[1]), change12: jaccardDistance(grids[1], grids[2]) };
+  const profile = space.profile ?? 'default';
   return {
-    id: candidate.id, params: candidate.params, varied: candidate.varied, steps: candidate.steps, metrics, score: score(metrics),
+    id: candidate.id, params: candidate.params, varied: candidate.varied, steps: candidate.steps, profile, metrics, score: score(metrics, profile),
     renderSeconds: Number(renderSeconds.toFixed(2)), wallSeconds: Number(((Date.now() - started) / 1000).toFixed(2)),
   };
 }
@@ -215,7 +233,8 @@ export function summaryRow(record: ResultRecord, rank: number) {
     violations: record.score!.violations,
     ropeIndex: range(x => x.ropeIndex), spacingCV: range(x => x.spacingCV), frameContact: range(x => x.frameContact),
     coreHalo: range(x => x.coreHalo), concealment: range(x => x.concealment), balance: range(x => x.balance),
-    fill: range(x => x.fill, 1), coherence: range(x => x.coherence, 0), largestShare: range(x => x.largestShare, 2), cloudInkM: range(x => x.cloudInkM, 2), points: range(x => x.points, 0),
+    fill: range(x => x.fill, 1), coherence: range(x => x.coherence, 0), largestShare: range(x => x.largestShare, 2),
+    interiorInk: range(x => x.interiorInk ?? 0, 1), eddyNear: m.frames.map(fm => (fm.eddyNear == null ? null : f(fm.eddyNear, 1))), cloudInkM: range(x => x.cloudInkM, 2), points: range(x => x.points, 0),
     change01: f(m.change01), change12: f(m.change12), parts: Object.fromEntries(Object.entries(record.score!.parts).map(([k, v]) => [k, f(v)])),
     varied: record.varied,
   };
@@ -237,11 +256,11 @@ export function contactSheet(records: ResultRecord[], title: string): string {
   const rows = records.map((record, i) => {
     const row = summaryRow(record, i + 1);
     const imgs = record.steps.map(step => `<figure><img loading="lazy" src="png/${record.id}-s${String(step).padStart(2, '0')}.png" alt="${record.id} step ${step}"><figcaption>step ${step}</figcaption></figure>`).join('');
-    const metric = (label: string, v: number[] | number) => `<tr><th>${label}</th><td>${Array.isArray(v) ? v.join(' / ') : v}</td></tr>`;
+    const metric = (label: string, v: number[] | number | string) => `<tr><th>${label}</th><td>${Array.isArray(v) ? v.join(' / ') : v}</td></tr>`;
     const params = Object.entries(row.varied).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join('');
     return `<section class="${row.feasible ? '' : 'infeasible'}"><h2>#${row.rank} ${esc(record.id)} <small>steps ${record.steps.join(' / ')} · score ${row.score} ${row.feasible ? 'feasible' : 'INFEASIBLE'}</small></h2>
 <div class="frames">${imgs}</div>
-<div class="tables"><table>${metric('ropeIndex', row.ropeIndex)}${metric('spacingCV', row.spacingCV)}${metric('frameContact', row.frameContact)}${metric('coreHalo', row.coreHalo)}${metric('concealment', row.concealment)}${metric('balance', row.balance)}${metric('fill', row.fill)}${metric('coherence', row.coherence)}${metric('largestShare', row.largestShare)}${metric('ink m', row.cloudInkM)}${metric('points', row.points)}${metric('change 0-30 / 30-60', [row.change01, row.change12])}</table>
+<div class="tables"><table>${metric('ropeIndex', row.ropeIndex)}${metric('spacingCV', row.spacingCV)}${metric('frameContact', row.frameContact)}${metric('coreHalo', row.coreHalo)}${metric('concealment', row.concealment)}${metric('balance', row.balance)}${metric('fill', row.fill)}${metric('coherence', row.coherence)}${metric('largestShare', row.largestShare)}${row.interiorInk.some(v => v > 0) ? metric('interiorInk', row.interiorInk) + metric('eddyNear m', row.eddyNear.map(v => v ?? '-').join(' / ')) : ''}${metric('ink m', row.cloudInkM)}${metric('points', row.points)}${metric('change 0-30 / 30-60', [row.change01, row.change12])}</table>
 <table>${params}</table>${row.violations.length ? `<p class="v">${row.violations.map(esc).join('<br>')}</p>` : ''}</div></section>`;
   }).join('\n');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -258,7 +277,7 @@ async function runSet(space: Space, candidates: Candidate[], dir: string, opts: 
   const existing = readResults(resultsPath);
   const todo = candidates.filter(c => {
     const prior = existing.get(c.id);
-    return !(prior && !prior.error && stable(prior.params) === stable(c.params) && stable(prior.steps) === stable(c.steps));
+    return !(prior && !prior.error && stable(prior.params) === stable(c.params) && stable(prior.steps) === stable(c.steps) && (prior.profile ?? 'default') === (space.profile ?? 'default'));
   });
   console.log(`${candidates.length} candidates, ${candidates.length - todo.length} already done, ${todo.length} to run (jobs ${opts.jobs})`);
   const ctx: RunContext = { space, jobs: opts.jobs, offCache: new Map() };

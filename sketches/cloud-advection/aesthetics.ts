@@ -15,7 +15,9 @@ export interface Pt { x: number; y: number }
 export interface FramePart { id: string; pen: string; paths: Pt[][]; diagnostic?: boolean }
 export interface Rect { xMin: number; yMin: number; xMax: number; yMax: number }
 export interface Core { x: number; y: number; r: number }
-export interface FrameGeometry { content: Rect; core: Core }
+/** The `sun` layout's ray band in final page mm: centre, inner radius (sunInner) and reach (sunReach). */
+export interface SunGeometry { x: number; y: number; inner: number; reach: number }
+export interface FrameGeometry { content: Rect; core: Core; sun?: SunGeometry }
 export interface FrameInput {
   parts: FramePart[];
   geometry: FrameGeometry;
@@ -131,6 +133,24 @@ export function frameGeometry(page: { width: number; height: number }, finishing
       y: cy * finishing.scale + finishing.offsetY,
       r: num('coreRadius', 34) * finishing.scale,
     },
+  };
+}
+
+interface WorldToPage { scale: number; offset: { x: number; y: number } }
+
+/**
+ * The sun ray band in final page coordinates. World metres map to source page mm by
+ * `worldToPage` (study.config.transforms.worldToPage), then through finishing.
+ * `centre` is the world point the layout radiates from (the domain centre).
+ */
+export function sunGeometry(worldToPage: WorldToPage, finishing: FinishingLike, params: Record<string, unknown>, centre: { x: number; y: number }): SunGeometry {
+  const num = (id: string, fallback: number) => (typeof params[id] === 'number' ? params[id] as number : fallback);
+  const mmPerM = worldToPage.scale * finishing.scale;
+  return {
+    x: (worldToPage.offset.x + centre.x * worldToPage.scale) * finishing.scale + finishing.offsetX,
+    y: (worldToPage.offset.y + centre.y * worldToPage.scale) * finishing.scale + finishing.offsetY,
+    inner: num('sunInner', 10.5) * mmPerM,
+    reach: num('sunReach', 20) * mmPerM,
   };
 }
 
@@ -309,6 +329,26 @@ export function coreHalo(samples: Sample[], geometry: FrameGeometry): number {
 }
 
 /**
+ * `interiorInk` (precise profile): cloud ink metres per m2 of the sun's ray band, the
+ * annulus [max(core radius, sunInner), sunReach] around the sun centre, clipped to the
+ * content rectangle. Weather has to enter the sun: low means a clean, cut-out sun.
+ * Zero when the geometry has no sun.
+ */
+export function interiorInk(samples: Sample[], geometry: FrameGeometry): number {
+  const { sun, core, content } = geometry;
+  if (!sun) return 0;
+  const rIn = Math.max(core.r, sun.inner);
+  const area = annulusArea({ x: sun.x, y: sun.y, r: rIn }, sun.reach, content);
+  if (!(area > 0)) return 0;
+  let inside = 0;
+  for (const s of samples) {
+    const d = Math.hypot(s.x - sun.x, s.y - sun.y);
+    if (d >= rIn && d <= sun.reach) inside += s.weight;
+  }
+  return (inside / area) * 1000;
+}
+
+/**
  * Normalized Shannon entropy of cloud ink over the 3x3 grid of the content
  * rectangle excluding the centre cell (8 cells): 1 is perfectly even, 0 is all in one cell or no ink.
  */
@@ -345,6 +385,10 @@ export interface FrameMetrics {
   coherence: number;
   /** Cloud ink in the largest 8 mm occupancy component over total cloud ink (0 with no ink). */
   largestShare: number;
+  /** Precise profile: cloud ink m per m2 in the sun's ray band (present only when the geometry has a sun). */
+  interiorInk?: number;
+  /** Report only, never scored: min distance (m) from any active train eddy to the sun centre; null with no train eddy. Set by explore.ts. */
+  eddyNear?: number | null;
 }
 
 /**
@@ -369,6 +413,7 @@ export function frameMetrics(input: FrameInput, offStructureInkM: number): Frame
     balance: balance(samples, content),
     fill: area > 0 ? cloud / area : 0,
     ...componentStats(samples, content),
+    ...(input.geometry.sun ? { interiorInk: interiorInk(samples, input.geometry) } : {}),
   };
 }
 
@@ -459,10 +504,27 @@ export interface Score {
 const PER_FRAME: (keyof FrameMetrics)[] = ['ropeIndex', 'spacingCV', 'frameContact', 'coreHalo', 'concealment', 'balance', 'fill', 'coherence', 'largestShare'];
 
 /**
+ * Scoring profiles. `default` is the organic-layout profile above and never changes.
+ * `precise` is for layouts whose architecture must stay legible (the sun): concealment
+ * is full at 0-0.12 and zero at 0.35 (at obscure 0.8 the sun shatters into dashes),
+ * and `interiorInk` (full >= 15 m/m2, zero <= 3) asks the weather to enter the sun.
+ * Hard constraints are shared.
+ */
+export type ProfileId = 'default' | 'precise';
+export const PROFILES: Record<ProfileId, { bands: Record<string, Band>; perFrame: (keyof FrameMetrics)[] }> = {
+  default: { bands: BANDS, perFrame: PER_FRAME },
+  precise: {
+    bands: { ...BANDS, concealment: [-Infinity, -Infinity, 0.12, 0.35], interiorInk: [3, 15, Infinity, Infinity] },
+    perFrame: [...PER_FRAME, 'interiorInk'],
+  },
+};
+
+/**
  * Hard constraints first (each frame: points <= 60k, ropeIndex <= 0.12, frameContact >= 0.2,
  * fill >= 15, coreHalo <= 1.5), then the desirability. A proxy for shortlisting; humans choose.
  */
-export function score(metrics: SearchMetrics): Score {
+export function score(metrics: SearchMetrics, profile: ProfileId = 'default'): Score {
+  const { bands, perFrame } = PROFILES[profile];
   const violations: string[] = [];
   metrics.frames.forEach((frame, i) => {
     if (frame.points > LIMITS.maxPoints) violations.push(`frame ${i}: points ${frame.points} > ${LIMITS.maxPoints}`);
@@ -473,12 +535,12 @@ export function score(metrics: SearchMetrics): Score {
   });
   const floor = (d: number) => Math.max(DESIRABILITY_FLOOR, d);
   const parts: Record<string, number> = {};
-  for (const id of PER_FRAME) {
-    const logs = metrics.frames.map(frame => Math.log(floor(bandDesirability(BANDS[id], frame[id] as number))));
+  for (const id of perFrame) {
+    const logs = metrics.frames.map(frame => Math.log(floor(bandDesirability(bands[id], (frame[id] ?? 0) as number))));
     parts[id] = Math.exp(logs.reduce((a, b) => a + b, 0) / Math.max(1, logs.length));
   }
-  parts.change01 = floor(bandDesirability(BANDS.change, metrics.change01));
-  parts.change12 = floor(bandDesirability(BANDS.change, metrics.change12));
+  parts.change01 = floor(bandDesirability(bands.change, metrics.change01));
+  parts.change12 = floor(bandDesirability(bands.change, metrics.change12));
   const values = Object.values(parts);
   const desirability = Math.exp(values.reduce((sum, v) => sum + Math.log(v), 0) / values.length);
   return { feasible: violations.length === 0, violations, desirability, parts };

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCandidates, repairFrames, snapToControl, stepCap } from '../../sketches/cloud-advection/explore.ts';
 import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import {
-  BANDS, LIMITS, MEASURE, balance, bandDesirability, connectedComponents, componentStats, coreHalo, frameContact, frameGeometry, frameMetrics, jaccardDistance,
+  BANDS, LIMITS, MEASURE, PROFILES, interiorInk, sunGeometry, balance, bandDesirability, connectedComponents, componentStats, coreHalo, frameContact, frameGeometry, frameMetrics, jaccardDistance,
   latinHypercube, occupancy, resamplePaths, ropeAndSpacing, score, type FrameGeometry, type FramePart, type FrameMetrics, type Pt,
 } from '../../sketches/cloud-advection/aesthetics.ts';
 
@@ -228,5 +228,44 @@ describe('cloud-advection aesthetics', () => {
     // Without frame ranges every candidate keeps the fallback steps.
     const plain = buildCandidates({ ...space, ranges: { windX: space.ranges.windX } });
     expect(plain.every(c => c.steps.join() === '0,30,60')).toBe(true);
+  });
+
+  it('precise profile: concealment band, interiorInk, and the default profile unchanged', () => {
+    const precise = PROFILES.precise.bands;
+    expect(bandDesirability(precise.concealment, 0)).toBe(1);
+    expect(bandDesirability(precise.concealment, 0.12)).toBe(1);
+    expect(bandDesirability(precise.concealment, 0.35)).toBe(0);
+    expect(bandDesirability(precise.interiorInk, 15)).toBe(1);
+    expect(bandDesirability(precise.interiorInk, 3)).toBe(0);
+    expect(PROFILES.default.bands).toBe(BANDS);
+    expect(PROFILES.default.perFrame).not.toContain('interiorInk');
+    expect(BANDS.concealment).toEqual([0, 0.15, 0.45, 0.8]);
+    const m: FrameMetrics = { ...good, concealment: 0.08, interiorInk: 20 };
+    const metrics = { frames: [m, m, m], change01: 0.4, change12: 0.4 };
+    expect(score(metrics, 'precise').desirability).toBeGreaterThan(score(metrics).desirability);
+    expect(score(metrics).parts.interiorInk).toBeUndefined();
+    expect(score(metrics, 'precise').parts.interiorInk).toBe(1);
+    // A sun-less frame has no interior ink, so it scores badly in the precise profile.
+    expect(score({ frames: [good, good, good], change01: 0.4, change12: 0.4 }, 'precise').parts.interiorInk).toBeCloseTo(0.01, 9);
+  });
+
+  it('sunGeometry maps world metres through the page mapping and finishing; interiorInk measures the ray band', () => {
+    const finishing = { scale: 1.02, offsetX: 3, offsetY: 4, contentRect: content };
+    const g = sunGeometry({ scale: 5, offset: { x: 10, y: 20 } }, finishing, { sunInner: 10, sunReach: 20 }, { x: 24, y: 39 });
+    expect(g.x).toBeCloseTo((10 + 24 * 5) * 1.02 + 3, 9);
+    expect(g.y).toBeCloseTo((20 + 39 * 5) * 1.02 + 4, 9);
+    expect(g.inner).toBeCloseTo(10 * 5 * 1.02, 9);
+    expect(g.reach).toBeCloseTo(20 * 5 * 1.02, 9);
+    const geom: FrameGeometry = { content, core: { x: 139.5, y: 216, r: 40 }, sun: { x: 139.5, y: 216, inner: 54, reach: 100 } };
+    // Ink on a circle of radius 77 (inside the band) vs radius 45 (inside inner) and 150 (outside reach).
+    const inBand = interiorInk(samplesOf([circle(139.5, 216, 77)]), geom);
+    expect(inBand).toBeGreaterThan(0);
+    expect(inBand).toBeCloseTo(((2 * Math.PI * 77) / (Math.PI * (100 ** 2 - 54 ** 2))) * 1000, 0);
+    expect(interiorInk(samplesOf([circle(139.5, 216, 45)]), geom)).toBe(0);
+    expect(interiorInk(samplesOf([circle(139.5, 216, 105)]), geom)).toBe(0);
+    expect(interiorInk(samplesOf([circle(139.5, 216, 77)]), { ...geom, sun: undefined })).toBe(0);
+    // The lower radius is the larger of core radius and sunInner.
+    const bigCore = interiorInk(samplesOf([circle(139.5, 216, 60)]), { ...geom, core: { ...geom.core, r: 70 } });
+    expect(bigCore).toBe(0);
   });
 });

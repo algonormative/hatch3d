@@ -258,8 +258,10 @@ async function main(): Promise<void> {
   };
 
   // ---- static overlay pieces (identical every frame)
+  // Simulation solids are filled dark; drawn-only members (`solid: false`) are thin light outlines.
   const solids = study.structure.map(m => {
     const pts = m.polygon.map(p => toPx(p.x, p.y).map(f1).join(',')).join(' ');
+    if (m.solid === false) return `<polygon points="${pts}" fill="none" stroke="#9a9fa8" stroke-width="1" stroke-linejoin="round"/>`;
     return `<polygon points="${pts}" fill="#4d5159" stroke="#4d5159" stroke-width="1.2" stroke-linejoin="round"/>`;
   }).join('');
   const core = study.marks.core;
@@ -408,10 +410,11 @@ ${printed ? `<text x="${frameW - GUTTER}" y="30" font-size="22" font-weight="700
 <text x="${barX + barW}" y="${barY + barH + 18}" font-size="14" fill="${INK}" text-anchor="end" font-family="${FONT}">c ≥ ${ref.toFixed(2)} (clamped)</text>
 <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#777" stroke-width="1"/>
 <g font-size="14" fill="#444c59" font-family="${FONT}">
-<rect x="${barX + 340}" y="${barY + 1}" width="16" height="14" fill="#4d5159"/><text x="${barX + 362}" y="${barY + 13}">solid member (absorbs)</text>
+<rect x="${barX + 340}" y="${barY + 1}" width="16" height="14" fill="#4d5159"/><text x="${barX + 362}" y="${barY + 13}">solid (absorbs)</text>
 <circle cx="${barX + 540}" cy="${barY + 8}" r="6.5" fill="none" stroke="#a02a6b" stroke-width="2"/><text x="${barX + 554}" y="${barY + 13}">eddy: spin on page, dotted trail, orange + = spawned</text>
 <line x1="${barX + 930}" y1="${barY + 8}" x2="${barX + 960}" y2="${barY + 8}" stroke="#b5372a" stroke-width="2" stroke-dasharray="6 4"/><text x="${barX + 968}" y="${barY + 13}">quiet core</text>
 <line x1="${barX + 340}" y1="${barY + 34}" x2="${barX + 366}" y2="${barY + 34}" stroke="#2d4a6b" stroke-width="1.6" opacity="0.5"/><text x="${barX + 374}" y="${barY + 39}">prescribed velocity (every ${ARROW_GRID} m)</text>
+<polygon points="${barX + 920},${barY + 42} ${barX + 950},${barY + 42} ${barX + 950},${barY + 28} ${barX + 920},${barY + 28}" fill="none" stroke="#9a9fa8" stroke-width="1.2"/><text x="${barX + 958}" y="${barY + 39}">drawn only, not a solid</text>
 <rect x="${barX + 640}" y="${barY + 26}" width="30" height="16" fill="none" stroke="#8a8f99" stroke-dasharray="2 3"/><text x="${barX + 678}" y="${barY + 39}">drawn area (washed outside)</text>
 </g>
 <rect x="${progX0}" y="${progY}" width="${progW}" height="4" fill="#c7c4bc"/>
