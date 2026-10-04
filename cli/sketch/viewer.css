@@ -102,75 +102,9 @@ h1 { font-size: clamp(1.65rem, 2.3vw, 2.4rem); line-height: 1.12; font-weight: 5
 .finish-pen legend { font: 600 .7rem var(--mono); padding: 0 .2rem; overflow-wrap: anywhere; }
 .finish-pen-fields { display: grid; grid-template-columns: 1.5fr 1fr .8fr; gap: .35rem; }
 .finish-body button { justify-self: start; }
-.control-group { border: 1px solid var(--border); border-radius: 2px; margin: .7rem 0; background: #fff; }
-.navigators { border-top: 1px solid var(--border); margin-top: .8rem; padding-top: .9rem; }
-.navigators[hidden], .radar-chart[hidden], .radar-axis-labels[hidden], .radar-unavailable[hidden],
-.spatial-chart[hidden], .spatial-axis-labels[hidden], .spatial-unavailable[hidden] { display: none; }
-.navigators h2 { font: 600 .69rem var(--mono); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 .75rem; }
-.radar-card { background: #fffdf9; border: 1px solid var(--border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
-.radar-card h3 { font: 600 .76rem var(--mono); margin: 0; }
-.radar-help, .radar-unavailable, .radar-macro-note { color: var(--muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
-.radar-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
-.radar-grid polygon { fill: none; stroke: #ded7ca; stroke-width: 1; }
-.radar-grid line { stroke: #ded7ca; stroke-width: 1; }
-.radar-shape { fill: #a6653430; stroke: #925522; stroke-width: 2; pointer-events: none; }
-.radar-tracks line { stroke: transparent; stroke-width: 18; cursor: crosshair; }
-.radar-handle { cursor: grab; }
-.radar-handle:active { cursor: grabbing; }
-.radar-hit { fill: transparent; }
-.radar-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
-.radar-chart-label { fill: #3b352f; font: 600 12px var(--mono); cursor: pointer; }
-.radar-chart-value { fill: #8a5b34; font-weight: 500; }
-.radar-handle:focus-visible { outline: none; }
-.radar-handle:focus-visible .radar-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
-.radar-handle:focus-visible .radar-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
-.radar-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
-.radar-axis-label { border-color: var(--border); background: #fff; color: var(--ink); padding: .3rem .42rem; font: .63rem var(--mono); }
-.radar-axis-label:hover { background: #f3ece2; }
-.spatial-card { background: #fffdf9; border: 1px solid var(--border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
-.spatial-card h3 { font: 600 .76rem var(--mono); margin: 0; }
-.spatial-help, .spatial-unavailable { color: var(--muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
-.spatial-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
-.xy-frame { fill: #fbf7ef; stroke: #d7ccba; stroke-width: 1.5; }
-.xy-midline { stroke: #ded7ca; stroke-width: 1; stroke-dasharray: 3 5; }
-.xy-crosshair { stroke: #b08058; stroke-width: 1; pointer-events: none; }
-.xy-hit { fill: transparent; cursor: crosshair; }
-.xy-position-dot { fill: #925522; stroke: #fff9ef; stroke-width: 2; cursor: grab; }
-.xyz-edges line { stroke: #c7b7a3; stroke-width: 1.5; }
-.xyz-axis-arm { stroke: #925522; stroke-width: 2; pointer-events: none; }
-.xyz-plane-arm { stroke: #b08058; stroke-width: 1.5; stroke-dasharray: 3 2; pointer-events: none; }
-.xyz-position-dot { fill: #3b352f; stroke: #fff9ef; stroke-width: 2; }
-.spatial-handle { cursor: grab; }
-.spatial-handle:active, .xyz-plane-handle:active { cursor: grabbing; }
-.spatial-hit, .xyz-plane-hit { fill: transparent; }
-.spatial-axis-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
-.xyz-plane-handle { cursor: grab; }
-.xyz-plane-diamond { fill: #a66534; stroke: #fff9ef; stroke-width: 1.5; }
-.spatial-handle:focus-visible { outline: none; }
-.spatial-handle:focus-visible .spatial-axis-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
-.spatial-handle:focus-visible .spatial-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
-.spatial-readout { fill: #3b352f; font: 600 12px var(--mono); }
-.spatial-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
-.spatial-axis-label { border-color: var(--border); background: #fff; color: var(--ink); padding: .3rem .42rem; font: .63rem var(--mono); }
-.spatial-axis-label:hover { background: #f3ece2; }
-.macro-value { color: #775331; font: .65rem/1.45 var(--mono); margin: -.25rem 0 .4rem; }
-.control-group[hidden], .control[hidden] { display: none; }
-.control-group > summary { cursor: pointer; padding: .72rem .85rem; font: 600 .74rem var(--mono); }
-.control-group-body { padding: 0 .85rem .35rem; }
-.control-group-reset { margin: .25rem 0 .35rem; font: .66rem var(--mono); }
-.control { padding: .85rem 0; border-top: 1px solid var(--border); }
-.control-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0 0 .55rem; }
-.control label, .inspection label, .pins label { font: 500 .74rem var(--mono); }
-.value { font: .72rem var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; }
-.control input[type=range] { appearance: none; width: 100%; height: 16px; background: transparent; margin: .2rem 0; }
-.control input[type=range]::-webkit-slider-runnable-track { height: 2px; background: #b7b3ae; }
-.control input[type=range]::-moz-range-track { height: 2px; background: #b7b3ae; }
-.control input[type=range]::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border: 1px solid var(--ink); border-radius: 50%; background: var(--bg); margin-top: -4.5px; }
-.control input[type=range]::-moz-range-thumb { width: 9px; height: 9px; border: 1px solid var(--ink); border-radius: 50%; background: var(--bg); }
-.control select, .inspection select, .pins select { width: 100%; padding: .48rem; border: 1px solid var(--border); border-radius: 2px; background: #fff; color: var(--ink); font: .74rem var(--mono); }
-.control .range { display: flex; justify-content: space-between; gap: 1rem; font: .65rem var(--mono); color: var(--muted); }
-.control .check { display: flex; align-items: center; gap: .5rem; }
-.control .check input, .inspection .check input { accent-color: var(--ink); }
+.inspection label, .pins label { font: 500 .74rem var(--mono); }
+.inspection select, .pins select { width: 100%; padding: .48rem; border: 1px solid var(--border); border-radius: 2px; background: #fff; color: var(--ink); font: .74rem var(--mono); }
+.inspection .check input { accent-color: var(--ink); }
 .notice { margin: 1rem 0; padding: .72rem; border: 1px solid var(--border); background: #fff; font-size: .76rem; line-height: 1.4; }
 .inspection, .pins { border: 0; border-top: 1px solid var(--border); padding: 1rem 0 0; margin: 1.1rem 0 0; }
 .inspection legend { color: var(--ink); padding: 0; }

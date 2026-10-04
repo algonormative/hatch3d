@@ -2,6 +2,8 @@
 
 A sketch is an ordinary TypeScript module with one default `Sketch` object. Page and path coordinates, margins, and pen widths are millimeters from the top-left of the page. The runner starts a fresh Node process for every render, so changes to local imports appear on the next render. Seed defaults to `0` and each named `ctx.random(partId)` stream is repeatable.
 
+For an independent external family, copy [`examples/plot-family-starter`](../examples/plot-family-starter/README.md) and install the private packed core and host packages using its exact commands. The copied mixed-study fixture is [`examples/plot-family-mixed`](../examples/plot-family-mixed/README.md). Each `open` command serves only that entry and its family controls.
+
 Existing hatch3d 2D and 3D compositions can be used through the [Sketch adapters](sketch-hatch3d.md), with runnable examples and physical pen parts.
 
 For slider groups, composition navigators, and sketch macros, see [Sketch controls and composition navigation](sketch-controls.md).

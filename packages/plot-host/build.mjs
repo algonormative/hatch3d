@@ -21,11 +21,13 @@ for (const [source, name] of [
   await build({ ...common, entryPoints: [join(root, source)], outfile: join(dist, name), banner: name === 'cli.js' ? { js: '#!/usr/bin/env node' } : undefined });
 }
 chmodSync(join(dist, 'cli.js'), 0o755);
-for (const file of ['viewer.html', 'viewer.css', 'viewer.js', 'viewer-state.js', 'radar-view.js', 'navigator-view.js', 'spatial-view.js', 'svg-controls.js']) {
+for (const file of ['viewer.html', 'viewer.css', 'viewer.js', 'viewer-state.js']) {
   copyFileSync(join(checkout, 'cli/sketch', file), join(dist, file));
 }
+copyFileSync(join(checkout, 'packages/plot-core/dist/controls.js'), join(dist, 'controls.js'));
+copyFileSync(join(checkout, 'packages/plot-core/dist/controls.css'), join(dist, 'controls.css'));
 copyFileSync(join(checkout, 'cli/sketch/plugins/plotter-upload-view.js'), join(dist, 'plugins/plotter-upload-view.js'));
-for (const file of ['control-values.js', 'control-geometry.js']) {
+for (const file of ['control-values.js', 'control-geometry.js', 'navigator-view.js', 'radar-view.js', 'spatial-view.js', 'svg-controls.js']) {
   copyFileSync(join(checkout, 'packages/plot-core/src', file), join(dist, file));
 }
 execFileSync(resolve(checkout, 'node_modules/.bin/tsc'), ['--project', join(root, 'tsconfig.json')], { stdio: 'inherit' });

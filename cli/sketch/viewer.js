@@ -1,13 +1,12 @@
 import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from './viewer-state.js';
-import { createNavigatorView } from './navigator-view.js';
-import { resolveMacroParams } from './control-values.js';
+import { mountControlPanel } from './controls.js';
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
     margin: null, paper: null, borderStyle: '', borderPen: null, borderInset: 12, contentGap: 6, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
-    result: null, hiddenPenIds: new Set(), groupCollapsed: new Map(), navigatorViews: [], stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -42,10 +41,6 @@ if (typeof document !== 'undefined') {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
     return payload;
-  }
-
-  function formatValue(control, value) {
-    return `${value}${control.units ? ` ${control.units}` : ''}`;
   }
 
   function finishNumber(value, label, minimum, maximum) {
@@ -231,236 +226,7 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  function updateControlVisibility() {
-    if (!state.metadata) return;
-    for (const control of state.metadata.controls) {
-      const row = document.getElementById(`control-row-${control.id}`);
-      if (row) row.hidden = Boolean(control.showWhen && state.params[control.showWhen.control] !== control.showWhen.equals);
-    }
-    for (const panel of $('controls').querySelectorAll('.control-group')) {
-      const count = [...panel.querySelectorAll('.control')].filter(row => !row.hidden).length;
-      panel.hidden = count === 0;
-      panel.querySelector('summary').textContent = `${panel.dataset.group} · ${count} ${count === 1 ? 'control' : 'controls'}`;
-    }
-    for (const { navigator, view } of state.navigatorViews) {
-      view.setAvailable(navigator.axes.every(id => {
-        const row = document.getElementById(`control-row-${id}`);
-        return row && !row.hidden;
-      }));
-    }
-  }
-
-  function syncControlViews() {
-    if (!state.metadata) return;
-    let effective = state.params;
-    let macroError = null;
-    try {
-      if (state.metadata.macros?.length) effective = resolveMacroParams(state.metadata.controls, state.params, state.metadata.macros);
-    } catch (error) {
-      macroError = error.message || String(error);
-      showError(`Could not preview sketch macros: ${macroError}`);
-    }
-    for (const control of state.metadata.controls) {
-      const input = $(`control-${control.id}`);
-      if (!input) continue;
-      if (control.type === 'toggle') input.checked = Boolean(state.params[control.id]);
-      else input.value = state.params[control.id];
-      if (control.type === 'slider') {
-        const row = $(`control-row-${control.id}`);
-        row.querySelector('.value').textContent = formatValue(control, state.params[control.id]);
-        const macroValue = row.querySelector('.macro-value');
-        if (macroValue) {
-          if (macroError) macroValue.textContent = `Base ${formatValue(control, state.params[control.id])} · With sketch macros unavailable`;
-          else {
-            const value = Number(effective[control.id]);
-            const limit = value === control.min ? ' · at min' : value === control.max ? ' · at max' : '';
-            macroValue.textContent = `Base ${formatValue(control, state.params[control.id])} · With sketch macros ${formatValue(control, value)}${limit}`;
-          }
-        }
-      }
-    }
-    for (const { view } of state.navigatorViews) view.update();
-  }
-
-  function applyControlValues(patch, expensive = false) {
-    const changed = Object.entries(patch).filter(([id, value]) => state.params[id] !== value);
-    if (!changed.length) return;
-    for (const [id, value] of changed) state.params[id] = value;
-    queueRender(expensive);
-    syncControlViews();
-    updateControlVisibility();
-  }
-
-  function focusedNavigator() {
-    const handle = document.activeElement?.closest?.('.radar-handle, .spatial-handle');
-    if (!handle) return null;
-    return { id: handle.dataset.navigatorId, axisId: handle.dataset.axisId };
-  }
-
-  function renderNavigators(focus = focusedNavigator()) {
-    for (const { view } of state.navigatorViews) view.dispose();
-    const host = $('navigators');
-    host.replaceChildren();
-    state.navigatorViews = [];
-    const navigators = state.metadata?.navigators || [];
-    host.hidden = navigators.length === 0;
-    if (!navigators.length) {
-      if (focus) $('reset').focus();
-      return;
-    }
-    const heading = document.createElement('h2');
-    heading.textContent = 'Shape map';
-    host.append(heading);
-    for (const navigator of navigators) {
-      const view = createNavigatorView(host, navigator, state.metadata.controls, id => state.params[id],
-        (patch, expensive) => applyControlValues(patch, expensive), () => scheduleRender(0));
-      state.navigatorViews.push({ navigator, view });
-    }
-    if (state.metadata.macros?.length) {
-      const note = document.createElement('p');
-      note.className = 'radar-macro-note';
-      note.textContent = '“With sketch macros” previews slider effects. Sketch code may transform values further.';
-      host.append(note);
-    }
-    updateControlVisibility();
-    if (focus && !state.navigatorViews.some(({ navigator, view }) => navigator.id === focus.id && view.focusAxis(focus.axisId))) $('reset').focus();
-  }
-
-  function renderControls() {
-    const host = $('controls');
-    const focusedControl = document.activeElement?.id?.startsWith('control-') ? document.activeElement.id : null;
-    const focusedGroup = document.activeElement?.closest?.('.control-group')?.dataset.group;
-    host.replaceChildren();
-    const groups = new Map();
-    for (const control of state.metadata.controls) {
-      let parent = host;
-      if (control.group) {
-        if (!groups.has(control.group)) {
-          const panel = document.createElement('details');
-          panel.className = 'control-group';
-          panel.dataset.group = control.group;
-          panel.open = state.groupCollapsed.has(control.group) ? !state.groupCollapsed.get(control.group) : groups.size === 0;
-          panel.addEventListener('toggle', () => state.groupCollapsed.set(control.group, !panel.open));
-          const summary = document.createElement('summary');
-          summary.textContent = control.group;
-          const body = document.createElement('div');
-          body.className = 'control-group-body';
-          const reset = document.createElement('button');
-          reset.type = 'button';
-          reset.className = 'quiet control-group-reset';
-          reset.dataset.groupReset = control.group;
-          reset.textContent = `Reset ${control.group}`;
-          reset.addEventListener('click', () => {
-            for (const { view } of state.navigatorViews) view.cancel();
-            for (const member of state.metadata.controls.filter(item => item.group === control.group)) state.params[member.id] = member.default;
-            $('incompatible').hidden = true;
-            renderControls();
-            syncControlViews();
-            updateControlVisibility();
-            queueRender(false);
-          });
-          body.append(reset);
-          panel.append(summary, body);
-          host.append(panel);
-          groups.set(control.group, body);
-        }
-        parent = groups.get(control.group);
-      }
-      const row = document.createElement('div');
-      row.className = 'control';
-      row.id = `control-row-${control.id}`;
-      if (control.type === 'toggle') {
-        const label = document.createElement('label');
-        label.className = 'check';
-        const input = document.createElement('input');
-        input.id = `control-${control.id}`;
-        input.type = 'checkbox';
-        input.checked = Boolean(state.params[control.id]);
-        input.addEventListener('change', () => {
-          state.params[control.id] = input.checked;
-          queueRender(false);
-          syncControlViews();
-          updateControlVisibility();
-        });
-        label.append(input, document.createTextNode(control.label));
-        row.append(label);
-      } else {
-        const heading = document.createElement('div');
-        heading.className = 'control-head';
-        const label = document.createElement('label');
-        label.textContent = control.label;
-        label.htmlFor = `control-${control.id}`;
-        heading.append(label);
-        if (control.type === 'slider') {
-          const value = document.createElement('span');
-          value.className = 'value';
-          value.textContent = formatValue(control, state.params[control.id]);
-          heading.append(value);
-          const influenced = state.metadata.macros?.some(macro => macro.targets.some(target => target.control === control.id));
-          const input = document.createElement('input');
-          input.id = `control-${control.id}`;
-          input.type = 'range';
-          input.min = control.min;
-          input.max = control.max;
-          input.step = control.step;
-          input.value = state.params[control.id];
-          input.addEventListener('input', () => {
-            applyControlValues({ [control.id]: Number(input.value) }, Boolean(control.expensive));
-          });
-          if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
-          const range = document.createElement('div');
-          range.className = 'range';
-          const minimum = document.createElement('span');
-          const maximum = document.createElement('span');
-          minimum.textContent = formatValue(control, control.min);
-          maximum.textContent = formatValue(control, control.max);
-          range.append(minimum, maximum);
-          row.append(heading);
-          if (influenced) {
-            const macroValue = document.createElement('div');
-            macroValue.className = 'macro-value';
-            row.append(macroValue);
-          }
-          row.append(input, range);
-        } else if (control.type === 'text') {
-          const input = document.createElement('input');
-          input.id = `control-${control.id}`;
-          input.type = 'text';
-          input.maxLength = control.maxLength;
-          input.value = state.params[control.id];
-          input.addEventListener('input', () => {
-            state.params[control.id] = input.value;
-            queueRender(Boolean(control.expensive));
-          });
-          if (control.expensive) input.addEventListener('change', () => scheduleRender(0));
-          row.append(heading, input);
-        } else {
-          const input = document.createElement('select');
-          input.id = `control-${control.id}`;
-          for (const optionValue of control.options) {
-            const option = document.createElement('option');
-            option.value = optionValue;
-            option.textContent = control.optionLabels && Object.hasOwn(control.optionLabels, optionValue) ? control.optionLabels[optionValue] : optionValue;
-            input.append(option);
-          }
-          input.value = state.params[control.id];
-          input.addEventListener('change', () => {
-            state.params[control.id] = input.value;
-            queueRender(false);
-            syncControlViews();
-            updateControlVisibility();
-          });
-          row.append(heading, input);
-        }
-      }
-      parent.append(row);
-    }
-    updateControlVisibility();
-    syncControlViews();
-    if (focusedControl && $(focusedControl) && !$(focusedControl).closest('.control')?.hidden) $(focusedControl).focus();
-    else if (focusedGroup) [...host.querySelectorAll('[data-group-reset]')].find(button => button.dataset.groupReset === focusedGroup)?.focus();
-    else if (focusedControl) $('reset').focus();
-  }
+  let controlPanel = null;
 
   function queueRender(expensive) {
     state.sequence++;
@@ -594,8 +360,7 @@ if (typeof document !== 'undefined') {
       if (sequence !== state.sequence || payload.requestId !== sequence) return;
       state.result = payload.result;
       state.params = { ...payload.result.params };
-      syncControlViews();
-      updateControlVisibility();
+      controlPanel?.update({ params: state.params });
       state.hiddenPenIds = reconcileHiddenPens(state.hiddenPenIds, state.result.metadata.pens);
       updateParts();
       renderPaperAndInks();
@@ -616,14 +381,13 @@ if (typeof document !== 'undefined') {
   }
 
   async function loadMetadata(sourceChanged = false) {
-    for (const { view } of state.navigatorViews) view.cancel();
+    controlPanel?.cancel();
     const sequence = ++state.sequence;
     state.pending?.abort();
     markDirty(sourceChanged ? 'Source changed. Checking controls…' : 'Loading sketch…');
     try {
       const next = await api('/api/metadata');
       if (sequence !== state.sequence) return;
-      const focus = focusedNavigator();
       const previous = state.metadata;
       const reconciliation = previous ? reconcileControls(previous.controls, state.params, next.controls) :
         { params: Object.fromEntries(next.controls.map(control => [control.id, control.default])), incompatible: [] };
@@ -632,8 +396,19 @@ if (typeof document !== 'undefined') {
       $('title').textContent = next.name;
       document.title = `${next.name} · Sketch study`;
       setPage(state.result?.metadata || next);
-      renderControls();
-      renderNavigators(focus);
+      if (controlPanel) controlPanel.update({ controls: next.controls, navigators: next.navigators || [], macros: next.macros || [], params: state.params });
+      else controlPanel = mountControlPanel({
+        controlsHost: $('controls'), navigatorsHost: $('navigators'), controls: next.controls,
+        navigators: next.navigators || [], macros: next.macros || [], params: state.params,
+        idPrefix: 'control', resetFocus: $('reset'),
+        onChange(patch, { expensive }) {
+          Object.assign(state.params, patch);
+          $('incompatible').hidden = true;
+          queueRender(expensive);
+        },
+        onCommit() { scheduleRender(0); },
+        onError(message) { if (message) showError(message); },
+      });
       renderFinishingControls();
       referenceOverlay();
       const notice = $('incompatible');
@@ -758,16 +533,7 @@ if (typeof document !== 'undefined') {
   $('overlay').addEventListener('change', referenceOverlay);
   $('part').addEventListener('change', showArt);
   $('pin-select').addEventListener('change', event => selectPin(event.target.value));
-  $('reset').addEventListener('click', () => {
-    if (!state.metadata) return;
-    for (const { view } of state.navigatorViews) view.cancel();
-    state.params = Object.fromEntries(state.metadata.controls.map(control => [control.id, control.default]));
-    $('incompatible').hidden = true;
-    renderControls();
-    syncControlViews();
-    updateControlVisibility();
-    queueRender(false);
-  });
+  $('reset').addEventListener('click', () => controlPanel?.reset());
   $('reseed').addEventListener('click', () => {
     state.seed = Math.floor(Math.random() * 0x7fffffff);
     $('seed').value = state.seed;

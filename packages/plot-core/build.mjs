@@ -12,9 +12,12 @@ const common = { bundle: true, format: 'esm', platform: 'neutral', target: 'es20
 for (const name of ['index', 'planar']) {
   await build({ ...common, entryPoints: [join(root, 'src', `${name}.ts`)], outfile: join(dist, `${name}.js`) });
 }
+await build({ ...common, entryPoints: [join(root, 'src/controls.js')], outfile: join(dist, 'controls.js') });
 await build({ ...common, entryPoints: [join(root, 'src/spatial.ts')], outfile: join(dist, 'spatial.js'), plugins: [{ name: 'cpu-spatial', setup(build) {
   build.onResolve({ filter: /wasm-pipeline$/ }, () => ({ path: join(root, 'src/spatial-wasm-shim.ts') }));
 } }] });
 execFileSync(resolve(root, '../../node_modules/.bin/tsc'), ['--project', join(root, 'tsconfig.json')], { stdio: 'inherit' });
 copyFileSync(join(dist, 'spatial-api.d.ts'), join(dist, 'spatial.d.ts'));
 for (const name of ['control-values', 'control-geometry']) copyFileSync(join(root, 'src', `${name}.d.ts`), join(dist, `${name}.d.ts`));
+copyFileSync(join(root, 'src/controls.d.ts'), join(dist, 'controls.d.ts'));
+copyFileSync(join(root, 'src/controls.css'), join(dist, 'controls.css'));

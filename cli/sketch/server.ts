@@ -18,14 +18,16 @@ const packedAssets = existsSync(join(HERE, 'child.js'));
 const STATIC = new Map([
   ['/', ['viewer.html', 'text/html; charset=utf-8']],
   ['/viewer.js', ['viewer.js', 'text/javascript; charset=utf-8']],
+  ['/controls.js', [packedAssets ? 'controls.js' : '../../packages/plot-core/src/controls.js', 'text/javascript; charset=utf-8']],
   ['/viewer-state.js', ['viewer-state.js', 'text/javascript; charset=utf-8']],
-  ['/radar-view.js', ['radar-view.js', 'text/javascript; charset=utf-8']],
-  ['/navigator-view.js', ['navigator-view.js', 'text/javascript; charset=utf-8']],
-  ['/spatial-view.js', ['spatial-view.js', 'text/javascript; charset=utf-8']],
-  ['/svg-controls.js', ['svg-controls.js', 'text/javascript; charset=utf-8']],
+  ['/radar-view.js', [packedAssets ? 'radar-view.js' : '../../packages/plot-core/src/radar-view.js', 'text/javascript; charset=utf-8']],
+  ['/navigator-view.js', [packedAssets ? 'navigator-view.js' : '../../packages/plot-core/src/navigator-view.js', 'text/javascript; charset=utf-8']],
+  ['/spatial-view.js', [packedAssets ? 'spatial-view.js' : '../../packages/plot-core/src/spatial-view.js', 'text/javascript; charset=utf-8']],
+  ['/svg-controls.js', [packedAssets ? 'svg-controls.js' : '../../packages/plot-core/src/svg-controls.js', 'text/javascript; charset=utf-8']],
   ['/control-geometry.js', [packedAssets ? 'control-geometry.js' : '../../packages/plot-core/src/control-geometry.js', 'text/javascript; charset=utf-8']],
   ['/control-values.js', [packedAssets ? 'control-values.js' : '../../packages/plot-core/src/control-values.js', 'text/javascript; charset=utf-8']],
   ['/viewer.css', ['viewer.css', 'text/css; charset=utf-8']],
+  ['/controls.css', [packedAssets ? 'controls.css' : '../../packages/plot-core/src/controls.css', 'text/css; charset=utf-8']],
 ]);
 const MAX_BODY_BYTES = 64 * 1024;
 

@@ -1,0 +1,103 @@
+/* Existing Hatch3D paper/ink controls, scoped to mounted panel hosts. */
+.plot-controls, .plot-navigators {
+  --plot-panel-ink: var(--ink, #1a1a1a);
+  --plot-panel-muted: var(--muted, #666);
+  --plot-panel-border: var(--border, #d4d0ca);
+  --plot-panel-bg: var(--bg, #f7f5f2);
+  --plot-panel-font: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.plot-controls .control-group { border: 1px solid var(--plot-panel-border); border-radius: 2px; margin: .7rem 0; background: #fff; }
+.plot-navigators { border-top: 1px solid var(--plot-panel-border); margin-top: .8rem; padding-top: .9rem; }
+.plot-navigators[hidden],
+.plot-navigators .radar-chart[hidden],
+.plot-navigators .radar-axis-labels[hidden],
+.plot-navigators .radar-unavailable[hidden],
+.plot-navigators .spatial-chart[hidden],
+.plot-navigators .spatial-axis-labels[hidden],
+.plot-navigators .spatial-unavailable[hidden] { display: none; }
+.plot-navigators h2 { font: 600 .69rem var(--plot-panel-font); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 .75rem; }
+.plot-navigators .radar-card { background: #fffdf9; border: 1px solid var(--plot-panel-border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
+.plot-navigators .radar-card h3 { font: 600 .76rem var(--plot-panel-font); margin: 0; }
+.plot-navigators .radar-help,
+.plot-navigators .radar-unavailable,
+.plot-navigators .radar-macro-note { color: var(--plot-panel-muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
+.plot-navigators .radar-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
+.plot-navigators .radar-grid polygon { fill: none; stroke: #ded7ca; stroke-width: 1; }
+.plot-navigators .radar-grid line { stroke: #ded7ca; stroke-width: 1; }
+.plot-navigators .radar-shape { fill: #a6653430; stroke: #925522; stroke-width: 2; pointer-events: none; }
+.plot-navigators .radar-tracks line { stroke: transparent; stroke-width: 18; cursor: crosshair; }
+.plot-navigators .radar-handle { cursor: grab; }
+.plot-navigators .radar-handle:active { cursor: grabbing; }
+.plot-navigators .radar-hit { fill: transparent; }
+.plot-navigators .radar-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
+.plot-navigators .radar-chart-label { fill: #3b352f; font: 600 12px var(--plot-panel-font); cursor: pointer; }
+.plot-navigators .radar-chart-value { fill: #8a5b34; font-weight: 500; }
+.plot-navigators .radar-handle:focus-visible { outline: none; }
+.plot-navigators .radar-handle:focus-visible .radar-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
+.plot-navigators .radar-handle:focus-visible .radar-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
+.plot-navigators .radar-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
+.plot-navigators .radar-axis-label { border-color: var(--plot-panel-border); background: #fff; color: var(--plot-panel-ink); padding: .3rem .42rem; font: .63rem var(--plot-panel-font); }
+.plot-navigators .radar-axis-label:hover { background: #f3ece2; }
+.plot-navigators .spatial-card { background: #fffdf9; border: 1px solid var(--plot-panel-border); padding: .8rem .7rem .65rem; margin-bottom: .7rem; }
+.plot-navigators .spatial-card h3 { font: 600 .76rem var(--plot-panel-font); margin: 0; }
+.plot-navigators .spatial-help,
+.plot-navigators .spatial-unavailable { color: var(--plot-panel-muted); font-size: .69rem; line-height: 1.45; margin: .38rem 0 .4rem; }
+.plot-navigators .spatial-chart { display: block; width: min(100%, 276px); margin: .2rem auto; touch-action: none; overflow: visible; }
+.plot-navigators .xy-frame { fill: #fbf7ef; stroke: #d7ccba; stroke-width: 1.5; }
+.plot-navigators .xy-midline { stroke: #ded7ca; stroke-width: 1; stroke-dasharray: 3 5; }
+.plot-navigators .xy-crosshair { stroke: #b08058; stroke-width: 1; pointer-events: none; }
+.plot-navigators .xy-hit { fill: transparent; cursor: crosshair; }
+.plot-navigators .xy-position-dot { fill: #925522; stroke: #fff9ef; stroke-width: 2; cursor: grab; }
+.plot-navigators .xyz-edges line { stroke: #c7b7a3; stroke-width: 1.5; }
+.plot-navigators .xyz-axis-arm { stroke: #925522; stroke-width: 2; pointer-events: none; }
+.plot-navigators .xyz-plane-arm { stroke: #b08058; stroke-width: 1.5; stroke-dasharray: 3 2; pointer-events: none; }
+.plot-navigators .xyz-position-dot { fill: #3b352f; stroke: #fff9ef; stroke-width: 2; }
+.plot-navigators .spatial-handle { cursor: grab; }
+.plot-navigators .spatial-handle:active,
+.plot-navigators .xyz-plane-handle:active { cursor: grabbing; }
+.plot-navigators .spatial-hit,
+.plot-navigators .xyz-plane-hit { fill: transparent; }
+.plot-navigators .spatial-axis-dot { fill: #fff9ef; stroke: #925522; stroke-width: 2; }
+.plot-navigators .xyz-plane-handle { cursor: grab; }
+.plot-navigators .xyz-plane-diamond { fill: #a66534; stroke: #fff9ef; stroke-width: 1.5; }
+.plot-navigators .spatial-handle:focus-visible { outline: none; }
+.plot-navigators .spatial-handle:focus-visible .spatial-axis-dot { fill: #925522; stroke: #fff; stroke-width: 3; }
+.plot-navigators .spatial-handle:focus-visible .spatial-hit { fill: #92552222; stroke: #925522; stroke-width: 1; }
+.plot-navigators .spatial-readout { fill: #3b352f; font: 600 12px var(--plot-panel-font); }
+.plot-navigators .spatial-axis-labels { display: flex; flex-wrap: wrap; gap: .3rem; }
+.plot-navigators .spatial-axis-label { border-color: var(--plot-panel-border); background: #fff; color: var(--plot-panel-ink); padding: .3rem .42rem; font: .63rem var(--plot-panel-font); }
+.plot-navigators .spatial-axis-label:hover { background: #f3ece2; }
+.plot-controls .macro-value { color: #775331; font: .65rem/1.45 var(--plot-panel-font); margin: -.25rem 0 .4rem; }
+.plot-controls .control-group[hidden],
+.plot-controls .control[hidden] { display: none; }
+.plot-controls .control-group > summary { cursor: pointer; padding: .72rem .85rem; font: 600 .74rem var(--plot-panel-font); }
+.plot-controls .control-group-body { padding: 0 .85rem .35rem; }
+.plot-controls .control-group-reset { margin: .25rem 0 .35rem; font: .66rem var(--plot-panel-font); }
+.plot-controls .control { padding: .85rem 0; border-top: 1px solid var(--plot-panel-border); }
+.plot-controls .control-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0 0 .55rem; }
+.plot-controls .control label { font: 500 .74rem var(--plot-panel-font); }
+.plot-controls .value { font: .72rem var(--plot-panel-font); color: var(--plot-panel-ink); font-variant-numeric: tabular-nums; }
+.plot-controls .control input[type=range] { appearance: none; width: 100%; height: 16px; background: transparent; margin: .2rem 0; }
+.plot-controls .control input[type=range]::-webkit-slider-runnable-track { height: 2px; background: #b7b3ae; }
+.plot-controls .control input[type=range]::-moz-range-track { height: 2px; background: #b7b3ae; }
+.plot-controls .control input[type=range]::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border: 1px solid var(--plot-panel-ink); border-radius: 50%; background: var(--plot-panel-bg); margin-top: -4.5px; }
+.plot-controls .control input[type=range]::-moz-range-thumb { width: 9px; height: 9px; border: 1px solid var(--plot-panel-ink); border-radius: 50%; background: var(--plot-panel-bg); }
+.plot-controls .control select { width: 100%; padding: .48rem; border: 1px solid var(--plot-panel-border); border-radius: 2px; background: #fff; color: var(--plot-panel-ink); font: .74rem var(--plot-panel-font); }
+.plot-controls .control .range { display: flex; justify-content: space-between; gap: 1rem; font: .65rem var(--plot-panel-font); color: var(--plot-panel-muted); }
+.plot-controls .control .check { display: flex; align-items: center; gap: .5rem; }
+.plot-controls .control .check input { accent-color: var(--plot-panel-ink); }
+.plot-controls .control-group-reset,
+.plot-navigators .radar-axis-label,
+.plot-navigators .spatial-axis-label {
+  border: 1px solid var(--plot-panel-border);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--plot-panel-ink);
+  cursor: pointer;
+}
+.plot-controls .control-group-reset { padding: .35rem .45rem; }
+.plot-controls .control input[type=text] {
+  width: 100%; padding: .48rem; border: 1px solid var(--plot-panel-border);
+  border-radius: 2px; background: #fff; color: var(--plot-panel-ink);
+  font: .74rem var(--plot-panel-font);
+}

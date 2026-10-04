@@ -21,7 +21,12 @@
     "./spatial": {
       "types": "./dist/spatial.d.ts",
       "import": "./dist/spatial.js"
-    }
+    },
+    "./controls": {
+      "types": "./dist/controls.d.ts",
+      "import": "./dist/controls.js"
+    },
+    "./controls.css": "./dist/controls.css"
   },
   "scripts": {
     "build": "node build.mjs",
