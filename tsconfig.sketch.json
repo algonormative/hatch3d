@@ -32,6 +32,7 @@
     "sketches/phase-garden/**/*.ts",
     "sketches/breach-cathedral/**/*.ts",
     "sketches/chamber-bloom/**/*.ts",
-    "sketches/load-bearing-silence/**/*.ts"
+    "sketches/load-bearing-silence/**/*.ts",
+    "sketches/cloud-advection/**/*.ts"
   ]
 }

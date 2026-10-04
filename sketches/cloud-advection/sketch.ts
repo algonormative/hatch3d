@@ -1,0 +1,69 @@
+import type { Sketch } from '../../src/sketch/types.ts';
+import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
+import { extractMarks } from './extract.ts';
+import { buildDomain, simulate } from './sim.ts';
+import { DT, WORLD, buildStudy } from './study.ts';
+
+/** Architecture that continues past its window and half-dissolves in advected, plotted cloud. */
+const sketch: Sketch = {
+  name: 'Prescribed Weather',
+  page: TABLOID_PAGE,
+  pens: [
+    { id: 'carbon', color: '#22282c', width: 0.25 },
+    { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
+    { id: 'violet', color: '#776090', width: 0.25 },
+    { id: 'cyan', color: '#6b8491', width: 0.25 },
+    { id: 'gold', color: '#a69d84', width: 0.25 },
+  ],
+  controls: [
+    ...posterControls('PRESCRIBED WEATHER', 'P1'),
+    { type: 'slider', id: 'turbulence', label: 'Turbulence', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Weather', expensive: true },
+    { type: 'slider', id: 'drift', label: 'Drift', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Weather', expensive: true },
+    { type: 'toggle', id: 'cloudEnabled', label: 'Draw advected cloud', default: true, group: 'Simulation' },
+    { type: 'slider', id: 'step', label: 'Time step', default: 30, min: 0, max: 120, step: 1, units: `steps of ${DT} s`, group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'windX', label: 'Wind X', default: -0.8, min: -3, max: 3, step: 0.1, units: 'm/s', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'windY', label: 'Wind Y', default: 0.5, min: -3, max: 3, step: 0.1, units: 'm/s', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'eddyX', label: 'Eddy X', default: 20, min: 0, max: WORLD.width, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'eddyY', label: 'Eddy Y', default: 34, min: 0, max: WORLD.height, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'eddyCirculation', label: 'Eddy circulation', default: 30, min: -120, max: 120, step: 1, units: 'm²/s', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'eddyCore', label: 'Eddy core radius', default: 3, min: 0.5, max: 12, step: 0.25, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'dispersion', label: 'Dispersion (diffusivity)', default: 0.1, min: 0, max: 0.7, step: 0.05, units: 'm²/s', group: 'Simulation', expensive: true },
+    { type: 'select', id: 'boundary', label: 'Domain edges', default: 'open', options: ['open', 'closed'], optionLabels: { open: 'Open (outflow)', closed: 'Closed (walls)' }, group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'sourceX', label: 'Source X', default: 43, min: 0, max: WORLD.width, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'sourceY', label: 'Source Y', default: 26, min: 0, max: WORLD.height, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'sourceSize', label: 'Source size', default: 11, min: 1, max: 20, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'referenceDensity', label: 'Reference density', default: 0.8, min: 0.05, max: 2, step: 0.05, group: 'Marks' },
+    { type: 'slider', id: 'cloudHatchPitch', label: 'Cloud hatch spacing', default: 2, min: 1.2, max: 6, step: 0.1, units: 'mm', group: 'Marks' },
+    { type: 'select', id: 'cloudPen', label: 'Cloud pen', default: 'cyan', options: ['cyan', 'ultramarine', 'violet', 'gold', 'carbon'], group: 'Marks' },
+    { type: 'slider', id: 'obscure', label: 'Structure obscuration', default: 0.8, min: 0, max: 1, step: 0.01, group: 'Marks' },
+    { type: 'slider', id: 'coreRadius', label: 'Quiet core radius', default: 34, min: 0, max: 90, step: 1, units: 'mm', group: 'Marks' },
+    { type: 'slider', id: 'coreX', label: 'Quiet core X', default: 0, min: -60, max: 60, step: 1, units: 'mm', group: 'Marks' },
+    { type: 'slider', id: 'coreY', label: 'Quiet core Y', default: 0, min: -90, max: 90, step: 1, units: 'mm', group: 'Marks' },
+    { type: 'slider', id: 'hatchPitch', label: 'Structure hatch spacing', default: 1.35, min: 0.6, max: 4, step: 0.05, units: 'mm', group: 'Structure' },
+  ],
+  navigators: [
+    { id: 'weather', label: 'Weather', axes: ['turbulence', 'drift', 'obscure'] },
+    { id: 'wind', label: 'Wind', type: 'xy', axes: ['windX', 'windY'], yDirection: 'down', axisLabels: ['X', 'Y'] },
+    { id: 'eddy', label: 'Eddy', type: 'xy', axes: ['eddyX', 'eddyY'], yDirection: 'down', axisLabels: ['X', 'Y'] },
+    { id: 'quiet-core', label: 'Quiet core', type: 'xy', axes: ['coreX', 'coreY'], yDirection: 'down', axisLabels: ['X', 'Y'] },
+    { id: 'source', label: 'Smoke source', type: 'xyz', axes: ['sourceX', 'sourceY', 'sourceSize'], axisLabels: ['X', 'Y', 'Size'] },
+  ],
+  macros: [
+    { control: 'turbulence', targets: [{ control: 'eddyCirculation', amount: 70 }, { control: 'eddyCore', amount: -4 }, { control: 'dispersion', amount: 0.6 }] },
+    { control: 'drift', targets: [{ control: 'windX', amount: 2.4 }, { control: 'windY', amount: 1 }] },
+  ],
+  draw(ctx) {
+    const study = buildStudy(ctx);
+    const enabled = ctx.params.cloudEnabled === true;
+    const step = Math.max(0, Math.min(120, Math.round(Number(ctx.params.step ?? 30))));
+    // The off state never touches the simulation.
+    const domain = enabled ? buildDomain(study.config) : null;
+    const snapshot = enabled ? simulate(study.config, [step])[0] : null;
+    const parts = extractMarks(domain, snapshot, study, {
+      cloudEnabled: enabled, hatchPitch: Number(ctx.params.hatchPitch ?? 1.35),
+    });
+    return composePoster(ctx, parts, { page: TABLOID_PAGE, subtitle: 'PRESCRIBED WEATHER', edition: 'P1' });
+  },
+};
+
+export default sketch;
