@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { watch, type FSWatcher } from 'node:fs';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,8 @@ import type { FinishingOptions, RenderResult } from '../../src/sketch/types.js';
 export interface SketchServerOptions { entry: string; port?: number; outputDir?: string; plotterUpload?: PlotterUploadConfig }
 export interface SketchServer { url: string; close: () => Promise<void> }
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+const packedAssets = existsSync(join(HERE, 'child.js'));
 const STATIC = new Map([
   ['/', ['viewer.html', 'text/html; charset=utf-8']],
   ['/viewer.js', ['viewer.js', 'text/javascript; charset=utf-8']],
@@ -21,11 +23,10 @@ const STATIC = new Map([
   ['/navigator-view.js', ['navigator-view.js', 'text/javascript; charset=utf-8']],
   ['/spatial-view.js', ['spatial-view.js', 'text/javascript; charset=utf-8']],
   ['/svg-controls.js', ['svg-controls.js', 'text/javascript; charset=utf-8']],
-  ['/control-geometry.js', ['../../packages/plot-core/src/control-geometry.js', 'text/javascript; charset=utf-8']],
-  ['/control-values.js', ['../../packages/plot-core/src/control-values.js', 'text/javascript; charset=utf-8']],
+  ['/control-geometry.js', [packedAssets ? 'control-geometry.js' : '../../packages/plot-core/src/control-geometry.js', 'text/javascript; charset=utf-8']],
+  ['/control-values.js', [packedAssets ? 'control-values.js' : '../../packages/plot-core/src/control-values.js', 'text/javascript; charset=utf-8']],
   ['/viewer.css', ['viewer.css', 'text/css; charset=utf-8']],
 ]);
-const HERE = dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 64 * 1024;
 
 function json(res: ServerResponse, status: number, value: unknown): void {
@@ -70,7 +71,8 @@ export async function startSketchServer({ entry, port = 0, outputDir, plotterUpl
   if (plotterUpload) validatePlotterUploadConfig(plotterUpload);
   const absoluteEntry = await realpath(resolve(entry));
   const sketchRoot = dirname(absoluteEntry);
-  const desiredOutput = resolve(outputDir ?? join(HERE, '..', '..', '.sketch-output', basename(sketchRoot), 'pins'));
+  const defaultOutputRoot = packedAssets ? (relative(sketchRoot, process.cwd()).startsWith('..') ? process.cwd() : dirname(sketchRoot)) : join(HERE, '..', '..');
+  const desiredOutput = resolve(outputDir ?? join(defaultOutputRoot, '.sketch-output', basename(sketchRoot), 'pins'));
   let existingAncestor = desiredOutput;
   let realAncestor: string;
   for (;;) {

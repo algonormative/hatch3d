@@ -1,14 +1,12 @@
 import { fork } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SketchRunnerError } from '../../packages/plot-host/src/errors.js';
+export { SketchRunnerError } from '../../packages/plot-host/src/errors.js';
 import type { FinishingOptions, Params, RenderResult, SketchMetadata } from '../../src/sketch/types.ts';
 
 export interface RenderOptions { entry: string; params?: Params; seed?: number; finishing?: FinishingOptions; timeoutMs?: number; signal?: AbortSignal }
 export interface InspectOptions { entry: string; timeoutMs?: number; signal?: AbortSignal }
-
-export class SketchRunnerError extends Error {
-  constructor(public readonly code: string, message: string) { super(message); this.name = 'SketchRunnerError'; }
-}
 
 type ChildResponse<T> = { ok: true; value: T } | { ok: false; error: { name: string; message: string } };
 
@@ -20,10 +18,10 @@ function run<T>(mode: 'inspect' | 'render', options: RenderOptions): Promise<T> 
   if (signal?.aborted) return Promise.reject(new SketchRunnerError('aborted', 'Sketch render was aborted'));
   // Vitest rewrites import.meta.url to a virtual module URL; the CLI uses the file URL.
   let childFile: string;
-  try { childFile = fileURLToPath(new URL('./child.ts', import.meta.url)); }
+  try { childFile = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './child.ts' : './child.js', import.meta.url)); }
   catch { childFile = resolve(process.cwd(), 'cli/sketch/child.ts'); }
   return new Promise<T>((resolvePromise, rejectPromise) => {
-    const child = fork(childFile, [], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const child = fork(childFile, [], { execArgv: ['--import', import.meta.resolve('tsx')], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let settled = false;
     let stderr = '';
     child.stdout?.resume(); // Sketch console output must not fill the pipe and stall rendering.

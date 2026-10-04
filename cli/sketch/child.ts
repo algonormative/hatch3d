@@ -2,11 +2,9 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { mapFinishingAssetMetadata, resolveFinishing } from '../../src/sketch/finishing.ts';
-import { validateSketch, resolveParams, finalParts } from '../../packages/plot-core/src/validation.ts';
-import { svgFor } from '../../packages/plot-core/src/svg.ts';
+import { mapFinishingAssetMetadata, resolveFinishing, validateSketch, resolveParams, finalParts, svgFor } from '../../packages/plot-core/src/index.ts';
 import { loadRasterAssets } from './raster.ts';
-import { resolveMacroParams } from '../../src/sketch/control-values.js';
+import { resolveMacroParams } from '../../packages/plot-core/src/index.ts';
 import type { Diagnostic, FinishingOptions, Params, RenderResult, SketchMetadata } from '../../src/sketch/types.ts';
 
 type Request = { mode: 'inspect' | 'render'; entry: string; params?: Params; seed?: number; finishing?: FinishingOptions };

@@ -1,6 +1,7 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { exportSketchPng, pngOptions, type PngTheme } from './sketch/export-png.ts';
 import { createCheckpoint, replayCheckpoint } from './sketch/checkpoint.ts';
 import { comparePreserved } from './sketch/preserve.ts';
@@ -168,7 +169,7 @@ export async function main(args: string[]): Promise<void> {
   console.log(JSON.stringify({ identity: result.identity, ...paths, diagnostics: result.diagnostics, stats: result.stats }));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     const code = error instanceof SketchRunnerError ? error.code : 'error';
     console.error(JSON.stringify({ error: { code, message: error instanceof Error ? error.message : String(error) } }));

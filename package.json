@@ -17,6 +17,8 @@
     "sketch": "tsx cli/sketch.ts",
     "sketch:typecheck": "tsc --project tsconfig.sketch.json",
     "plot-core:build": "npm run build --prefix packages/plot-core",
+    "plot-host:build": "npm run plot-core:build && npm run build --prefix packages/plot-host",
+    "plot-host:smoke": "npm run plot-host:build && npm run smoke --prefix packages/plot-host",
     "render:list": "tsx cli/render.ts --list",
     "render:info": "tsx cli/render.ts --info",
     "stats": "tsx cli/stats.ts",
