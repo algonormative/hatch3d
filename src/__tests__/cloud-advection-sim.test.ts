@@ -585,8 +585,8 @@ describe('cloud advection: numerical fixtures', () => {
   });
 
   it('bounds total work: cells x steps x substeps', () => {
-    // 316x316 = 99,856 cells, 3 substeps, 240 steps = 71.9M > 60M
-    const big = makeConfig({ cols: 316, rows: 316, diffusivity: 0.25, center: { x: 80, y: 80 }, radii: { x: 10, y: 10 } });
+    // 316x316 = 99,856 cells, 5 substeps, 240 steps = 119.8M > 90M
+    const big = makeConfig({ cols: 316, rows: 316, diffusivity: 0.35, center: { x: 80, y: 80 }, radii: { x: 10, y: 10 } });
     const t0 = performance.now();
     expect(() => simulate(big, [240])).toThrow(/cell updates/);
     const snap = initialSnapshot(big);

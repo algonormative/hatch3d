@@ -32,7 +32,8 @@ export const LIMITS = Object.freeze({
   maxCells: 100_000,
   maxSteps: 240,
   maxDiffusionSubsteps: 16,
-  maxWork: 60_000_000,
+  // The art grid (23,400 cells) at 240 steps and the 16-substep cap is 89.9M.
+  maxWork: 90_000_000,
 });
 
 /**

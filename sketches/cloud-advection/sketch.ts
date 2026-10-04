@@ -1,6 +1,7 @@
 import type { Sketch } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { extractMarks } from './extract.ts';
+import { LIMITS } from './model.ts';
 import { buildDomain, simulate } from './sim.ts';
 import { DT, WORLD, buildStudy } from './study.ts';
 
@@ -25,7 +26,7 @@ const sketch: Sketch = {
     { type: 'select', id: 'layout', label: 'Structure layout', default: 'orbit', options: ['span', 'orbit'], optionLabels: { span: 'Span (decks and piers)', orbit: 'Orbit (clusters around the core)' }, group: 'Structure', expensive: true },
     { type: 'slider', id: 'structureDensity', label: 'Structure density', default: 0.6, min: 0, max: 1, step: 0.01, group: 'Structure', expensive: true },
     { type: 'toggle', id: 'cloudEnabled', label: 'Draw advected cloud', default: true, group: 'Simulation' },
-    { type: 'slider', id: 'step', label: 'Time step', default: 30, min: 0, max: 120, step: 1, units: `steps of ${DT} s`, group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'step', label: 'Time step', default: 30, min: 0, max: LIMITS.maxSteps, step: 1, units: `steps of ${DT} s`, group: 'Simulation', expensive: true },
     { type: 'slider', id: 'windX', label: 'Wind X', default: -0.8, min: -3, max: 3, step: 0.1, units: 'm/s', group: 'Simulation', expensive: true },
     { type: 'slider', id: 'windY', label: 'Wind Y', default: 0.5, min: -3, max: 3, step: 0.1, units: 'm/s', group: 'Simulation', expensive: true },
     { type: 'slider', id: 'eddyX', label: 'Eddy X', default: 20, min: 0, max: WORLD.width, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
@@ -70,7 +71,7 @@ const sketch: Sketch = {
   draw(ctx) {
     const study = buildStudy(ctx);
     const enabled = ctx.params.cloudEnabled === true;
-    const step = Math.max(0, Math.min(120, Math.round(Number(ctx.params.step ?? 30))));
+    const step = Math.max(0, Math.min(LIMITS.maxSteps, Math.round(Number(ctx.params.step ?? 30))));
     // The off state never touches the simulation.
     const domain = enabled ? buildDomain(study.config) : null;
     const snapshot = enabled ? simulate(study.config, [step])[0] : null;
