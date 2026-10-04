@@ -79,12 +79,15 @@ export function memberDrawings(study: CloudStudy, pitchMm: number): MemberDrawin
     y0: Math.min(...ring.map(p => p.y)), y1: Math.max(...ring.map(p => p.y)),
   }));
   return study.structure.map((member, i) => {
+    // Stroke members (rays, ring bands, filaments) are drawn as given and never overlap one another.
+    if (member.strokes) return { outline: member.strokes.map(line => line.map(study.worldToArt)), hatch: [] };
     const ring = rings[i];
     const pitch = Math.max(pitchMm * member.pitch, 0.05) / study.fit.scale;
     let hatch = hatchPolygon(ring, member.hatchAngle, pitch, member.tonal);
     if (member.cross) hatch = hatch.concat(hatchPolygon(ring, member.hatchAngle + 1.15, pitch * 1.9, false));
     let outline: Point[][] = [[...ring, { ...ring[0] }]];
     for (let j = i + 1; j < rings.length; j++) {
+      if (study.structure[j].strokes) continue;
       const a = boxes[i], b = boxes[j];
       if (b.x1 < a.x0 || b.x0 > a.x1 || b.y1 < a.y0 || b.y0 > a.y1) continue;
       outline = outline.flatMap(path => subtractConvex(path, rings[j]));
@@ -526,7 +529,8 @@ export function extractMarks(
   const wisps = study.style === 'streaks' ? [] : hatchAtmosphere(bounds, cloudField, {
     spacing: marks.hatchSpacing / fit.scale, angle: marks.hatchAngle,
   });
-  const rings = study.structure.map(m => m.polygon.map(study.worldToArt));
+  // Only solid members cut the cloud by area; drawn-only marks keep just the clearance from their lines.
+  const rings = study.structure.filter(m => m.solid !== false).map(m => m.polygon.map(study.worldToArt));
   // Shared by contours and streaks: keep clear of visible members, then cut the quiet core.
   const finish = (paths: Point[][], minLength: number, spacing = 0): Point[][] => {
     const origin: number[] = [];

@@ -27,7 +27,7 @@ import { mapFinishingPoint, resolveFinishing } from '../../packages/plot-core/sr
 import type { FinishingOptions, Params } from '../../src/sketch/types.ts';
 import { studyContext } from './evidence.ts';
 import { advance, buildDomain, initialSnapshot, velocityAtTime } from './sim.ts';
-import type { CloudSnapshot } from './model.ts';
+import type { ActiveVortex, CloudSnapshot } from './model.ts';
 import sketch from './sketch.ts';
 import { buildStudy } from './study.ts';
 
@@ -265,24 +265,32 @@ async function main(): Promise<void> {
   const core = study.marks.core;
   const corePx = mapFinishingPoint(core.center, finishing);
   const coreSvg = `<circle cx="${f1(corePx.x * pxPerMm)}" cy="${f1(corePx.y * pxPerMm)}" r="${f1(core.radius * finishing.scale * pxPerMm)}" fill="none" stroke="#b5372a" stroke-width="2" stroke-dasharray="10 7"/>`;
-  const eddyName = (id: string): string => (id === 'eddy-a' ? 'A' : id === 'eddy-b' ? 'B' : id.replace('eddy-', ''));
-  /** Eddy rings at this frame's centres, a dotted trail of each past path, and an edge chevron when a centre is off the drawn area. */
+  /** Static `eddy-a` → A; `train-3` → T3. */
+  const eddyName = (key: string): string => (key === 'eddy-a' ? 'A' : key === 'eddy-b' ? 'B' : key.startsWith('train-') ? `T${key.slice(6)}` : key.replace('eddy-', ''));
+  /**
+   * Rings at this frame's ACTIVE vortices (spin from the sign of circulation), a dotted trail per vortex key
+   * (it ends when the key leaves the active list), a "+" flash on the frame where a key first appears, and an edge
+   * chevron for an eddy off the drawn area. Only on-page eddies and static eddies get a text label, so a train
+   * of a dozen does not clutter.
+   */
   const eddyLayer = (frame: Frame, frameIndex: number): string => {
     let out = '';
     const TRAIL_STEPS = 60;
-    config.vortices.forEach((v, k) => {
-      const name = eddyName(v.id);
-      // trail: centres of earlier frames within the last TRAIL_STEPS steps, ending at the current centre
+    const previous = frameIndex > 0 ? new Set(frames[frameIndex - 1].snapshot.vortices.map(v => v.key)) : null;
+    for (const v of frame.snapshot.vortices) {
+      const isTrain = v.key.startsWith('train-');
+      const name = eddyName(v.key);
+      // trail: the same key's centres in earlier frames within TRAIL_STEPS, stopping where the key was absent
       const trail: Array<[number, number]> = [];
       for (let i = frameIndex; i >= 0 && frame.step - frames[i].step <= TRAIL_STEPS; i--) {
-        const c = frames[i].snapshot.vortexCenters[k];
-        trail.unshift(toPx(c.x, c.y));
+        const prev = frames[i].snapshot.vortices.find(w => w.key === v.key);
+        if (!prev) break;
+        trail.unshift(toPx(prev.center.x, prev.center.y));
       }
       if (trail.length > 1 && trail.some((q, i) => i > 0 && Math.hypot(q[0] - trail[i - 1][0], q[1] - trail[i - 1][1]) > 0.5)) {
         out += `<polyline points="${trail.map(q => `${f1(q[0])},${f1(q[1])}`).join(' ')}" fill="none" stroke="#a02a6b" stroke-width="2.4" stroke-dasharray="1.5 6" stroke-linecap="round" opacity="0.55"/>`;
       }
-      const c = frame.snapshot.vortexCenters[k];
-      const [cx, cy] = toPx(c.x, c.y);
+      const [cx, cy] = toPx(v.center.x, v.center.y);
       const outside = cx < contentPx.x0 || cx > contentPx.x1 || cy < contentPx.y0 || cy > contentPx.y1;
       if (outside) {
         // chevron on the drawn-area edge, pointing at the eddy
@@ -293,10 +301,14 @@ async function main(): Promise<void> {
         const ex = mx + dx * t, ey = my + dy * t;
         const ang = Math.atan2(dy, dx);
         const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
-        const tip = [ex + ux * 16, ey + uy * 16], l = [ex - ux * 10 + nx * 14, ey - uy * 10 + ny * 14], r = [ex - ux * 10 - nx * 14, ey - uy * 10 - ny * 14];
-        out += `<polygon points="${f1(tip[0])},${f1(tip[1])} ${f1(l[0])},${f1(l[1])} ${f1(r[0])},${f1(r[1])}" fill="#a02a6b" stroke="#fbf9f3" stroke-width="2" stroke-linejoin="round"/>`
-          + `<text x="${f1(ex - ux * 22 + (ux > 0.3 ? -14 : ux < -0.3 ? 14 : 0))}" y="${f1(ey - uy * 22 + (uy > 0.3 ? -6 : 14))}" font-size="14" font-weight="700" fill="#7d1f52" stroke="#fbf9f3" stroke-width="4" paint-order="stroke" text-anchor="middle" font-family="${FONT}">${name} off page</text>`;
-        return;
+        const k = isTrain ? 0.6 : 1;
+        const tip = [ex + ux * 16 * k, ey + uy * 16 * k], l = [ex - ux * 10 * k + nx * 14 * k, ey - uy * 10 * k + ny * 14 * k], r = [ex - ux * 10 * k - nx * 14 * k, ey - uy * 10 * k - ny * 14 * k];
+        out += `<polygon points="${f1(tip[0])},${f1(tip[1])} ${f1(l[0])},${f1(l[1])} ${f1(r[0])},${f1(r[1])}" fill="#a02a6b" opacity="${isTrain ? 0.6 : 1}" stroke="#fbf9f3" stroke-width="2" stroke-linejoin="round"/>`;
+        if (previous && !previous.has(v.key)) out += `<circle cx="${f1(ex + ux * 4)}" cy="${f1(ey + uy * 4)}" r="20" fill="none" stroke="#e08a00" stroke-width="3"/>`;
+        if (!isTrain) {
+          out += `<text x="${f1(ex - ux * 22 + (ux > 0.3 ? -14 : ux < -0.3 ? 14 : 0))}" y="${f1(ey - uy * 22 + (uy > 0.3 ? -6 : 14))}" font-size="14" font-weight="700" fill="#7d1f52" stroke="#fbf9f3" stroke-width="4" paint-order="stroke" text-anchor="middle" font-family="${FONT}">${name} off page</text>`;
+        }
+        continue;
       }
       const r = Math.max(7, v.coreRadius * pxPerM);
       const sgn = v.circulation >= 0 ? 1 : -1; // positive circulation = clockwise on the y-down page
@@ -310,20 +322,26 @@ async function main(): Promise<void> {
       const nx = -ty, ny = tx, hs = 9;
       const head = `<polygon fill="#a02a6b" points="${f1(ex + tx * hs)},${f1(ey + ty * hs)} ${f1(ex - tx * 2 + nx * hs * 0.6)},${f1(ey - ty * 2 + ny * hs * 0.6)} ${f1(ex - tx * 2 - nx * hs * 0.6)},${f1(ey - ty * 2 - ny * hs * 0.6)}"/>`;
       out += `<circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(r)}" fill="rgba(255,255,255,0.35)" stroke="#a02a6b" stroke-width="2.2"/>${arc}${head}`
-        + `<text x="${f1(cx)}" y="${f1(cy + 5)}" font-size="14" font-weight="700" fill="#a02a6b" text-anchor="middle" font-family="${FONT}">${name}</text>`
-        + `<text x="${f1(cx + R + 10)}" y="${f1(cy + 5)}" font-size="14" font-weight="600" fill="#7d1f52" stroke="#fbf9f3" stroke-width="4" paint-order="stroke" stroke-linejoin="round" font-family="${FONT}">${name} Γ ${signed(v.circulation, 0)}</text>`;
-    });
+        + `<text x="${f1(cx)}" y="${f1(cy + 5)}" font-size="13" font-weight="700" fill="#a02a6b" text-anchor="middle" font-family="${FONT}">${name}</text>`;
+      // circulation label on every on-page eddy (the sign is the spin: + clockwise on the page)
+      out += `<text x="${f1(cx + R + 10)}" y="${f1(cy + 5)}" font-size="13" font-weight="600" fill="#7d1f52" stroke="#fbf9f3" stroke-width="4" paint-order="stroke" stroke-linejoin="round" font-family="${FONT}">${isTrain ? '' : `${name} `}Γ ${signed(v.circulation, 0)}</text>`;
+      // spawn flash: a "+" ring on the first frame this key appears
+      if (previous && !previous.has(v.key)) {
+        out += `<circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(R + 14)}" fill="none" stroke="#e08a00" stroke-width="3"/>`
+          + `<path d="M${f1(cx - R - 22)},${f1(cy)} h${f1(2 * R + 44)} M${f1(cx)},${f1(cy - R - 22)} v${f1(2 * R + 44)}" stroke="#e08a00" stroke-width="3" stroke-linecap="round"/>`;
+      }
+    }
     return out;
   };
   // Sparse velocity arrows every ~5 m: the prescribed field with the vortices at this frame's centres (faint).
   const ARROW_GRID = 5;
-  const arrowLayer = (centers: ReadonlyArray<{ x: number; y: number }>): string => {
+  const arrowLayer = (active: ReadonlyArray<ActiveVortex>): string => {
     let arrows = '';
     for (let y = ARROW_GRID / 2; y < config.domain.size.y; y += ARROW_GRID) {
       for (let x = ARROW_GRID / 2; x < config.domain.size.x; x += ARROW_GRID) {
         const [px, py] = toPx(x, y);
         if (px < contentPx.x0 - 20 || px > contentPx.x1 + 20 || py < contentPx.y0 - 20 || py > contentPx.y1 + 20) continue;
-        const v = velocityAtTime(config, centers, { x, y });
+        const v = velocityAtTime(config, active, { x, y });
         const speed = Math.hypot(v.x, v.y);
         const lenM = Math.min(4.2, 1.7 * speed); // metres of page-length for a given speed
         const L = lenM * pxPerM;
@@ -379,7 +397,7 @@ async function main(): Promise<void> {
 ${printed ? `<text x="${frameW - GUTTER}" y="30" font-size="22" font-weight="700" fill="${PRINT_COLOR}" text-anchor="end" font-family="${FONT}">PRINT ${frame.printIndex! + 1}/3 · step ${frame.step}</text>` : ''}
 <g transform="translate(${leftX} ${panelY})">
 <defs><clipPath id="pc"><rect width="${PANEL_W}" height="${panelH}"/></clipPath><clipPath id="cc"><rect x="${f1(contentPx.x0)}" y="${f1(contentPx.y0)}" width="${f1(contentPx.x1 - contentPx.x0)}" height="${f1(contentPx.y1 - contentPx.y0)}"/></clipPath></defs>
-<g clip-path="url(#pc)"><g clip-path="url(#cc)">${arrowLayer(frame.snapshot.vortexCenters)}${solids}</g>${staticLeftOver}${eddyLayer(frame, index)}${windArrow}
+<g clip-path="url(#pc)"><g clip-path="url(#cc)">${arrowLayer(frame.snapshot.vortices)}${solids}</g>${staticLeftOver}${eddyLayer(frame, index)}${windArrow}
 <rect x="12" y="12" width="276" height="86" rx="6" fill="rgba(251,249,243,0.9)"/>
 <text x="24" y="46" font-size="30" font-weight="700" fill="${INK}" font-family="${FONT}">step ${frame.step} · ${f1(timeS)} s</text>
 <text x="24" y="72" font-size="16" fill="${INK}" font-family="${FONT}">mass ${massNow.toFixed(1)} m² (step 0: ${massInitial.toFixed(1)})</text>
@@ -391,8 +409,8 @@ ${printed ? `<text x="${frameW - GUTTER}" y="30" font-size="22" font-weight="700
 <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#777" stroke-width="1"/>
 <g font-size="14" fill="#444c59" font-family="${FONT}">
 <rect x="${barX + 340}" y="${barY + 1}" width="16" height="14" fill="#4d5159"/><text x="${barX + 362}" y="${barY + 13}">solid member (absorbs)</text>
-<circle cx="${barX + 540}" cy="${barY + 8}" r="6.5" fill="none" stroke="#a02a6b" stroke-width="2"/><text x="${barX + 554}" y="${barY + 13}">eddy centre, spin on page, dotted trail</text>
-<line x1="${barX + 850}" y1="${barY + 8}" x2="${barX + 880}" y2="${barY + 8}" stroke="#b5372a" stroke-width="2" stroke-dasharray="6 4"/><text x="${barX + 888}" y="${barY + 13}">quiet core</text>
+<circle cx="${barX + 540}" cy="${barY + 8}" r="6.5" fill="none" stroke="#a02a6b" stroke-width="2"/><text x="${barX + 554}" y="${barY + 13}">eddy: spin on page, dotted trail, orange + = spawned</text>
+<line x1="${barX + 930}" y1="${barY + 8}" x2="${barX + 960}" y2="${barY + 8}" stroke="#b5372a" stroke-width="2" stroke-dasharray="6 4"/><text x="${barX + 968}" y="${barY + 13}">quiet core</text>
 <line x1="${barX + 340}" y1="${barY + 34}" x2="${barX + 366}" y2="${barY + 34}" stroke="#2d4a6b" stroke-width="1.6" opacity="0.5"/><text x="${barX + 374}" y="${barY + 39}">prescribed velocity (every ${ARROW_GRID} m)</text>
 <rect x="${barX + 640}" y="${barY + 26}" width="30" height="16" fill="none" stroke="#8a8f99" stroke-dasharray="2 3"/><text x="${barX + 678}" y="${barY + 39}">drawn area (washed outside)</text>
 </g>

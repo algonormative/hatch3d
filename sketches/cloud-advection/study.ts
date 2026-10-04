@@ -10,6 +10,9 @@ export const GRID_SPACING = 0.4;
 export const DT = 0.5;
 /** Contour feature size handed to the hatcher, final page mm. */
 export const FEATURE_SCALE_MM = 30;
+/** Eddy train bookkeeping constants: how far outside the frame an eddy may drift before it is removed, and the active cap. */
+const TRAIN_REMOVE_MARGIN_M = 8;
+const TRAIN_MAX_ACTIVE = 10;
 /** Preferred wisp tangent, radians. */
 export const HATCH_ANGLE = -0.38;
 
@@ -79,9 +82,13 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
     return { x: (page.x - offset.x) / pageMmPerM, y: (page.y - offset.y) / pageMmPerM };
   };
 
-  const layout: LayoutId = (['span', 'colonnade', 'portal', 'ring'] as const).find(id => id === ctx.params.layout) ?? 'orbit';
-  const structure = buildStructure(ctx.random('structure'), layout, numeric(ctx, 'structureDensity', 0.6, 0, 1), Math.round(numeric(ctx, 'ringCount', 8, 4, 12)));
-  const solids: SolidRegion[] = structure.map(member => ({ id: member.id, kind: 'solid', polygon: member.polygon }));
+  const layout: LayoutId = (['span', 'colonnade', 'portal', 'ring', 'sun'] as const).find(id => id === ctx.params.layout) ?? 'orbit';
+  const structure = buildStructure(ctx.random('structure'), layout, numeric(ctx, 'structureDensity', 0.6, 0, 1), Math.round(numeric(ctx, 'ringCount', 8, 4, 12)), {
+    rays: Math.round(numeric(ctx, 'sunRays', 22, 12, 72)), inner: numeric(ctx, 'sunInner', 10.5, 10, 16), reach: numeric(ctx, 'sunReach', 20, 14, 40), solidRings: ctx.params.sunSolidRings === true,
+    alternate: numeric(ctx, 'sunAlternate', 0.55, 0.2, 1), rings: Math.round(numeric(ctx, 'sunRings', 2, 0, 3)), noise: numeric(ctx, 'sunNoise', 0.15, 0, 1),
+    random: ctx.random('sun-noise'),
+  });
+  const solids: SolidRegion[] = structure.filter(member => member.solid !== false).map(member => ({ id: member.id, kind: 'solid', polygon: member.polygon }));
 
   const eddyCirculation = numeric(ctx, 'eddyCirculation', 30, -120, 120);
   const eddyCore = numeric(ctx, 'eddyCore', 3, 0.5, 12);
@@ -96,6 +103,7 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
   }
   const sourceSize = numeric(ctx, 'sourceSize', 8, 1, 20);
   const smokeRandom = ctx.random('smoke-source');
+  const trainOn = ctx.params.trainEnabled === true;
   const boundaryMode = ctx.params.boundary === 'closed' || ctx.params.boundary === 'inflow' ? ctx.params.boundary : 'open';
   const config: CloudStudyConfig = {
     domain: { origin: { x: 0, y: 0 }, size: { x: WORLD.width, y: WORLD.height } },
@@ -118,7 +126,15 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
     },
     solids,
     // Eddies stay put unless asked; `fixed` is the sim's default and is left out of the config (and the hash).
-    ...(ctx.params.eddyDrift === 'wind' || ctx.params.eddyDrift === 'kirchhoff' ? { eddyDrift: ctx.params.eddyDrift } : {}),
+    // An eddy train needs moving centres: with `fixed` selected it runs under `kirchhoff` (documented in the brief).
+    ...(trainOn ? { eddyDrift: ctx.params.eddyDrift === 'wind' ? 'wind' as const : 'kirchhoff' as const }
+      : ctx.params.eddyDrift === 'wind' || ctx.params.eddyDrift === 'kirchhoff' ? { eddyDrift: ctx.params.eddyDrift } : {}),
+    ...(trainOn ? { eddyTrain: {
+      id: 'eddy-train' as const, period: Math.round(numeric(ctx, 'trainPeriod', 20, 8, 60)), firstStep: 0,
+      circulation: numeric(ctx, 'trainCirculation', 40, 10, 120), coreRadius: numeric(ctx, 'trainCore', 2.5, 1, 6),
+      alternate: ctx.params.trainAlternate !== false, lateralJitter: numeric(ctx, 'trainJitter', 0.3, 0, 1), timingJitter: 0,
+      seed: uint32(ctx.random('eddy-train')), removeMargin: TRAIN_REMOVE_MARGIN_M, maxActive: TRAIN_MAX_ACTIVE,
+    } } : {}),
     // Upstream weather arrives through the upwind edges only in `inflow` mode; it is hashed whenever present.
     ...(boundaryMode === 'inflow' ? { front: {
       id: 'weather-front' as const, kind: 'frozen-field' as const,

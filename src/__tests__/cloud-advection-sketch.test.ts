@@ -6,7 +6,7 @@ import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import { MEMBER_CLEARANCE_MM, distanceToSegment, extractMarks, parseCloudStateId } from '../../sketches/cloud-advection/extract.ts';
 import { studyContext } from '../../sketches/cloud-advection/evidence.ts';
 import { buildDomain, configHashes, simulate } from '../../sketches/cloud-advection/sim.ts';
-import { CORE_CENTER, CORE_KEEP_OUT, WORLD, distanceToPolygon, colonnadeLayout, portalLayout, ringLayout } from '../../sketches/cloud-advection/layout.ts';
+import { CORE_CENTER, CORE_KEEP_OUT, WORLD, distanceToPolygon, colonnadeLayout, portalLayout, ringLayout, sunLayout } from '../../sketches/cloud-advection/layout.ts';
 import sketch from '../../sketches/cloud-advection/sketch.ts';
 import { buildStudy } from '../../sketches/cloud-advection/study.ts';
 import type { FinishingOptions, Params } from '../sketch/types.ts';
@@ -40,7 +40,7 @@ describe('Prescribed Weather sketch', () => {
     expect(navigators[4]).toMatchObject({ axes: ['sourceX', 'sourceY', 'sourceSize'], axisLabels: ['X', 'Y', 'Size'] });
     expect((metadata.macros ?? []).map(m => m.control)).toEqual(['turbulence', 'drift']);
     const ids = new Set(metadata.controls.map(c => c.id));
-    for (const id of ['layout', 'ringCount', 'eddyDrift', 'markStyle', 'streakPen', 'streakSpacing', 'sourceEnabled', 'contourMinSpacing', 'structureDensity', 'frontSoftness', 'frontAmplitude', 'frontScale', 'frontCoverage', 'fillInterior', 'cloudEnabled', 'step', 'windX', 'windY', 'eddyX', 'eddyY', 'eddyCirculation', 'eddyCore', 'dispersion', 'boundary',
+    for (const id of ['layout', 'ringCount', 'sunRays', 'sunInner', 'sunReach', 'sunAlternate', 'sunRings', 'sunNoise', 'trainEnabled', 'trainPeriod', 'trainCirculation', 'trainCore', 'trainAlternate', 'trainJitter', 'eddyDrift', 'markStyle', 'streakPen', 'streakSpacing', 'sourceEnabled', 'contourMinSpacing', 'structureDensity', 'frontSoftness', 'frontAmplitude', 'frontScale', 'frontCoverage', 'fillInterior', 'cloudEnabled', 'step', 'windX', 'windY', 'eddyX', 'eddyY', 'eddyCirculation', 'eddyCore', 'dispersion', 'boundary',
       'sourceX', 'sourceY', 'sourceSize', 'referenceDensity', 'cloudHatchPitch', 'cloudPen', 'obscure', 'coreRadius', 'coreX', 'coreY', 'hatchPitch']) {
       expect(ids.has(id), id).toBe(true);
     }
@@ -522,5 +522,135 @@ describe('Prescribed Weather sketch', () => {
       expect(up).toBeGreaterThan(0.2);
       expect(behind).toBeLessThan(up * 0.35);
     }, 60000);
+  });
+
+  describe('sun layout', () => {
+    type P = { x: number; y: number };
+    const stream = (seed: number) => studyContext({ seed, params: {} }).random('sun-noise');
+    const sun = (noise: number, over: Partial<Parameters<typeof sunLayout>[0]> = {}, seed = 211) =>
+      sunLayout({ rays: 32, inner: 12, reach: 30, alternate: 0.55, rings: 2, noise, random: stream(seed), ...over });
+    const rotate = (ring: P[], by: number): P[] => ring.map(p => ({
+      x: CORE_CENTER.x + (p.x - CORE_CENTER.x) * Math.cos(by) - (p.y - CORE_CENTER.y) * Math.sin(by),
+      y: CORE_CENTER.y + (p.x - CORE_CENTER.x) * Math.sin(by) + (p.y - CORE_CENTER.y) * Math.cos(by),
+    }));
+    const close = (a: P[], b: P[]): boolean => a.length === b.length && a.every((p, i) => Math.hypot(p.x - b[i].x, p.y - b[i].y) < 1e-9);
+
+    it('has exact rotational symmetry at noise 0 (by two ray steps) and is seed independent', () => {
+      const n = 32;
+      const members = sun(0);
+      const rays = members.filter(m => m.kind === 'ray');
+      expect(rays).toHaveLength(n);
+      rays.forEach((m, k) => {
+        // Even rays are long, odd rays short: each repeats every two steps.
+        expect(close(m.polygon, rotate(rays[k % 2].polygon, ((k - (k % 2)) * 2 * Math.PI) / n)), m.name).toBe(true);
+      });
+      for (const ring of [1, 2]) {
+        const arcs = members.filter(m => m.name.startsWith(`ring${ring}-`));
+        expect(arcs).toHaveLength(n);
+        // Arcs sit between a long and a short ray, so they repeat every two steps like the rays.
+        arcs.forEach((m, k) => expect(close(m.polygon, rotate(arcs[k % 2].polygon, ((k - (k % 2)) * 2 * Math.PI) / n)), m.name).toBe(true));
+      }
+      const spikes = members.filter(m => m.kind === 'spike');
+      expect(spikes).toHaveLength(n * 3);
+      expect(sun(0, {}, 1)).toEqual(sun(0, {}, 999));
+      expect(new Set(members.map(m => m.pen)).size).toBeLessThanOrEqual(2);
+      expect(members.every(m => m.pen !== 'cyan')).toBe(true);
+    });
+
+    it('is deterministic with noise, perturbs the layout, and never reaches the core', () => {
+      expect(sun(0.4)).toEqual(sun(0.4));
+      expect(sun(0.4, {}, 1)).not.toEqual(sun(0.4, {}, 2));
+      expect(sun(0.4)).not.toEqual(sun(0));
+      // The noise control scales fixed draws, so the member list keeps its identity.
+      expect(sun(0.4).length).toBeGreaterThan(sun(0).length * 0.8);
+      for (const noise of [0, 0.15, 1]) {
+        for (const seed of [1, 2, 3]) {
+          for (const m of sun(noise, { rays: 24, rings: 3 }, seed)) {
+            expect(distanceToPolygon(m.polygon, CORE_CENTER), `${m.name} noise ${noise}`).toBeGreaterThanOrEqual(CORE_KEEP_OUT);
+          }
+        }
+      }
+    });
+
+    it('tapers rays to a tip thinner than a grid cell, draws parallel strokes that end as the wedge narrows', () => {
+      const study = buildStudy(studyContext({ seed: 211, params: { layout: 'sun', sunNoise: 0.4 } }));
+      const rays = study.structure.filter(m => m.kind === 'ray');
+      expect(rays.length).toBe(22);
+      const cell = study.config.transforms.worldToGrid.spacing;
+      for (const ray of rays) {
+        const [a, tip, b] = ray.polygon;
+        const baseWidth = Math.hypot(a.x - b.x, a.y - b.y);
+        expect(baseWidth).toBeGreaterThan(cell);
+        // Width of the wedge a cell-length short of the tip is already narrower than a cell.
+        const length = Math.hypot(tip.x - (a.x + b.x) / 2, tip.y - (a.y + b.y) / 2);
+        expect((baseWidth * cell) / length).toBeLessThan(cell);
+        const lines = ray.strokes!;
+        expect(lines.length).toBeGreaterThanOrEqual(1);
+        const lengths = lines.map(l => Math.hypot(l[1].x - l[0].x, l[1].y - l[0].y));
+        expect(Math.max(...lengths)).toBeCloseTo(length, 6);
+        if (lines.length > 1) expect(Math.min(...lengths)).toBeLessThan(Math.max(...lengths) * 0.99);
+      }
+    });
+
+    it('wires the controls, stays within the path budget, and lets wakes form behind thin rays', async () => {
+      const sunParams: Params = { layout: 'sun', sunRays: 48, sunRings: 3, sunNoise: 0.4 };
+      const off = await render(config('off'), sunParams);
+      expect(off.stats.pathCount).toBeLessThanOrEqual(2500);
+      expect(cloud(off)).toEqual([]);
+      const study = buildStudy(studyContext({ seed: 211, params: { ...sunParams, sunRays: 48 } }));
+      expect(study.structure.filter(m => m.kind === 'ray')).toHaveLength(48);
+      expect(study.structure.some(m => m.kind === 'spike')).toBe(true);
+      expect(study.structure.filter(m => m.name.startsWith('ring')).length).toBeGreaterThan(48 * 2);
+      // Rings 0 gives no bands and no corona.
+      expect(buildStudy(studyContext({ seed: 211, params: { layout: 'sun', sunRings: 0 } })).structure.every(m => m.kind === 'ray')).toBe(true);
+      // The presentation configuration keeps every solid's strokes inside the structure budget at the maximum ray count.
+      const dense = await render(config('off'), { layout: 'sun', sunRays: 72, sunRings: 3 });
+      expect(dense.stats.pathCount).toBeLessThanOrEqual(2500);
+    }, 60000);
+
+    it('draws the corona (and, by default, the ring bands) without making solids; sunSolidRings turns the bands solid', () => {
+      const params = { layout: 'sun', sunRays: 22, sunRings: 2 };
+      const drawnOnly = buildStudy(studyContext({ seed: 211, params }));
+      const solidIds = new Set(drawnOnly.config.solids.map(solid => solid.id));
+      const rays = drawnOnly.structure.filter(m => m.kind === 'ray');
+      const arcs = drawnOnly.structure.filter(m => m.kind === 'arc');
+      const spikes = drawnOnly.structure.filter(m => m.kind === 'spike');
+      expect(rays).toHaveLength(22);
+      expect(arcs.length).toBeGreaterThan(22);
+      expect(spikes.length).toBeGreaterThan(0);
+      // Only the rays are in the simulation; everything else is drawn only (and is still drawn).
+      expect([...solidIds].sort()).toEqual(rays.map(m => m.id).sort());
+      expect(drawnOnly.config.solids).toHaveLength(22);
+      for (const m of [...arcs, ...spikes]) { expect(m.solid).toBe(false); expect(m.strokes!.length).toBeGreaterThan(0); }
+      const solidRings = buildStudy(studyContext({ seed: 211, params: { ...params, sunSolidRings: true } }));
+      expect(solidRings.config.solids).toHaveLength(22 + arcs.length);
+      expect(solidRings.config.solids.some(solid => solid.id.includes('spike'))).toBe(false);
+      expect(configHashes(solidRings.config).stateKey).not.toBe(configHashes(drawnOnly.config).stateKey);
+      // Ring arcs fill at most half of their sector, so there is a gap for the weather between arcs.
+      const angleOf = (poly: { x: number; y: number }[]) => poly.map(p => Math.atan2(p.y - CORE_CENTER.y, p.x - CORE_CENTER.x));
+      const first = angleOf(arcs.find(m => m.name === 'ring1-01')!.polygon);
+      const span = Math.max(...first) - Math.min(...first);
+      expect(span).toBeLessThan(((2 * Math.PI) / 22) * 0.55);
+      // The whole sun sits inside the content width with room to spare (outer extent below 22 m of the 24 m half-width).
+      const reach = Math.max(...drawnOnly.structure.flatMap(m => m.polygon.map(p => Math.hypot(p.x - CORE_CENTER.x, p.y - CORE_CENTER.y))));
+      expect(reach).toBeLessThan(22);
+    });
+
+    it('wires the eddy train: controls reach the config, fixed drift is coerced, and the train changes the state', () => {
+      const base = { ...config('step-30').params, layout: 'sun' };
+      const plain = buildStudy(studyContext({ seed: 211, params: base }));
+      expect(plain.config.eddyTrain).toBeUndefined();
+      const train = buildStudy(studyContext({ seed: 211, params: { ...base, trainEnabled: true, trainPeriod: 24, trainCirculation: 55, trainCore: 3, trainAlternate: false, trainJitter: 0.6 } }));
+      expect(train.config.eddyTrain).toMatchObject({ id: 'eddy-train', period: 24, circulation: 55, coreRadius: 3, alternate: false, lateralJitter: 0.6, timingJitter: 0 });
+      expect(Number.isInteger(train.config.eddyTrain!.seed)).toBe(true);
+      expect(train.config.eddyDrift).toBe('kirchhoff');
+      expect(buildStudy(studyContext({ seed: 211, params: { ...base, trainEnabled: true, eddyDrift: 'wind' } })).config.eddyDrift).toBe('wind');
+      expect(configHashes(train.config).stateKey).not.toBe(configHashes(plain.config).stateKey);
+      const other = buildStudy(studyContext({ seed: 212, params: { ...base, trainEnabled: true } }));
+      expect(other.config.eddyTrain!.seed).not.toBe(train.config.eddyTrain!.seed);
+      // Mark-only changes still leave the train's state alone.
+      const marked = buildStudy(studyContext({ seed: 211, params: { ...base, trainEnabled: true, trainPeriod: 24, trainCirculation: 55, trainCore: 3, trainAlternate: false, trainJitter: 0.6, obscure: 0.3, cloudHatchPitch: 3 } }));
+      expect(configHashes(marked.config).stateKey).toBe(configHashes(train.config).stateKey);
+    });
   });
 });

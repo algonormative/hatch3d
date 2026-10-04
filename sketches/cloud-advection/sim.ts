@@ -15,7 +15,7 @@
  * traces that end farther out read zero anyway.
  */
 import { LIMITS, MODEL, SNAPSHOT_SCHEMA } from './model.ts';
-import type { CloudSnapshot, CloudStudyConfig, EddyDrift, SnapshotHashes, Vec2, WeatherFront } from './model.ts';
+import type { ActiveVortex, CloudSnapshot, CloudStudyConfig, EddyDrift, SnapshotHashes, Vec2, WeatherFront } from './model.ts';
 
 // ---------------------------------------------------------------- hashing
 
@@ -86,6 +86,7 @@ export function configHashes(config: CloudStudyConfig): SnapshotHashes {
     vortices: config.vortices,
     front: config.front, // omitted from the canonical form when absent
     eddyDrift: driftOf(config) === 'fixed' ? undefined : config.eddyDrift, // fixed (or absent) is never hashed
+    eddyTrain: config.eddyTrain, // omitted from the canonical form when absent
     source: {
       amplitude: config.source.amplitude,
       noiseScale: config.source.noiseScale,
@@ -98,26 +99,29 @@ export function configHashes(config: CloudStudyConfig): SnapshotHashes {
 
 // --------------------------------------------------------------- velocity
 
-interface VortexTable { gam: number[]; core2: number[] }
+/** Flat vortex field for fast velocity evaluation (same arithmetic as the kernel in the docs). */
+interface VField { n: number; x: Float64Array; y: Float64Array; gam: Float64Array; core2: Float64Array }
 
-function vortexTable(config: CloudStudyConfig): VortexTable {
-  return {
-    gam: config.vortices.map((v) => v.circulation / (2 * Math.PI)),
-    core2: config.vortices.map((v) => v.coreRadius * v.coreRadius),
-  };
+function toField(vs: ReadonlyArray<ActiveVortex>): VField {
+  const n = vs.length;
+  const f: VField = { n, x: new Float64Array(n), y: new Float64Array(n), gam: new Float64Array(n), core2: new Float64Array(n) };
+  for (let i = 0; i < n; i++) {
+    f.x[i] = vs[i].center.x;
+    f.y[i] = vs[i].center.y;
+    f.gam[i] = vs[i].circulation / (2 * Math.PI);
+    f.core2[i] = vs[i].coreRadius * vs[i].coreRadius;
+  }
+  return f;
 }
 
-/** wind + Σ regularized vortices located at `centers`; writes into `out`. */
-function velocityInto(
-  wx: number, wy: number, tab: VortexTable, centers: ReadonlyArray<Vec2>,
-  px: number, py: number, out: Vec2,
-): void {
+/** wind + Σ regularized vortices of `f`; writes into `out`. */
+function velocityInto(wx: number, wy: number, f: VField, px: number, py: number, out: Vec2): void {
   let vx = wx;
   let vy = wy;
-  for (let i = 0; i < centers.length; i++) {
-    const dx = px - centers[i].x;
-    const dy = py - centers[i].y;
-    const k = tab.gam[i] / (dx * dx + dy * dy + tab.core2[i]);
+  for (let i = 0; i < f.n; i++) {
+    const dx = px - f.x[i];
+    const dy = py - f.y[i];
+    const k = f.gam[i] / (dx * dx + dy * dy + f.core2[i]);
     vx += k * -dy;
     vy += k * dx;
   }
@@ -125,19 +129,19 @@ function velocityInto(
   out.y = vy;
 }
 
-/** Velocity (m/s) for the INITIAL vortex layout of the config. */
+/** Velocity (m/s) for the INITIAL vortex layout (static vortices plus any train eddy spawned at step 0). */
 export function velocityAt(config: CloudStudyConfig, p: Vec2): Vec2 {
-  return velocityAtTime(config, config.vortices.map((v) => v.center), p);
+  return velocityAtTime(config, initialVortices(config), p);
 }
 
 /**
- * Velocity (m/s) with the vortices at the given centres (see `vortexCentersAt`;
- * note the density backtrace of a step uses the midpoint centres, see EddyDrift).
+ * Velocity (m/s) for an active vortex list, e.g. `snapshot.vortices` or
+ * `vortexStateAt(config, step)`. Note the density backtrace of a step uses the
+ * midpoint centres of that step, see EddyDrift.
  */
-export function velocityAtTime(config: CloudStudyConfig, centers: ReadonlyArray<Vec2>, p: Vec2): Vec2 {
-  if (centers.length !== config.vortices.length) throw new RangeError('centers must have one entry per vortex');
+export function velocityAtTime(config: CloudStudyConfig, vortices: ReadonlyArray<ActiveVortex>, p: Vec2): Vec2 {
   const out = { x: 0, y: 0 };
-  velocityInto(config.wind.velocity.x, config.wind.velocity.y, vortexTable(config), centers, p.x, p.y, out);
+  velocityInto(config.wind.velocity.x, config.wind.velocity.y, toField(vortices), p.x, p.y, out);
   return out;
 }
 
@@ -145,49 +149,161 @@ function driftOf(config: CloudStudyConfig): EddyDrift {
   return config.eddyDrift ?? 'fixed';
 }
 
-const isMoving = (config: CloudStudyConfig): boolean => driftOf(config) !== 'fixed' && config.vortices.length > 0;
+const isMoving = (config: CloudStudyConfig): boolean =>
+  driftOf(config) !== 'fixed' && (config.vortices.length > 0 || config.eddyTrain !== undefined);
 
-/** One RK2 (midpoint) step of the vortex centres at the fixed dt. Shared by every replay path. */
-function stepCenters(config: CloudStudyConfig, tab: VortexTable, centers: ReadonlyArray<Vec2>): Vec2[] {
+const copyVortex = (v: ActiveVortex): ActiveVortex => ({
+  key: v.key, center: { x: v.center.x, y: v.center.y }, circulation: v.circulation, coreRadius: v.coreRadius,
+});
+
+// ------------------------------------------------------------- eddy train
+
+export interface TrainSpawn {
+  /** Spawn index k (key `train-<k>`). */
+  index: number;
+  /** Step at which the eddy first exists in the state. */
+  step: number;
+  center: Vec2;
+  /** Signed circulation. */
+  circulation: number;
+}
+
+/** Upwind edge: most negative outward-normal · wind; ties in the order left, right, top, bottom. */
+function upwindEdge(wind: Vec2): 'left' | 'right' | 'top' | 'bottom' {
+  const dots: Array<['left' | 'right' | 'top' | 'bottom', number]> = [
+    ['left', -wind.x], ['right', wind.x], ['top', -wind.y], ['bottom', wind.y],
+  ];
+  let best = dots[0];
+  for (const d of dots) if (d[1] < best[1]) best = d;
+  return best[0];
+}
+
+function trainSchedule(config: CloudStudyConfig): TrainSpawn[] {
+  const t = config.eddyTrain;
+  if (!t) return [];
+  const { origin, size } = config.domain;
+  const edge = upwindEdge(config.wind.velocity);
+  const out: TrainSpawn[] = [];
+  for (let k = 0; ; k++) {
+    const J = t.timingJitter;
+    const jitter = J === 0 ? 0 : Math.min(2 * J, Math.floor(hashNoise(t.seed, k, 0x51) * (2 * J + 1))) - J;
+    const step = t.firstStep + k * t.period + jitter;
+    if (step > LIMITS.maxSteps) break;
+    const r = 2 * hashNoise(t.seed, k, 0x77) - 1;
+    const sign = t.alternate && k % 2 === 1 ? -1 : 1;
+    let center: Vec2;
+    if (edge === 'left' || edge === 'right') {
+      const y = origin.y + size.y / 2 + t.lateralJitter * r * (size.y / 2);
+      center = { x: edge === 'left' ? origin.x - t.coreRadius : origin.x + size.x + t.coreRadius, y };
+    } else {
+      const x = origin.x + size.x / 2 + t.lateralJitter * r * (size.x / 2);
+      center = { x, y: edge === 'top' ? origin.y - t.coreRadius : origin.y + size.y + t.coreRadius };
+    }
+    out.push({ index: k, step, center, circulation: sign * t.circulation });
+  }
+  return out;
+}
+
+/** Every spawn of the config's eddy train through LIMITS.maxSteps, in spawn order (empty without a train). */
+export function eddyTrainSpawns(config: CloudStudyConfig): TrainSpawn[] {
+  validateConfig(config);
+  return trainSchedule(config).map((s) => ({ ...s, center: { ...s.center } }));
+}
+
+const staticVortices = (config: CloudStudyConfig): ActiveVortex[] => config.vortices.map((v) => ({
+  key: v.id, center: { x: v.center.x, y: v.center.y }, circulation: v.circulation, coreRadius: v.coreRadius,
+}));
+
+const spawnVortex = (sp: TrainSpawn, coreRadius: number): ActiveVortex => ({
+  key: `train-${sp.index}`, center: { x: sp.center.x, y: sp.center.y }, circulation: sp.circulation, coreRadius,
+});
+
+function initialVortices(config: CloudStudyConfig, schedule: TrainSpawn[] = trainSchedule(config)): ActiveVortex[] {
+  const out = staticVortices(config);
+  const train = config.eddyTrain;
+  if (train) for (const sp of schedule) if (sp.step === 0) out.push(spawnVortex(sp, train.coreRadius));
+  return out;
+}
+
+/** One RK2 (midpoint) step of every active vortex at the fixed dt. */
+function stepVortices(config: CloudStudyConfig, vs: ReadonlyArray<ActiveVortex>): ActiveVortex[] {
   const { dt } = config.settings;
   const U = config.wind.velocity;
   const kirchhoff = driftOf(config) === 'kirchhoff';
-  const m = centers.length;
-  const velocities = (cs: ReadonlyArray<Vec2>): Vec2[] => cs.map((c, i) => {
+  const f = toField(vs);
+  const m = vs.length;
+  const velocities = (xs: number[], ys: number[]): Vec2[] => xs.map((cx, i) => {
     let vx = U.x;
     let vy = U.y;
     if (kirchhoff) {
       for (let k = 0; k < m; k++) {
         if (k === i) continue; // no self-induction
-        const dx = c.x - cs[k].x;
-        const dy = c.y - cs[k].y;
-        const kk = tab.gam[k] / (dx * dx + dy * dy + tab.core2[k]);
+        const dx = cx - xs[k];
+        const dy = ys[i] - ys[k];
+        const kk = f.gam[k] / (dx * dx + dy * dy + f.core2[k]);
         vx += kk * -dy;
         vy += kk * dx;
       }
     }
     return { x: vx, y: vy };
   });
-  const k1 = velocities(centers);
-  const mid = centers.map((c, i) => ({ x: c.x + 0.5 * dt * k1[i].x, y: c.y + 0.5 * dt * k1[i].y }));
-  const k2 = velocities(mid);
-  return centers.map((c, i) => ({ x: c.x + dt * k2[i].x, y: c.y + dt * k2[i].y }));
+  const xs = vs.map((v) => v.center.x);
+  const ys = vs.map((v) => v.center.y);
+  const k1 = velocities(xs, ys);
+  const k2 = velocities(xs.map((x, i) => x + 0.5 * dt * k1[i].x), ys.map((y, i) => y + 0.5 * dt * k1[i].y));
+  return vs.map((v, i) => ({
+    key: v.key, circulation: v.circulation, coreRadius: v.coreRadius,
+    center: { x: xs[i] + dt * k2[i].x, y: ys[i] + dt * k2[i].y },
+  }));
 }
 
 /**
- * Vortex centres at an integer step: a deterministic replay of the same
- * integrator the stepper uses, so it is bitwise equal to a snapshot's centres.
+ * State transition n → n+1: move all eddies (RK2), remove train eddies beyond
+ * removeMargin, then spawn the eddy scheduled for step n+1 (evicting the oldest
+ * train eddy at maxActive). `mid` is the midpoint layout the backtrace uses.
  */
-export function vortexCentersAt(config: CloudStudyConfig, step: number): Vec2[] {
+function advanceState(
+  config: CloudStudyConfig, schedule: TrainSpawn[], active: ReadonlyArray<ActiveVortex>, n: number,
+): { next: ActiveVortex[]; mid: ActiveVortex[] } {
+  const moved = stepVortices(config, active);
+  const mid = active.map((v, i) => ({
+    key: v.key, circulation: v.circulation, coreRadius: v.coreRadius,
+    center: { x: 0.5 * (v.center.x + moved[i].center.x), y: 0.5 * (v.center.y + moved[i].center.y) },
+  }));
+  const train = config.eddyTrain;
+  if (!train) return { next: moved, mid };
+  const S = config.vortices.length;
+  const { origin, size } = config.domain;
+  const x1 = origin.x + size.x;
+  const y1 = origin.y + size.y;
+  let next = moved.filter((v, i) => {
+    if (i < S) return true; // static vortices are never removed
+    const dx = Math.max(origin.x - v.center.x, 0, v.center.x - x1);
+    const dy = Math.max(origin.y - v.center.y, 0, v.center.y - y1);
+    return Math.hypot(dx, dy) <= train.removeMargin;
+  });
+  const spawn = schedule.find((sp) => sp.step === n + 1);
+  if (spawn) {
+    if (next.length - S >= train.maxActive) next = [...next.slice(0, S), ...next.slice(S + 1)];
+    next.push(spawnVortex(spawn, train.coreRadius));
+  }
+  return { next, mid };
+}
+
+/**
+ * Active vortex list at an integer step: a deterministic replay of the same
+ * transition the stepper uses, so it is bitwise equal to a snapshot's list.
+ */
+export function vortexStateAt(config: CloudStudyConfig, step: number): ActiveVortex[] {
   validateConfig(config);
   if (!Number.isInteger(step) || step < 0 || step > LIMITS.maxSteps) {
     throw new RangeError(`step must be an integer in [0, ${LIMITS.maxSteps}]`);
   }
-  let centers = config.vortices.map((v) => ({ x: v.center.x, y: v.center.y }));
-  if (!isMoving(config)) return centers;
-  const tab = vortexTable(config);
-  for (let s = 0; s < step; s++) centers = stepCenters(config, tab, centers);
-  return centers;
+  const schedule = trainSchedule(config);
+  let active = initialVortices(config, schedule);
+  if (!isMoving(config)) return active;
+  for (let n = 0; n < step; n++) active = advanceState(config, schedule, active, n).next;
+  return active;
 }
 
 // ------------------------------------------------------------ weather front
@@ -356,6 +472,32 @@ function validateConfig(config: CloudStudyConfig): void {
   diffusionSubsteps(settings, g.spacing);
   if (settings.boundary !== 'open' && settings.boundary !== 'closed' && settings.boundary !== 'inflow') {
     throw new RangeError("settings.boundary must be 'open', 'closed' or 'inflow'");
+  }
+  if (config.eddyTrain) {
+    const t = config.eddyTrain;
+    if (driftOf(config) === 'fixed') throw new RangeError("eddyTrain requires eddyDrift 'wind' or 'kirchhoff'");
+    const int = (name: string, v: number, min: number): void => {
+      finite(name, v);
+      if (!Number.isInteger(v) || v < min) throw new RangeError(`${name} must be an integer >= ${min}`);
+    };
+    int('eddyTrain.period', t.period, 1);
+    int('eddyTrain.firstStep', t.firstStep, 0);
+    int('eddyTrain.timingJitter', t.timingJitter, 0);
+    if (2 * t.timingJitter >= t.period) throw new RangeError('eddyTrain.timingJitter must satisfy 2·timingJitter < period (spawns never reorder)');
+    if (t.firstStep < t.timingJitter) throw new RangeError('eddyTrain.firstStep must be >= timingJitter');
+    finite('eddyTrain.circulation', t.circulation);
+    if (t.circulation <= 0) throw new RangeError('eddyTrain.circulation is a magnitude and must be positive');
+    positive('eddyTrain.coreRadius', t.coreRadius);
+    finite('eddyTrain.lateralJitter', t.lateralJitter);
+    if (t.lateralJitter < 0 || t.lateralJitter > 1) throw new RangeError('eddyTrain.lateralJitter must be in [0, 1]');
+    finite('eddyTrain.seed', t.seed);
+    if (!Number.isInteger(t.seed) || t.seed < 0 || t.seed > 0xffffffff) throw new RangeError('eddyTrain.seed must be a uint32');
+    finite('eddyTrain.removeMargin', t.removeMargin);
+    if (t.removeMargin < 0) throw new RangeError('eddyTrain.removeMargin must be nonnegative');
+    int('eddyTrain.maxActive', t.maxActive, 1);
+    if (t.maxActive > LIMITS.maxTrainEddies) throw new RangeError(`eddyTrain.maxActive must be <= ${LIMITS.maxTrainEddies}`);
+    if (typeof t.alternate !== 'boolean') throw new RangeError('eddyTrain.alternate must be a boolean');
+    if (config.vortices.some((v) => v.id.startsWith('train-'))) throw new RangeError("static vortex ids must not start with 'train-'");
   }
   if (config.eddyDrift !== undefined && config.eddyDrift !== 'fixed' && config.eddyDrift !== 'wind' && config.eddyDrift !== 'kirchhoff') {
     throw new RangeError("eddyDrift must be 'fixed', 'wind' or 'kirchhoff'");
@@ -792,9 +934,9 @@ function newStencil(N: number, inflow: boolean): Stencil {
 
 /**
  * Backtrace + wall-aware interpolation weights of every fluid cell for the
- * velocity field with vortices at `centers` (steady within the step).
+ * velocity field `field` (steady within the step).
  */
-function fillStencil(n: Internals, config: CloudStudyConfig, tab: VortexTable, centers: ReadonlyArray<Vec2>, st: Stencil): void {
+function fillStencil(n: Internals, config: CloudStudyConfig, field: VField, st: Stencil): void {
   const { dt } = config.settings;
   const { cols, rows, h, solid, ox, oy } = n;
   const { idx, w, ghost } = st;
@@ -811,8 +953,8 @@ function fillStencil(n: Internals, config: CloudStudyConfig, tab: VortexTable, c
       if (solid[c]) continue;
       const px = ox + (i + 0.5) * h;
       const py = oy + (j + 0.5) * h;
-      velocityInto(n.windX, n.windY, tab, centers, px, py, v1);
-      velocityInto(n.windX, n.windY, tab, centers, px - 0.5 * dt * v1.x, py - 0.5 * dt * v1.y, v2);
+      velocityInto(n.windX, n.windY, field, px, py, v1);
+      velocityInto(n.windX, n.windY, field, px - 0.5 * dt * v1.x, py - 0.5 * dt * v1.y, v2);
       const dx = -dt * v2.x;
       const dy = -dt * v2.y;
       const qx = px + dx;
@@ -876,7 +1018,7 @@ function getFixedStencil(domain: CloudDomain, engine: Engine): Stencil {
   const n = internalsOf(domain);
   const { config } = domain;
   const st = newStencil(n.cols * n.rows, n.inflow);
-  fillStencil(n, config, vortexTable(config), config.vortices.map((v) => v.center), st);
+  fillStencil(n, config, toField(staticVortices(config)), st);
   engine.fixed = st;
   return st;
 }
@@ -897,8 +1039,8 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
   const { config } = domain;
   const dt = config.settings.dt;
   const moving = isMoving(config);
-  const tab = vortexTable(config);
-  let centers: Vec2[] = snapshot.vortexCenters.map((c) => ({ x: c.x, y: c.y }));
+  const schedule = trainSchedule(config);
+  let active: ActiveVortex[] = snapshot.vortices.map(copyVortex);
   // Fixed eddies: one stencil for the whole run. Drifting eddies: rebuilt every step from the midpoint centres.
   const scratch = moving ? newStencil(N, n.inflow) : null;
   let st = moving ? (scratch as Stencil) : getFixedStencil(domain, engine);
@@ -912,11 +1054,10 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
   for (let s = 0; s < steps; s++) {
     const tOld = (snapshot.step + s) * dt; // time of the field being sampled
     if (moving && scratch) {
-      const next = stepCenters(config, tab, centers);
-      const mid = next.map((c, i) => ({ x: 0.5 * (centers[i].x + c.x), y: 0.5 * (centers[i].y + c.y) }));
-      fillStencil(n, config, tab, mid, scratch);
+      const { next, mid } = advanceState(config, schedule, active, snapshot.step + s);
+      fillStencil(n, config, toField(mid), scratch);
       st = scratch;
-      centers = next;
+      active = next;
     }
     const { idx, w, ghost } = st;
 
@@ -975,7 +1116,7 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
     }
   }
 
-  return makeSnapshot(domain, Array.from(cur), snapshot.step + steps, snapshot.mass.initial, centers);
+  return makeSnapshot(domain, Array.from(cur), snapshot.step + steps, snapshot.mass.initial, active);
 }
 
 // ------------------------------------------------------- initial condition
@@ -1005,7 +1146,7 @@ function valueNoise(seed: number, x: number, y: number): number {
   return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
 }
 
-function makeSnapshot(domain: CloudDomain, density: number[], step: number, initialMass: number, centers: ReadonlyArray<Vec2>): CloudSnapshot {
+function makeSnapshot(domain: CloudDomain, density: number[], step: number, initialMass: number, vortices: ReadonlyArray<ActiveVortex>): CloudSnapshot {
   const current = massSum(density, domain.cellArea);
   const drift = current - initialMass;
   return {
@@ -1023,7 +1164,7 @@ function makeSnapshot(domain: CloudDomain, density: number[], step: number, init
       drift,
       relativeDrift: initialMass === 0 ? 0 : drift / initialMass,
     },
-    vortexCenters: centers.map((c) => ({ x: c.x, y: c.y })),
+    vortices: vortices.map(copyVortex),
   };
 }
 
@@ -1052,7 +1193,7 @@ function initialFromDomain(domain: CloudDomain): CloudSnapshot {
       density[c] = value;
     }
   }
-  return makeSnapshot(domain, density, 0, massSum(density, domain.cellArea), domain.config.vortices.map((v) => v.center));
+  return makeSnapshot(domain, density, 0, massSum(density, domain.cellArea), initialVortices(domain.config));
 }
 
 // ---------------------------------------------------------------- stepping
@@ -1073,9 +1214,12 @@ function snapshotBodyProblem(s: CloudSnapshot): string | null {
     const v = s.density[i];
     if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return `density[${i}] must be finite and nonnegative`;
   }
-  if (!Array.isArray(s.vortexCenters) ||
-      s.vortexCenters.some((c) => !isRecord(c) || typeof c.x !== 'number' || typeof c.y !== 'number' || !Number.isFinite(c.x) || !Number.isFinite(c.y))) {
-    return 'vortexCenters must be an array of finite {x, y}';
+  if (!Array.isArray(s.vortices) || s.vortices.some((v) => !isRecord(v) || typeof v.key !== 'string' ||
+      !isRecord(v.center) || typeof v.center.x !== 'number' || typeof v.center.y !== 'number' ||
+      !Number.isFinite(v.center.x) || !Number.isFinite(v.center.y) ||
+      typeof v.circulation !== 'number' || !Number.isFinite(v.circulation) ||
+      typeof v.coreRadius !== 'number' || !Number.isFinite(v.coreRadius) || v.coreRadius <= 0)) {
+    return 'vortices must be an array of {key, center {x, y}, circulation, coreRadius} with finite numbers';
   }
   const recomputed = massSum(s.density, s.grid.spacing * s.grid.spacing);
   if (!closeTo(s.mass.current, recomputed, 1e-12)) return 'mass.current does not match the density';
@@ -1105,11 +1249,14 @@ function assertCompatible(snapshot: CloudSnapshot, domain: CloudDomain): void {
   }
   const problem = snapshotBodyProblem(snapshot);
   if (problem) throw new SnapshotMismatchError(`snapshot ${problem}`);
-  // Centres are a deterministic function of the config and step; a forged or stale layout is rejected.
-  const expectedCenters = vortexCentersAt(domain.config, snapshot.step);
-  const centersMatch = snapshot.vortexCenters.length === expectedCenters.length &&
-    expectedCenters.every((c, i) => c.x === snapshot.vortexCenters[i].x && c.y === snapshot.vortexCenters[i].y);
-  if (!centersMatch) throw new SnapshotMismatchError('snapshot vortexCenters do not match the config at this step');
+  // The vortex list is a deterministic function of the config and step; a forged or stale list is rejected.
+  const expected = vortexStateAt(domain.config, snapshot.step);
+  const same = snapshot.vortices.length === expected.length && expected.every((e, i) => {
+    const v = snapshot.vortices[i];
+    return v.key === e.key && v.center.x === e.center.x && v.center.y === e.center.y &&
+      v.circulation === e.circulation && v.coreRadius === e.coreRadius;
+  });
+  if (!same) throw new SnapshotMismatchError('snapshot vortices do not match the config at this step');
   // dt is fixed by the config hash, so timeS is exactly step·dt (the same product the sim stores).
   if (snapshot.timeS !== snapshot.step * domain.config.settings.dt) {
     throw new SnapshotMismatchError('snapshot timeS is not step·dt');

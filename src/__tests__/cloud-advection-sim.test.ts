@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { LIMITS, MODEL, SNAPSHOT_SCHEMA, type CloudStudyConfig, type EddyDrift, type SolidRegion, type Vec2, type Vortex, type WeatherFront } from '../../sketches/cloud-advection/model.ts';
+import { LIMITS, MODEL, SNAPSHOT_SCHEMA, type CloudStudyConfig, type EddyDrift, type EddyTrain, type SolidRegion, type Vec2, type Vortex, type WeatherFront } from '../../sketches/cloud-advection/model.ts';
 import {
   SnapshotMismatchError,
   advance,
   buildDomain,
   configHashes,
+  eddyTrainSpawns,
   frontAt,
   hashFloat64,
   initialSnapshot,
@@ -15,7 +16,7 @@ import {
   stableHash,
   velocityAt,
   velocityAtTime,
-  vortexCentersAt,
+  vortexStateAt,
 } from '../../sketches/cloud-advection/sim.ts';
 
 interface Opts {
@@ -34,10 +35,11 @@ interface Opts {
   amplitude: number;
   front: WeatherFront;
   eddyDrift: EddyDrift;
+  eddyTrain: EddyTrain;
 }
 
 function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
-  const o: Partial<Opts> & Omit<Opts, 'front' | 'eddyDrift'> = {
+  const o: Partial<Opts> & Omit<Opts, 'front' | 'eddyDrift' | 'eddyTrain'> = {
     cols: 40, rows: 40, spacing: 0.5, dt: 0.5, boundary: 'open', diffusivity: 0,
     wind: { x: 0, y: 0 }, vortices: [], solids: [],
     center: { x: 6, y: 10 }, radii: { x: 3, y: 3 }, seed: 1234, amplitude: 1,
@@ -59,6 +61,7 @@ function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
     solids: o.solids,
     ...(o.front ? { front: o.front } : {}),
     ...(o.eddyDrift ? { eddyDrift: o.eddyDrift } : {}),
+    ...(o.eddyTrain ? { eddyTrain: o.eddyTrain } : {}),
   };
 }
 
@@ -80,6 +83,9 @@ function centroid(density: number[], cols: number, spacing: number): Vec2 {
   });
   return { x: sx / m, y: sy / m };
 }
+
+const centersAt = (config: CloudStudyConfig, step: number): Vec2[] => vortexStateAt(config, step).map((v) => v.center);
+const centersOf = (s: { vortices: Array<{ center: Vec2 }> }): Vec2[] => s.vortices.map((v) => v.center);
 
 const sum = (a: ArrayLike<number>): number => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s; };
 
@@ -420,8 +426,10 @@ describe('cloud advection: numerical fixtures', () => {
       const [s40] = simulate(richConfig(), [40]);
       expect(s40.densityHash).toBe('11d588b63b0ff896');
 // Pinned with MODEL 1.2.0 before eddyDrift existed; an absent eddyDrift must keep these.
-      expect(configHashes(richConfig()).simulation).toBe('e6cb1b0dfd664f23');
-      expect(configHashes(makeConfig({ wind: { x: 0.8, y: 0.15 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('703910d488969e8c');
+      // Pinned with MODEL 1.3.0 before eddyTrain existed; an absent eddyTrain must keep these.
+      expect(configHashes(richConfig()).simulation).toBe('62e60b8d61285a5b');
+      expect(configHashes(makeConfig({ wind: { x: 0.8, y: 0.15 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('c4e54b1406e2d69c');
+      expect(configHashes(makeConfig({ eddyDrift: 'kirchhoff', vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('70ed5a57d1907af5');
     });
 
     it('softness: absent equals 0.12, is validated, hashed, and widens the bank edge', () => {
@@ -506,8 +514,8 @@ describe('cloud advection: numerical fixtures', () => {
     it('5c. snapshots from an older model version refuse to resume', () => {
       const config = makeConfig({ boundary: 'inflow', front: front() });
       const snap = initialSnapshot(config);
-      expect(MODEL.version).toBe('1.2.0');
-      expect(MODEL.backendVersion).toBe('1.2.0');
+      expect(MODEL.version).toBe('1.3.0');
+      expect(MODEL.backendVersion).toBe('1.3.0');
       const old = { ...snap, model: { ...snap.model, version: '1.0.0', backendVersion: '1.0.0' } } as unknown as typeof snap;
       expect(() => advance(old, config, 1)).toThrow(SnapshotMismatchError);
     });
@@ -573,6 +581,21 @@ describe('cloud advection: numerical fixtures', () => {
   describe('vortex drift (eddyDrift)', () => {
     const angleOf = (a: Vec2, b: Vec2): number => Math.atan2(b.y - a.y, b.x - a.x);
 
+    it('train-free drifting configs keep their pre-train density hashes', () => {
+      const got: Record<string, string> = {};
+      for (const eddyDrift of ['wind', 'kirchhoff'] as const) {
+        const config = makeConfig({
+          boundary: 'inflow', eddyDrift, diffusivity: 0.1, wind: { x: 0.6, y: 0.2 },
+          front: { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 3, coverage: 0.5, seed: 99, fillInterior: true },
+          vortices: [vortex('eddy-1', 12, 10, 8, 1.5), vortex('eddy-2', 15, 12, -5, 1.2), vortex('eddy-3', 9, 14, 3, 1)],
+          solids: [rect('solid-a', 14, 6, 15, 8)],
+        });
+        got[eddyDrift] = simulate(config, [90])[0].densityHash;
+      }
+      // Computed with MODEL 1.2.0 before the eddy train existed.
+      expect(got).toEqual({ wind: 'b3a4f20d0508a4f3', kirchhoff: '1415024e1ce5e440' });
+    });
+
     it('fixed (absent or explicit) keeps centres, hashes and density bitwise', () => {
       const base = { wind: { x: 0.8, y: 0.1 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)], solids: [rect('solid-a', 14, 6, 15, 14)], diffusivity: 0.1 };
       const absent = makeConfig(base);
@@ -581,10 +604,10 @@ describe('cloud advection: numerical fixtures', () => {
       const [a] = simulate(absent, [60]);
       const [e] = simulate(explicit, [60]);
       expect(e.density).toEqual(a.density);
-      expect(a.vortexCenters).toEqual([{ x: 12, y: 9 }]);
-      expect(vortexCentersAt(absent, 60)).toEqual([{ x: 12, y: 9 }]);
+      expect(centersOf(a)).toEqual([{ x: 12, y: 9 }]);
+      expect(centersAt(absent, 60)).toEqual([{ x: 12, y: 9 }]);
       expect(a.schema).toBe(SNAPSHOT_SCHEMA);
-      expect(SNAPSHOT_SCHEMA).toMatch(/\.v2$/);
+      expect(SNAPSHOT_SCHEMA).toMatch(/\.v3$/);
     });
 
     it("'wind': a lone vortex travels with the wind", () => {
@@ -594,14 +617,14 @@ describe('cloud advection: numerical fixtures', () => {
       let worst = 0;
       for (const snap of snaps) {
         const t = snap.step * 0.5;
-        worst = Math.max(worst, Math.abs(snap.vortexCenters[0].x - (8 + wind.x * t)), Math.abs(snap.vortexCenters[0].y - (14 + wind.y * t)));
-        expect(vortexCentersAt(config, snap.step)).toEqual(snap.vortexCenters); // replay is bitwise
+        worst = Math.max(worst, Math.abs(snap.vortices[0].center.x - (8 + wind.x * t)), Math.abs(snap.vortices[0].center.y - (14 + wind.y * t)));
+        expect(vortexStateAt(config, snap.step)).toEqual(snap.vortices); // replay is bitwise
       }
       console.log(`[cloud-advection] wind drift: max centre error after 120 steps = ${worst.toExponential(2)} m`);
       expect(worst).toBeLessThan(1e-12);
       // the flow really follows: the velocity field at the drifted centres matches the initial layout shifted by the travel
-      const v0 = velocityAtTime(config, [{ x: 8, y: 14 }], { x: 10, y: 14 });
-      const v1 = velocityAtTime(config, snaps[2].vortexCenters, { x: 10 + wind.x * 60, y: 14 + wind.y * 60 });
+      const v0 = velocityAtTime(config, vortexStateAt(config, 0), { x: 10, y: 14 });
+      const v1 = velocityAtTime(config, snaps[2].vortices, { x: 10 + wind.x * 60, y: 14 + wind.y * 60 });
       expect(v1.x).toBeCloseTo(v0.x, 10);
       expect(v1.y).toBeCloseTo(v0.y, 10);
     });
@@ -614,11 +637,11 @@ describe('cloud advection: numerical fixtures', () => {
       const omega = G / (Math.PI * (d * d + a * a)); // v = G d / (2π (d²+a²)) at radius d/2
       let sepErr = 0, midErr = 0;
       for (let step = 0; step <= 240; step += 8) {
-        const [c1, c2] = vortexCentersAt(config, step);
+        const [c1, c2] = centersAt(config, step);
         sepErr = Math.max(sepErr, Math.abs(Math.hypot(c2.x - c1.x, c2.y - c1.y) - d) / d);
         midErr = Math.max(midErr, Math.hypot((c1.x + c2.x) / 2 - 10, (c1.y + c2.y) / 2 - 10));
       }
-      const [c1, c2] = vortexCentersAt(config, 240);
+      const [c1, c2] = centersAt(config, 240);
       const turned = angleOf(c1, c2); // vortex 2 started on +x of vortex 1 (angle 0)
       const expected = omega * 240 * dt;
       console.log(`[cloud-advection] kirchhoff co-rotating pair: separation drift ${sepErr.toExponential(2)} (relative), midpoint drift ${midErr.toExponential(2)} m, rotation ${turned.toFixed(7)} rad vs analytic ${expected.toFixed(7)}`);
@@ -627,7 +650,7 @@ describe('cloud advection: numerical fixtures', () => {
       // RK2 phase error is O(θ³) per step with θ = ω·dt ≈ 0.004; about 1e-6 rad accumulates over 240 steps (measured).
       expect(Math.abs(turned - expected)).toBeLessThan(1e-5);
       const [snap] = simulate(config, [240]);
-      expect(snap.vortexCenters).toEqual(vortexCentersAt(config, 240));
+      expect(snap.vortices).toEqual(vortexStateAt(config, 240));
     });
 
     it("'kirchhoff': a counter-rotating pair translates perpendicular to its axis", () => {
@@ -639,9 +662,9 @@ describe('cloud advection: numerical fixtures', () => {
       const speed = (G * d) / (2 * Math.PI * (d * d + a * a));
       const [snap] = simulate(config, [100]);
       const travel = speed * 100 * dt;
-      const errY = Math.abs((snap.vortexCenters[0].y - 10) - travel) / travel;
-      const errY2 = Math.abs((snap.vortexCenters[1].y - 10) - travel) / travel;
-      const errX = Math.max(Math.abs(snap.vortexCenters[0].x - 8), Math.abs(snap.vortexCenters[1].x - 12));
+      const errY = Math.abs((snap.vortices[0].center.y - 10) - travel) / travel;
+      const errY2 = Math.abs((snap.vortices[1].center.y - 10) - travel) / travel;
+      const errX = Math.max(Math.abs(snap.vortices[0].center.x - 8), Math.abs(snap.vortices[1].center.x - 12));
       console.log(`[cloud-advection] kirchhoff dipole: speed ${speed.toFixed(6)} m/s, relative travel error ${Math.max(errY, errY2).toExponential(2)}, sideways drift ${errX.toExponential(2)} m`);
       expect(Math.max(errY, errY2)).toBeLessThan(1e-6);
       expect(errX).toBeLessThan(1e-9);
@@ -659,9 +682,9 @@ describe('cloud advection: numerical fixtures', () => {
       const resumed = advance(parseSnapshot(serializeSnapshot(half)), config, 30);
       expect(resumed.densityHash).toBe(direct.densityHash);
       expect(resumed.density).toEqual(direct.density);
-      expect(resumed.vortexCenters).toEqual(direct.vortexCenters);
+      expect(resumed.vortices).toEqual(direct.vortices);
       expect(resumed.mass).toEqual(direct.mass);
-      expect(direct.vortexCenters[0]).not.toEqual({ x: 12, y: 10 }); // they really moved
+      expect(direct.vortices[0].center).not.toEqual({ x: 12, y: 10 }); // they really moved
     });
 
     it('a thin wall still leaks nothing while a vortex drifts past it', () => {
@@ -681,7 +704,7 @@ describe('cloud advection: numerical fixtures', () => {
             center: { x: 5, y: 10 }, radii: { x: 2.5, y: 2.5 },
           };
           const [last] = simulate(makeConfig({ ...base, solids: [wall] }), [30]);
-          expect(last.vortexCenters[0].x).toBeGreaterThan(wallX); // the vortex did cross the wall line
+          expect(last.vortices[0].center.x).toBeGreaterThan(wallX); // the vortex did cross the wall line
           const leaked = rightMax(makeConfig({ ...base, solids: [wall] }));
           const control = rightMax(makeConfig(base));
           console.log(`[cloud-advection] drifting vortex past a thin wall (${eddyDrift}, D=${diffusivity}): max right-side = ${leaked}; no-wall control = ${control.toFixed(3)}`);
@@ -709,23 +732,27 @@ describe('cloud advection: numerical fixtures', () => {
 
       const config = mk('kirchhoff');
       const snap = advance(initialSnapshot(config), config, 5);
-      const forged = { ...snap, vortexCenters: [{ x: 8, y: 10 }, { x: 13, y: 10 }] }; // the step-0 layout at step 5
-      expect(() => advance(forged, config, 1)).toThrow(/vortexCenters/);
-      expect(() => advance({ ...snap, vortexCenters: [snap.vortexCenters[0]] }, config, 1)).toThrow(SnapshotMismatchError);
+      const forged = { ...snap, vortices: vortexStateAt(config, 0) }; // the step-0 layout at step 5
+      expect(() => advance(forged, config, 1)).toThrow(/vortices/);
+      expect(() => advance({ ...snap, vortices: [snap.vortices[0]] }, config, 1)).toThrow(SnapshotMismatchError);
+      expect(() => advance({ ...snap, vortices: snap.vortices.map((v) => ({ ...v, circulation: v.circulation * 2 })) }, config, 1)).toThrow(/vortices/);
       const text = JSON.parse(serializeSnapshot(snap)) as Record<string, unknown>;
-      delete text.vortexCenters;
-      expect(() => parseSnapshot(JSON.stringify(text))).toThrow(/vortexCenters/);
-      expect(() => parseSnapshot(JSON.stringify({ ...text, vortexCenters: [{ x: Number.NaN, y: 1 }] }))).toThrow(/vortexCenters/);
+      delete text.vortices;
+      expect(() => parseSnapshot(JSON.stringify(text))).toThrow(/vortices/);
+      expect(() => parseSnapshot(JSON.stringify({ ...text, vortices: [{ key: 'a', center: { x: null, y: 1 }, circulation: 1, coreRadius: 1 }] }))).toThrow(/vortices/);
       expect(() => parseSnapshot(JSON.stringify({ ...JSON.parse(serializeSnapshot(snap)), schema: 'hatch3d.cloud-advection.snapshot.v1' }))).toThrow(/schema/);
-      expect(() => vortexCentersAt(config, -1)).toThrow(RangeError);
+      expect(() => vortexStateAt(config, -1)).toThrow(RangeError);
     });
 
-    it('velocityAtTime uses the supplied centres; velocityAt stays the initial layout', () => {
+    it('velocityAtTime uses the supplied active list; velocityAt stays the initial layout', () => {
       const config = makeConfig({ wind: { x: 1, y: 0 }, vortices: [vortex('eddy-1', 5, 5, 6, 1)] });
       const p = { x: 7, y: 6 };
-      expect(velocityAtTime(config, [{ x: 5, y: 5 }], p)).toEqual(velocityAt(config, p));
-      expect(velocityAtTime(config, [{ x: 9, y: 5 }], p)).not.toEqual(velocityAt(config, p));
-      expect(() => velocityAtTime(config, [], p)).toThrow(RangeError);
+      const initial = vortexStateAt(config, 0);
+      expect(initial[0].key).toBe('eddy-1');
+      expect(velocityAtTime(config, initial, p)).toEqual(velocityAt(config, p));
+      const moved = [{ ...initial[0], center: { x: 9, y: 5 } }];
+      expect(velocityAtTime(config, moved, p)).not.toEqual(velocityAt(config, p));
+      expect(velocityAtTime(config, [], p)).toEqual({ x: 1, y: 0 }); // wind only
     });
 
     it('art-like config with ~30 solids and drifting eddies fits the time budget', () => {
@@ -764,6 +791,227 @@ describe('cloud advection: numerical fixtures', () => {
       // the work budget counts the per-step stencil rebuild: 99,856 cells x 240 steps x 5 > the limit
       const big = makeConfig({ cols: 316, rows: 316, eddyDrift: 'wind', vortices: [vortex('eddy-1', 80, 80, 5, 2)], center: { x: 80, y: 80 }, radii: { x: 10, y: 10 } });
       expect(() => simulate(big, [240])).toThrow(/cell updates/);
+    });
+  });
+
+  describe('eddy train', () => {
+    const train = (over: Partial<EddyTrain> = {}): EddyTrain => ({
+      id: 'eddy-train', period: 20, firstStep: 0, circulation: 4, coreRadius: 1.5, alternate: true,
+      lateralJitter: 0.5, timingJitter: 0, seed: 7, removeMargin: 3, maxActive: 6, ...over,
+    });
+    const withTrain = (over: Partial<Parameters<typeof makeConfig>[0]> = {}, t: Partial<EddyTrain> = {}): CloudStudyConfig =>
+      makeConfig({ eddyDrift: 'wind', wind: { x: 1, y: 0 }, eddyTrain: train(t), amplitude: 0, ...over });
+    const trainKeys = (config: CloudStudyConfig, step: number): string[] =>
+      vortexStateAt(config, step).map((v) => v.key).filter((k) => k.startsWith('train-'));
+
+    it('spawn schedule follows the rule: steps, signs, lateral bounds, determinism', () => {
+      const exact = withTrain({}, { firstStep: 3, period: 20 });
+      const spawns = eddyTrainSpawns(exact);
+      expect(spawns.map((sp) => sp.step)).toEqual(Array.from({ length: 12 }, (_, k) => 3 + 20 * k)); // 3 .. 223
+      expect(spawns.map((sp) => sp.index)).toEqual(Array.from({ length: 12 }, (_, k) => k));
+      spawns.forEach((sp, k) => {
+        expect(sp.circulation).toBe(k % 2 === 0 ? 4 : -4);
+        expect(sp.center.x).toBe(-1.5); // upwind edge is the left one; one core radius outside
+        expect(Math.abs(sp.center.y - 10)).toBeLessThanOrEqual(0.5 * 10 + 1e-12); // ±lateralJitter · half the edge length
+      });
+      expect(new Set(spawns.map((sp) => sp.center.y)).size).toBeGreaterThan(6); // genuinely jittered
+      // non-alternating: always +
+      expect(eddyTrainSpawns(withTrain({}, { alternate: false })).every((sp) => sp.circulation === 4)).toBe(true);
+      // lateralJitter 0: exactly the edge midpoint; 1: reaches far toward the corners
+      expect(eddyTrainSpawns(withTrain({}, { lateralJitter: 0 })).every((sp) => sp.center.y === 10)).toBe(true);
+      const wide = eddyTrainSpawns(withTrain({}, { lateralJitter: 1, period: 4 })).map((sp) => sp.center.y);
+      expect(Math.max(...wide) - Math.min(...wide)).toBeGreaterThan(14);
+      expect(Math.max(...wide)).toBeLessThanOrEqual(20 + 1e-12);
+      expect(Math.min(...wide)).toBeGreaterThanOrEqual(-1e-12);
+      // deterministic, and seed-dependent
+      expect(eddyTrainSpawns(withTrain())).toEqual(eddyTrainSpawns(withTrain()));
+      expect(eddyTrainSpawns(withTrain({}, { seed: 8 }))).not.toEqual(eddyTrainSpawns(withTrain()));
+
+      // timing jitter: within ±J of the exact period, strictly increasing, deterministic
+      const jittered = eddyTrainSpawns(withTrain({}, { firstStep: 4, period: 20, timingJitter: 4 }));
+      let moved = 0;
+      jittered.forEach((sp, k) => {
+        expect(Math.abs(sp.step - (4 + 20 * k))).toBeLessThanOrEqual(4);
+        if (sp.step !== 4 + 20 * k) moved++;
+        if (k > 0) expect(sp.step).toBeGreaterThan(jittered[k - 1].step);
+      });
+      expect(moved).toBeGreaterThan(3);
+      expect(jittered.every((sp) => sp.step <= LIMITS.maxSteps)).toBe(true);
+    });
+
+    it('chooses the upwind edge from the wind direction (four directions, diagonals, ties)', () => {
+      const edgeFor = (wind: Vec2): Vec2 => eddyTrainSpawns(withTrain({ wind }, { lateralJitter: 0, coreRadius: 1.5 }))[0].center;
+      expect(edgeFor({ x: 1, y: 0 })).toEqual({ x: -1.5, y: 10 }); // left
+      expect(edgeFor({ x: -1, y: 0 })).toEqual({ x: 21.5, y: 10 }); // right
+      expect(edgeFor({ x: 0, y: 1 })).toEqual({ x: 10, y: -1.5 }); // top (air comes from y < 0)
+      expect(edgeFor({ x: 0, y: -1 })).toEqual({ x: 10, y: 21.5 }); // bottom
+      expect(edgeFor({ x: 1, y: 0.4 })).toEqual({ x: -1.5, y: 10 }); // diagonal, x dominant
+      expect(edgeFor({ x: 0.3, y: -1 })).toEqual({ x: 10, y: 21.5 }); // diagonal, y dominant
+      expect(edgeFor({ x: 1, y: 1 })).toEqual({ x: -1.5, y: 10 }); // exact tie: x edges first
+      expect(edgeFor({ x: -1, y: 1 })).toEqual({ x: 21.5, y: 10 }); // tie: right before top
+      expect(edgeFor({ x: 0, y: 0 })).toEqual({ x: -1.5, y: 10 }); // zero wind: left
+      // along a top/bottom edge the lateral jitter runs in x
+      const top = eddyTrainSpawns(withTrain({ wind: { x: 0, y: 1 } }, { lateralJitter: 1, period: 4 }));
+      expect(top.every((sp) => sp.center.y === -1.5 && sp.center.x >= -1e-12 && sp.center.x <= 20 + 1e-12)).toBe(true);
+      expect(new Set(top.map((sp) => sp.center.x)).size).toBeGreaterThan(10);
+    });
+
+    it('spawned eddies enter the state at their step and carry key, sign and core', () => {
+      const config = withTrain({ vortices: [vortex('eddy-a', 5, 5, 3, 1)] }, { firstStep: 0, period: 20 });
+      const s0 = vortexStateAt(config, 0);
+      expect(s0.map((v) => v.key)).toEqual(['eddy-a', 'train-0']); // a spawn at step 0 is in the initial state
+      expect(s0[1]).toEqual({ key: 'train-0', center: eddyTrainSpawns(config)[0].center, circulation: 4, coreRadius: 1.5 });
+      expect(vortexStateAt(config, 19).map((v) => v.key)).toEqual(['eddy-a', 'train-0']);
+      const s20 = vortexStateAt(config, 20);
+      expect(s20.map((v) => v.key)).toEqual(['eddy-a', 'train-0', 'train-1']);
+      expect(s20[2].center).toEqual(eddyTrainSpawns(config)[1].center); // unmoved on its spawn step
+      expect(s20[2].circulation).toBe(-4);
+      const [snap] = simulate(config, [20]);
+      expect(snap.vortices).toEqual(s20);
+    });
+
+    it('removes eddies beyond removeMargin and keeps static vortices', () => {
+      const config = withTrain({ vortices: [vortex('eddy-a', 18, 5, 3, 1)] }, { period: 100, removeMargin: 2.2 });
+      // train-0 starts at x = -1.5 and moves 0.5 m/step: x_n = -1.5 + 0.5 n; beyond 22.2 from n = 48
+      expect(trainKeys(config, 47)).toEqual(['train-0']);
+      expect(trainKeys(config, 48)).toEqual([]);
+      expect(trainKeys(config, 100)).toEqual(['train-1']); // the next spawn arrives at step 100
+      // the static vortex also left the domain but is never removed
+      const s120 = vortexStateAt(config, 120);
+      const a = s120.find((v) => v.key === 'eddy-a');
+      expect(a?.center.x).toBeGreaterThan(22.2);
+    });
+
+    it('evicts the oldest train eddy at maxActive and stays bounded', () => {
+      const config = withTrain({}, { period: 5, maxActive: 3, removeMargin: 1e6 });
+      expect(trainKeys(config, 50)).toEqual(['train-8', 'train-9', 'train-10']);
+      expect(trainKeys(config, 10)).toEqual(['train-0', 'train-1', 'train-2']);
+      expect(trainKeys(config, 15)).toEqual(['train-1', 'train-2', 'train-3']);
+      for (let step = 0; step <= LIMITS.maxSteps; step += 13) expect(trainKeys(config, step).length).toBeLessThanOrEqual(3);
+      // with the default margin the count is also bounded by what is inside/near the domain
+      const dense = withTrain({}, { period: 2, maxActive: LIMITS.maxTrainEddies, removeMargin: 3 });
+      let most = 0;
+      for (let step = 0; step <= LIMITS.maxSteps; step += 7) most = Math.max(most, trainKeys(dense, step).length);
+      expect(most).toBeLessThanOrEqual(LIMITS.maxTrainEddies);
+    });
+
+    it('validates the train', () => {
+      const bad = (t: Partial<EddyTrain>, over: Partial<Parameters<typeof makeConfig>[0]> = {}): void => {
+        expect(() => buildDomain(withTrain(over, t)), JSON.stringify({ t, over })).toThrow(RangeError);
+      };
+      bad({}, { eddyDrift: 'fixed' });
+      expect(() => buildDomain({ ...withTrain(), eddyDrift: undefined })).toThrow(/requires eddyDrift/);
+      bad({ period: 0 }); bad({ period: 2.5 }); bad({ firstStep: -1 }); bad({ circulation: 0 }); bad({ coreRadius: 0 });
+      bad({ lateralJitter: 1.1 }); bad({ timingJitter: -1 }); bad({ timingJitter: 10, period: 20 }); bad({ firstStep: 1, timingJitter: 2 });
+      bad({ seed: -1 }); bad({ removeMargin: -1 }); bad({ maxActive: 0 }); bad({ maxActive: LIMITS.maxTrainEddies + 1 });
+      bad({ circulation: Number.NaN });
+      expect(() => buildDomain(withTrain({ vortices: [vortex('train-7', 5, 5, 1, 1)] }))).toThrow(RangeError);
+      expect(() => buildDomain(withTrain({ eddyDrift: 'kirchhoff' }))).not.toThrow();
+    });
+
+    it('is deterministic and resumes bitwise between spawns and exactly at a spawn step', () => {
+      const config = withTrain({
+        boundary: 'inflow', eddyDrift: 'kirchhoff', diffusivity: 0.1, wind: { x: 0.8, y: 0.1 },
+        front: { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 3, coverage: 0.5, seed: 99, fillInterior: true },
+        vortices: [vortex('eddy-a', 12, 10, 6, 1.5)], solids: [rect('solid-a', 14, 6, 15, 8)], amplitude: 1,
+      }, { firstStep: 4, period: 20, timingJitter: 3, lateralJitter: 0.6 });
+      const spawns = eddyTrainSpawns(config).map((sp) => sp.step);
+      const direct = simulate(config, [80])[0];
+      expect(simulate(config, [80])[0].densityHash).toBe(direct.densityHash);
+      expect(direct.vortices.length).toBeGreaterThan(2);
+      for (const resumeAt of [spawns[1] - 7, spawns[1], spawns[2], 33]) {
+        const half = advance(initialSnapshot(config), config, resumeAt);
+        const resumed = advance(parseSnapshot(serializeSnapshot(half)), config, 80 - resumeAt);
+        expect(resumed.densityHash, `resume at ${resumeAt}`).toBe(direct.densityHash);
+        expect(resumed.density).toEqual(direct.density);
+        expect(resumed.vortices).toEqual(direct.vortices);
+        expect(resumed.mass).toEqual(direct.mass);
+      }
+    });
+
+    it('a thin wall stays leak-free while train eddies cross it', () => {
+      const wallX = 12.1;
+      const wall = rect('solid-wall', wallX - 0.0125, -1, wallX + 0.0125, 21);
+      const steps = [4, 8, 12, 20, 30, 60, 120];
+      const rightMax = (c: CloudStudyConfig): number => {
+        let m = 0;
+        for (const snap of simulate(c, steps)) snap.density.forEach((v, k) => { if (((k % 40) + 0.5) * 0.5 > wallX) m = Math.max(m, v); });
+        return m;
+      };
+      for (const diffusivity of [0, 0.3]) {
+        const base = {
+          boundary: 'closed' as const, eddyDrift: 'kirchhoff' as const, diffusivity, wind: { x: 1, y: 0 },
+          center: { x: 5, y: 10 }, radii: { x: 2.5, y: 2.5 }, amplitude: 1,
+          eddyTrain: train({ period: 12, circulation: 8, lateralJitter: 0.3 }),
+        };
+        const [late] = simulate(makeConfig({ ...base, solids: [wall] }), [60]);
+        expect(late.vortices.some((v) => v.key.startsWith('train-') && v.center.x > wallX)).toBe(true); // eddies crossed the wall line
+        const leaked = rightMax(makeConfig({ ...base, solids: [wall] }));
+        const control = rightMax(makeConfig(base));
+        console.log(`[cloud-advection] eddy train crossing a thin wall (D=${diffusivity}): max right-side = ${leaked}; no-wall control = ${control.toFixed(3)}`);
+        expect(leaked).toBe(0);
+        expect(control).toBeGreaterThan(0.01);
+      }
+    });
+
+    it('any train field change invalidates snapshots; the train is hashed only when present', () => {
+      const base = withTrain({ eddyDrift: 'kirchhoff' }, { firstStep: 2 });
+      const h0 = configHashes(base);
+      const snap = initialSnapshot(base);
+      const changes: Array<Partial<EddyTrain>> = [
+        { period: 21 }, { firstStep: 3 }, { circulation: 5 }, { coreRadius: 1.4 }, { alternate: false },
+        { lateralJitter: 0.4 }, { timingJitter: 1 }, { seed: 8 }, { removeMargin: 4 }, { maxActive: 5 },
+      ];
+      for (const change of changes) {
+        const changed = withTrain({ eddyDrift: 'kirchhoff' }, { firstStep: 2, ...change });
+        const h1 = configHashes(changed);
+        expect(h1.simulation, JSON.stringify(change)).not.toBe(h0.simulation);
+        expect(h1.geometry).toBe(h0.geometry);
+        expect(h1.transform).toBe(h0.transform);
+        expect(() => advance(snap, changed, 1), JSON.stringify(change)).toThrow(SnapshotMismatchError);
+      }
+      const without = { ...structuredClone(base), eddyTrain: undefined };
+      expect(configHashes(without).simulation).not.toBe(h0.simulation);
+      expect(() => advance(snap, without, 1)).toThrow(SnapshotMismatchError);
+      expect(configHashes({ ...without, eddyTrain: undefined })).toEqual(configHashes(without));
+    });
+
+    it('art-like config with a period-20 train and ~30 solids fits the time budget', () => {
+      const solids: SolidRegion[] = [];
+      for (let i = 0; i < 30; i++) {
+        const ang = i * 2.399;
+        const cx = 24 + 16 * Math.cos(ang) * ((i % 7) / 7 + 0.3);
+        const cy = 39 + 30 * Math.sin(ang) * ((i % 5) / 5 + 0.3);
+        solids.push({
+          id: `solid-${i}`, kind: 'solid',
+          polygon: Array.from({ length: 6 }, (_, k) => {
+            const t = (k / 6) * 2 * Math.PI;
+            const r = 1.2 + 0.5 * (k % 2);
+            return { x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) };
+          }),
+        });
+      }
+      const config = makeConfig({
+        cols: 120, rows: 195, spacing: 0.4, dt: 0.25, boundary: 'inflow', diffusivity: 0.05, eddyDrift: 'kirchhoff',
+        wind: { x: 0.9, y: 0.35 }, solids, amplitude: 1,
+        vortices: [vortex('eddy-1', 20, 30, 12, 2), vortex('eddy-2', 30, 55, -9, 3), vortex('eddy-3', 25, 42, 7, 2)],
+        center: { x: 12, y: 20 }, radii: { x: 6, y: 9 },
+        front: { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 8, coverage: 0.45, seed: 9, fillInterior: true },
+        eddyTrain: train({ period: 20, circulation: 8, coreRadius: 2.5, removeMargin: 6, maxActive: 12, lateralJitter: 0.7, timingJitter: 3, firstStep: 3 }),
+      });
+      const t0 = performance.now();
+      const snaps = simulate(config, [0, 60, 120, 240]);
+      const ms = performance.now() - t0;
+      const counts = snaps.map((snap) => snap.vortices.length);
+      console.log(`[cloud-advection] eddy-train art config (30 solids, kirchhoff, inflow, D on), steps 0..240: ${ms.toFixed(0)} ms; active vortices at 0/60/120/240 = ${counts.join('/')}`);
+      for (const snap of snaps) {
+        let min = Infinity, max = -Infinity;
+        for (const c of snap.density) { expect(Number.isFinite(c)).toBe(true); min = Math.min(min, c); max = Math.max(max, c); }
+        expect(min).toBeGreaterThanOrEqual(0);
+        expect(max).toBeLessThanOrEqual(1 + 1e-9);
+      }
+      expect(ms).toBeLessThan(4000);
+      expect(counts[3]).toBeGreaterThan(3); // the train is still alive at the end
     });
   });
 

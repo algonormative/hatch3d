@@ -8,8 +8,8 @@ export const FIN_THICKNESS = 0.15;
 export const CORE_CENTER: Vec2 = Object.freeze({ x: WORLD.width / 2, y: WORLD.height / 2 });
 export const CORE_KEEP_OUT = 8.6;
 
-export type LayoutId = 'span' | 'orbit' | 'colonnade' | 'portal' | 'ring';
-export type MemberKind = 'slab' | 'pier' | 'fin' | 'box' | 'wedge' | 'rail' | 'plate' | 'radial';
+export type LayoutId = 'span' | 'orbit' | 'colonnade' | 'portal' | 'ring' | 'sun';
+export type MemberKind = 'slab' | 'pier' | 'fin' | 'box' | 'wedge' | 'rail' | 'plate' | 'radial' | 'ray' | 'arc' | 'spike';
 
 /** An architectural member. It is both a solid in the simulation and a drawn outline. */
 export interface StructureMember {
@@ -29,6 +29,16 @@ export interface StructureMember {
   cross: boolean;
   /** Hatch pitch compresses across the member, giving a tonal ramp. */
   tonal: boolean;
+  /**
+   * World-metre polylines drawn instead of outline plus hatch (rays, ring strokes, filaments). The
+   * polygon is still the simulation solid. Such members never overlap one another.
+   */
+  strokes?: Vec2[][];
+  /**
+   * false: drawn only. The marks exist on paper but the member is not a solid in the simulation, so it
+   * does not block the weather (an artistic departure). Absent means solid.
+   */
+  solid?: boolean;
 }
 
 const rect = (x0: number, y0: number, x1: number, y1: number): Vec2[] => [
@@ -310,12 +320,162 @@ export function ringLayout(count = 8): StructureMember[] {
   return members;
 }
 
-export function buildStructure(random: () => number, layout: LayoutId = 'span', density = 0.6, ringCount = 8): StructureMember[] {
+// ------------------------------------------------------------------ sun
+
+export interface SunOptions {
+  /** Ray count, even (alternating long and short rays). */
+  rays: number;
+  /** Inner radius of the rays in metres. */
+  inner: number;
+  /** Outer radius of the long rays in metres. */
+  reach: number;
+  /** Short ray length as a fraction of the long ray length (0..1). */
+  alternate: number;
+  /** Concentric ring bands, 0..3. */
+  rings: number;
+  /** Ring bands are solids in the simulation when true; drawn-only otherwise (the corona is always drawn-only). */
+  solidRings?: boolean;
+  /** 0 = exact rotational symmetry; above 0, seeded perturbation. */
+  noise: number;
+  /** Named stream `sun-noise`. Every draw is made whatever the noise, so the noise control only scales values. */
+  random: () => number;
+}
+
+const SUN_ACCENT = 'vermilion';
+/** Spacing of the parallel strokes in a ray and in a ring band, metres (about 1.5 mm of page). */
+const SUN_STROKE = 0.3;
+const SUN_BAND = 0.9;
+const SUN_SPIKE_WIDTH = 0.15;
+const SUN_SPIKE_LENGTH = 3.4;
+const SUN_MARGIN = 0.35;
+/** Fraction of each sector between two rays that a ring arc covers; the rest is open for the weather. */
+const SUN_RING_FILL = 0.5;
+
+/**
+ * `sun`: tapered rays radiate from just outside the quiet core, alternating long and short; thin ring
+ * bands, broken into arcs between the rays so the weather threads through; and a corona of fine
+ * filaments off the outermost band's outer edge. Rays are drawn as lines parallel to the ray axis that end where the
+ * wedge narrows below their offset. At noise 0 the layout has exact rotational symmetry (by two ray
+ * steps); noise perturbs ray length, angle and taper, ring radius (a smooth low-frequency wobble) and
+ * filament length and presence. The rays are solids in the simulation. Ring bands are drawn-only unless
+ * `solidRings`; the corona filaments are always drawn-only (glints, not walls). Drawn-only marks are an
+ * artistic departure: the weather passes through them.
+ */
+export function sunLayout(o: SunOptions): StructureMember[] {
+  const n = Math.max(12, Math.min(72, Math.round(o.rays / 2) * 2));
+  const inner = Math.max(CORE_KEEP_OUT + 1.2, o.inner);
+  const reach = Math.max(inner + 6, o.reach);
+  const noise = Math.max(0, Math.min(1, o.noise));
+  const u = (): number => 2 * o.random() - 1;
+  const step = (2 * Math.PI) / n;
+  const cx = CORE_CENTER.x, cy = CORE_CENTER.y;
+  const members: StructureMember[] = [];
+  const pt = (r: number, a: number): Vec2 => ({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  const baseWidth = Math.max(0.3, 0.45 * 2 * Math.PI * inner / n);
+
+  interface Ray { angle: number; length: number; width: number }
+  const rays: Ray[] = [];
+  for (let k = 0; k < n; k++) {
+    const dAngle = u(), dLength = u(), dWidth = u();
+    const long = k % 2 === 0;
+    const length = (reach - inner) * (long ? 1 : Math.max(0.1, Math.min(1, o.alternate))) * (1 + noise * 0.4 * dLength);
+    rays.push({
+      angle: step * k + noise * 0.3 * step * dAngle,
+      length,
+      width: Math.max(0.3, baseWidth * (1 + noise * 0.4 * dWidth)),
+    });
+  }
+  const halfWidthAt = (ray: Ray, r: number): number => {
+    const t = (r - inner) / ray.length;
+    return t >= 1 ? 0 : (ray.width / 2) * (1 - Math.max(0, t));
+  };
+  rays.forEach((ray, k) => {
+    const dir = { x: Math.cos(ray.angle), y: Math.sin(ray.angle) };
+    const perp = { x: -dir.y, y: dir.x };
+    const base = pt(inner, ray.angle);
+    const tip = pt(inner + ray.length, ray.angle);
+    const polygon: Vec2[] = [
+      { x: base.x + (perp.x * ray.width) / 2, y: base.y + (perp.y * ray.width) / 2 }, tip,
+      { x: base.x - (perp.x * ray.width) / 2, y: base.y - (perp.y * ray.width) / 2 },
+    ];
+    const strands = 2 * Math.floor(ray.width / (2 * SUN_STROKE)) + 1;
+    const strokes: Vec2[][] = [];
+    for (let j = 0; j < strands; j++) {
+      const v = (j - (strands - 1) / 2) * SUN_STROKE;
+      const end = ray.length * (1 - (2 * Math.abs(v)) / ray.width);
+      strokes.push([
+        { x: base.x + perp.x * v, y: base.y + perp.y * v },
+        { x: base.x + perp.x * v + dir.x * end, y: base.y + perp.y * v + dir.y * end },
+      ]);
+    }
+    members.push(member(`ray${String(k + 1).padStart(2, '0')}`, { kind: 'ray', polygon, pen: 'carbon', hatchAngle: 0, pitch: 1, cross: false, tonal: false, strokes }));
+  });
+
+  // Ring bands: radii spread between the rays' inner end and the long tips.
+  const fractions = [[], [0.5], [0.36, 0.66], [0.26, 0.5, 0.74]][Math.max(0, Math.min(3, Math.round(o.rings)))];
+  const harmonics: number[][] = [];
+  const spikeDraws: number[][] = [];
+  const arcDraws: number[][] = [];
+  for (let i = 0; i < 3; i++) {
+    harmonics.push([o.random() * 2 * Math.PI, o.random() * 2 * Math.PI]);
+    spikeDraws.push(Array.from({ length: n * 3 * 2 }, () => o.random()));
+    arcDraws.push(Array.from({ length: n }, () => o.random()));
+  }
+  fractions.forEach((fraction, ri) => {
+    const r0 = inner + (reach - inner) * fraction;
+    const radiusAt = (a: number): number =>
+      r0 + noise * 0.06 * r0 * (Math.sin(3 * a + harmonics[ri][0]) + 0.5 * Math.sin(5 * a + harmonics[ri][1]));
+    // Only the outermost band carries a corona: a filament off an inner band would run into the next band.
+    const corona = ri === fractions.length - 1;
+    for (let k = 0; k < n; k++) {
+      const a = rays[k], b = rays[(k + 1) % n];
+      const aEnd = a.angle + Math.atan2(halfWidthAt(a, r0 - SUN_BAND / 2) + SUN_MARGIN, r0);
+      let bStart = b.angle - Math.atan2(halfWidthAt(b, r0 - SUN_BAND / 2) + SUN_MARGIN, r0);
+      if (k === n - 1) bStart += 2 * Math.PI;
+      if (bStart - aEnd < 0.02) continue;
+      // The band fills only part of the sector, so the weather can thread between arcs as well as between rays.
+      const sector = bStart - aEnd;
+      const span = sector * SUN_RING_FILL;
+      const shift = noise * 0.2 * sector * (2 * arcDraws[ri][k] - 1);
+      const from = aEnd + (sector - span) / 2 + shift;
+      const to = from + span;
+      const count = Math.max(2, Math.ceil(((to - from) * 180) / Math.PI / 1.5));
+      const angles = Array.from({ length: count + 1 }, (_, i) => from + ((to - from) * i) / count);
+      const offsets = (d: number): Vec2[] => angles.map(t => pt(radiusAt(t) + d, t));
+      const polygon = [...offsets(SUN_BAND / 2), ...offsets(-SUN_BAND / 2).reverse()];
+      const strokes = [-SUN_STROKE, 0, SUN_STROKE].map(d => offsets(d));
+      const name = `ring${ri + 1}-${String(k + 1).padStart(2, '0')}`;
+      members.push(member(name, { kind: 'arc', polygon, pen: SUN_ACCENT, hatchAngle: 0, pitch: 1, cross: false, tonal: false, strokes, solid: o.solidRings === true }));
+      if (!corona) continue;
+      for (let j = 0; j < 3; j++) {
+        const dp = spikeDraws[ri][(k * 3 + j) * 2], dl = spikeDraws[ri][(k * 3 + j) * 2 + 1];
+        // Presence and length: all kept at noise 0; noise drops some and varies the rest.
+        if (dp < noise * 0.35) continue;
+        const t = from + (to - from) * [0.15, 0.5, 0.85][j];
+        const length = SUN_SPIKE_LENGTH * (1 + noise * 0.8 * (2 * dl - 1));
+        const r1 = radiusAt(t) + SUN_BAND / 2 + 0.05;
+        const dir = { x: Math.cos(t), y: Math.sin(t) };
+        const perp = { x: -dir.y, y: dir.x };
+        const p0 = pt(r1, t), p1 = pt(r1 + length, t);
+        const w = SUN_SPIKE_WIDTH / 2;
+        const spike: Vec2[] = [
+          { x: p0.x + perp.x * w, y: p0.y + perp.y * w }, { x: p1.x + perp.x * w, y: p1.y + perp.y * w },
+          { x: p1.x - perp.x * w, y: p1.y - perp.y * w }, { x: p0.x - perp.x * w, y: p0.y - perp.y * w },
+        ];
+        members.push(member(`spike${ri + 1}-${String(k + 1).padStart(2, '0')}-${j + 1}`, { kind: 'spike', polygon: spike, pen: SUN_ACCENT, hatchAngle: 0, pitch: 1, cross: false, tonal: false, strokes: [[p0, p1]], solid: false }));
+      }
+    }
+  });
+  return members;
+}
+
+export function buildStructure(random: () => number, layout: LayoutId = 'span', density = 0.6, ringCount = 8, sun?: SunOptions): StructureMember[] {
   switch (layout) {
     case 'orbit': return orbitLayout(random, density);
     case 'colonnade': return colonnadeLayout(density);
     case 'portal': return portalLayout();
     case 'ring': return ringLayout(ringCount);
+    case 'sun': return sunLayout(sun ?? { rays: 22, inner: 10.5, reach: 20, alternate: 0.55, rings: 2, noise: 0.15, random });
     default: return spanLayout(random);
   }
 }

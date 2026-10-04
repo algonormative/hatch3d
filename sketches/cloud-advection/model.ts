@@ -16,12 +16,12 @@ export interface Vec2 { x: number; y: number }
 
 export const MODEL = Object.freeze({
   id: 'prescribed-passive-advection',
-  version: '1.2.0',
+  version: '1.3.0',
   backend: 'ts-cpu-semi-lagrangian-rk2-bilinear',
-  backendVersion: '1.2.0',
+  backendVersion: '1.3.0',
 });
 
-export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v2';
+export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v3';
 
 /**
  * Hard bounds that keep a render bounded. `maxDiffusionSubsteps` caps the
@@ -32,6 +32,8 @@ export const LIMITS = Object.freeze({
   maxCells: 100_000,
   maxSteps: 240,
   maxDiffusionSubsteps: 16,
+  // Hard cap on `eddyTrain.maxActive`.
+  maxTrainEddies: 12,
   // The art grid (23,400 cells) at 240 steps and the 16-substep cap is 89.9M.
   maxWork: 90_000_000,
 });
@@ -65,9 +67,65 @@ export const LIMITS = Object.freeze({
  * midpoint ½(c_n + c_{n+1}) of that step's centre motion (both RK2 stages of the
  * backtrace see that same field). Solids do not affect vortex motion (no image
  * vortices — an approximation), and a vortex that leaves the domain keeps moving
- * and still contributes. Snapshots carry the current centres (`vortexCenters`).
+ * and still contributes. Snapshots carry the active vortex list (`vortices`).
  */
 export type EddyDrift = 'fixed' | 'wind' | 'kirchhoff';
+
+/**
+ * Eddy train (`CloudStudyConfig.eddyTrain`): a deterministic stream of vortices
+ * released upwind so the flow stays alive for the whole window. Requires
+ * `eddyDrift` to be `wind` or `kirchhoff` (RangeError with `fixed`). Exact rules:
+ *
+ * - SPAWN. The k-th eddy (k = 0, 1, 2, …) exists in the state at step
+ *   s_k = firstStep + k·period + j_k, where j_k is a seeded integer in
+ *   [−timingJitter, +timingJitter] (0 when timingJitter = 0). Validation
+ *   guarantees 2·timingJitter < period and firstStep ≥ timingJitter, so spawn
+ *   steps strictly increase and are never reordered or clamped. A spawn at step
+ *   s is part of the snapshot at step s (a spawn at step 0 is in the initial
+ *   state) and first moves in the step s → s+1.
+ * - PLACEMENT. The upwind edge is the edge whose outward normal has the most
+ *   negative dot product with the uniform wind (left (−1,0), right (+1,0),
+ *   top (0,−1), bottom (0,+1); ties and zero wind resolve in that order, so x
+ *   edges win ties). The eddy centre sits one coreRadius beyond that edge, at
+ *   the edge midpoint plus a seeded offset in ±lateralJitter · (edge length / 2).
+ * - SIGN. circulation is a magnitude: eddy k gets −circulation when `alternate`
+ *   and k is odd, otherwise +circulation.
+ * - MOTION. Train eddies move exactly like the config's static vortices (same
+ *   `eddyDrift`, and under `kirchhoff` they all induce one another).
+ * - REMOVAL. At the end of step n → n+1 (after all centres have moved), a train
+ *   eddy whose centre is farther than `removeMargin` m outside the domain
+ *   rectangle (Euclidean distance to the rectangle) is removed. Static vortices
+ *   are never removed. A removed eddy still took part in that step's backtrace.
+ *   Keep removeMargin ≥ coreRadius, or fresh eddies that move outward vanish at once.
+ * - CAP. `maxActive` (1 … LIMITS.maxTrainEddies) caps ACTIVE TRAIN eddies. If a
+ *   spawn would exceed it, the oldest active train eddy (lowest k) is removed
+ *   first. Removal by margin happens before spawning within a step.
+ * - ORDER. The active list is always: static vortices in config order, then
+ *   train eddies by ascending k.
+ * - RANDOMNESS. Lateral offset and timing jitter come from the seeded integer
+ *   hash (`seed`, k); no Math.random.
+ */
+export interface EddyTrain {
+  id: 'eddy-train';
+  period: number; // steps, integer >= 1
+  firstStep: number; // integer >= 0
+  circulation: number; // m^2/s, magnitude (> 0)
+  coreRadius: number; // m
+  alternate: boolean;
+  lateralJitter: number; // 0..1 fraction of the upwind edge half-span
+  timingJitter: number; // integer steps, 0 = exact period
+  seed: number; // uint32
+  removeMargin: number; // m
+  maxActive: number; // integer 1..LIMITS.maxTrainEddies
+}
+
+/** One vortex of the active list at a step (static `eddy-*` id, or `train-<k>`). */
+export interface ActiveVortex {
+  key: string;
+  center: Vec2; // m
+  circulation: number; // m^2/s, signed
+  coreRadius: number; // m
+}
 
 export type BoundaryMode = 'open' | 'closed' | 'inflow';
 
@@ -159,6 +217,8 @@ export interface CloudStudyConfig {
   front?: WeatherFront;
   /** Vortex motion; absent means `fixed` and is omitted from hashes (as is an explicit `fixed`). */
   eddyDrift?: EddyDrift;
+  /** Upwind eddy stream; absent is omitted from hashes. Requires a drifting `eddyDrift`. */
+  eddyTrain?: EddyTrain;
 }
 
 export interface SnapshotHashes {
@@ -199,8 +259,12 @@ export interface CloudSnapshot {
   /** Hash of the exact Float64 bytes of `density`. */
   densityHash: string;
   mass: MassBudget;
-  /** Vortex centres (m) at this step, in `config.vortices` order. Equal to the initial layout when eddies are fixed. */
-  vortexCenters: Vec2[];
+  /**
+   * Active vortices at this step: the config's static vortices in order (key =
+   * their id), then train eddies by ascending spawn index (key `train-<k>`).
+   * Centres equal the initial layout while eddies are fixed.
+   */
+  vortices: ActiveVortex[];
 }
 
 /**
