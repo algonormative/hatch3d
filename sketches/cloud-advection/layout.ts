@@ -8,7 +8,7 @@ export const FIN_THICKNESS = 0.15;
 export const CORE_CENTER: Vec2 = Object.freeze({ x: WORLD.width / 2, y: WORLD.height / 2 });
 export const CORE_KEEP_OUT = 8.6;
 
-export type LayoutId = 'span' | 'orbit';
+export type LayoutId = 'span' | 'orbit' | 'colonnade' | 'portal' | 'ring';
 export type MemberKind = 'slab' | 'pier' | 'fin' | 'box' | 'wedge' | 'rail' | 'plate' | 'radial';
 
 /** An architectural member. It is both a solid in the simulation and a drawn outline. */
@@ -227,6 +227,95 @@ export function orbitLayout(random: () => number, density = 0.6): StructureMembe
   return members;
 }
 
-export function buildStructure(random: () => number, layout: LayoutId = 'span', density = 0.6): StructureMember[] {
-  return layout === 'orbit' ? orbitLayout(random, density) : spanLayout(random);
+// ------------------------------------------------- symmetric layouts
+// No seeded jitter anywhere below: the geometry is a pure function of its arguments, computed
+// exactly (no rounding), so mirror and rotation symmetry hold to floating-point precision.
+
+type Draft = Omit<StructureMember, 'id' | 'name'>;
+const member = (name: string, draft: Draft): StructureMember => ({ id: `solid-${name}`, name, ...draft });
+const SYM_PITCH = 1;
+const MIRROR_X = CORE_CENTER.x;
+const mirror = (ring: Vec2[]): Vec2[] => ring.map(p => ({ x: 2 * MIRROR_X - p.x, y: p.y })).reverse();
+const box = (x0: number, y0: number, x1: number, y1: number): Vec2[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+const rotateAbout = (ring: Vec2[], by: number): Vec2[] => {
+  const c = Math.cos(by), s = Math.sin(by);
+  return ring.map(p => ({ x: CORE_CENTER.x + (p.x - CORE_CENTER.x) * c - (p.y - CORE_CENTER.y) * s, y: CORE_CENTER.y + (p.x - CORE_CENTER.x) * s + (p.y - CORE_CENTER.y) * c }));
+};
+
+/**
+ * `colonnade`: two facing rows of identical horizontal slabs, exactly equally spaced across the page and
+ * perpendicular to a mostly downward wind, so the wakes behind the slabs become stripes and the gaps
+ * between them channel the weather. The middle of each row is left open around the quiet core.
+ * `density` picks the column count: 4 below 0.34, 6 below 0.67, else 8.
+ */
+export function colonnadeLayout(density = 0.6): StructureMember[] {
+  const columns = density < 0.34 ? 4 : density < 0.67 ? 6 : 8;
+  const pitch = WORLD.width / columns;
+  const length = pitch * 0.7;
+  const thick = 2.2;
+  const members: StructureMember[] = [];
+  const rows: [string, number, string][] = [['u', CORE_CENTER.y - 16, 'carbon'], ['l', CORE_CENTER.y + 16, 'ultramarine']];
+  for (const [prefix, y, pen] of rows) {
+    for (let k = 0; k < columns; k++) {
+      const cx = pitch * (k + 0.5);
+      // Keep the core and the middle of the row clear.
+      const ring = box(cx - length / 2, y - thick / 2, cx + length / 2, y + thick / 2);
+      if (distanceToPolygon(ring, CORE_CENTER) < CORE_KEEP_OUT) continue;
+      members.push(member(`${prefix}${String(k + 1).padStart(2, '0')}`, { kind: 'slab', polygon: ring, pen, hatchAngle: Math.PI / 4, pitch: SYM_PITCH, cross: false, tonal: false }));
+    }
+  }
+  return members;
+}
+
+/**
+ * `portal`: a mirror-symmetric gate. Two identical massive piers either side of the core, a lintel above,
+ * two identical thin sills below, and three pairs of identical long rails running to the frame.
+ */
+export function portalLayout(): StructureMember[] {
+  const members: StructureMember[] = [];
+  const leftPier = box(MIRROR_X - 15, CORE_CENTER.y - 16, MIRROR_X - 10, CORE_CENTER.y + 16);
+  const pair = (name: string, ring: Vec2[], pen: string, hatchAngle: number): void => {
+    members.push(member(`${name}-l`, { kind: 'pier', polygon: ring, pen, hatchAngle, pitch: SYM_PITCH, cross: false, tonal: false }));
+    members.push(member(`${name}-r`, { kind: 'pier', polygon: mirror(ring), pen, hatchAngle: Math.PI - hatchAngle, pitch: SYM_PITCH, cross: false, tonal: false }));
+  };
+  pair('pier', leftPier, 'carbon', Math.PI / 4);
+  members.push(member('lintel', { kind: 'slab', polygon: box(MIRROR_X - 19, CORE_CENTER.y - 22, MIRROR_X + 19, CORE_CENTER.y - 16), pen: 'carbon', hatchAngle: Math.PI / 2, pitch: SYM_PITCH, cross: false, tonal: false }));
+  pair('sill', box(MIRROR_X - 15, CORE_CENTER.y + 20, MIRROR_X - 4, CORE_CENTER.y + 21), 'ultramarine', Math.PI / 2);
+  // Long rails: horizontal from each pier to the frame, and vertical from the lintel to the top frame.
+  for (const [k, dy] of [-9, 0, 9].entries()) pair(`rail${k + 1}`, box(-2, CORE_CENTER.y + dy - 0.15, MIRROR_X - 15, CORE_CENTER.y + dy + 0.15), 'ultramarine', Math.PI / 2);
+  pair('mast', box(MIRROR_X - 17, -2, MIRROR_X - 16.6, CORE_CENTER.y - 22), 'ultramarine', Math.PI / 2);
+  return members;
+}
+
+/**
+ * `ring`: `count` identical radial slabs in exact rotational symmetry about the core, inner ends at a
+ * fixed radius, plus `count` identical thin tangent rails around them (the outer ring segments).
+ */
+export function ringLayout(count = 8): StructureMember[] {
+  const n = Math.max(4, Math.min(12, Math.round(count)));
+  const inner = 12.5, length = 15, width = 2.6;
+  const slab = box(CORE_CENTER.x + inner, CORE_CENTER.y - width / 2, CORE_CENTER.x + inner + length, CORE_CENTER.y + width / 2);
+  const outerR = inner + length + 4.5;
+  const chord = 2 * outerR * Math.tan(Math.PI / n) * 0.78;
+  const rail = box(CORE_CENTER.x + outerR - 0.15, CORE_CENTER.y - chord / 2, CORE_CENTER.x + outerR + 0.15, CORE_CENTER.y + chord / 2);
+  const members: StructureMember[] = [];
+  for (let k = 0; k < n; k++) {
+    const by = (2 * Math.PI * k) / n;
+    members.push(member(`s${String(k + 1).padStart(2, '0')}`, { kind: 'slab', polygon: rotateAbout(slab, by), pen: 'carbon', hatchAngle: by + Math.PI / 2, pitch: SYM_PITCH, cross: false, tonal: false }));
+  }
+  for (let k = 0; k < n; k++) {
+    const by = (2 * Math.PI * k) / n;
+    members.push(member(`t${String(k + 1).padStart(2, '0')}`, { kind: 'rail', polygon: rotateAbout(rail, by), pen: 'ultramarine', hatchAngle: by, pitch: SYM_PITCH * 2.4, cross: false, tonal: false }));
+  }
+  return members;
+}
+
+export function buildStructure(random: () => number, layout: LayoutId = 'span', density = 0.6, ringCount = 8): StructureMember[] {
+  switch (layout) {
+    case 'orbit': return orbitLayout(random, density);
+    case 'colonnade': return colonnadeLayout(density);
+    case 'portal': return portalLayout();
+    case 'ring': return ringLayout(ringCount);
+    default: return spanLayout(random);
+  }
 }

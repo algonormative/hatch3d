@@ -15,7 +15,7 @@
  * traces that end farther out read zero anyway.
  */
 import { LIMITS, MODEL, SNAPSHOT_SCHEMA } from './model.ts';
-import type { CloudSnapshot, CloudStudyConfig, SnapshotHashes, Vec2, WeatherFront } from './model.ts';
+import type { CloudSnapshot, CloudStudyConfig, EddyDrift, SnapshotHashes, Vec2, WeatherFront } from './model.ts';
 
 // ---------------------------------------------------------------- hashing
 
@@ -85,6 +85,7 @@ export function configHashes(config: CloudStudyConfig): SnapshotHashes {
     wind: config.wind,
     vortices: config.vortices,
     front: config.front, // omitted from the canonical form when absent
+    eddyDrift: driftOf(config) === 'fixed' ? undefined : config.eddyDrift, // fixed (or absent) is never hashed
     source: {
       amplitude: config.source.amplitude,
       noiseScale: config.source.noiseScale,
@@ -97,17 +98,96 @@ export function configHashes(config: CloudStudyConfig): SnapshotHashes {
 
 // --------------------------------------------------------------- velocity
 
-export function velocityAt(config: CloudStudyConfig, p: Vec2): Vec2 {
-  let vx = config.wind.velocity.x;
-  let vy = config.wind.velocity.y;
-  for (const v of config.vortices) {
-    const dx = p.x - v.center.x;
-    const dy = p.y - v.center.y;
-    const k = v.circulation / (2 * Math.PI) / (dx * dx + dy * dy + v.coreRadius * v.coreRadius);
+interface VortexTable { gam: number[]; core2: number[] }
+
+function vortexTable(config: CloudStudyConfig): VortexTable {
+  return {
+    gam: config.vortices.map((v) => v.circulation / (2 * Math.PI)),
+    core2: config.vortices.map((v) => v.coreRadius * v.coreRadius),
+  };
+}
+
+/** wind + Σ regularized vortices located at `centers`; writes into `out`. */
+function velocityInto(
+  wx: number, wy: number, tab: VortexTable, centers: ReadonlyArray<Vec2>,
+  px: number, py: number, out: Vec2,
+): void {
+  let vx = wx;
+  let vy = wy;
+  for (let i = 0; i < centers.length; i++) {
+    const dx = px - centers[i].x;
+    const dy = py - centers[i].y;
+    const k = tab.gam[i] / (dx * dx + dy * dy + tab.core2[i]);
     vx += k * -dy;
     vy += k * dx;
   }
-  return { x: vx, y: vy };
+  out.x = vx;
+  out.y = vy;
+}
+
+/** Velocity (m/s) for the INITIAL vortex layout of the config. */
+export function velocityAt(config: CloudStudyConfig, p: Vec2): Vec2 {
+  return velocityAtTime(config, config.vortices.map((v) => v.center), p);
+}
+
+/**
+ * Velocity (m/s) with the vortices at the given centres (see `vortexCentersAt`;
+ * note the density backtrace of a step uses the midpoint centres, see EddyDrift).
+ */
+export function velocityAtTime(config: CloudStudyConfig, centers: ReadonlyArray<Vec2>, p: Vec2): Vec2 {
+  if (centers.length !== config.vortices.length) throw new RangeError('centers must have one entry per vortex');
+  const out = { x: 0, y: 0 };
+  velocityInto(config.wind.velocity.x, config.wind.velocity.y, vortexTable(config), centers, p.x, p.y, out);
+  return out;
+}
+
+function driftOf(config: CloudStudyConfig): EddyDrift {
+  return config.eddyDrift ?? 'fixed';
+}
+
+const isMoving = (config: CloudStudyConfig): boolean => driftOf(config) !== 'fixed' && config.vortices.length > 0;
+
+/** One RK2 (midpoint) step of the vortex centres at the fixed dt. Shared by every replay path. */
+function stepCenters(config: CloudStudyConfig, tab: VortexTable, centers: ReadonlyArray<Vec2>): Vec2[] {
+  const { dt } = config.settings;
+  const U = config.wind.velocity;
+  const kirchhoff = driftOf(config) === 'kirchhoff';
+  const m = centers.length;
+  const velocities = (cs: ReadonlyArray<Vec2>): Vec2[] => cs.map((c, i) => {
+    let vx = U.x;
+    let vy = U.y;
+    if (kirchhoff) {
+      for (let k = 0; k < m; k++) {
+        if (k === i) continue; // no self-induction
+        const dx = c.x - cs[k].x;
+        const dy = c.y - cs[k].y;
+        const kk = tab.gam[k] / (dx * dx + dy * dy + tab.core2[k]);
+        vx += kk * -dy;
+        vy += kk * dx;
+      }
+    }
+    return { x: vx, y: vy };
+  });
+  const k1 = velocities(centers);
+  const mid = centers.map((c, i) => ({ x: c.x + 0.5 * dt * k1[i].x, y: c.y + 0.5 * dt * k1[i].y }));
+  const k2 = velocities(mid);
+  return centers.map((c, i) => ({ x: c.x + dt * k2[i].x, y: c.y + dt * k2[i].y }));
+}
+
+/**
+ * Vortex centres at an integer step: a deterministic replay of the same
+ * integrator the stepper uses, so it is bitwise equal to a snapshot's centres.
+ */
+export function vortexCentersAt(config: CloudStudyConfig, step: number): Vec2[] {
+  validateConfig(config);
+  if (!Number.isInteger(step) || step < 0 || step > LIMITS.maxSteps) {
+    throw new RangeError(`step must be an integer in [0, ${LIMITS.maxSteps}]`);
+  }
+  let centers = config.vortices.map((v) => ({ x: v.center.x, y: v.center.y }));
+  if (!isMoving(config)) return centers;
+  const tab = vortexTable(config);
+  for (let s = 0; s < step; s++) centers = stepCenters(config, tab, centers);
+  return centers;
 }
 
 // ------------------------------------------------------------ weather front
@@ -235,7 +315,10 @@ function diffusionSubsteps(settings: { dt: number; diffusivity: number }, h: num
 /** Total gather/diffusion work for `steps` steps, rejected before any is done. */
 function checkWork(domain: CloudDomain, steps: number): void {
   const substeps = diffusionSubsteps(domain.config.settings, domain.spacing);
-  const work = domain.cols * domain.rows * steps * Math.max(1, substeps);
+  // A drifting-eddy step rebuilds the backtrace stencil: about five gathers' worth of work per cell (measured,
+  // and it runs alongside the diffusion substeps), so it counts as at least five updates per cell-step.
+  const perCellStep = Math.max(1, substeps, isMoving(domain.config) ? 5 : 0);
+  const work = domain.cols * domain.rows * steps * perCellStep;
   if (work > LIMITS.maxWork) {
     throw new RangeError(`${steps} steps on ${domain.cols * domain.rows} cells needs ${work} cell updates, above the limit of ${LIMITS.maxWork}`);
   }
@@ -273,6 +356,9 @@ function validateConfig(config: CloudStudyConfig): void {
   diffusionSubsteps(settings, g.spacing);
   if (settings.boundary !== 'open' && settings.boundary !== 'closed' && settings.boundary !== 'inflow') {
     throw new RangeError("settings.boundary must be 'open', 'closed' or 'inflow'");
+  }
+  if (config.eddyDrift !== undefined && config.eddyDrift !== 'fixed' && config.eddyDrift !== 'wind' && config.eddyDrift !== 'kirchhoff') {
+    throw new RangeError("eddyDrift must be 'fixed', 'wind' or 'kirchhoff'");
   }
   if (settings.boundary === 'inflow' && !config.front) {
     throw new RangeError("settings.boundary 'inflow' requires config.front");
@@ -672,39 +758,52 @@ export function sampleDensity(domain: CloudDomain, density: ArrayLike<number>, p
 
 // ----------------------------------------------------------------- engine
 
-interface Engine {
+/**
+ * Inflow only: per affected cell, up to four upstream reads (world position,
+ * weight, stride 4 per entry). A backtrace that leaves the domain is one read
+ * of weight 1 at q.
+ */
+interface GhostList { cell: number[]; count: number[]; x: number[]; y: number[]; w: number[] }
+
+interface Stencil {
   /** 4 entries per cell; unused slots point at the cell itself with weight 0. */
   idx: Int32Array;
   w: Float64Array;
+  ghost?: GhostList;
+}
+
+interface Engine {
   /** Diffusion faces: east / south face of cell c is open. Present only if diffusivity > 0. */
   openE?: Uint8Array;
   openS?: Uint8Array;
   substeps: number;
   kappa: number;
-  /**
-   * Inflow only: per affected cell, up to four upstream reads (world position,
-   * weight). A backtrace that leaves the domain is one read of weight 1 at q.
-   */
-  ghost?: { m: number; cell: Int32Array; count: Uint8Array; x: Float64Array; y: Float64Array; w: Float64Array };
+  /** Backtrace stencil for the initial (fixed) vortex layout; built lazily. */
+  fixed?: Stencil;
 }
 
-function getEngine(domain: CloudDomain): Engine {
-  const n = internalsOf(domain);
-  if (n.engine) return n.engine;
-  const { config } = domain;
-  const { dt, diffusivity } = config.settings;
+function newStencil(N: number, inflow: boolean): Stencil {
+  return {
+    idx: new Int32Array(N * 4),
+    w: new Float64Array(N * 4),
+    ghost: inflow ? { cell: [], count: [], x: [], y: [], w: [] } : undefined,
+  };
+}
+
+/**
+ * Backtrace + wall-aware interpolation weights of every fluid cell for the
+ * velocity field with vortices at `centers` (steady within the step).
+ */
+function fillStencil(n: Internals, config: CloudStudyConfig, tab: VortexTable, centers: ReadonlyArray<Vec2>, st: Stencil): void {
+  const { dt } = config.settings;
   const { cols, rows, h, solid, ox, oy } = n;
-  const N = cols * rows;
-  const idx = new Int32Array(N * 4);
-  const w = new Float64Array(N * 4);
+  const { idx, w, ghost } = st;
   const si = new Int32Array(4);
   const sw = new Float64Array(4);
   const gs = newGhost();
-  const gCell: number[] = [];
-  const gCount: number[] = [];
-  const gx: number[] = [];
-  const gy: number[] = [];
-  const gw: number[] = [];
+  const v1 = { x: 0, y: 0 };
+  const v2 = { x: 0, y: 0 };
+  if (ghost) { ghost.cell.length = 0; ghost.count.length = 0; ghost.x.length = 0; ghost.y.length = 0; ghost.w.length = 0; }
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const c = j * cols + i;
@@ -712,8 +811,8 @@ function getEngine(domain: CloudDomain): Engine {
       if (solid[c]) continue;
       const px = ox + (i + 0.5) * h;
       const py = oy + (j + 0.5) * h;
-      const v1 = velocityAt(config, { x: px, y: py });
-      const v2 = velocityAt(config, { x: px - 0.5 * dt * v1.x, y: py - 0.5 * dt * v1.y });
+      velocityInto(n.windX, n.windY, tab, centers, px, py, v1);
+      velocityInto(n.windX, n.windY, tab, centers, px - 0.5 * dt * v1.x, py - 0.5 * dt * v1.y, v2);
       const dx = -dt * v2.x;
       const dy = -dt * v2.y;
       const qx = px + dx;
@@ -721,14 +820,14 @@ function getEngine(domain: CloudDomain): Engine {
       // A blocked backtrace reads 0 (absorbing wall, clean air behind it).
       let count = 0;
       if (firstBlock(n, px, py, qx, qy) === Infinity) {
-        if (n.inflow && (qx < ox || qx > n.x1 || qy < oy || qy > n.y1)) {
+        if (ghost && (qx < ox || qx > n.x1 || qy < oy || qy > n.y1)) {
           // Left the domain: read the upstream field at q itself.
-          gCell.push(c); gCount.push(1); gx.push(qx, 0, 0, 0); gy.push(qy, 0, 0, 0); gw.push(1, 0, 0, 0);
+          ghost.cell.push(c); ghost.count.push(1); ghost.x.push(qx, 0, 0, 0); ghost.y.push(qy, 0, 0, 0); ghost.w.push(1, 0, 0, 0);
         } else {
-          count = sampleStencil(n, qx, qy, si, sw, n.inflow ? gs : null);
-          if (n.inflow && gs.n > 0) {
-            gCell.push(c); gCount.push(gs.n);
-            for (let k = 0; k < 4; k++) { gx.push(gs.x[k]); gy.push(gs.y[k]); gw.push(k < gs.n ? gs.w[k] : 0); }
+          count = sampleStencil(n, qx, qy, si, sw, ghost ? gs : null);
+          if (ghost && gs.n > 0) {
+            ghost.cell.push(c); ghost.count.push(gs.n);
+            for (let k = 0; k < 4; k++) { ghost.x.push(gs.x[k]); ghost.y.push(gs.y[k]); ghost.w.push(k < gs.n ? gs.w[k] : 0); }
           }
         }
       }
@@ -739,7 +838,15 @@ function getEngine(domain: CloudDomain): Engine {
       for (let k = count; k < 4; k++) w[c * 4 + k] = 0;
     }
   }
+}
 
+function getEngine(domain: CloudDomain): Engine {
+  const n = internalsOf(domain);
+  if (n.engine) return n.engine;
+  const { config } = domain;
+  const { dt, diffusivity } = config.settings;
+  const { cols, rows, h, solid, ox, oy } = n;
+  const N = cols * rows;
   let openE: Uint8Array | undefined;
   let openS: Uint8Array | undefined;
   let substeps = 0;
@@ -760,14 +867,18 @@ function getEngine(domain: CloudDomain): Engine {
     substeps = diffusionSubsteps(config.settings, h);
     kappa = (diffusivity * (dt / substeps)) / (h * h);
   }
-  const ghost = n.inflow
-    ? {
-      m: gCell.length, cell: Int32Array.from(gCell), count: Uint8Array.from(gCount),
-      x: Float64Array.from(gx), y: Float64Array.from(gy), w: Float64Array.from(gw),
-    }
-    : undefined;
-  n.engine = { idx, w, openE, openS, substeps, kappa, ghost };
+  n.engine = { openE, openS, substeps, kappa };
   return n.engine;
+}
+
+function getFixedStencil(domain: CloudDomain, engine: Engine): Stencil {
+  if (engine.fixed) return engine.fixed;
+  const n = internalsOf(domain);
+  const { config } = domain;
+  const st = newStencil(n.cols * n.rows, n.inflow);
+  fillStencil(n, config, vortexTable(config), config.vortices.map((v) => v.center), st);
+  engine.fixed = st;
+  return st;
 }
 
 function massSum(density: ArrayLike<number>, cellArea: number): number {
@@ -781,9 +892,16 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
   const engine = getEngine(domain);
   const { cols, rows, solid, closed } = n;
   const N = cols * rows;
-  const { idx, w, openE, openS, substeps, kappa, ghost } = engine;
+  const { openE, openS, substeps, kappa } = engine;
   const { front, windX, windY, ox, oy, h } = n;
-  const dt = domain.config.settings.dt;
+  const { config } = domain;
+  const dt = config.settings.dt;
+  const moving = isMoving(config);
+  const tab = vortexTable(config);
+  let centers: Vec2[] = snapshot.vortexCenters.map((c) => ({ x: c.x, y: c.y }));
+  // Fixed eddies: one stencil for the whole run. Drifting eddies: rebuilt every step from the midpoint centres.
+  const scratch = moving ? newStencil(N, n.inflow) : null;
+  let st = moving ? (scratch as Stencil) : getFixedStencil(domain, engine);
   let cur = Float64Array.from(snapshot.density);
   let nxt = new Float64Array(N);
   // Inflow diffusion: upstream values in the ghost cells just outside each edge (per step, fixed across substeps).
@@ -793,6 +911,14 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
 
   for (let s = 0; s < steps; s++) {
     const tOld = (snapshot.step + s) * dt; // time of the field being sampled
+    if (moving && scratch) {
+      const next = stepCenters(config, tab, centers);
+      const mid = next.map((c, i) => ({ x: 0.5 * (centers[i].x + c.x), y: 0.5 * (centers[i].y + c.y) }));
+      fillStencil(n, config, tab, mid, scratch);
+      st = scratch;
+      centers = next;
+    }
+    const { idx, w, ghost } = st;
 
     for (let c = 0; c < N; c++) {
       if (solid[c]) { nxt[c] = 0; continue; }
@@ -803,7 +929,7 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
     if (ghost && front) {
       const sx = windX * tOld;
       const sy = windY * tOld;
-      for (let e = 0; e < ghost.m; e++) {
+      for (let e = 0; e < ghost.cell.length; e++) {
         const c = ghost.cell[e];
         let v = nxt[c];
         for (let k = 0; k < ghost.count[e]; k++) {
@@ -849,7 +975,7 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
     }
   }
 
-  return makeSnapshot(domain, Array.from(cur), snapshot.step + steps, snapshot.mass.initial);
+  return makeSnapshot(domain, Array.from(cur), snapshot.step + steps, snapshot.mass.initial, centers);
 }
 
 // ------------------------------------------------------- initial condition
@@ -879,7 +1005,7 @@ function valueNoise(seed: number, x: number, y: number): number {
   return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
 }
 
-function makeSnapshot(domain: CloudDomain, density: number[], step: number, initialMass: number): CloudSnapshot {
+function makeSnapshot(domain: CloudDomain, density: number[], step: number, initialMass: number, centers: ReadonlyArray<Vec2>): CloudSnapshot {
   const current = massSum(density, domain.cellArea);
   const drift = current - initialMass;
   return {
@@ -897,6 +1023,7 @@ function makeSnapshot(domain: CloudDomain, density: number[], step: number, init
       drift,
       relativeDrift: initialMass === 0 ? 0 : drift / initialMass,
     },
+    vortexCenters: centers.map((c) => ({ x: c.x, y: c.y })),
   };
 }
 
@@ -925,7 +1052,7 @@ function initialFromDomain(domain: CloudDomain): CloudSnapshot {
       density[c] = value;
     }
   }
-  return makeSnapshot(domain, density, 0, massSum(density, domain.cellArea));
+  return makeSnapshot(domain, density, 0, massSum(density, domain.cellArea), domain.config.vortices.map((v) => v.center));
 }
 
 // ---------------------------------------------------------------- stepping
@@ -945,6 +1072,10 @@ function snapshotBodyProblem(s: CloudSnapshot): string | null {
   for (let i = 0; i < s.density.length; i++) {
     const v = s.density[i];
     if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return `density[${i}] must be finite and nonnegative`;
+  }
+  if (!Array.isArray(s.vortexCenters) ||
+      s.vortexCenters.some((c) => !isRecord(c) || typeof c.x !== 'number' || typeof c.y !== 'number' || !Number.isFinite(c.x) || !Number.isFinite(c.y))) {
+    return 'vortexCenters must be an array of finite {x, y}';
   }
   const recomputed = massSum(s.density, s.grid.spacing * s.grid.spacing);
   if (!closeTo(s.mass.current, recomputed, 1e-12)) return 'mass.current does not match the density';
@@ -974,6 +1105,11 @@ function assertCompatible(snapshot: CloudSnapshot, domain: CloudDomain): void {
   }
   const problem = snapshotBodyProblem(snapshot);
   if (problem) throw new SnapshotMismatchError(`snapshot ${problem}`);
+  // Centres are a deterministic function of the config and step; a forged or stale layout is rejected.
+  const expectedCenters = vortexCentersAt(domain.config, snapshot.step);
+  const centersMatch = snapshot.vortexCenters.length === expectedCenters.length &&
+    expectedCenters.every((c, i) => c.x === snapshot.vortexCenters[i].x && c.y === snapshot.vortexCenters[i].y);
+  if (!centersMatch) throw new SnapshotMismatchError('snapshot vortexCenters do not match the config at this step');
   // dt is fixed by the config hash, so timeS is exactly step·dt (the same product the sim stores).
   if (snapshot.timeS !== snapshot.step * domain.config.settings.dt) {
     throw new SnapshotMismatchError('snapshot timeS is not step·dt');

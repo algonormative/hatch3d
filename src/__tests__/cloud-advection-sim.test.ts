@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LIMITS, MODEL, type CloudStudyConfig, type SolidRegion, type Vec2, type Vortex, type WeatherFront } from '../../sketches/cloud-advection/model.ts';
+import { LIMITS, MODEL, SNAPSHOT_SCHEMA, type CloudStudyConfig, type EddyDrift, type SolidRegion, type Vec2, type Vortex, type WeatherFront } from '../../sketches/cloud-advection/model.ts';
 import {
   SnapshotMismatchError,
   advance,
@@ -14,6 +14,8 @@ import {
   simulate,
   stableHash,
   velocityAt,
+  velocityAtTime,
+  vortexCentersAt,
 } from '../../sketches/cloud-advection/sim.ts';
 
 interface Opts {
@@ -31,10 +33,11 @@ interface Opts {
   seed: number;
   amplitude: number;
   front: WeatherFront;
+  eddyDrift: EddyDrift;
 }
 
 function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
-  const o: Partial<Opts> & Omit<Opts, 'front'> = {
+  const o: Partial<Opts> & Omit<Opts, 'front' | 'eddyDrift'> = {
     cols: 40, rows: 40, spacing: 0.5, dt: 0.5, boundary: 'open', diffusivity: 0,
     wind: { x: 0, y: 0 }, vortices: [], solids: [],
     center: { x: 6, y: 10 }, radii: { x: 3, y: 3 }, seed: 1234, amplitude: 1,
@@ -55,6 +58,7 @@ function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
     },
     solids: o.solids,
     ...(o.front ? { front: o.front } : {}),
+    ...(o.eddyDrift ? { eddyDrift: o.eddyDrift } : {}),
   };
 }
 
@@ -415,7 +419,9 @@ describe('cloud advection: numerical fixtures', () => {
     it('front configs without softness keep their pre-softness hashes', () => {
       const [s40] = simulate(richConfig(), [40]);
       expect(s40.densityHash).toBe('11d588b63b0ff896');
-      expect(configHashes(richConfig()).simulation).toBe('7ec69afe1e2d7bbf');
+// Pinned with MODEL 1.2.0 before eddyDrift existed; an absent eddyDrift must keep these.
+      expect(configHashes(richConfig()).simulation).toBe('e6cb1b0dfd664f23');
+      expect(configHashes(makeConfig({ wind: { x: 0.8, y: 0.15 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('703910d488969e8c');
     });
 
     it('softness: absent equals 0.12, is validated, hashed, and widens the bank edge', () => {
@@ -500,8 +506,8 @@ describe('cloud advection: numerical fixtures', () => {
     it('5c. snapshots from an older model version refuse to resume', () => {
       const config = makeConfig({ boundary: 'inflow', front: front() });
       const snap = initialSnapshot(config);
-      expect(MODEL.version).toBe('1.1.0');
-      expect(MODEL.backendVersion).toBe('1.1.0');
+      expect(MODEL.version).toBe('1.2.0');
+      expect(MODEL.backendVersion).toBe('1.2.0');
       const old = { ...snap, model: { ...snap.model, version: '1.0.0', backendVersion: '1.0.0' } } as unknown as typeof snap;
       expect(() => advance(old, config, 1)).toThrow(SnapshotMismatchError);
     });
@@ -561,6 +567,203 @@ describe('cloud advection: numerical fixtures', () => {
       }
       expect(ms60).toBeLessThan(1000);
       expect(sum(last.density)).toBeGreaterThan(0);
+    });
+  });
+
+  describe('vortex drift (eddyDrift)', () => {
+    const angleOf = (a: Vec2, b: Vec2): number => Math.atan2(b.y - a.y, b.x - a.x);
+
+    it('fixed (absent or explicit) keeps centres, hashes and density bitwise', () => {
+      const base = { wind: { x: 0.8, y: 0.1 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)], solids: [rect('solid-a', 14, 6, 15, 14)], diffusivity: 0.1 };
+      const absent = makeConfig(base);
+      const explicit = makeConfig({ ...base, eddyDrift: 'fixed' });
+      expect(configHashes(explicit)).toEqual(configHashes(absent));
+      const [a] = simulate(absent, [60]);
+      const [e] = simulate(explicit, [60]);
+      expect(e.density).toEqual(a.density);
+      expect(a.vortexCenters).toEqual([{ x: 12, y: 9 }]);
+      expect(vortexCentersAt(absent, 60)).toEqual([{ x: 12, y: 9 }]);
+      expect(a.schema).toBe(SNAPSHOT_SCHEMA);
+      expect(SNAPSHOT_SCHEMA).toMatch(/\.v2$/);
+    });
+
+    it("'wind': a lone vortex travels with the wind", () => {
+      const wind = { x: 0.8, y: -0.3 };
+      const config = makeConfig({ eddyDrift: 'wind', wind, vortices: [vortex('eddy-1', 8, 14, 5, 1.5)] });
+      const snaps = simulate(config, [0, 50, 120]);
+      let worst = 0;
+      for (const snap of snaps) {
+        const t = snap.step * 0.5;
+        worst = Math.max(worst, Math.abs(snap.vortexCenters[0].x - (8 + wind.x * t)), Math.abs(snap.vortexCenters[0].y - (14 + wind.y * t)));
+        expect(vortexCentersAt(config, snap.step)).toEqual(snap.vortexCenters); // replay is bitwise
+      }
+      console.log(`[cloud-advection] wind drift: max centre error after 120 steps = ${worst.toExponential(2)} m`);
+      expect(worst).toBeLessThan(1e-12);
+      // the flow really follows: the velocity field at the drifted centres matches the initial layout shifted by the travel
+      const v0 = velocityAtTime(config, [{ x: 8, y: 14 }], { x: 10, y: 14 });
+      const v1 = velocityAtTime(config, snaps[2].vortexCenters, { x: 10 + wind.x * 60, y: 14 + wind.y * 60 });
+      expect(v1.x).toBeCloseTo(v0.x, 10);
+      expect(v1.y).toBeCloseTo(v0.y, 10);
+    });
+
+    it("'kirchhoff': two equal co-rotating vortices orbit their midpoint", () => {
+      const G = 2, a = 0.5, d = 4, dt = 0.1;
+      const config = makeConfig({
+        eddyDrift: 'kirchhoff', dt, vortices: [vortex('eddy-1', 8, 10, G, a), vortex('eddy-2', 12, 10, G, a)],
+      });
+      const omega = G / (Math.PI * (d * d + a * a)); // v = G d / (2π (d²+a²)) at radius d/2
+      let sepErr = 0, midErr = 0;
+      for (let step = 0; step <= 240; step += 8) {
+        const [c1, c2] = vortexCentersAt(config, step);
+        sepErr = Math.max(sepErr, Math.abs(Math.hypot(c2.x - c1.x, c2.y - c1.y) - d) / d);
+        midErr = Math.max(midErr, Math.hypot((c1.x + c2.x) / 2 - 10, (c1.y + c2.y) / 2 - 10));
+      }
+      const [c1, c2] = vortexCentersAt(config, 240);
+      const turned = angleOf(c1, c2); // vortex 2 started on +x of vortex 1 (angle 0)
+      const expected = omega * 240 * dt;
+      console.log(`[cloud-advection] kirchhoff co-rotating pair: separation drift ${sepErr.toExponential(2)} (relative), midpoint drift ${midErr.toExponential(2)} m, rotation ${turned.toFixed(7)} rad vs analytic ${expected.toFixed(7)}`);
+      expect(sepErr).toBeLessThan(1e-6);
+      expect(midErr).toBeLessThan(1e-12);
+      // RK2 phase error is O(θ³) per step with θ = ω·dt ≈ 0.004; about 1e-6 rad accumulates over 240 steps (measured).
+      expect(Math.abs(turned - expected)).toBeLessThan(1e-5);
+      const [snap] = simulate(config, [240]);
+      expect(snap.vortexCenters).toEqual(vortexCentersAt(config, 240));
+    });
+
+    it("'kirchhoff': a counter-rotating pair translates perpendicular to its axis", () => {
+      const G = 2, a = 0.5, d = 4, dt = 0.5;
+      const config = makeConfig({
+        eddyDrift: 'kirchhoff', dt, vortices: [vortex('eddy-1', 8, 10, G, a), vortex('eddy-2', 12, 10, -G, a)],
+      });
+      // Each vortex sees the other at distance d with kernel G d / (2π (d² + a²)): both move along +y at that speed.
+      const speed = (G * d) / (2 * Math.PI * (d * d + a * a));
+      const [snap] = simulate(config, [100]);
+      const travel = speed * 100 * dt;
+      const errY = Math.abs((snap.vortexCenters[0].y - 10) - travel) / travel;
+      const errY2 = Math.abs((snap.vortexCenters[1].y - 10) - travel) / travel;
+      const errX = Math.max(Math.abs(snap.vortexCenters[0].x - 8), Math.abs(snap.vortexCenters[1].x - 12));
+      console.log(`[cloud-advection] kirchhoff dipole: speed ${speed.toFixed(6)} m/s, relative travel error ${Math.max(errY, errY2).toExponential(2)}, sideways drift ${errX.toExponential(2)} m`);
+      expect(Math.max(errY, errY2)).toBeLessThan(1e-6);
+      expect(errX).toBeLessThan(1e-9);
+    });
+
+    it('resumes bitwise from a serialized snapshot while the eddies drift', () => {
+      const config = makeConfig({
+        boundary: 'inflow', eddyDrift: 'kirchhoff', diffusivity: 0.1, wind: { x: 0.6, y: 0.2 },
+        front: { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 3, coverage: 0.5, seed: 99, fillInterior: true },
+        vortices: [vortex('eddy-1', 12, 10, 8, 1.5), vortex('eddy-2', 15, 12, -5, 1.2), vortex('eddy-3', 9, 14, 3, 1)],
+        solids: [rect('solid-a', 14, 6, 15, 8)],
+      });
+      const [direct] = simulate(config, [60]);
+      const half = advance(initialSnapshot(config), config, 30);
+      const resumed = advance(parseSnapshot(serializeSnapshot(half)), config, 30);
+      expect(resumed.densityHash).toBe(direct.densityHash);
+      expect(resumed.density).toEqual(direct.density);
+      expect(resumed.vortexCenters).toEqual(direct.vortexCenters);
+      expect(resumed.mass).toEqual(direct.mass);
+      expect(direct.vortexCenters[0]).not.toEqual({ x: 12, y: 10 }); // they really moved
+    });
+
+    it('a thin wall still leaks nothing while a vortex drifts past it', () => {
+      const wallX = 12.1;
+      const wall = rect('solid-wall', wallX - 0.0125, -1, wallX + 0.0125, 21);
+      const steps = [4, 8, 12, 20, 30, 60, 120];
+      const rightMax = (c: CloudStudyConfig): number => {
+        let m = 0;
+        for (const snap of simulate(c, steps)) snap.density.forEach((v, k) => { if (((k % 40) + 0.5) * 0.5 > wallX) m = Math.max(m, v); });
+        return m;
+      };
+      for (const eddyDrift of ['wind', 'kirchhoff'] as const) {
+        for (const diffusivity of [0, 0.3]) {
+          const base = {
+            boundary: 'closed' as const, eddyDrift, diffusivity, wind: { x: 1, y: 0 },
+            vortices: [vortex('eddy-1', 8, 8, 10, 1.5), vortex('eddy-2', 8, 12, -6, 1.5)],
+            center: { x: 5, y: 10 }, radii: { x: 2.5, y: 2.5 },
+          };
+          const [last] = simulate(makeConfig({ ...base, solids: [wall] }), [30]);
+          expect(last.vortexCenters[0].x).toBeGreaterThan(wallX); // the vortex did cross the wall line
+          const leaked = rightMax(makeConfig({ ...base, solids: [wall] }));
+          const control = rightMax(makeConfig(base));
+          console.log(`[cloud-advection] drifting vortex past a thin wall (${eddyDrift}, D=${diffusivity}): max right-side = ${leaked}; no-wall control = ${control.toFixed(3)}`);
+          expect(leaked).toBe(0);
+          expect(control).toBeGreaterThan(0.01);
+        }
+      }
+    });
+
+    it('eddyDrift changes invalidate snapshots; forged centres are rejected', () => {
+      const mk = (eddyDrift?: EddyDrift): CloudStudyConfig => makeConfig({
+        ...(eddyDrift ? { eddyDrift } : {}), wind: { x: 0.5, y: 0 },
+        vortices: [vortex('eddy-1', 8, 10, 4, 1), vortex('eddy-2', 13, 10, 4, 1)],
+      });
+      const h0 = configHashes(mk());
+      for (const drift of ['wind', 'kirchhoff'] as const) {
+        const hs = configHashes(mk(drift));
+        expect(hs.simulation).not.toBe(h0.simulation);
+        expect(hs.geometry).toBe(h0.geometry);
+        expect(hs.transform).toBe(h0.transform);
+        expect(() => advance(initialSnapshot(mk()), mk(drift), 1)).toThrow(SnapshotMismatchError);
+      }
+      expect(configHashes(mk('wind')).simulation).not.toBe(configHashes(mk('kirchhoff')).simulation);
+      expect(() => buildDomain({ ...mk(), eddyDrift: 'spin' as EddyDrift })).toThrow(RangeError);
+
+      const config = mk('kirchhoff');
+      const snap = advance(initialSnapshot(config), config, 5);
+      const forged = { ...snap, vortexCenters: [{ x: 8, y: 10 }, { x: 13, y: 10 }] }; // the step-0 layout at step 5
+      expect(() => advance(forged, config, 1)).toThrow(/vortexCenters/);
+      expect(() => advance({ ...snap, vortexCenters: [snap.vortexCenters[0]] }, config, 1)).toThrow(SnapshotMismatchError);
+      const text = JSON.parse(serializeSnapshot(snap)) as Record<string, unknown>;
+      delete text.vortexCenters;
+      expect(() => parseSnapshot(JSON.stringify(text))).toThrow(/vortexCenters/);
+      expect(() => parseSnapshot(JSON.stringify({ ...text, vortexCenters: [{ x: Number.NaN, y: 1 }] }))).toThrow(/vortexCenters/);
+      expect(() => parseSnapshot(JSON.stringify({ ...JSON.parse(serializeSnapshot(snap)), schema: 'hatch3d.cloud-advection.snapshot.v1' }))).toThrow(/schema/);
+      expect(() => vortexCentersAt(config, -1)).toThrow(RangeError);
+    });
+
+    it('velocityAtTime uses the supplied centres; velocityAt stays the initial layout', () => {
+      const config = makeConfig({ wind: { x: 1, y: 0 }, vortices: [vortex('eddy-1', 5, 5, 6, 1)] });
+      const p = { x: 7, y: 6 };
+      expect(velocityAtTime(config, [{ x: 5, y: 5 }], p)).toEqual(velocityAt(config, p));
+      expect(velocityAtTime(config, [{ x: 9, y: 5 }], p)).not.toEqual(velocityAt(config, p));
+      expect(() => velocityAtTime(config, [], p)).toThrow(RangeError);
+    });
+
+    it('art-like config with ~30 solids and drifting eddies fits the time budget', () => {
+      const solids: SolidRegion[] = [];
+      for (let i = 0; i < 30; i++) {
+        const ang = i * 2.399;
+        const cx = 24 + 16 * Math.cos(ang) * ((i % 7) / 7 + 0.3);
+        const cy = 39 + 30 * Math.sin(ang) * ((i % 5) / 5 + 0.3);
+        solids.push({
+          id: `solid-${i}`, kind: 'solid',
+          polygon: Array.from({ length: 6 }, (_, k) => {
+            const t = (k / 6) * 2 * Math.PI;
+            const r = 1.2 + 0.5 * (k % 2);
+            return { x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) };
+          }),
+        });
+      }
+      const config = makeConfig({
+        cols: 120, rows: 195, spacing: 0.4, dt: 0.25, boundary: 'inflow', diffusivity: 0.05, eddyDrift: 'kirchhoff',
+        wind: { x: 0.9, y: 0.35 }, solids,
+        vortices: [vortex('eddy-1', 20, 30, 12, 2), vortex('eddy-2', 30, 55, -9, 3), vortex('eddy-3', 25, 42, 7, 2)],
+        center: { x: 12, y: 20 }, radii: { x: 6, y: 9 },
+        front: { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 8, coverage: 0.45, seed: 9, fillInterior: true },
+      });
+      const t0 = performance.now();
+      const snaps = simulate(config, [0, 60, 120, 240]);
+      const ms = performance.now() - t0;
+      console.log(`[cloud-advection] drifting-eddy art config (30 solids, kirchhoff, inflow, D on), steps 0..240: ${ms.toFixed(0)} ms`);
+      for (const snap of snaps) {
+        let min = Infinity, max = -Infinity;
+        for (const c of snap.density) { expect(Number.isFinite(c)).toBe(true); min = Math.min(min, c); max = Math.max(max, c); }
+        expect(min).toBeGreaterThanOrEqual(0);
+        expect(max).toBeLessThanOrEqual(1 + 1e-9);
+      }
+      expect(ms).toBeLessThan(4000);
+      // the work budget counts the per-step stencil rebuild: 99,856 cells x 240 steps x 5 > the limit
+      const big = makeConfig({ cols: 316, rows: 316, eddyDrift: 'wind', vortices: [vortex('eddy-1', 80, 80, 5, 2)], center: { x: 80, y: 80 }, radii: { x: 10, y: 10 } });
+      expect(() => simulate(big, [240])).toThrow(/cell updates/);
     });
   });
 

@@ -16,17 +16,17 @@ export interface Vec2 { x: number; y: number }
 
 export const MODEL = Object.freeze({
   id: 'prescribed-passive-advection',
-  version: '1.1.0',
+  version: '1.2.0',
   backend: 'ts-cpu-semi-lagrangian-rk2-bilinear',
-  backendVersion: '1.1.0',
+  backendVersion: '1.2.0',
 });
 
-export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v1';
+export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v2';
 
 /**
  * Hard bounds that keep a render bounded. `maxDiffusionSubsteps` caps the
  * explicit-diffusion substeps per step; `maxWork` caps
- * cells × steps × max(1, substeps) for one advance/simulate call.
+ * cells × steps × max(1, substeps, 5 when eddies drift) for one advance/simulate call.
  */
 export const LIMITS = Object.freeze({
   maxCells: 100_000,
@@ -51,6 +51,24 @@ export const LIMITS = Object.freeze({
  *   the field being sampled (`step · dt`), instead of zero. Requires `front`.
  *   Solids still absorb: a backtrace blocked by a solid reads zero.
  */
+/**
+ * How vortex centres move (`CloudStudyConfig.eddyDrift`, absent = `fixed`).
+ * - `fixed`: centres never move; the velocity field is steady.
+ * - `wind`: every centre is carried by the uniform wind.
+ * - `kirchhoff`: every centre moves with the wind plus the velocity induced at
+ *   its position by every OTHER vortex (same regularized kernel as the flow;
+ *   self-induction excluded) — classic point-vortex dynamics.
+ *
+ * Centres advance once per step by RK2 (midpoint) at the fixed dt, before the
+ * density backtrace of that step. The backtrace from step n to n+1 uses the
+ * velocity field at time t_n + dt/2: uniform wind plus vortices located at the
+ * midpoint ½(c_n + c_{n+1}) of that step's centre motion (both RK2 stages of the
+ * backtrace see that same field). Solids do not affect vortex motion (no image
+ * vortices — an approximation), and a vortex that leaves the domain keeps moving
+ * and still contributes. Snapshots carry the current centres (`vortexCenters`).
+ */
+export type EddyDrift = 'fixed' | 'wind' | 'kirchhoff';
+
 export type BoundaryMode = 'open' | 'closed' | 'inflow';
 
 /**
@@ -139,6 +157,8 @@ export interface CloudStudyConfig {
   solids: SolidRegion[];
   /** Upstream weather; required for the `inflow` boundary. */
   front?: WeatherFront;
+  /** Vortex motion; absent means `fixed` and is omitted from hashes (as is an explicit `fixed`). */
+  eddyDrift?: EddyDrift;
 }
 
 export interface SnapshotHashes {
@@ -179,6 +199,8 @@ export interface CloudSnapshot {
   /** Hash of the exact Float64 bytes of `density`. */
   densityHash: string;
   mass: MassBudget;
+  /** Vortex centres (m) at this step, in `config.vortices` order. Equal to the initial layout when eddies are fixed. */
+  vortexCenters: Vec2[];
 }
 
 /**

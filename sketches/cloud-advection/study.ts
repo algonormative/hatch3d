@@ -79,8 +79,8 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
     return { x: (page.x - offset.x) / pageMmPerM, y: (page.y - offset.y) / pageMmPerM };
   };
 
-  const layout: LayoutId = ctx.params.layout === 'span' ? 'span' : 'orbit';
-  const structure = buildStructure(ctx.random('structure'), layout, numeric(ctx, 'structureDensity', 0.6, 0, 1));
+  const layout: LayoutId = (['span', 'colonnade', 'portal', 'ring'] as const).find(id => id === ctx.params.layout) ?? 'orbit';
+  const structure = buildStructure(ctx.random('structure'), layout, numeric(ctx, 'structureDensity', 0.6, 0, 1), Math.round(numeric(ctx, 'ringCount', 8, 4, 12)));
   const solids: SolidRegion[] = structure.map(member => ({ id: member.id, kind: 'solid', polygon: member.polygon }));
 
   const eddyCirculation = numeric(ctx, 'eddyCirculation', 30, -120, 120);
@@ -117,6 +117,8 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
       amplitude: ctx.params.sourceEnabled === false ? 0 : 1, noiseScale: sourceSize * 0.45, seed: uint32(smokeRandom),
     },
     solids,
+    // Eddies stay put unless asked; `fixed` is the sim's default and is left out of the config (and the hash).
+    ...(ctx.params.eddyDrift === 'wind' || ctx.params.eddyDrift === 'kirchhoff' ? { eddyDrift: ctx.params.eddyDrift } : {}),
     // Upstream weather arrives through the upwind edges only in `inflow` mode; it is hashed whenever present.
     ...(boundaryMode === 'inflow' ? { front: {
       id: 'weather-front' as const, kind: 'frozen-field' as const,
