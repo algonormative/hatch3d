@@ -4,23 +4,35 @@ import { projectPolylinesClipped } from '../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { clipPolylineToRect } from '../../src/utils/clip.ts';
+import { createAtmosphere, hatchAtmosphere, maskAtmospherePaths } from '../../packages/plot-core/src/atmosphere.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'cyan' | 'coral' | 'gold';
 type PagePoint = { x: number; y: number };
-type Stroke = { pen: Ink; points: THREE.Vector3[]; light?: 'ribbon' | 'ray' };
+type Stroke = { pen: Ink; points: THREE.Vector3[]; light?: 'ribbon' | 'ray'; extension?: true };
 type Face = [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
 
 const PAGE = { width: 297, height: 420 };
 const ART = { xMin: 18, xMax: 279, yMin: 76, yMax: 357 };
 const PIXELS_PER_MM = 2;
-const VIEW_WIDTH = PAGE.width * PIXELS_PER_MM;
-const VIEW_HEIGHT = PAGE.height * PIXELS_PER_MM;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'cyan', 'coral', 'gold'];
 const LIGHT_INKS: Ink[] = ['cyan', 'coral', 'gold'];
 type LightBounds = { xMin: number; xMax: number; yMin: number; yMax: number };
+type Viewport = { width: number; height: number; offsetX: number; offsetY: number };
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const viewportFor = (extended: boolean): Viewport => {
+  const pad = extended ? 0.25 : 0;
+  return { width: PAGE.width * (1 + 2 * pad), height: PAGE.height * (1 + 2 * pad),
+    offsetX: PAGE.width * pad, offsetY: PAGE.height * pad };
+};
+const pageFromNdc = (point: THREE.Vector3, viewport: Viewport): PagePoint => ({
+  x: (point.x * 0.5 + 0.5) * viewport.width - viewport.offsetX,
+  y: (-point.y * 0.5 + 0.5) * viewport.height - viewport.offsetY,
+});
+const planeFromPage = (point: PagePoint, depth: number, view: THREE.OrthographicCamera, viewport: Viewport): THREE.Vector3 =>
+  new THREE.Vector3((point.x + viewport.offsetX) / viewport.width * 2 - 1,
+    1 - (point.y + viewport.offsetY) / viewport.height * 2, depth).unproject(view);
 const cubic = (a: PagePoint, b: PagePoint, c: PagePoint, d: PagePoint, t: number): PagePoint => {
   const u = 1 - t;
   return { x: u*u*u*a.x + 3*u*u*t*b.x + 3*u*t*t*c.x + t*t*t*d.x,
@@ -228,6 +240,33 @@ function brokenEnd(route: BridgeRoute, meshes: THREE.BufferGeometry[], strokes: 
   }
 }
 
+/** New modules grow beyond both established bridge ends without advancing any original random stream. */
+function outerArms(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGeometry[]): Stroke[] {
+  const reach = numeric(ctx, 'structureReach', 0, 0, 1);
+  if (reach <= 0) return [];
+  const strokes: Stroke[] = [];
+  const random = ctx.random('bridge-outer-arms');
+  const spans: [number, number][] = [[0.11 - 0.34 * reach, 0.11], [0.96, 0.96 + 0.34 * reach]];
+  for (const [side, [from, to]] of spans.entries()) {
+    const sections = Math.max(2, Math.ceil((to - from) * 27));
+    for (let index = 0; index < sections; index++) {
+      deckSegment(route, meshes, strokes, lerp(from, to, index / sections), lerp(from, to, (index + 1) / sections),
+        40 + side * 16 + index);
+    }
+    if (reach >= 0.2) {
+      const station = side === 0 ? lerp(from, to, 0.4) : lerp(from, to, 0.6);
+      portal(route, meshes, strokes, station, 40 + side * 7, 0.25 + random() * 0.65);
+    }
+    if (reach >= 0.55) {
+      const station = side === 0 ? lerp(from, to, 0.72) : lerp(from, to, 0.28);
+      buttress(route, meshes, strokes, station, side === 0 ? -1 : 1,
+        10 + random() * 9, 0.045, 11 + random() * 7);
+    }
+  }
+  for (const item of strokes) item.extension = true;
+  return strokes;
+}
+
 function branches(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGeometry[], strokes: Stroke[]): void {
   const random = ctx.random('branch-growth');
   const ribbon = (start: PagePoint, angle: number, length: number, halfWidth: number, curvature: number, daughter: boolean): PagePoint => {
@@ -295,13 +334,13 @@ function branches(route: BridgeRoute, ctx: SketchContext, meshes: THREE.BufferGe
 }
 
 /** Broken satellites share one center but differ in orbit, shear, and depth. */
-function orbitalFragments(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, meshes: THREE.BufferGeometry[], strokes: Stroke[]): void {
+function orbitalFragments(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, viewport: Viewport, meshes: THREE.BufferGeometry[], strokes: Stroke[]): void {
   const random = ctx.random('orbital-topology');
   const middle = (route.leftGap + route.rightGap) / 2;
   const center = route.center(middle);
   const anchor = route.point(middle, 0, 14).project(view);
-  const centerProjection = { x: (anchor.x * 0.5 + 0.5) * PAGE.width, y: (-anchor.y * 0.5 + 0.5) * PAGE.height };
-  const onPlane = (x: number, y: number) => new THREE.Vector3(x / PAGE.width * 2 - 1, 1 - y / PAGE.height * 2, anchor.z).unproject(view);
+  const centerProjection = pageFromNdc(anchor, viewport);
+  const onPlane = (x: number, y: number) => planeFromPage({ x, y }, anchor.z, view, viewport);
   const orbitShift = onPlane(centerProjection.x + numeric(ctx, 'singularityX', 0, -12, 12),
     centerProjection.y + numeric(ctx, 'singularityY', 0, -12, 12)).sub(onPlane(centerProjection.x, centerProjection.y));
   const fragmentation = numeric(ctx, 'orbitalFragmentation', 0.52, 0, 1);
@@ -397,16 +436,13 @@ export function lightRuns(points: PagePoint[], gapAmount: number, noise: (point:
 }
 
 /** Image-plane light shares the solid depth pass but never becomes an occluder. */
-function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, strokes: Stroke[], bounds: LightBounds): PagePoint {
+function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.OrthographicCamera, viewport: Viewport, strokes: Stroke[], bounds: LightBounds): PagePoint {
   const middle = (route.leftGap + route.rightGap) / 2;
   const anchor = route.point(middle, 0, 14).project(view);
-  const center = {
-    x: (anchor.x * 0.5 + 0.5) * PAGE.width + numeric(ctx, 'singularityX', 0, -12, 12),
-    y: (-anchor.y * 0.5 + 0.5) * PAGE.height + numeric(ctx, 'singularityY', 0, -12, 12),
-  };
-  const onPlane = (point: PagePoint) => new THREE.Vector3(
-    point.x / PAGE.width * 2 - 1, 1 - point.y / PAGE.height * 2, anchor.z,
-  ).unproject(view);
+  const projected = pageFromNdc(anchor, viewport);
+  const center = { x: projected.x + numeric(ctx, 'singularityX', 0, -12, 12),
+    y: projected.y + numeric(ctx, 'singularityY', 0, -12, 12) };
+  const onPlane = (point: PagePoint) => planeFromPage(point, anchor.z, view, viewport);
   const random = ctx.random('silence-ribbon');
   const amount = numeric(ctx, 'lightRibbons', 0.42, 0, 1);
   const power = numeric(ctx, 'singularityPower', 0.55, 0, 1);
@@ -496,8 +532,9 @@ function lightGeometry(route: BridgeRoute, ctx: SketchContext, view: THREE.Ortho
   return center;
 }
 
-function camera(): THREE.OrthographicCamera {
-  const view = new THREE.OrthographicCamera(-PAGE.width / 2, PAGE.width / 2, PAGE.height / 2, -PAGE.height / 2, 0.1, 1000);
+function camera(viewport: Viewport): THREE.OrthographicCamera {
+  const view = new THREE.OrthographicCamera(-viewport.width / 2, viewport.width / 2,
+    viewport.height / 2, -viewport.height / 2, 0.1, 1000);
   view.position.set(185, -135, 330);
   view.lookAt(0, 0, 0);
   view.updateProjectionMatrix();
@@ -532,6 +569,7 @@ export function drawBridge(ctx: SketchContext, lightBounds: LightBounds = ART): 
   const route = new BridgeRoute(ctx);
   const meshes: THREE.BufferGeometry[] = [];
   const strokes: Stroke[] = [];
+  const structureReach = numeric(ctx, 'structureReach', 0, 0, 1);
   const spans: [number, number][] = [[0.11, route.leftGap], [route.rightGap, 0.96]];
   let moduleIndex = 0;
   const portalVariation = ctx.random('portal-arrangement');
@@ -551,15 +589,40 @@ export function drawBridge(ctx: SketchContext, lightBounds: LightBounds = ART): 
   brokenEnd(route, meshes, strokes, route.leftGap, 1);
   brokenEnd(route, meshes, strokes, route.rightGap, -1);
   branches(route, ctx, meshes, strokes);
-  const view = camera();
-  orbitalFragments(route, ctx, view, meshes, strokes);
-  const projectedSingularityCenter = lightGeometry(route, ctx, view, strokes, lightBounds);
+  strokes.push(...outerArms(route, ctx, meshes));
+  const viewport = viewportFor(structureReach > 0);
+  const viewWidth = Math.round(viewport.width * PIXELS_PER_MM);
+  const viewHeight = Math.round(viewport.height * PIXELS_PER_MM);
+  const view = camera(viewport);
+  orbitalFragments(route, ctx, view, viewport, meshes, strokes);
+  const projectedSingularityCenter = lightGeometry(route, ctx, view, viewport, strokes, lightBounds);
+  const fogCoverage = numeric(ctx, 'fogCoverage', 0.55, 0, 1);
+  const fogDepth = numeric(ctx, 'fogDepth', 0.58, 0, 1);
+  const fogEnabled = ctx.params.fogEnabled === true && fogCoverage > 0 && fogDepth > 0;
+  const atmosphere = fogEnabled ? createAtmosphere({ bounds: lightBounds,
+    seed: Math.floor(ctx.random('bridge-atmosphere')() * 0xffffffff), depth: fogDepth,
+    scale: lerp(16, 42, numeric(ctx, 'fogScale', 0.6, 0, 1)),
+    center: projectedSingularityCenter, clearRadius: 34 }) : null;
+  const cameraForward = new THREE.Vector3();
+  const strokeDepths = new Map<Stroke, number>();
+  if (atmosphere) {
+    view.getWorldDirection(cameraForward);
+    for (const source of strokes) {
+      if (source.light) continue;
+      const distance = source.points.reduce((sum, point) =>
+        sum + point.clone().sub(view.position).dot(cameraForward), 0) / source.points.length;
+      strokeDepths.set(source, distance);
+    }
+  }
+  const nearDepth = atmosphere ? Math.min(...strokeDepths.values()) : 0;
+  const farDepth = atmosphere ? Math.max(...strokeDepths.values()) : 1;
   try {
     const midpoint = route.point((route.leftGap + route.rightGap) / 2, 0, 6).project(view);
-    const projectedGapCenter = { x: (midpoint.x * 0.5 + 0.5) * PAGE.width, y: (-midpoint.y * 0.5 + 0.5) * PAGE.height };
-    const depth = renderDepthBufferCPU(meshes, view, VIEW_WIDTH, VIEW_HEIGHT);
-    const projection = projectPolylinesClipped(strokes.map(item => item.points), view, VIEW_WIDTH, VIEW_HEIGHT);
+    const projectedGapCenter = pageFromNdc(midpoint, viewport);
+    const depth = renderDepthBufferCPU(meshes, view, viewWidth, viewHeight);
+    const projection = projectPolylinesClipped(strokes.map(item => item.points), view, viewWidth, viewHeight);
     const pathsByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
+    const extensionByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
     const ribbonByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
     const rayByPen = new Map<Ink, Point[][]>(INKS.map(pen => [pen, []]));
     let candidateSegments = 0;
@@ -567,38 +630,45 @@ export function drawBridge(ctx: SketchContext, lightBounds: LightBounds = ART): 
     for (let index = 0; index < projection.polylines.length; index++) {
       const source = strokes[projection.sourceIndices[index]];
       const pen = source.pen;
-      for (const clipped of clipProjectedPolyline(projection.polylines[index], VIEW_WIDTH, VIEW_HEIGHT)) {
+      for (const clipped of clipProjectedPolyline(projection.polylines[index], viewWidth, viewHeight)) {
         const dense = densifyProjectedPolyline(clipped);
         candidateSegments += dense.length - 1;
         const visibleRuns = ctx.params.occlusion === false ? [dense] : splitPolylineByDepth(dense, depth, 0.0012).visible;
         for (const visible of visibleRuns) {
           visibleSegments += visible.length - 1;
-          const page = visible.map(point => ({ x: point.x / PIXELS_PER_MM, y: point.y / PIXELS_PER_MM }));
-          for (const bounded of clipPolylineToRect(page, source.light ? lightBounds : ART)) {
+          const page = visible.map(point => ({ x: point.x / PIXELS_PER_MM - viewport.offsetX,
+            y: point.y / PIXELS_PER_MM - viewport.offsetY }));
+          for (const bounded of clipPolylineToRect(page, source.light || source.extension ? lightBounds : ART)) {
             if (pathLength(bounded) >= 0.55) {
-              const destination = source.light === 'ribbon' ? ribbonByPen : source.light === 'ray' ? rayByPen : pathsByPen;
-              destination.get(pen)!.push(economical(bounded));
+              const destination = source.light === 'ribbon' ? ribbonByPen : source.light === 'ray' ? rayByPen :
+                source.extension ? extensionByPen : pathsByPen;
+              const authored = economical(bounded);
+              if (!atmosphere || source.light) destination.get(pen)!.push(authored);
+              else {
+                // Camera-space distance, rather than world z, makes remote faces dissolve first.
+                const far = farDepth > nearDepth ? clamp((strokeDepths.get(source)! - nearDepth) / (farDepth - nearDepth), 0, 1) : 0.5;
+                const depthWeight = source.extension ? 0.55 + 0.15 * far : 0.38 + 0.18 * far;
+                const visible = maskAtmospherePaths([authored], atmosphere,
+                  { amount: fogCoverage, depth: depthWeight, sampleStep: 1.4, minLength: 0.55 });
+                destination.get(pen)!.push(...visible.map(economical));
+              }
             }
           }
         }
       }
     }
-    // The image-plane light can extend past the depth camera's fixed viewport.
-    // There are no structural occluders there; retain those outer fragments so
-    // the poster fit and finishing can crop them at the true framed boundary.
+    // Light beyond the depth viewport has no structural occluder. The extended
+    // viewport covers the full usable frame when structural reach is enabled.
     const outside = [
-      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: lightBounds.yMin, yMax: 0 },
-      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: PAGE.height - 1 / PIXELS_PER_MM, yMax: lightBounds.yMax },
-      { xMin: lightBounds.xMin, xMax: 0, yMin: 0, yMax: PAGE.height },
-      { xMin: PAGE.width - 1 / PIXELS_PER_MM, xMax: lightBounds.xMax, yMin: 0, yMax: PAGE.height },
+      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: lightBounds.yMin, yMax: -viewport.offsetY },
+      { xMin: lightBounds.xMin, xMax: lightBounds.xMax, yMin: viewport.height - viewport.offsetY - 1 / PIXELS_PER_MM, yMax: lightBounds.yMax },
+      { xMin: lightBounds.xMin, xMax: -viewport.offsetX, yMin: -viewport.offsetY, yMax: viewport.height - viewport.offsetY },
+      { xMin: viewport.width - viewport.offsetX - 1 / PIXELS_PER_MM, xMax: lightBounds.xMax,
+        yMin: -viewport.offsetY, yMax: viewport.height - viewport.offsetY },
     ].filter(rect => rect.xMax > rect.xMin && rect.yMax > rect.yMin);
     for (const source of strokes) {
       if (!source.light) continue;
-      const page = source.points.map(point => {
-        const projected = point.clone().project(view);
-        return { x: (projected.x * 0.5 + 0.5) * PAGE.width,
-          y: (-projected.y * 0.5 + 0.5) * PAGE.height };
-      });
+      const page = source.points.map(point => pageFromNdc(point.clone().project(view), viewport));
       const destination = source.light === 'ribbon' ? ribbonByPen : rayByPen;
       for (const strip of outside) for (const bounded of clipPolylineToRect(page, strip)) {
         if (pathLength(bounded) >= 0.55) destination.get(source.pen)!.push(economical(bounded));
@@ -606,8 +676,12 @@ export function drawBridge(ctx: SketchContext, lightBounds: LightBounds = ART): 
     }
     const parts: Part[] = [
       ...INKS.map(pen => ({ id: `bridge-${pen}`, pen, paths: pathsByPen.get(pen)! })),
+      ...(structureReach > 0 ? INKS.map(pen => ({ id: `extension-${pen}`, pen, paths: extensionByPen.get(pen)! })) : []),
       ...LIGHT_INKS.map(pen => ({ id: `ribbon-${pen}`, pen, paths: ribbonByPen.get(pen)! })),
       ...LIGHT_INKS.map(pen => ({ id: `ray-${pen}`, pen, paths: rayByPen.get(pen)! })),
+      ...(atmosphere ? [{ id: 'fog-cyan', pen: 'cyan' as Ink,
+        paths: hatchAtmosphere(lightBounds, atmosphere, { spacing: numeric(ctx, 'fogHatchPitch', 3, 1.2, 6),
+          angle: -0.38, minLength: 1.2 }) }] : []),
     ];
     return { parts, stats: { candidateSegments, visibleSegments, hiddenSegments: candidateSegments - visibleSegments, meshCount: meshes.length, gap: [route.leftGap, route.rightGap], projectedGapCenter, projectedSingularityCenter } };
   } finally {

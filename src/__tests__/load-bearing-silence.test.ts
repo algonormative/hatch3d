@@ -163,4 +163,79 @@ describe('Load Bearing Silence', () => {
       expect(clearance(drawing, 'ribbon-', drawing.stats.projectedSingularityCenter)).toBeGreaterThan(bound === 'min' ? 0 : 5);
     }
   }, 30000);
+
+  it('preserves zero-reach source geometry and grows independent structural modules toward the frame', async () => {
+    const defaultGeometry = drawBridge(geometryContext({}, 211));
+    const explicitOff = drawBridge(geometryContext({ structureReach: 0, fogEnabled: false }, 211));
+    expect(explicitOff.parts).toEqual(defaultGeometry.parts);
+    expect(explicitOff.stats).toEqual(defaultGeometry.stats);
+    expect(explicitOff.parts.some(part => part.id.startsWith('extension-'))).toBe(false);
+
+    const params = { posterMode: 'abstract', branchCount: 1, singularityPower: 0.75,
+      ribbonEdgeReach: 1, rayEdgeReach: 0.8, fogEnabled: false };
+    const short = await renderSketch({ entry, seed: 211, params: { ...params, structureReach: 0 } });
+    const long = await renderSketch({ entry, seed: 211, params: { ...params, structureReach: 1 } });
+    expect(count(short, 'extension-')).toBe(0);
+    expect(count(long, 'extension-')).toBeGreaterThan(100);
+    const extents = (parts: typeof long.parts) => {
+      const points = parts.flatMap(part => part.paths).flat();
+      return { xMin: Math.min(...points.map(point => point.x)), xMax: Math.max(...points.map(point => point.x)),
+        yMin: Math.min(...points.map(point => point.y)), yMax: Math.max(...points.map(point => point.y)) };
+    };
+    const old = extents(art(long, 'bridge-'));
+    const added = extents(art(long, 'extension-'));
+    expect(added.xMin).toBeLessThan(old.xMin - 10);
+    expect(added.xMax).toBeGreaterThan(old.xMax + 10);
+    expect(added.yMin).toBeLessThan(old.yMin - 20);
+    expect(added.yMax).toBeGreaterThan(old.yMax + 20);
+    expect(long.stats.pointCount).toBeLessThan(200_000);
+  }, 30000);
+
+  it('veils camera-distant structure with coherent edge hatches while keeping named light and core clear', async () => {
+    const base = { posterMode: 'abstract', structureReach: 1, branchCount: 1,
+      singularityPower: 0.75, lightGapAmount: 0.48, ribbonEdgeReach: 1, rayEdgeReach: 0.8 };
+    const clear = await renderSketch({ entry, seed: 211, params: { ...base, fogEnabled: false } });
+    const veiled = await renderSketch({ entry, seed: 211, params: { ...base, fogEnabled: true,
+      fogCoverage: 0.68, fogDepth: 0.65, fogScale: 0.65, fogHatchPitch: 3 } });
+    const deep = await renderSketch({ entry, seed: 211, params: { ...base, fogEnabled: true,
+      fogCoverage: 0.94, fogDepth: 0.9, fogScale: 0.8, fogHatchPitch: 2.2 } });
+    for (const candidate of [veiled, deep]) {
+      expect(art(candidate, 'ribbon-')).toEqual(art(clear, 'ribbon-'));
+      expect(art(candidate, 'ray-')).toEqual(art(clear, 'ray-'));
+      expect(count(candidate, 'fog-')).toBeGreaterThan(20);
+      expect(art(candidate, 'extension-')).not.toEqual(art(clear, 'extension-'));
+      expect(candidate.stats.pointCount).toBeLessThan(200_000);
+      expect(candidate.diagnostics).toEqual([]);
+    }
+    expect(count(deep, 'extension-')).toBeGreaterThan(0);
+    expect(count(deep, 'extension-')).toBeLessThan(count(veiled, 'extension-'));
+    const deepDrawing = drawBridge(geometryContext({ ...base, fogEnabled: true,
+      fogCoverage: 0.94, fogDepth: 0.9, fogScale: 0.8, fogHatchPitch: 2.2 }, 211));
+    expect(clearance(deepDrawing, 'fog-', deepDrawing.stats.projectedSingularityCenter)).toBeGreaterThan(20);
+  }, 30000);
+
+  it('keeps maximum fog and outer reach finite inside the lettered art band at both cloud scales', async () => {
+    const finishing = { border: { style: 'double' as const, pen: 'carbon', inset: 12, contentGap: 0 } };
+    for (const fogScale of [0, 1]) {
+      const params = { posterMode: 'lettered', structureReach: 1, fogEnabled: true,
+        fogCoverage: 1, fogDepth: 1, fogScale, fogHatchPitch: 1.2,
+        ribbonEdgeReach: 1, rayEdgeReach: 1 };
+      const result = await renderSketch({ entry, seed: 211, params, finishing });
+      expect(result.diagnostics).toEqual([]);
+      expect(result.stats.pointCount).toBeGreaterThan(1_000);
+      expect(result.stats.pointCount).toBeLessThan(200_000);
+      expect(count(result, 'fog-')).toBeGreaterThan(0);
+      for (const part of result.parts.filter(part => part.id.startsWith('extension-') || part.id.startsWith('fog-'))) {
+        for (const path of part.paths) for (const point of path) {
+          expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBe(true);
+          expect(point.x).toBeGreaterThanOrEqual(14.25);
+          expect(point.x).toBeLessThanOrEqual(265.15);
+          expect(point.y).toBeGreaterThan(70);
+          expect(point.y).toBeLessThan(380);
+        }
+      }
+      const drawing = drawBridge(geometryContext(params, 211));
+      expect(clearance(drawing, 'fog-', drawing.stats.projectedSingularityCenter)).toBeGreaterThan(20);
+    }
+  }, 30000);
 });

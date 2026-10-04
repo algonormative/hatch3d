@@ -8,3 +8,5 @@ export { strokeText, strokeTextOnPath, measureStrokeText } from './stroke-text.j
 export type { StrokeFace, TextStyle, PathTextStyle } from './stroke-text.js';
 export { snapSliderValue, resolveMacroParams } from './control-values.js';
 export * from './control-geometry.js';
+export { createAtmosphere, maskAtmospherePaths, hatchAtmosphere } from './atmosphere.js';
+export type { AtmosphereField, AtmosphereOptions, MaskAtmosphereOptions, HatchAtmosphereOptions, Bounds as AtmosphereBounds, Point as AtmospherePoint } from './atmosphere.js';

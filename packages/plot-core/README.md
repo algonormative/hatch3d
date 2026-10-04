@@ -9,6 +9,20 @@ Private local package for executable pen-plotter sketches. Version `0.1.0` recor
 - `@hatch3d/plot-core/spatial` — optional legacy Hatch3D 3D composition adapter bundled with its CPU depth pipeline. Install compatible `three` and `simplex-noise` peers to use it; TypeScript consumers also need `@types/three`. It creates one solids pen part, and can add a separate paper-space 2D pen; it does not generally style or cross-occlude independent physical ink parts.
 - `@hatch3d/plot-core/controls` — optional browser DOM panel for scalar controls, groups, conditions, macros, and radar/XY/XYZ editors. It is absent from the core index and does not touch `document` at import time. Pair it with `@hatch3d/plot-core/controls.css`; the stylesheet scopes rules to mounted panel hosts.
 
+The core index also exports pen-only, deterministic cloud treatment for
+physical polylines:
+
+```ts
+import { createAtmosphere, maskAtmospherePaths, hatchAtmosphere } from '@hatch3d/plot-core';
+
+const bounds = { xMin: 0, yMin: 0, xMax: 210, yMax: 297 };
+const cloud = createAtmosphere({ bounds, seed: 42, depth: 0.7, scale: 24 });
+const visiblePaths = maskAtmospherePaths(paths, cloud, { amount: 0.6 });
+const cloudMarks = hatchAtmosphere(bounds, cloud, { spacing: 3, angle: Math.PI / 5 });
+```
+
+The two outputs are separate pen-ready polyline arrays. See [hatched atmosphere](../../docs/techniques/hatched-atmosphere.md) for control meanings and visibility behavior.
+
 ```ts
 import type { Sketch } from '@hatch3d/plot-core';
 import { strokeText } from '@hatch3d/plot-core';
