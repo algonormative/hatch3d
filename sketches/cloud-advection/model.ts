@@ -16,9 +16,9 @@ export interface Vec2 { x: number; y: number }
 
 export const MODEL = Object.freeze({
   id: 'prescribed-passive-advection',
-  version: '1.0.0',
+  version: '1.1.0',
   backend: 'ts-cpu-semi-lagrangian-rk2-bilinear',
-  backendVersion: '1.0.0',
+  backendVersion: '1.1.0',
 });
 
 export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v1';
@@ -43,8 +43,46 @@ export const LIMITS = Object.freeze({
  *   inflow is zero (a backtrace that would cross an edge reads zero), and
  *   anything carried into an edge is absorbed. Interpolation never reads
  *   outside the grid. There is no conservation guarantee.
+ * - `inflow`: like `open` for outflow, but weather arrives from outside the
+ *   frame. Anything the domain reads from beyond an edge — a backtrace that
+ *   leaves the domain, interpolation corners outside the grid, diffusion ghost
+ *   cells — reads the frozen upstream field of `config.front` at the time of
+ *   the field being sampled (`step · dt`), instead of zero. Requires `front`.
+ *   Solids still absorb: a backtrace blocked by a solid reads zero.
  */
-export type BoundaryMode = 'open' | 'closed';
+export type BoundaryMode = 'open' | 'closed' | 'inflow';
+
+/**
+ * Frozen upstream cloud field (Taylor's frozen-turbulence assumption): a fixed
+ * pattern W(x, y) carried rigidly by the UNIFORM wind only. Vortices do not
+ * carry it — they act on concentration inside the domain, never on the far
+ * field.
+ *
+ *   W(x, y) = amplitude · smoothstep(1 − coverage − softness, 1 − coverage + softness,
+ *                                    fbm(seed, x / scale, y / scale))   (softness default 0.12)
+ *
+ * `fbm` is a 3-octave seeded value-noise sum normalized to [0, 1]. The field
+ * at world point p and time t is W(p − wind.velocity · t). Required when the
+ * boundary mode is `inflow`; hashed into the simulation component whenever
+ * present. With `fillInterior`, step 0 starts every fluid cell at
+ * max(source value, W(p)) so the weather is already present; solid cells stay 0.
+ */
+export interface WeatherFront {
+  id: 'weather-front';
+  kind: 'frozen-field';
+  amplitude: number; // peak concentration of the far field
+  scale: number; // m, bank size
+  coverage: number; // 0..1, fraction of sky that is cloud
+  seed: number; // uint32
+  fillInterior: boolean;
+  /**
+   * Half-width of the smoothstep band, in fbm units, valid in [0.02, 0.5].
+   * Absent means 0.12 and is omitted from hashes, so configs written before
+   * this field keep their hashes. Larger values soften bank edges (a smaller
+   * peak gradient of W); present values are hashed in the simulation component.
+   */
+  softness?: number;
+}
 
 export interface UniformWind { id: 'wind'; kind: 'uniform-wind'; velocity: Vec2 /* m/s */ }
 
@@ -98,6 +136,8 @@ export interface CloudStudyConfig {
   vortices: Vortex[];
   source: SmokeSource;
   solids: SolidRegion[];
+  /** Upstream weather; required for the `inflow` boundary. */
+  front?: WeatherFront;
 }
 
 export interface SnapshotHashes {

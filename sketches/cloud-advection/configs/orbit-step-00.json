@@ -11,7 +11,7 @@
     "eddyCirculation": 30,
     "eddyCore": 3,
     "dispersion": 0.1,
-    "boundary": "open",
+    "boundary": "inflow",
     "sourceX": 43,
     "sourceY": 26,
     "sourceSize": 11,
@@ -19,13 +19,20 @@
     "cloudHatchPitch": 2,
     "cloudPen": "cyan",
     "obscure": 0.8,
-    "coreRadius": 34,
+    "coreRadius": 44,
     "coreX": 0,
     "coreY": 0,
     "hatchPitch": 1.35,
-    "layout": "span",
+    "layout": "orbit",
     "markStyle": "contours",
-    "contourMinSpacing": 0
+    "sourceEnabled": false,
+    "frontAmplitude": 1.0,
+    "frontScale": 9,
+    "frontCoverage": 0.42,
+    "fillInterior": true,
+    "structureDensity": 0.6,
+    "frontSoftness": 0.12,
+    "contourMinSpacing": 0.55
   },
   "finishing": {
     "border": {

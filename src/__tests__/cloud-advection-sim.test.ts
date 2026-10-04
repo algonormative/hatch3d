@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { LIMITS, type CloudStudyConfig, type SolidRegion, type Vec2, type Vortex } from '../../sketches/cloud-advection/model.ts';
+import { LIMITS, MODEL, type CloudStudyConfig, type SolidRegion, type Vec2, type Vortex, type WeatherFront } from '../../sketches/cloud-advection/model.ts';
 import {
   SnapshotMismatchError,
   advance,
   buildDomain,
   configHashes,
+  frontAt,
   hashFloat64,
   initialSnapshot,
   parseSnapshot,
@@ -28,13 +29,15 @@ interface Opts {
   center: Vec2;
   radii: Vec2;
   seed: number;
+  amplitude: number;
+  front: WeatherFront;
 }
 
 function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
-  const o: Opts = {
+  const o: Partial<Opts> & Omit<Opts, 'front'> = {
     cols: 40, rows: 40, spacing: 0.5, dt: 0.5, boundary: 'open', diffusivity: 0,
     wind: { x: 0, y: 0 }, vortices: [], solids: [],
-    center: { x: 6, y: 10 }, radii: { x: 3, y: 3 }, seed: 1234,
+    center: { x: 6, y: 10 }, radii: { x: 3, y: 3 }, seed: 1234, amplitude: 1,
     ...over,
   };
   return {
@@ -48,9 +51,10 @@ function makeConfig(over: Partial<Opts> = {}): CloudStudyConfig {
     vortices: o.vortices,
     source: {
       id: 'smoke-source', kind: 'source', center: o.center, radii: o.radii,
-      amplitude: 1, noiseScale: 2.5, seed: o.seed,
+      amplitude: o.amplitude, noiseScale: 2.5, seed: o.seed,
     },
     solids: o.solids,
+    ...(o.front ? { front: o.front } : {}),
   };
 }
 
@@ -298,6 +302,266 @@ describe('cloud advection: numerical fixtures', () => {
     expect(domain.config.solids).toHaveLength(0);
     expect(Object.isFrozen(domain.config)).toBe(true);
     expect(domain.hashes).toEqual(configHashes(domain.config));
+  });
+
+  it('open/closed results without a front are bit-for-bit unchanged (regression hashes)', () => {
+    const base = {
+      cols: 48, rows: 36, wind: { x: 0.8, y: 0.15 }, diffusivity: 0.1,
+      vortices: [vortex('eddy-1', 12, 9, 6, 1.5), vortex('eddy-2', 15, 12, -4, 1)],
+      solids: [rect('solid-a', 9.2, 5, 9.7, 13), { id: 'solid-b' as const, kind: 'solid' as const, polygon: [{ x: 14, y: 2 }, { x: 17, y: 4 }, { x: 15, y: 6.2 }] }],
+      center: { x: 6, y: 9 }, radii: { x: 3, y: 4 },
+    };
+    const got: Record<string, string> = {};
+    for (const boundary of ['open', 'closed'] as const) {
+      const [s60] = simulate(makeConfig({ ...base, boundary }), [60]);
+      got[boundary] = s60.densityHash;
+    }
+    // Values computed with MODEL 1.0.0 before the inflow mode existed.
+    expect(got).toEqual({ open: 'f4561ba25511f244', closed: 'c47fa27b32c0c03b' });
+  });
+
+  describe('inflow boundary and the frozen upstream field', () => {
+    const front = (over: Partial<WeatherFront> = {}): WeatherFront => ({
+      id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 3, coverage: 0.5, seed: 99, fillInterior: true, ...over,
+    });
+    const centerOf = (k: number, cols = 40, h = 0.5): Vec2 => ({ x: ((k % cols) + 0.5) * h, y: (Math.floor(k / cols) + 0.5) * h });
+
+    it('frontAt is a rigidly advected, bounded, deterministic pattern', () => {
+      const cfg = makeConfig({ boundary: 'inflow', front: front(), wind: { x: 1.3, y: -0.4 } });
+      let lo = Infinity, hi = -Infinity;
+      for (let k = 0; k < 400; k++) {
+        const p = { x: (k % 20) * 1.1, y: Math.floor(k / 20) * 1.1 };
+        const v = frontAt(cfg, p, 0);
+        lo = Math.min(lo, v); hi = Math.max(hi, v);
+        expect(frontAt(cfg, { x: p.x + 1.3 * 7, y: p.y - 0.4 * 7 }, 7)).toBeCloseTo(v, 12);
+        expect(frontAt(cfg, p, 0)).toBe(v);
+      }
+      expect(lo).toBeGreaterThanOrEqual(0);
+      expect(hi).toBeLessThanOrEqual(1);
+      expect(hi - lo).toBeGreaterThan(0.5); // genuinely patchy
+      expect(frontAt(makeConfig(), { x: 1, y: 1 }, 3)).toBe(0); // no front
+      const thin = makeConfig({ boundary: 'inflow', front: front({ coverage: 0.1 }) });
+      const thick = makeConfig({ boundary: 'inflow', front: front({ coverage: 0.9 }) });
+      const mean = (c: CloudStudyConfig): number => { let m = 0; for (let k = 0; k < 400; k++) m += frontAt(c, { x: (k % 20) * 1.1, y: Math.floor(k / 20) * 1.1 }, 0); return m / 400; };
+      expect(mean(thick)).toBeGreaterThan(mean(thin) + 0.3);
+    });
+
+    it('1. the interior equals the frozen field carried by the wind (fillInterior)', () => {
+      for (const [name, wind] of [['+x', { x: 1, y: 0 }], ['diagonal', { x: 1, y: 1 }]] as Array<[string, Vec2]>) {
+        const config = makeConfig({ boundary: 'inflow', front: front(), wind, amplitude: 0 });
+        const snaps = simulate(config, [0, 10, 40]);
+        let maxErr = 0;
+        for (const snap of snaps) {
+          snap.density.forEach((v, k) => {
+            maxErr = Math.max(maxErr, Math.abs(v - frontAt(config, centerOf(k), snap.timeS)));
+          });
+          expect(Math.max(...snap.density)).toBeGreaterThan(0.5);
+        }
+        console.log(`[cloud-advection] frozen-field consistency ${name}: max |cell - W(center - U t)| = ${maxErr.toExponential(2)} over steps 0/10/40`);
+        expect(maxErr).toBeLessThan(1e-12);
+      }
+    });
+
+    it('2. without fillInterior the field enters one column per step', () => {
+      const config = makeConfig({ boundary: 'inflow', front: front({ fillInterior: false }), wind: { x: 1, y: 0 }, amplitude: 0 });
+      const [s0, s10] = simulate(config, [0, 10]);
+      expect(Math.max(...s0.density)).toBe(0);
+      let maxErr = 0;
+      s10.density.forEach((v, k) => {
+        if (k % 40 < 10) maxErr = Math.max(maxErr, Math.abs(v - frontAt(config, centerOf(k), s10.timeS)));
+        else expect(v).toBe(0);
+      });
+      console.log(`[cloud-advection] inflow front, 10 upwind columns: max error = ${maxErr.toExponential(2)}`);
+      expect(maxErr).toBeLessThan(1e-12);
+      expect(Math.max(...s10.density)).toBeGreaterThan(0.3);
+    });
+
+    it('3. zero velocity is the exact identity under inflow', () => {
+      const config = makeConfig({ boundary: 'inflow', front: front() });
+      const [s0, s60] = simulate(config, [0, 60]);
+      expect(s60.densityHash).toBe(s0.densityHash);
+      expect(s60.density).toEqual(s0.density);
+      expect(s60.mass.drift).toBe(0);
+      expect(s0.mass.initial).toBeGreaterThan(0);
+    });
+
+    it('4. a thin wall keeps the lee exactly 0 while the front arrives on the left', () => {
+      const h = 0.5;
+      const wallX = 12.1;
+      const wall = rect('solid-wall', wallX - 0.025 * h, -1, wallX + 0.025 * h, 21);
+      const base = { boundary: 'inflow' as const, front: front({ fillInterior: false }), wind: { x: 1.7, y: 0 }, amplitude: 0 };
+      const steps = [4, 8, 12, 16, 30, 60, 120];
+      let leaked = 0, left = 0, control = 0;
+      for (const snap of simulate(makeConfig({ ...base, solids: [wall] }), steps)) {
+        snap.density.forEach((v, k) => {
+          if (centerOf(k).x > wallX) leaked = Math.max(leaked, v);
+          else left = Math.max(left, v);
+        });
+      }
+      for (const snap of simulate(makeConfig(base), steps)) {
+        snap.density.forEach((v, k) => { if (centerOf(k).x > wallX) control = Math.max(control, v); });
+      }
+      console.log(`[cloud-advection] inflow thin wall: max right-side value = ${leaked}; left max = ${left.toFixed(3)}; no-wall control right = ${control.toFixed(3)}`);
+      expect(leaked).toBe(0);
+      expect(left).toBeGreaterThan(0.3);
+      expect(control).toBeGreaterThan(0.3);
+    });
+
+    const richConfig = (over: Partial<WeatherFront> = {}): CloudStudyConfig => makeConfig({
+      boundary: 'inflow', front: front(over), wind: { x: 0.8, y: 0.2 }, diffusivity: 0.1,
+      vortices: [vortex('eddy-1', 12, 10, 8, 1.5)], solids: [rect('solid-a', 14, 6, 15, 14)],
+    });
+
+    it('front configs without softness keep their pre-softness hashes', () => {
+      const [s40] = simulate(richConfig(), [40]);
+      expect(s40.densityHash).toBe('11d588b63b0ff896');
+      expect(configHashes(richConfig()).simulation).toBe('7ec69afe1e2d7bbf');
+    });
+
+    it('softness: absent equals 0.12, is validated, hashed, and widens the bank edge', () => {
+      const withSoft = (softness: number | undefined): CloudStudyConfig => makeConfig({
+        boundary: 'inflow', front: front({ ...(softness === undefined ? {} : { softness }), fillInterior: true }), amplitude: 0,
+      });
+      const a = simulate(richConfig(), [20])[0];
+      const explicit = simulate(makeConfig({
+        boundary: 'inflow', front: front({ softness: 0.12 }), wind: { x: 0.8, y: 0.2 }, diffusivity: 0.1,
+        vortices: [vortex('eddy-1', 12, 10, 8, 1.5)], solids: [rect('solid-a', 14, 6, 15, 14)],
+      }), [20])[0];
+      expect(explicit.density).toEqual(a.density); // bitwise: 0.12 is the default
+      expect(configHashes(withSoft(0.12)).simulation).not.toBe(configHashes(withSoft(undefined)).simulation);
+      expect(configHashes(withSoft(undefined)).simulation).toBe(configHashes(makeConfig({ boundary: 'inflow', front: front(), amplitude: 0 })).simulation);
+
+      for (const bad of [0.01, 0.51, -0.1, Number.NaN]) {
+        expect(() => buildDomain(withSoft(bad)), `softness ${bad}`).toThrow(RangeError);
+      }
+      expect(() => buildDomain(withSoft(0.02))).not.toThrow();
+      expect(() => buildDomain(withSoft(0.5))).not.toThrow();
+
+      const snap = initialSnapshot(withSoft(undefined));
+      expect(() => advance(snap, withSoft(0.3), 1)).toThrow(SnapshotMismatchError);
+
+      // peak |grad W| on a fine sample grid shrinks as softness grows
+      const grad = (softness: number): number => {
+        const cfg = withSoft(softness);
+        const d = 0.05;
+        let peak = 0;
+        for (let i = 0; i < 200; i++) {
+          for (let j = 0; j < 200; j++) {
+            const p = { x: i * 0.1, y: j * 0.1 };
+            const w = frontAt(cfg, p, 0);
+            peak = Math.max(peak, Math.hypot(
+              (frontAt(cfg, { x: p.x + d, y: p.y }, 0) - w) / d,
+              (frontAt(cfg, { x: p.x, y: p.y + d }, 0) - w) / d,
+            ));
+          }
+        }
+        return peak;
+      };
+      const g = [0.06, 0.12, 0.3].map(grad);
+      console.log(`[cloud-advection] peak |grad W| for softness 0.06/0.12/0.3 = ${g.map((v) => v.toFixed(3)).join(' / ')}`);
+      expect(g[0]).toBeGreaterThan(g[1]);
+      expect(g[1]).toBeGreaterThan(g[2]);
+    });
+
+    it('5a. resumes deterministically from a serialized snapshot', () => {
+      const config = richConfig();
+      const [direct] = simulate(config, [60]);
+      const half = advance(initialSnapshot(config), config, 30);
+      const resumed = advance(parseSnapshot(serializeSnapshot(half)), config, 30);
+      expect(resumed.densityHash).toBe(direct.densityHash);
+      expect(resumed.density).toEqual(direct.density);
+      expect(resumed.mass).toEqual(direct.mass);
+      expect(Math.max(...direct.density)).toBeGreaterThan(0.1);
+    });
+
+    it('5b. any front field change invalidates snapshots (simulation hash only)', () => {
+      const base = richConfig();
+      const snap = initialSnapshot(base);
+      const h0 = configHashes(base);
+      const changes: Array<[string, Partial<WeatherFront>]> = [
+        ['amplitude', { amplitude: 0.9 }], ['scale', { scale: 4 }], ['coverage', { coverage: 0.6 }],
+        ['seed', { seed: 100 }], ['fillInterior', { fillInterior: false }],
+      ];
+      for (const [label, change] of changes) {
+        const changed = richConfig(change);
+        const h1 = configHashes(changed);
+        expect(h1.simulation, label).not.toBe(h0.simulation);
+        expect(h1.geometry, label).toBe(h0.geometry);
+        expect(h1.transform, label).toBe(h0.transform);
+        expect(() => advance(snap, changed, 1), label).toThrow(SnapshotMismatchError);
+      }
+      // dropping the front from an open config is a different state too
+      const open = { ...structuredClone(base), front: undefined };
+      open.settings.boundary = 'open';
+      expect(() => advance(snap, open, 1)).toThrow(SnapshotMismatchError);
+      expect(configHashes(makeConfig()).simulation).toBe(configHashes({ ...makeConfig(), front: undefined }).simulation);
+    });
+
+    it('5c. snapshots from an older model version refuse to resume', () => {
+      const config = makeConfig({ boundary: 'inflow', front: front() });
+      const snap = initialSnapshot(config);
+      expect(MODEL.version).toBe('1.1.0');
+      expect(MODEL.backendVersion).toBe('1.1.0');
+      const old = { ...snap, model: { ...snap.model, version: '1.0.0', backendVersion: '1.0.0' } } as unknown as typeof snap;
+      expect(() => advance(old, config, 1)).toThrow(SnapshotMismatchError);
+    });
+
+    it('validates the front and the inflow requirement', () => {
+      expect(() => buildDomain(makeConfig({ boundary: 'inflow' }))).toThrow(/requires config.front/);
+      const bad = (over: Partial<WeatherFront>): void => {
+        expect(() => buildDomain(makeConfig({ boundary: 'inflow', front: front(over) }))).toThrow(RangeError);
+      };
+      bad({ coverage: 1.5 }); bad({ coverage: -0.1 }); bad({ scale: 0 }); bad({ amplitude: -1 });
+      bad({ seed: -1 }); bad({ seed: 1.5 }); bad({ amplitude: Number.NaN });
+      // fillInterior applies whenever a front is present, in any mode
+      const [s0] = simulate(makeConfig({ boundary: 'open', front: front(), amplitude: 0 }), [0]);
+      expect(Math.max(...s0.density)).toBeGreaterThan(0.5);
+    });
+
+    it('sampleDensity reads the upstream field outside the grid when given timeS', () => {
+      const config = makeConfig({ boundary: 'inflow', front: front(), amplitude: 0, wind: { x: 1, y: 0 } });
+      const domain = buildDomain(config);
+      const [s3] = simulate(config, [3]);
+      const y = 10.25; // row 20: a cell-center row, so fy = 0
+      const edge = { x: 0, y };
+      const expected = 0.5 * frontAt(config, { x: -0.25, y }, s3.timeS) + 0.5 * s3.density[20 * 40];
+      expect(sampleDensity(domain, s3.density, edge, s3.timeS)).toBeCloseTo(expected, 12);
+      expect(sampleDensity(domain, s3.density, edge)).toBeCloseTo(0.5 * s3.density[20 * 40], 12);
+      const outside = { x: -3, y: 4 };
+      expect(sampleDensity(domain, s3.density, outside, s3.timeS)).toBe(frontAt(config, outside, s3.timeS));
+    });
+
+    it('6. art-like inflow config stays finite, bounded and fast', () => {
+      const config = makeConfig({
+        cols: 120, rows: 195, spacing: 0.4, dt: 0.25, boundary: 'inflow', diffusivity: 0.05,
+        wind: { x: 0.9, y: 0.35 },
+        vortices: [vortex('eddy-1', 20, 30, 12, 2), vortex('eddy-2', 30, 55, -9, 3)],
+        center: { x: 12, y: 20 }, radii: { x: 6, y: 9 },
+        front: front({ scale: 8, coverage: 0.45 }),
+        solids: [
+          rect('solid-a', 22, 15, 30, 24),
+          { id: 'solid-b', kind: 'solid', polygon: [{ x: 8, y: 50 }, { x: 14, y: 46 }, { x: 18, y: 52 }, { x: 14, y: 58 }, { x: 8, y: 57 }] },
+          rect('solid-thin', 30, 28, 30.02, 60),
+          { id: 'solid-c', kind: 'solid', polygon: [{ x: 38, y: 40 }, { x: 44, y: 70 }, { x: 34, y: 66 }] },
+        ],
+      });
+      const t0 = performance.now();
+      simulate(config, [0, 30, 60]);
+      const ms60 = performance.now() - t0;
+      const t1 = performance.now();
+      const snaps = simulate(config, [0, 30, 60, 120]);
+      const ms120 = performance.now() - t1;
+      const last = snaps[snaps.length - 1];
+      console.log(`[cloud-advection] art-like inflow 120x195: steps 0..60 ${ms60.toFixed(0)} ms, 0..120 ${ms120.toFixed(0)} ms, relativeDrift = ${last.mass.relativeDrift.toFixed(3)}`);
+      for (const snap of snaps) {
+        let min = Infinity, max = -Infinity;
+        for (const c of snap.density) { expect(Number.isFinite(c)).toBe(true); min = Math.min(min, c); max = Math.max(max, c); }
+        expect(min).toBeGreaterThanOrEqual(0);
+        expect(max).toBeLessThanOrEqual(1 + 1e-9); // convex reads of values that are all <= 1
+      }
+      expect(ms60).toBeLessThan(1000);
+      expect(sum(last.density)).toBeGreaterThan(0);
+    });
   });
 
   it('simulate returns ascending unique steps', () => {

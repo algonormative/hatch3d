@@ -22,7 +22,10 @@
     "coreRadius": 34,
     "coreX": 0,
     "coreY": 0,
-    "hatchPitch": 1.35
+    "hatchPitch": 1.35,
+    "layout": "span",
+    "markStyle": "contours",
+    "contourMinSpacing": 0
   },
   "finishing": {
     "border": {

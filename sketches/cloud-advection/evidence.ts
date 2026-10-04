@@ -92,10 +92,14 @@ function main(): void {
     const t = performance.now();
     const parts = extractMarks(domain, series[step], study, { cloudEnabled: true, hatchPitch });
     const cloud = parts.filter(p => p.id.startsWith('cloud-') && !p.diagnostic);
+    const streaks = parts.filter(p => p.id.startsWith('streak-'));
+    const count = (list: typeof parts, f: (p: (typeof parts)[number]) => number): number => list.reduce((n, p) => n + f(p), 0);
     marks.push({
       step,
-      cloudPaths: cloud.reduce((n, p) => n + p.paths.length, 0),
-      cloudPoints: cloud.reduce((n, p) => n + p.paths.reduce((m, path) => m + path.length, 0), 0),
+      cloudPaths: count(cloud, p => p.paths.length),
+      cloudPoints: count(cloud, p => p.paths.reduce((m, path) => m + path.length, 0)),
+      streakPaths: count(streaks, p => p.paths.length),
+      streakPoints: count(streaks, p => p.paths.reduce((m, path) => m + path.length, 0)),
       extractMs: ms(t),
     });
   }
@@ -109,6 +113,9 @@ function main(): void {
     core: { coreRadius: 60, coreX: 20, coreY: -30 },
     referenceDensity: { referenceDensity: 0.9 },
     hatchPitch: { hatchPitch: 2.5 },
+    markStyle: { markStyle: 'contours' },
+    streakPen: { streakPen: 'gold' },
+    streakSpacing: { streakSpacing: 5 },
   };
   const invariance: Record<string, { stateKey: string; densityHash: string; unchanged: boolean }> = {};
   for (const [name, change] of Object.entries(variants)) {

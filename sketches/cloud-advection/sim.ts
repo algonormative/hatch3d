@@ -15,7 +15,7 @@
  * traces that end farther out read zero anyway.
  */
 import { LIMITS, MODEL, SNAPSHOT_SCHEMA } from './model.ts';
-import type { CloudSnapshot, CloudStudyConfig, SnapshotHashes, Vec2 } from './model.ts';
+import type { CloudSnapshot, CloudStudyConfig, SnapshotHashes, Vec2, WeatherFront } from './model.ts';
 
 // ---------------------------------------------------------------- hashing
 
@@ -84,6 +84,7 @@ export function configHashes(config: CloudStudyConfig): SnapshotHashes {
     settings: config.settings,
     wind: config.wind,
     vortices: config.vortices,
+    front: config.front, // omitted from the canonical form when absent
     source: {
       amplitude: config.source.amplitude,
       noiseScale: config.source.noiseScale,
@@ -107,6 +108,45 @@ export function velocityAt(config: CloudStudyConfig, p: Vec2): Vec2 {
     vy += k * dx;
   }
   return { x: vx, y: vy };
+}
+
+// ------------------------------------------------------------ weather front
+
+/** 3-octave seeded value-noise sum, normalized to [0, 1]. */
+function fbm(seed: number, x: number, y: number): number {
+  let sum = 0;
+  let amp = 1;
+  let norm = 0;
+  let freq = 1;
+  for (let o = 0; o < 3; o++) {
+    sum += amp * valueNoise(seed + o * 0x153e, x * freq, y * freq);
+    norm += amp;
+    amp *= 0.5;
+    freq *= 2;
+  }
+  return sum / norm;
+}
+
+const DEFAULT_FRONT_SOFTNESS = 0.12;
+
+/** The static upstream pattern W(x, y). */
+function frontField(f: WeatherFront, x: number, y: number): number {
+  const v = fbm(f.seed, x / f.scale, y / f.scale);
+  const soft = f.softness ?? DEFAULT_FRONT_SOFTNESS;
+  return f.amplitude * smoothstep(1 - f.coverage - soft, 1 - f.coverage + soft, v) + 0;
+}
+
+/**
+ * Upstream cloud field at world point p and time timeS: W(p − wind·timeS), the
+ * frozen pattern carried rigidly by the uniform wind (vortices do not move it).
+ * Returns 0 for a config without a front.
+ */
+export function frontAt(config: CloudStudyConfig, p: Vec2, timeS: number): number {
+  if (!config.front) return 0;
+  finite('p.x', p.x);
+  finite('p.y', p.y);
+  finite('timeS', timeS);
+  return frontField(config.front, p.x - config.wind.velocity.x * timeS, p.y - config.wind.velocity.y * timeS);
 }
 
 // ----------------------------------------------------------------- domain
@@ -134,6 +174,10 @@ interface Internals {
   cols: number;
   rows: number;
   closed: boolean;
+  inflow: boolean;
+  front?: WeatherFront;
+  windX: number;
+  windY: number;
   x1: number;
   y1: number;
   /** Per edge: cx, cy, sx, sy (start and direction vector). */
@@ -227,8 +271,26 @@ function validateConfig(config: CloudStudyConfig): void {
   finite('settings.diffusivity', settings.diffusivity);
   if (settings.diffusivity < 0) throw new RangeError('settings.diffusivity must be nonnegative');
   diffusionSubsteps(settings, g.spacing);
-  if (settings.boundary !== 'open' && settings.boundary !== 'closed') {
-    throw new RangeError("settings.boundary must be 'open' or 'closed'");
+  if (settings.boundary !== 'open' && settings.boundary !== 'closed' && settings.boundary !== 'inflow') {
+    throw new RangeError("settings.boundary must be 'open', 'closed' or 'inflow'");
+  }
+  if (settings.boundary === 'inflow' && !config.front) {
+    throw new RangeError("settings.boundary 'inflow' requires config.front");
+  }
+  if (config.front) {
+    const f = config.front;
+    finite('front.amplitude', f.amplitude);
+    if (f.amplitude < 0) throw new RangeError('front.amplitude must be nonnegative');
+    positive('front.scale', f.scale);
+    finite('front.coverage', f.coverage);
+    if (f.coverage < 0 || f.coverage > 1) throw new RangeError('front.coverage must be in [0, 1]');
+    finite('front.seed', f.seed);
+    if (!Number.isInteger(f.seed) || f.seed < 0 || f.seed > 0xffffffff) throw new RangeError('front.seed must be a uint32');
+    if (typeof f.fillInterior !== 'boolean') throw new RangeError('front.fillInterior must be a boolean');
+    if (f.softness !== undefined) {
+      finite('front.softness', f.softness);
+      if (f.softness < 0.02 || f.softness > 0.5) throw new RangeError('front.softness must be in [0.02, 0.5]');
+    }
   }
   vec('wind.velocity', wind.velocity);
   vortices.forEach((v, i) => {
@@ -466,6 +528,10 @@ export function buildDomain(input: CloudStudyConfig): CloudDomain {
   const internals: Internals = {
     ox, oy, h, cols, rows,
     closed: config.settings.boundary === 'closed',
+    inflow: config.settings.boundary === 'inflow',
+    front: config.front,
+    windX: config.wind.velocity.x,
+    windY: config.wind.velocity.y,
     x1: ox + cols * h,
     y1: oy + rows * h,
     edges, nEdges, bucketSize, nbx, nby, bucketStart, bucketEdges, dualHasEdge, solid,
@@ -489,6 +555,9 @@ function internalsOf(domain: CloudDomain): Internals {
 
 // ------------------------------------------------- wall-aware interpolation
 
+interface GhostOut { n: number; x: Float64Array; y: Float64Array; w: Float64Array }
+const newGhost = (): GhostOut => ({ n: 0, x: new Float64Array(4), y: new Float64Array(4), w: new Float64Array(4) });
+
 /**
  * Fill up to four (cell, weight) pairs approximating the density at q.
  * Weights are normalized over contributing corners. When no corner can
@@ -499,8 +568,9 @@ function internalsOf(domain: CloudDomain): Internals {
  */
 function sampleStencil(
   n: Internals, qx: number, qy: number,
-  idxOut: Int32Array, wOut: Float64Array,
+  idxOut: Int32Array, wOut: Float64Array, ghost: GhostOut | null = null,
 ): number {
+  if (ghost) ghost.n = 0;
   const { ox, oy, h, cols, rows, closed, solid, nEdges, dualHasEdge } = n;
   const gx = (qx - ox) / h - 0.5;
   const gy = (qy - oy) / h - 0.5;
@@ -525,7 +595,15 @@ function sampleStencil(
     const ci = i0 + di;
     const cj = j0 + dj;
     if (ci < 0 || ci >= cols || cj < 0 || cj >= rows) {
-      if (!closed) wsum += w; // open: zero-valued ghost corner keeps its weight
+      if (!closed) {
+        wsum += w; // open: zero-valued ghost corner keeps its weight
+        if (ghost) { // inflow: the ghost corner reads the upstream field at its world position
+          ghost.x[ghost.n] = ox + (ci + 0.5) * h;
+          ghost.y[ghost.n] = oy + (cj + 0.5) * h;
+          ghost.w[ghost.n] = w;
+          ghost.n++;
+        }
+      }
       continue;
     }
     const idx = cj * cols + ci;
@@ -539,9 +617,13 @@ function sampleStencil(
   }
   if (count > 0) {
     for (let k = 0; k < count; k++) wOut[k] /= wsum;
+    if (ghost) for (let k = 0; k < ghost.n; k++) ghost.w[k] /= wsum;
     return count;
   }
-  if (wsum > 0) return 0; // only ghost corners contributed: value 0
+  if (wsum > 0) { // only ghost corners contributed: value 0 (or their upstream values)
+    if (ghost) for (let k = 0; k < ghost.n; k++) ghost.w[k] /= wsum;
+    return 0;
+  }
 
   const ci = Math.floor((qx - ox) / h);
   const cj = Math.floor((qy - oy) / h);
@@ -557,17 +639,34 @@ function sampleStencil(
   return 0;
 }
 
-/** Wall-aware bilinear sample; the same rule the advection step uses. Reads 0 where nothing is visible. */
-export function sampleDensity(domain: CloudDomain, density: ArrayLike<number>, p: Vec2): number {
+/**
+ * Wall-aware bilinear sample; the same rule the advection step uses. Reads 0
+ * where nothing is visible. In `inflow` mode, pass `timeS` (the snapshot time)
+ * so corners — or the whole point — outside the grid read the upstream field
+ * as the step does; without it they read 0 like `open`.
+ */
+export function sampleDensity(domain: CloudDomain, density: ArrayLike<number>, p: Vec2, timeS?: number): number {
   const n = internalsOf(domain);
   if (density.length !== domain.cols * domain.rows) throw new RangeError('density length does not match the grid');
   finite('p.x', p.x);
   finite('p.y', p.y);
+  const front = n.inflow && timeS !== undefined ? n.front : undefined;
+  if (front) {
+    finite('timeS', timeS as number);
+    if (p.x < n.ox || p.x > n.x1 || p.y < n.oy || p.y > n.y1) {
+      return frontField(front, p.x - n.windX * (timeS as number), p.y - n.windY * (timeS as number));
+    }
+  }
   const idx = new Int32Array(4);
   const w = new Float64Array(4);
-  const count = sampleStencil(n, p.x, p.y, idx, w);
+  const ghost = front ? newGhost() : null;
+  const count = sampleStencil(n, p.x, p.y, idx, w, ghost);
   let s = 0;
   for (let k = 0; k < count; k++) s += w[k] * density[idx[k]];
+  if (front && ghost) {
+    const t = timeS as number;
+    for (let k = 0; k < ghost.n; k++) s += ghost.w[k] * frontField(front, ghost.x[k] - n.windX * t, ghost.y[k] - n.windY * t);
+  }
   return s + 0;
 }
 
@@ -582,6 +681,11 @@ interface Engine {
   openS?: Uint8Array;
   substeps: number;
   kappa: number;
+  /**
+   * Inflow only: per affected cell, up to four upstream reads (world position,
+   * weight). A backtrace that leaves the domain is one read of weight 1 at q.
+   */
+  ghost?: { m: number; cell: Int32Array; count: Uint8Array; x: Float64Array; y: Float64Array; w: Float64Array };
 }
 
 function getEngine(domain: CloudDomain): Engine {
@@ -595,6 +699,12 @@ function getEngine(domain: CloudDomain): Engine {
   const w = new Float64Array(N * 4);
   const si = new Int32Array(4);
   const sw = new Float64Array(4);
+  const gs = newGhost();
+  const gCell: number[] = [];
+  const gCount: number[] = [];
+  const gx: number[] = [];
+  const gy: number[] = [];
+  const gw: number[] = [];
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const c = j * cols + i;
@@ -609,7 +719,19 @@ function getEngine(domain: CloudDomain): Engine {
       const qx = px + dx;
       const qy = py + dy;
       // A blocked backtrace reads 0 (absorbing wall, clean air behind it).
-      const count = firstBlock(n, px, py, qx, qy) === Infinity ? sampleStencil(n, qx, qy, si, sw) : 0;
+      let count = 0;
+      if (firstBlock(n, px, py, qx, qy) === Infinity) {
+        if (n.inflow && (qx < ox || qx > n.x1 || qy < oy || qy > n.y1)) {
+          // Left the domain: read the upstream field at q itself.
+          gCell.push(c); gCount.push(1); gx.push(qx, 0, 0, 0); gy.push(qy, 0, 0, 0); gw.push(1, 0, 0, 0);
+        } else {
+          count = sampleStencil(n, qx, qy, si, sw, n.inflow ? gs : null);
+          if (n.inflow && gs.n > 0) {
+            gCell.push(c); gCount.push(gs.n);
+            for (let k = 0; k < 4; k++) { gx.push(gs.x[k]); gy.push(gs.y[k]); gw.push(k < gs.n ? gs.w[k] : 0); }
+          }
+        }
+      }
       for (let k = 0; k < count; k++) {
         idx[c * 4 + k] = si[k];
         w[c * 4 + k] = sw[k];
@@ -638,7 +760,13 @@ function getEngine(domain: CloudDomain): Engine {
     substeps = diffusionSubsteps(config.settings, h);
     kappa = (diffusivity * (dt / substeps)) / (h * h);
   }
-  n.engine = { idx, w, openE, openS, substeps, kappa };
+  const ghost = n.inflow
+    ? {
+      m: gCell.length, cell: Int32Array.from(gCell), count: Uint8Array.from(gCount),
+      x: Float64Array.from(gx), y: Float64Array.from(gy), w: Float64Array.from(gw),
+    }
+    : undefined;
+  n.engine = { idx, w, openE, openS, substeps, kappa, ghost };
   return n.engine;
 }
 
@@ -653,18 +781,53 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
   const engine = getEngine(domain);
   const { cols, rows, solid, closed } = n;
   const N = cols * rows;
-  const { idx, w, openE, openS, substeps, kappa } = engine;
+  const { idx, w, openE, openS, substeps, kappa, ghost } = engine;
+  const { front, windX, windY, ox, oy, h } = n;
+  const dt = domain.config.settings.dt;
   let cur = Float64Array.from(snapshot.density);
   let nxt = new Float64Array(N);
+  // Inflow diffusion: upstream values in the ghost cells just outside each edge (per step, fixed across substeps).
+  const diffGhost = n.inflow && front && openE
+    ? { l: new Float64Array(rows), r: new Float64Array(rows), t: new Float64Array(cols), b: new Float64Array(cols) }
+    : null;
 
   for (let s = 0; s < steps; s++) {
+    const tOld = (snapshot.step + s) * dt; // time of the field being sampled
+
     for (let c = 0; c < N; c++) {
       if (solid[c]) { nxt[c] = 0; continue; }
       const b = c * 4;
       nxt[c] = (w[b] * cur[idx[b]] + w[b + 1] * cur[idx[b + 1]] +
         w[b + 2] * cur[idx[b + 2]] + w[b + 3] * cur[idx[b + 3]]) + 0;
     }
+    if (ghost && front) {
+      const sx = windX * tOld;
+      const sy = windY * tOld;
+      for (let e = 0; e < ghost.m; e++) {
+        const c = ghost.cell[e];
+        let v = nxt[c];
+        for (let k = 0; k < ghost.count[e]; k++) {
+          v += ghost.w[e * 4 + k] * frontField(front, ghost.x[e * 4 + k] - sx, ghost.y[e * 4 + k] - sy);
+        }
+        nxt[c] = v + 0;
+      }
+    }
     [cur, nxt] = [nxt, cur];
+
+    if (diffGhost && front) {
+      const sx = windX * tOld;
+      const sy = windY * tOld;
+      for (let j = 0; j < rows; j++) {
+        const y = oy + (j + 0.5) * h - sy;
+        diffGhost.l[j] = frontField(front, ox - 0.5 * h - sx, y);
+        diffGhost.r[j] = frontField(front, ox + (cols + 0.5) * h - sx, y);
+      }
+      for (let i = 0; i < cols; i++) {
+        const x = ox + (i + 0.5) * h - sx;
+        diffGhost.t[i] = frontField(front, x, oy - 0.5 * h - sy);
+        diffGhost.b[i] = frontField(front, x, oy + (rows + 0.5) * h - sy);
+      }
+    }
 
     if (openE && openS) {
       for (let sub = 0; sub < substeps; sub++) {
@@ -674,10 +837,10 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
             if (solid[c]) { nxt[c] = 0; continue; }
             const a = cur[c];
             let acc = 0;
-            if (i + 1 < cols) { if (openE[c]) acc += cur[c + 1] - a; } else if (!closed) acc -= a;
-            if (i > 0) { if (openE[c - 1]) acc += cur[c - 1] - a; } else if (!closed) acc -= a;
-            if (j + 1 < rows) { if (openS[c]) acc += cur[c + cols] - a; } else if (!closed) acc -= a;
-            if (j > 0) { if (openS[c - cols]) acc += cur[c - cols] - a; } else if (!closed) acc -= a;
+            if (i + 1 < cols) { if (openE[c]) acc += cur[c + 1] - a; } else if (!closed) acc += (diffGhost ? diffGhost.r[j] : 0) - a;
+            if (i > 0) { if (openE[c - 1]) acc += cur[c - 1] - a; } else if (!closed) acc += (diffGhost ? diffGhost.l[j] : 0) - a;
+            if (j + 1 < rows) { if (openS[c]) acc += cur[c + cols] - a; } else if (!closed) acc += (diffGhost ? diffGhost.b[i] : 0) - a;
+            if (j > 0) { if (openS[c - cols]) acc += cur[c - cols] - a; } else if (!closed) acc += (diffGhost ? diffGhost.t[i] : 0) - a;
             nxt[c] = a + kappa * acc + 0;
           }
         }
@@ -743,7 +906,7 @@ export function initialSnapshot(config: CloudStudyConfig): CloudSnapshot {
 
 function initialFromDomain(domain: CloudDomain): CloudSnapshot {
   const n = internalsOf(domain);
-  const { source } = domain.config;
+  const { source, front } = domain.config;
   const density = new Array<number>(domain.cols * domain.rows).fill(0);
   for (let j = 0; j < domain.rows; j++) {
     const y = n.oy + (j + 0.5) * n.h;
@@ -753,9 +916,13 @@ function initialFromDomain(domain: CloudDomain): CloudSnapshot {
       const x = n.ox + (i + 0.5) * n.h;
       const r = Math.hypot((x - source.center.x) / source.radii.x, (y - source.center.y) / source.radii.y);
       const falloff = 1 - smoothstep(0, 1, r);
-      if (falloff <= 0) continue;
-      const billow = 0.55 + 0.45 * valueNoise(source.seed, x / source.noiseScale, y / source.noiseScale);
-      density[c] = source.amplitude * falloff * billow + 0;
+      let value = 0;
+      if (falloff > 0) {
+        const billow = 0.55 + 0.45 * valueNoise(source.seed, x / source.noiseScale, y / source.noiseScale);
+        value = source.amplitude * falloff * billow + 0;
+      }
+      if (front?.fillInterior) value = Math.max(value, frontField(front, x, y));
+      density[c] = value;
     }
   }
   return makeSnapshot(domain, density, 0, massSum(density, domain.cellArea));

@@ -1,0 +1,232 @@
+import type { Vec2 } from './model.ts';
+
+/** World domain in metres; its aspect matches the abstract Tabloid target. */
+export const WORLD = Object.freeze({ width: 48, height: 78 });
+/** Fin plate thickness in the `span` layout, deliberately thinner than a grid cell. */
+export const FIN_THICKNESS = 0.15;
+/** The quiet core's centre in world metres (the page centre) and the members' keep-out radius around it. */
+export const CORE_CENTER: Vec2 = Object.freeze({ x: WORLD.width / 2, y: WORLD.height / 2 });
+export const CORE_KEEP_OUT = 8.6;
+
+export type LayoutId = 'span' | 'orbit';
+export type MemberKind = 'slab' | 'pier' | 'fin' | 'box' | 'wedge' | 'rail' | 'plate' | 'radial';
+
+/** An architectural member. It is both a solid in the simulation and a drawn outline. */
+export interface StructureMember {
+  /** Simulation id, `solid-<name>`. */
+  id: string;
+  name: string;
+  kind: MemberKind;
+  /** Physical pen the member is drawn in. */
+  pen: string;
+  /** World metres; convex simple polygon. */
+  polygon: Vec2[];
+  /** Interior hatch direction in art space, radians. */
+  hatchAngle: number;
+  /** Multiplier on the structure hatch pitch (1 = the `hatchPitch` control). */
+  pitch: number;
+  /** A second, sparser hatch set crossing the first. */
+  cross: boolean;
+  /** Hatch pitch compresses across the member, giving a tonal ramp. */
+  tonal: boolean;
+}
+
+const rect = (x0: number, y0: number, x1: number, y1: number): Vec2[] => [
+  { x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 },
+];
+const snap = (v: number): number => Math.round(v * 20) / 20;
+
+/**
+ * `span`: members enter from the left and right frame edges and stop short of the
+ * middle, leaving a missing span of about fourteen metres.
+ */
+export function spanLayout(random: () => number): StructureMember[] {
+  const jitter = (amount: number): number => snap((random() - 0.5) * 2 * amount);
+  const W = WORLD.width;
+  const members: StructureMember[] = [];
+  const add = (name: string, kind: MemberKind, pen: string, polygon: Vec2[], hatchAngle: number): void => {
+    members.push({ id: `solid-${name}`, name, kind, pen, polygon, hatchAngle, pitch: 1, cross: false, tonal: false });
+  };
+  const aEnd = 16.4 + jitter(1.2);
+  const aY = 12 + jitter(1.5);
+  add('deck-a', 'slab', 'carbon', rect(-2, aY, aEnd, aY + 4.4), 0.9);
+  const bStart = 32 + jitter(1.2);
+  const bY = 34 + jitter(1.5);
+  add('deck-b', 'slab', 'carbon', rect(bStart, bY, W + 2, bY + 4.6), -0.9);
+  const cEnd = 13.5 + jitter(1.5);
+  const cY = 63 + jitter(1.5);
+  add('deck-c', 'slab', 'carbon', rect(-2, cY, cEnd, cY + 3.6), 0.9);
+  const pierAX = aEnd - 6.2 + jitter(0.6);
+  add('pier-a', 'pier', 'ultramarine', rect(pierAX, aY + 4.4, pierAX + 3.2, aY + 33), -0.9);
+  const pierBX = bStart + 5.4 + jitter(0.6);
+  add('pier-b', 'pier', 'ultramarine', rect(pierBX, bY + 4.6, pierBX + 3.2, bY + 38), 0.9);
+  const finX = 24.6 + jitter(0.6);
+  const finY = 46 + jitter(1);
+  add('fin', 'fin', 'violet', rect(finX, finY, finX + FIN_THICKNESS, finY + 17.5), 0.9);
+  return members;
+}
+
+// ----------------------------------------------------------------- orbit
+
+/** Oriented box: `len` along `angle`, `wid` across. */
+function orientedBox(cx: number, cy: number, len: number, wid: number, angle: number): Vec2[] {
+  return taper(cx, cy, len, wid, wid, angle);
+}
+
+/** Trapezoid along `angle`: width `w0` at the back, `w1` at the front (0 gives a triangle). */
+function taper(cx: number, cy: number, len: number, w0: number, w1: number, angle: number): Vec2[] {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const q = (v: number): number => Math.round(v * 1000) / 1000;
+  const at = (u: number, v: number): Vec2 => ({ x: q(cx + u * c - v * s), y: q(cy + u * s + v * c) });
+  const pts = [at(-len / 2, -w0 / 2), at(len / 2, -w1 / 2)];
+  if (w1 > 0) pts.push(at(len / 2, w1 / 2));
+  pts.push(at(-len / 2, w0 / 2));
+  return pts;
+}
+
+function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const sq = dx * dx + dy * dy;
+  const t = sq === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / sq));
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
+
+function inside(ring: Vec2[], p: Vec2): boolean {
+  let hit = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) hit = !hit;
+  }
+  return hit;
+}
+
+/** Distance from `p` to a polygon (0 when inside). */
+export function distanceToPolygon(ring: Vec2[], p: Vec2): number {
+  if (inside(ring, p)) return 0;
+  return Math.min(...ring.map((a, i) => distanceToSegment(p, a, ring[(i + 1) % ring.length])));
+}
+
+const PEN_WEIGHTS: [string, number][] = [
+  ['carbon', 0.42], ['ultramarine', 0.28], ['vermilion', 0.09], ['violet', 0.08], ['acid', 0.05], ['coral', 0.04], ['gold', 0.04],
+];
+
+/** Group sizes at density 0 and 1. A member's identity never depends on the density; only how many of each group are kept. */
+const ORBIT_COUNTS = { clusterA: [10, 22], clusterB: [10, 22], satellite: [6, 12], radial: [5, 8], rail: [3, 6] } as const;
+const RADIAL_SLOTS = 8;
+/** Slot order that keeps any prefix of radials spread around the core. */
+const RADIAL_ORDER = [0, 4, 2, 6, 1, 5, 3, 7];
+export const ORBIT_MAX_MEMBERS = 22 + 22 + 12 + 8 + 6;
+
+/**
+ * `orbit`: two large clusters and a satellite of rotated members around the quiet core,
+ * long members that radiate out through the frame edge, and a few free rails. Every
+ * member keeps `CORE_KEEP_OUT` metres clear of the core.
+ *
+ * `density` (0..1) only chooses how many members of each group are kept: the full
+ * candidate list is always generated in the same order from `random`, then a prefix of
+ * each group is taken, so raising the density adds members and never moves the others.
+ */
+export function orbitLayout(random: () => number, density = 0.6): StructureMember[] {
+  const d = Math.max(0, Math.min(1, density));
+  const keep = (range: readonly [number, number]): number => Math.round(range[0] + (range[1] - range[0]) * d);
+  const range = (a: number, b: number): number => a + (b - a) * random();
+  const pickPen = (): string => {
+    let r = random();
+    for (const [pen, w] of PEN_WEIGHTS) { r -= w; if (r <= 0) return pen; }
+    return 'carbon';
+  };
+  const clear = (ring: Vec2[]): boolean => distanceToPolygon(ring, CORE_CENTER) >= CORE_KEEP_OUT;
+  const onPage = (ring: Vec2[]): boolean => ring.some(p => p.x > -1 && p.x < WORLD.width + 1 && p.y > -1 && p.y < WORLD.height + 1);
+  type Draft = Omit<StructureMember, 'id' | 'name'>;
+
+  const cluster = (center: Vec2, axis: number, count: number, spread: number): Draft[] => {
+    const out: Draft[] = [];
+    const ax = { x: Math.cos(axis), y: Math.sin(axis) };
+    const px = { x: -ax.y, y: ax.x };
+    for (let n = 0; n < count; n++) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const along = (random() - 0.5) * 2 * spread * 1.25;
+        const across = (random() - 0.5) * 2 * spread * 0.7;
+        const cx = center.x + ax.x * along + px.x * across;
+        const cy = center.y + ax.y * along + px.y * across;
+        const angle = axis + (random() - 0.5) * 0.55 + (random() < 0.22 ? Math.PI / 2 : 0);
+        const roll = random();
+        let kind: MemberKind;
+        let polygon: Vec2[];
+        if (roll < 0.5) { kind = 'box'; polygon = orientedBox(cx, cy, range(3.5, 11), range(1.1, 4), angle); }
+        else if (roll < 0.68) { kind = 'wedge'; polygon = taper(cx, cy, range(4, 10), range(1.6, 4), range(0, 1), angle); }
+        else if (roll < 0.84) { kind = 'rail'; polygon = orientedBox(cx, cy, range(6, 13), range(0.15, 0.35), angle); }
+        else { kind = 'plate'; const s = range(1.8, 4.2); polygon = orientedBox(cx, cy, s, s * range(0.8, 1.2), angle); }
+        if (!clear(polygon) || !onPage(polygon)) continue;
+        const rail = kind === 'rail';
+        // Hatch along the member, across it as rungs, or on the diagonal.
+        const hatchAngle = angle + [0.62, -0.62, Math.PI / 2, 0.2][Math.floor(random() * 4)];
+        const pen = rail ? (random() < 0.5 ? 'violet' : 'vermilion') : pickPen();
+        out.push({ kind, polygon, pen, hatchAngle, pitch: rail ? 2.6 : range(0.55, 1.6), cross: !rail && random() < 0.16, tonal: !rail && random() < 0.18 });
+        break;
+      }
+    }
+    return out;
+  };
+  // Two large clusters on opposite sides of the core, one small satellite.
+  const sign = random() < 0.5 ? 1 : -1;
+  const clusterA = cluster({ x: 24 + 12 * sign + range(-1.5, 1.5), y: 39 - 15 + range(-2, 2) }, -0.95 * sign + range(-0.2, 0.2), ORBIT_COUNTS.clusterA[1], 4.8);
+  const clusterB = cluster({ x: 24 - 12 * sign + range(-1.5, 1.5), y: 39 + 15 + range(-2, 2) }, -0.95 * sign + range(-0.2, 0.2), ORBIT_COUNTS.clusterB[1], 4.8);
+  const upper = random() < 0.5;
+  const satellite = cluster({ x: 24 + (upper ? 14 : -14) * sign + range(-1, 1), y: 39 + (upper ? 27 : -27) + range(-2, 2) }, 0.5 * sign + range(-0.3, 0.3), ORBIT_COUNTS.satellite[1], 3.8);
+
+  // Long members that radiate from just outside the core and run out through the frame edge.
+  const phase = random() * Math.PI * 2;
+  const radials: Draft[] = [];
+  for (const slot of RADIAL_ORDER) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const phi = phase + (Math.PI * 2 * slot) / RADIAL_SLOTS + range(-0.22, 0.22);
+      const dir = { x: Math.cos(phi), y: Math.sin(phi) };
+      // Distance along the ray to leave the domain rectangle.
+      const tx = dir.x > 0 ? (WORLD.width - CORE_CENTER.x) / dir.x : dir.x < 0 ? -CORE_CENTER.x / dir.x : Infinity;
+      const ty = dir.y > 0 ? (WORLD.height - CORE_CENTER.y) / dir.y : dir.y < 0 ? -CORE_CENTER.y / dir.y : Infinity;
+      const r0 = CORE_KEEP_OUT + range(1.2, 4.5);
+      const r1 = Math.min(tx, ty) + 3;
+      if (r1 - r0 < 8) continue;
+      const w0 = random() < 0.2 ? range(0.18, 0.5) : range(1.2, 3.4);
+      const w1 = w0 * range(0.3, 1.1);
+      const mid = (r0 + r1) / 2;
+      const polygon = taper(CORE_CENTER.x + dir.x * mid, CORE_CENTER.y + dir.y * mid, r1 - r0, w0, w1, phi);
+      if (!clear(polygon)) continue;
+      const thin = w0 < 0.6;
+      radials.push({
+        kind: 'radial', polygon, pen: thin ? 'violet' : random() < 0.6 ? 'carbon' : 'ultramarine',
+        hatchAngle: phi + (random() < 0.5 ? Math.PI / 2 : 0.5), pitch: thin ? 3 : range(1, 1.8),
+        cross: !thin && random() < 0.2, tonal: !thin && random() < 0.3,
+      });
+      break;
+    }
+  }
+  // A few free rails bridging between the clusters (some thinner than a grid cell).
+  const rails: Draft[] = [];
+  for (let n = 0; n < ORBIT_COUNTS.rail[1]; n++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const polygon = orientedBox(range(8, 40), range(10, 68), range(7, 15), range(0.15, 0.3), range(0, Math.PI));
+      if (!clear(polygon) || !onPage(polygon)) continue;
+      rails.push({ kind: 'rail', polygon, pen: n % 2 ? 'violet' : 'vermilion', hatchAngle: Math.PI / 2 + range(-0.3, 0.3), pitch: 2.6, cross: false, tonal: false });
+      break;
+    }
+  }
+  const members: StructureMember[] = [];
+  const take = (prefix: string, drafts: Draft[], count: number): void => {
+    drafts.slice(0, count).forEach((draft, i) => {
+      const name = `${prefix}${String(i + 1).padStart(2, '0')}`;
+      members.push({ id: `solid-${name}`, name, ...draft });
+    });
+  };
+  take('a', clusterA, keep(ORBIT_COUNTS.clusterA));
+  take('b', clusterB, keep(ORBIT_COUNTS.clusterB));
+  take('c', satellite, keep(ORBIT_COUNTS.satellite));
+  take('r', radials, keep(ORBIT_COUNTS.radial));
+  take('f', rails, keep(ORBIT_COUNTS.rail));
+  return members;
+}
+
+export function buildStructure(random: () => number, layout: LayoutId = 'span', density = 0.6): StructureMember[] {
+  return layout === 'orbit' ? orbitLayout(random, density) : spanLayout(random);
+}
