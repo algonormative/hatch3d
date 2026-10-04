@@ -14,7 +14,7 @@ export function renderSketch(options: RenderOptions): Promise<RenderResult> { re
 export function inspectSketch(options: InspectOptions): Promise<SketchMetadata> { return inspect(options); }
 
 export interface PlotterUploadConfig { baseUrl: string; token: string; fetchImpl?: typeof fetch; timeoutMs?: number }
-export interface SketchServerOptions { entry: string; port?: number; outputDir?: string; plotterUpload?: PlotterUploadConfig }
+export interface SketchServerOptions { entry: string; port?: number; outputDir?: string; plotterUpload?: PlotterUploadConfig; plotprepExecutable?: string }
 export interface SketchServer { url: string; close: () => Promise<void> }
 export function startSketchServer(options: SketchServerOptions): Promise<SketchServer> { return start(options); }
 

@@ -8,6 +8,7 @@ import { plotterQueueConfig, plotterQueueId, queueSketchRender, validatePlotterU
 
 const runner = vi.hoisted(() => ({ inspectSketch: vi.fn(), renderSketch: vi.fn() }));
 vi.mock('../../cli/sketch/runner.js', () => ({ ...runner }));
+vi.mock('../../cli/sketch/source-stamp.js', () => ({ sourceStamp: vi.fn().mockResolvedValue('test-source-stamp') }));
 import { startSketchServer, type SketchServer } from '../../cli/sketch/server.ts';
 
 const result: RenderResult = {

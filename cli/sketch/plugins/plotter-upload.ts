@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { RenderResult } from '../../../src/sketch/types.js';
-import { exportSketchPng } from '../export-png.js';
+import { exportSketchPng, renderSvgPng } from '../export-png.js';
+import { svgSha256, type PreparedDerivative } from '../preparation.js';
 
 /** This module has no network side effects until queueSketchRender is called. */
 export interface PlotterUploadConfig {
@@ -59,18 +60,42 @@ export function plotterQueueConfig(result: RenderResult, svgKey: string, pngKey:
   };
 }
 
-export async function queueSketchRender(result: RenderResult, config: PlotterUploadConfig): Promise<string> {
+export function preparedQueueId(result: RenderResult, derivative: PreparedDerivative): string {
+  return `hatch3d-prepared-${createHash('sha256').update(result.identity).update('\0').update(derivative.sourceSha256).update('\0').update(derivative.preparedSha256).digest('hex')}`;
+}
+
+export function preparedQueueConfig(result: RenderResult, derivative: PreparedDerivative, sourceSvgKey: string, preparedSvgKey: string, pngKey: string): Record<string, unknown> {
+  const nativePens = derivative.report.pens;
+  const pens = nativePens.map(pen => ({ id: pen.pen_id!, color: pen.color, width: pen.stroke_width_mm, passes: pen.passes }));
+  return {
+    ...plotterQueueConfig(result, preparedSvgKey, pngKey),
+    page: result.metadata.page,
+    pens,
+    layers: nativePens.map(pen => ({ id: pen.pen_id!, color: pen.color, width: pen.stroke_width_mm, passes: pen.passes,
+      parts: derivative.report.parts.filter(part => part.layer_number === pen.layer_number && part.path_count_after > 0).map(part => part.part_id) })),
+    stats: { pathCount: derivative.report.geometry.output.paths, pointCount: derivative.report.geometry.output.vertices,
+      lengthMm: derivative.report.geometry.output.drawn_length_mm, partCount: derivative.report.parts.filter(part => part.path_count_after > 0).length },
+    preparation: { schema_version: 1, source_svg_key: sourceSvgKey, source_sha256: derivative.sourceSha256, prepared_sha256: derivative.preparedSha256 },
+  };
+}
+
+interface QueueArtifacts { id: string; title: string; svg: Uint8Array; png: Uint8Array; sourceSvg?: Uint8Array; config: Record<string, unknown> }
+export interface QueueGuard { signal?: AbortSignal; stillCurrent?: () => Promise<boolean> }
+
+async function queueArtifacts(artifacts: QueueArtifacts, config: PlotterUploadConfig, guard: QueueGuard = {}): Promise<string> {
   const base = validatePlotterUploadConfig(config);
-  const id = plotterQueueId(result);
+  const { id } = artifacts;
   const svgKey = `plotter/${id}.svg`;
   const pngKey = `plotter/${id}.png`;
-  // The same renderer and default options as the viewer's PNG export.
-  const png = exportSketchPng(result, 'paper', 6);
+  const sourceSvgKey = `plotter/${id}-source.svg`;
   const fetchImpl = config.fetchImpl ?? fetch;
   const url = (path: string) => new URL(path, base).href;
   const post = async (path: string, contentType: string, body: BodyInit, acknowledge = false): Promise<void> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 10_000);
+    const cancel = () => controller.abort();
+    guard.signal?.addEventListener('abort', cancel, { once: true });
+    if (guard.signal?.aborted) controller.abort();
     try {
       const response = await fetchImpl(url(path), {
         method: 'POST',
@@ -109,19 +134,41 @@ export async function queueSketchRender(result: RenderResult, config: PlotterUpl
     } catch (error) {
       if (error instanceof PlotterUploadError) throw error;
       throw new PlotterUploadError('upstream', 'Print queue request failed or timed out');
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); guard.signal?.removeEventListener('abort', cancel); }
   };
   // The queue row is last: a retry reuses identical keys and the worker's INSERT OR IGNORE ID.
-  await post(`/image/${svgKey}`, 'image/svg+xml; charset=utf-8', new TextEncoder().encode(result.svg));
-  await post(`/image/${pngKey}`, 'image/png', new Uint8Array(png));
+  if (artifacts.sourceSvg) await post(`/image/${sourceSvgKey}`, 'image/svg+xml; charset=utf-8', new Uint8Array(artifacts.sourceSvg));
+  await post(`/image/${svgKey}`, 'image/svg+xml; charset=utf-8', new Uint8Array(artifacts.svg));
+  await post(`/image/${pngKey}`, 'image/png', new Uint8Array(artifacts.png));
+  if (guard.signal?.aborted || guard.stillCurrent && !(await guard.stillCurrent())) throw new PlotterUploadError('config', 'Current render changed before queue publication');
   await post('/print-queue', 'application/json', JSON.stringify({
     id,
-    title: result.metadata.name,
+    title: artifacts.title,
     composition: 'sketch',
     svg_key: svgKey,
     png_key: pngKey,
-    config: JSON.stringify(plotterQueueConfig(result, svgKey, pngKey)),
+    config: JSON.stringify(artifacts.config),
     source: 'hatch3d',
   }), true);
   return id;
+}
+
+export async function queueSketchRender(result: RenderResult, config: PlotterUploadConfig, guard?: QueueGuard): Promise<string> {
+  const id = plotterQueueId(result);
+  const svgKey = `plotter/${id}.svg`;
+  const pngKey = `plotter/${id}.png`;
+  return queueArtifacts({ id, title: result.metadata.name, svg: new TextEncoder().encode(result.svg),
+    png: exportSketchPng(result, 'paper', 6), config: plotterQueueConfig(result, svgKey, pngKey) }, config, guard);
+}
+
+export async function queuePreparedRender(result: RenderResult, derivative: PreparedDerivative, config: PlotterUploadConfig, guard?: QueueGuard): Promise<string> {
+  if (derivative.sourceIdentity !== result.identity || derivative.sourceSha256 !== svgSha256(result.svg) ||
+      derivative.preparedSha256 !== svgSha256(derivative.bytes)) throw new PlotterUploadError('config', 'Prepared upload does not match the current canonical render');
+  const id = preparedQueueId(result, derivative);
+  const svgKey = `plotter/${id}.svg`;
+  const sourceSvgKey = `plotter/${id}-source.svg`;
+  const pngKey = `plotter/${id}.png`;
+  const png = renderSvgPng(derivative.bytes.toString('utf8'), result.metadata.page, 'paper', 6);
+  return queueArtifacts({ id, title: result.metadata.name, svg: derivative.bytes, sourceSvg: new TextEncoder().encode(result.svg),
+    png, config: preparedQueueConfig(result, derivative, sourceSvgKey, svgKey, pngKey) }, config, guard);
 }

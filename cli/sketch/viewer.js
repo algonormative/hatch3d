@@ -6,7 +6,35 @@ if (typeof document !== 'undefined') {
   const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
     margin: null, paper: null, borderStyle: '', borderPen: null, borderInset: 12, contentGap: 6, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
   const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
-    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null };
+    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null,
+    preparation: null, preparationPending: null, preparationSequence: 0, selectedArtifact: 'source' };
+
+  function selectedArtifact() {
+    return state.selectedArtifact === 'prepared' && state.preparation && !state.stale
+      ? { artifact: 'prepared', preparedKey: state.preparation.key } : {};
+  }
+
+  function updateArtifactSelection() {
+    const selection = selectedArtifact();
+    $('artifact-source').checked = selection.artifact !== 'prepared';
+    $('artifact-prepared').checked = selection.artifact === 'prepared';
+    $('artifact-prepared').disabled = state.stale || !state.preparation;
+    $('download').dataset.artifact = selection.artifact || 'source';
+    $('download').dataset.preparedKey = selection.preparedKey || '';
+  }
+
+  function clearPreparation(message = 'Prepare the current SVG to compare its derivative.') {
+    state.preparationSequence++;
+    state.preparationPending?.abort();
+    state.preparationPending = null;
+    state.preparation = null;
+    state.selectedArtifact = 'source';
+    $('preparation-panel').hidden = true;
+    $('preparation-art').removeAttribute('src');
+    $('comparison').classList.remove('has-preparation');
+    $('preparation-status').textContent = message;
+    updateArtifactSelection();
+  }
 
   function status(message, stale = false) {
     $('status').textContent = message;
@@ -18,6 +46,8 @@ if (typeof document !== 'undefined') {
     $('download').dataset.identity = !stale && state.result ? state.result.identity : '';
     $('download-png').disabled = stale || !state.result;
     state.stale = stale;
+    $('preparation-run').disabled = stale || !state.result;
+    updateArtifactSelection();
   }
 
   function showError(message) {
@@ -33,6 +63,7 @@ if (typeof document !== 'undefined') {
 
   function markDirty(message = 'Rendering current settings…') {
     clearTimeout(state.timer);
+    clearPreparation('Inputs changed. Prepare the new successful render.');
     status(state.result ? `${message} Previous preview is from earlier settings.` : message, true);
   }
 
@@ -41,6 +72,37 @@ if (typeof document !== 'undefined') {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
     return payload;
+  }
+
+  function preparationOptions() {
+    const operations = { sort: $('preparation-sort').checked, allowReverse: $('preparation-reverse').checked };
+    for (const [id, key] of [['preparation-merge', 'mergeToleranceMm'], ['preparation-simplify', 'simplifyToleranceMm']]) {
+      const raw = $(id).value.trim();
+      if (!raw) continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0 || value > 10) throw new Error(`${key} must be between 0 and 10 mm.`);
+      operations[key] = value;
+      if (key === 'mergeToleranceMm') operations.mergeScope = 'named-parts';
+    }
+    return operations;
+  }
+
+  function showPreparation(preparation) {
+    state.preparation = preparation;
+    const panel = $('preparation-panel');
+    panel.hidden = false;
+    $('comparison').classList.add('has-preparation');
+    const query = new URLSearchParams({ identity: preparation.sourceIdentity, preparedKey: preparation.key });
+    $('preparation-art').src = `/api/preparation.svg?${query}`;
+    $('preparation-art').parentElement.style.setProperty('--page-ratio', preparation.report.page.width_mm / preparation.report.page.height_mm);
+    $('preparation-art').parentElement.style.setProperty('--paper', state.result.metadata.page.paper || '#ffffff');
+    const before = preparation.sourceReport.geometry.normalized;
+    const after = preparation.report.geometry.output;
+    const beforeTravel = before.pen_up_mm ?? preparation.sourceReport.travel.before_mm;
+    const afterTravel = after.pen_up_mm ?? preparation.report.travel.after_mm;
+    $('preparation-detail').textContent = `${before.paths.toLocaleString()} → ${after.paths.toLocaleString()} paths · ${Math.round(beforeTravel).toLocaleString()} → ${Math.round(afterTravel).toLocaleString()} mm pen-up travel · ${preparation.report.pens.length} pen layers`;
+    $('preparation-status').textContent = 'Prepared derivative ready. Compare both pages, then select the artifact to retain or export.';
+    updateArtifactSelection();
   }
 
   function finishNumber(value, label, minimum, maximum) {
@@ -429,7 +491,7 @@ if (typeof document !== 'undefined') {
     const selector = $('pin-select');
     const old = selector.value;
     selector.replaceChildren(new Option('No comparison', ''));
-    for (const pin of state.pins) selector.add(new Option(`${pin.name} · ${new Date(pin.pinnedAt).toLocaleString()}`, pin.pinId));
+    for (const pin of state.pins) selector.add(new Option(`${pin.name}${pin.preparation ? ' · prepared' : ''} · ${new Date(pin.pinnedAt).toLocaleString()}`, pin.pinId));
     selector.value = state.pins.some(pin => pin.pinId === old) ? old : '';
   }
 
@@ -444,13 +506,14 @@ if (typeof document !== 'undefined') {
     $('pin-art').parentElement.style.setProperty('--page-ratio', pin.page.width / pin.page.height);
     $('pin-art').src = `/api/pins/${encodeURIComponent(id)}/svg`;
     $('pin-date').textContent = new Date(pin.pinnedAt).toLocaleString();
-    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.stats.pathCount.toLocaleString()} paths · ${Object.keys(pin.params).length} saved controls`;
+    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.preparation ? `prepared ${pin.stats.pathCount.toLocaleString()} paths from ${pin.canonicalStats.pathCount.toLocaleString()} source paths` : `${pin.stats.pathCount.toLocaleString()} paths`} · ${Object.keys(pin.params).length} saved controls`;
   }
 
   async function loadFinishingOptions() {
     try {
       state.finishOptions = await api('/api/finishing-options');
       state.finishOptionsError = null;
+      $('preparation').hidden = !state.finishOptions.preparationEnabled;
       fillFinishChoices();
       renderFinishingControls();
     } catch (error) {
@@ -530,6 +593,49 @@ if (typeof document !== 'undefined') {
     queueFinishingRender();
   });
 
+  for (const id of ['preparation-sort', 'preparation-reverse', 'preparation-merge', 'preparation-simplify']) {
+    $(id).addEventListener('input', () => clearPreparation('Preparation settings changed. Run preparation again before selecting its derivative.'));
+    $(id).addEventListener('change', () => clearPreparation('Preparation settings changed. Run preparation again before selecting its derivative.'));
+  }
+  $('artifact-source').addEventListener('change', () => {
+    state.selectedArtifact = 'source';
+    updateArtifactSelection();
+  });
+  $('artifact-prepared').addEventListener('change', () => {
+    if (state.stale || !state.preparation) return;
+    state.selectedArtifact = 'prepared';
+    updateArtifactSelection();
+  });
+  $('preparation-run').addEventListener('click', async () => {
+    if (state.stale || !state.result) return;
+    let operations;
+    try { operations = preparationOptions(); }
+    catch (error) { showError(error.message || String(error)); return; }
+    clearPreparation('Preparing the current full SVG…');
+    const sequence = state.sequence;
+    const serial = state.preparationSequence;
+    const result = state.result;
+    const controller = new AbortController();
+    state.preparationPending = controller;
+    $('preparation-run').disabled = true;
+    try {
+      const payload = await api('/api/preparation', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ identity: result.identity, operations }) });
+      if (sequence !== state.sequence || serial !== state.preparationSequence || state.stale || result !== state.result ||
+          JSON.stringify(operations) !== JSON.stringify(preparationOptions())) return;
+      showPreparation(payload.preparation);
+      clearError();
+    } catch (error) {
+      if (sequence === state.sequence && serial === state.preparationSequence && !controller.signal.aborted) {
+        $('preparation-status').textContent = error.message || String(error);
+        showError(error.message || String(error));
+      }
+    } finally {
+      if (state.preparationPending === controller) state.preparationPending = null;
+      $('preparation-run').disabled = state.stale || !state.result;
+    }
+  });
+
   $('overlay').addEventListener('change', referenceOverlay);
   $('part').addEventListener('change', showArt);
   $('pin-select').addEventListener('change', event => selectPin(event.target.value));
@@ -551,8 +657,9 @@ if (typeof document !== 'undefined') {
   $('download').addEventListener('click', () => {
     if (state.stale || !state.result) return;
     const anchor = document.createElement('a');
-    anchor.href = `/api/export.svg?identity=${encodeURIComponent(state.result.identity)}`;
-    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}.svg`;
+    const selection = selectedArtifact();
+    anchor.href = `/api/export.svg?${new URLSearchParams({ identity: state.result.identity, ...selection })}`;
+    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}${selection.artifact === 'prepared' ? '-prepared' : ''}.svg`;
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
@@ -560,9 +667,10 @@ if (typeof document !== 'undefined') {
   $('download-png').addEventListener('click', () => {
     if (state.stale || !state.result) return;
     const anchor = document.createElement('a');
-    const query = new URLSearchParams({ identity: state.result.identity, theme: $('png-theme').value, scale: $('png-scale').value || '6' });
+    const selection = selectedArtifact();
+    const query = new URLSearchParams({ identity: state.result.identity, theme: $('png-theme').value, scale: $('png-scale').value || '6', ...selection });
     anchor.href = `/api/export.png?${query}`;
-    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}.png`;
+    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}${selection.artifact === 'prepared' ? '-prepared' : ''}.png`;
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
@@ -573,7 +681,7 @@ if (typeof document !== 'undefined') {
     const identity = state.result.identity;
     $('pin').disabled = true;
     try {
-      const saved = await api('/api/pins', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ identity }) });
+      const saved = await api('/api/pins', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ identity, ...selectedArtifact() }) });
       await refreshPins();
       $('pin-select').value = saved.pinId;
       selectPin(saved.pinId);

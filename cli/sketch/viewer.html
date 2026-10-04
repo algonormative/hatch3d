@@ -19,8 +19,8 @@
         <label class="seed-label" for="seed">Seed <input id="seed" type="number" min="0" max="2147483647" step="1" value="0"></label>
         <button id="reseed" type="button" class="quiet">New seed</button>
         <button id="reset" type="button" class="quiet">Reset controls</button>
-        <button id="pin" type="button" disabled>Pin this version</button>
-        <button id="download" type="button" disabled>Export full SVG</button>
+        <button id="pin" type="button" disabled>Pin selected version</button>
+        <button id="download" type="button" disabled>Export selected SVG</button>
       </div>
     </header>
 
@@ -36,6 +36,11 @@
               <div id="reference-layer" class="reference-layer" hidden></div>
             </div>
             <p id="inspection-note" class="inspection-note" hidden></p>
+          </section>
+          <section id="preparation-panel" class="preview-panel" hidden>
+            <div class="panel-heading"><h2>Prepared derivative</h2><span>Native plotprep</span></div>
+            <div class="page-frame"><img id="preparation-art" alt="Prepared plotter SVG"></div>
+            <p id="preparation-detail" class="pin-detail"></p>
           </section>
           <section id="pin-panel" class="preview-panel pin-panel" hidden>
             <div class="panel-heading"><h2>Pinned version</h2><span id="pin-date"></span></div>
@@ -100,6 +105,21 @@
             <button id="download-png" type="button" disabled>Export PNG</button>
           </div>
         </details>
+        <section id="preparation" class="preparation" aria-labelledby="preparation-title" hidden>
+          <h3 id="preparation-title">Prepare for plotting</h3>
+          <p>Run optional native path sorting and cleanup on the current full SVG. Compare the derivative with its original before choosing what to pin, export, or upload.</p>
+          <label class="check"><input id="preparation-sort" type="checkbox" checked> Sort paths</label>
+          <label class="check"><input id="preparation-reverse" type="checkbox"> Allow path reversal</label>
+          <label>Merge tolerance (mm; blank disables)<input id="preparation-merge" type="number" min="0" max="10" step="0.01" placeholder="Disabled"></label>
+          <label>Simplify tolerance (mm; blank disables)<input id="preparation-simplify" type="number" min="0" max="10" step="0.01" placeholder="Disabled"></label>
+          <button id="preparation-run" type="button" disabled>Prepare current SVG</button>
+          <p id="preparation-status" role="status" aria-live="polite">Render a sketch to prepare it.</p>
+          <fieldset class="preparation-choice">
+            <legend>Selected artifact</legend>
+            <label class="check"><input id="artifact-source" type="radio" name="selected-artifact" checked> Original SVG</label>
+            <label class="check"><input id="artifact-prepared" type="radio" name="selected-artifact" disabled> Prepared SVG</label>
+          </fieldset>
+        </section>
         <section id="navigators" class="navigators" aria-label="Shape maps" hidden></section>
         <div id="controls" class="controls"></div>
         <div id="incompatible" class="notice" hidden></div>

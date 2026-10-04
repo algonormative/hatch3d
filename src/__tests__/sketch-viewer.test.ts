@@ -6,9 +6,21 @@ import { readFileSync } from 'node:fs';
 import type { RenderResult, SketchMetadata } from '../sketch/types';
 
 const runner = vi.hoisted(() => ({ inspectSketch: vi.fn(), renderSketch: vi.fn() }));
+const watcherGate = vi.hoisted(() => ({ suppress: false }));
+vi.mock('node:fs', async () => {
+  const { createRequire } = await import('node:module');
+  const fs = createRequire(import.meta.url)('node:fs') as typeof import('node:fs');
+  const watch = (filename: string, options: { recursive?: boolean }, listener: (...args: unknown[]) => void) =>
+    fs.watch(filename, options, (eventType, path) => { if (!watcherGate.suppress) listener(eventType, path); });
+  return { ...fs, watch, default: { ...fs, watch } };
+});
 vi.mock('../../cli/sketch/runner.js', () => runner);
+vi.mock('../../cli/sketch/source-stamp.js', () => ({
+  sourceStamp: vi.fn(async (entry: string) => (await import('node:fs/promises')).readFile(entry, 'utf8')),
+}));
 
 import { startSketchServer, type SketchServer } from '../../cli/sketch/server';
+import { sourceStamp } from '../../cli/sketch/source-stamp.js';
 import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from '../../cli/sketch/viewer-state.js';
 
 const metadata: SketchMetadata = {
@@ -47,12 +59,35 @@ describe('local sketch viewer', () => {
   });
 
   afterEach(async () => {
+    watcherGate.suppress = false;
     await server.close();
     await rm(temporary, { recursive: true, force: true });
   });
 
   async function post(path: string, body: unknown): Promise<Response> {
     return fetch(new URL(path, server.url), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  async function expectSourceChangeAfterEdit(nextSource: string): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2_000);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const events = await fetch(new URL('/api/events', server.url), { signal: controller.signal });
+      reader = events.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain(': connected');
+      await writeFile(entry, nextSource);
+      let message = '';
+      while (!message.includes('event: source-change')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('Source event stream ended before the edit was reported');
+        message += new TextDecoder().decode(chunk.value);
+      }
+    } finally {
+      clearTimeout(timeout);
+      await reader?.cancel().catch(() => {});
+      controller.abort();
+    }
   }
 
   it('serves a complete browser module graph from its HTTP routes', async () => {
@@ -189,6 +224,63 @@ describe('local sketch viewer', () => {
     expect((await post('/api/render', { requestId: 3, params: { pitch: 2 }, seed: 3 })).status).toBe(200);
     await writeFile(entry, 'export default { changed: true }');
     await vi.waitFor(async () => expect((await exported('second')).status).toBe(409), { timeout: 1500 });
+  });
+
+  it('does not let an old action stamp invalidate a newer render', async () => {
+    const stamp = vi.mocked(sourceStamp);
+    let releaseStamp: ((value: string) => void) | undefined;
+    let completeRender: ((value: RenderResult) => void) | undefined;
+    let oldExport: Promise<Response> | undefined;
+    let newer: Promise<Response> | undefined;
+    watcherGate.suppress = true;
+    try {
+      expect((await post('/api/render', { requestId: 1 })).status).toBe(200);
+      const priorCalls = stamp.mock.calls.length;
+      stamp.mockImplementationOnce(() => new Promise(resolve => { releaseStamp = resolve; }));
+      oldExport = fetch(new URL('/api/export.svg?identity=first', server.url));
+      await vi.waitFor(() => expect(stamp.mock.calls.length).toBe(priorCalls + 1));
+
+      runner.renderSketch.mockImplementationOnce(() => new Promise(resolve => { completeRender = resolve; }));
+      newer = post('/api/render', { requestId: 2 });
+      await vi.waitFor(() => expect(completeRender).toBeTypeOf('function'));
+      releaseStamp!(await readFile(entry, 'utf8'));
+      expect((await oldExport).status).toBe(409);
+      completeRender!(result('second'));
+      const response = await newer;
+      expect(response.status, await response.text()).toBe(200);
+      expect((await fetch(new URL('/api/export.svg?identity=second', server.url))).status).toBe(200);
+    } finally {
+      releaseStamp?.(await readFile(entry, 'utf8'));
+      completeRender?.(result('second'));
+      if (oldExport) await oldExport.catch(() => undefined);
+      if (newer) await newer.catch(() => undefined);
+      stamp.mockReset().mockImplementation(async path => readFile(path, 'utf8'));
+      watcherGate.suppress = false;
+    }
+  });
+
+  it('notifies a source fix after initial metadata fails', async () => {
+    runner.inspectSketch.mockRejectedValueOnce(new Error('Invalid sketch syntax'));
+    expect((await fetch(new URL('/api/metadata', server.url))).status).toBe(400);
+    await expectSourceChangeAfterEdit('export default { fixed: true };\n');
+  });
+
+  it('notifies a source fix after a failed rerender clears the last good result', async () => {
+    expect((await post('/api/render', { requestId: 1 })).status).toBe(200);
+    runner.renderSketch.mockRejectedValueOnce(new Error('Invalid sketch geometry'));
+    expect((await post('/api/render', { requestId: 2 })).status).toBe(422);
+    await expectSourceChangeAfterEdit('export default { repaired: true };\n');
+  });
+
+  it('notifies a source edit during a pending render even when that render becomes stale', async () => {
+    let completeRender!: (value: RenderResult) => void;
+    runner.renderSketch.mockImplementationOnce(() => new Promise(resolve => { completeRender = resolve; }));
+    const pending = post('/api/render', { requestId: 1 });
+    await vi.waitFor(() => expect(completeRender).toBeTypeOf('function'));
+    await expectSourceChangeAfterEdit('export default { editedDuringRender: true };\n');
+    completeRender(result('first'));
+    const response = await pending;
+    expect(response.status, await response.text()).toBe(409);
   });
 
   it('marks a timed-out render as failed and never offers its previous result for pinning', async () => {
@@ -552,6 +644,70 @@ it('groups controls, changes conditional visibility without replacing a focused 
     expect((document.getElementById('control-mode') as HTMLSelectElement).value).toBe('deep');
     expect((document.getElementById('control-pitch') as HTMLInputElement).value).toBe('3');
   } finally {
+    vi.unstubAllGlobals();
+    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    document.body.replaceChildren();
+  }
+});
+
+it('selects a prepared derivative only for matching current operations and ignores late preparation', async () => {
+  vi.resetModules();
+  document.documentElement.innerHTML = readFileSync(join(process.cwd(), 'cli/sketch/viewer.html'), 'utf8');
+  let settlePreparation: ((value: Response) => void) | undefined;
+  let preparations = 0;
+  let renders = 0;
+  const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  const prepared = { key: 'a'.repeat(64), sourceIdentity: 'render-1', sourceSha256: 'b'.repeat(64), preparedSha256: 'c'.repeat(64),
+    report: { page: { width_mm: 100, height_mm: 150 }, pens: [{ pen_id: 'ink' }], geometry: { output: { paths: 1, pen_up_mm: 5 } }, travel: { after_mm: 5 } },
+    sourceReport: { geometry: { normalized: { paths: 2, pen_up_mm: 10 } }, travel: { before_mm: 10 } } };
+  vi.stubGlobal('EventSource', class { addEventListener() {} });
+  vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+    if (url === '/api/metadata') return Promise.resolve(response(metadata));
+    if (url === '/api/finishing-options') return Promise.resolve(response({ paperSizes: {}, borderStyles: {}, pngScales: [6], preparationEnabled: true }));
+    if (url === '/api/pins') return Promise.resolve(response([]));
+    if (url === '/api/render') {
+      renders++;
+      return Promise.resolve(response({ requestId: JSON.parse(String(options?.body)).requestId, result: result(`render-${renders}`) }));
+    }
+    if (url === '/api/preparation') {
+      preparations++;
+      if (preparations === 1) return Promise.resolve(response({ preparation: prepared }));
+      return new Promise<Response>(resolve => { settlePreparation = resolve; });
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  }));
+  Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:preview', configurable: true });
+  Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, configurable: true });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    expect(this.getAttribute('href')).toContain('artifact=prepared&preparedKey=' + prepared.key);
+  });
+  try {
+    await import('../../cli/sketch/viewer.js');
+    await vi.waitFor(() => expect((document.getElementById('preparation-run') as HTMLButtonElement).disabled).toBe(false));
+    expect((document.getElementById('preparation') as HTMLElement).hidden).toBe(false);
+    (document.getElementById('preparation-run') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect((document.getElementById('preparation-panel') as HTMLElement).hidden).toBe(false));
+    expect(document.getElementById('preparation-detail')?.textContent).toMatch(/2 → 1 paths/);
+    (document.getElementById('artifact-prepared') as HTMLInputElement).click();
+    expect((document.getElementById('download') as HTMLButtonElement).dataset.preparedKey).toBe(prepared.key);
+    (document.getElementById('download') as HTMLButtonElement).click();
+    const merge = document.getElementById('preparation-merge') as HTMLInputElement;
+    merge.value = '0.1';
+    merge.dispatchEvent(new Event('input'));
+    expect((document.getElementById('preparation-panel') as HTMLElement).hidden).toBe(true);
+    expect((document.getElementById('artifact-prepared') as HTMLInputElement).disabled).toBe(true);
+    expect((document.getElementById('download') as HTMLButtonElement).dataset.artifact).toBe('source');
+    (document.getElementById('preparation-run') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(settlePreparation).toBeTypeOf('function'));
+    (document.getElementById('reseed') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(renders).toBe(2));
+    settlePreparation!(response({ preparation: prepared }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect((document.getElementById('preparation-panel') as HTMLElement).hidden).toBe(true);
+    expect((document.getElementById('download') as HTMLButtonElement).dataset.artifact).toBe('source');
+  } finally {
+    click.mockRestore();
     vi.unstubAllGlobals();
     delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
     delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;

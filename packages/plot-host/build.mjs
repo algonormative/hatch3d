@@ -12,7 +12,10 @@ mkdirSync(join(dist, 'plugins'), { recursive: true });
 const coreAlias = { name: 'public-core', setup(builder) {
   builder.onResolve({ filter: /packages\/plot-core\/src\/index\.ts$/ }, () => ({ path: '@hatch3d/plot-core', external: true }));
 } };
-const common = { bundle: true, platform: 'node', format: 'esm', target: 'node20', packages: 'external', plugins: [coreAlias], logLevel: 'warning' };
+const nativeAdapter = { name: 'bundled-private-native-adapter', setup(builder) {
+  builder.onResolve({ filter: /^@hatch3d\/plotprep-node$/ }, () => ({ path: join(checkout, 'node_modules/@hatch3d/plotprep-node/index.js') }));
+} };
+const common = { bundle: true, platform: 'node', format: 'esm', target: 'node20', packages: 'external', plugins: [coreAlias, nativeAdapter], logLevel: 'warning' };
 for (const [source, name] of [
   ['src/index.ts', 'index.js'],
   ['../../cli/sketch.ts', 'cli.js'],

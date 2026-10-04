@@ -1,0 +1,345 @@
+{
+  "diagnostics": [
+    {
+      "code": "snapped_joins",
+      "element": null,
+      "message": "1 open-path joins moved endpoints by up to 1 mm",
+      "severity": "warning"
+    }
+  ],
+  "engine": {
+    "name": "plotprep",
+    "version": "0.1.0",
+    "vsvg_revision": "b02060a761e9f0d177293fd7a6f01dd2a28ddae7"
+  },
+  "geometry": {
+    "after_cleanup": {
+      "drawn_length_mm": 19.0,
+      "paths": 1,
+      "pen_up_mm": 10.04987562112089,
+      "segments": 2,
+      "vertices": 3
+    },
+    "normalized": {
+      "drawn_length_mm": 18.0,
+      "paths": 2,
+      "pen_up_mm": 11.04987562112089,
+      "segments": 2,
+      "vertices": 4
+    },
+    "original": {
+      "basis": "physical_source_strokes_before_clip_dash",
+      "drawn_length_mm": 18.0,
+      "paths": 2,
+      "segments": 2,
+      "vertices": 4
+    },
+    "output": {
+      "drawn_length_mm": 19.0,
+      "paths": 1,
+      "pen_up_mm": 10.04987562112089,
+      "segments": 2,
+      "vertices": 3
+    }
+  },
+  "operations": {
+    "cleanup": {
+      "enabled": true,
+      "merge_scope": "named_parts",
+      "merge_tolerance_mm": 1.1,
+      "result": {
+        "after": {
+          "geometry": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "before": {
+          "geometry": {
+            "drawn_length_mm": 18.0,
+            "paths": 2,
+            "pen_up_mm": 11.04987562112089,
+            "segments": 2,
+            "vertices": 4
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 18.0,
+            "paths": 2,
+            "pen_up_mm": 11.04987562112089,
+            "segments": 2,
+            "vertices": 4
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 18.0,
+                "paths": 2,
+                "pen_up_mm": 11.04987562112089,
+                "segments": 2,
+                "vertices": 4
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 18.0,
+                "paths": 2,
+                "pen_up_mm": 11.04987562112089,
+                "segments": 2,
+                "vertices": 4
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "geometry_checks": 1,
+        "joined_paths": 1,
+        "max_join_shift_mm": 1.0,
+        "max_simplify_deviation_mm": 0.0,
+        "merge_scope": "named_parts",
+        "merge_tolerance_mm": 1.1,
+        "removed_vertices": 0,
+        "simplified_paths": 0,
+        "simplify_tolerance_mm": null,
+        "snapped_joins": 1,
+        "untouched_closed_paths": 0,
+        "untouched_curved_paths": 0
+      },
+      "simplify_tolerance_mm": null
+    },
+    "normalization": {
+      "applied_clips": 0,
+      "arc_conversions": 0,
+      "curve_tolerance_mm": null,
+      "expanded_dashes": 0,
+      "flattened_drawables": 0,
+      "output_paths": 2,
+      "output_segments": 2,
+      "requested_curve_tolerance_mm": 0.05,
+      "shape_curve_conversions": 0,
+      "source_drawables": 2,
+      "source_drawn_length_mm": 18.0,
+      "source_paths": 2,
+      "source_segments": 2,
+      "source_vertices": 4
+    },
+    "sort": {
+      "allow_reverse": false,
+      "enabled": true,
+      "objective_after_mm": 10.04987562112089,
+      "objective_before_mm": 10.04987562112089,
+      "result": {
+        "after": {
+          "geometry": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "allow_reverse": false,
+        "before": {
+          "geometry": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 19.0,
+            "paths": 1,
+            "pen_up_mm": 10.04987562112089,
+            "segments": 2,
+            "vertices": 3
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 19.0,
+                "paths": 1,
+                "pen_up_mm": 10.04987562112089,
+                "segments": 2,
+                "vertices": 3
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "candidate_checks": 1,
+        "changed_layers": [],
+        "fallback_layers": [],
+        "reversed_paths": 0
+      }
+    }
+  },
+  "page": {
+    "height_mm": 20.0,
+    "width_mm": 30.0
+  },
+  "parts": [
+    {
+      "layer_number": 1,
+      "part_id": "trace",
+      "path_count_after": 1,
+      "path_count_before": 2,
+      "source_element_id": null
+    }
+  ],
+  "pass_weighted": {
+    "after_cleanup": {
+      "drawn_length_mm": 19.0,
+      "paths": 1,
+      "pen_up_mm": 10.04987562112089,
+      "segments": 2,
+      "vertices": 3
+    },
+    "before": {
+      "drawn_length_mm": 18.0,
+      "paths": 2,
+      "pen_up_mm": 11.04987562112089,
+      "segments": 2,
+      "vertices": 4
+    },
+    "output": {
+      "drawn_length_mm": 19.0,
+      "paths": 1,
+      "pen_up_mm": 10.04987562112089,
+      "segments": 2,
+      "vertices": 3
+    }
+  },
+  "pens": [
+    {
+      "color": "#000000",
+      "id": null,
+      "label": "1 ink",
+      "layer_number": 1,
+      "passes": 1,
+      "path_count_after": 1,
+      "path_count_before": 2,
+      "pen_id": "ink",
+      "source_label": "1 ink",
+      "stroke_width_mm": 0.3
+    }
+  ],
+  "prepared": {
+    "path": "src/__tests__/fixtures/plotprep/cleanup-prepared.svg",
+    "sha256": "8c6c64f4e8937c3cba1921042a2b89ffa8340c53e47f2b1b623a943b784b92bd"
+  },
+  "schema_version": 1,
+  "source": {
+    "path": "src/__tests__/fixtures/plotprep/cleanup-input.svg",
+    "sha256": "55e8a4ba74560210e1abfe8699258a8870dc840993f1ffc1f8afac6f2e3358ca"
+  },
+  "travel": {
+    "after_cleanup_mm": 10.04987562112089,
+    "after_mm": 10.04987562112089,
+    "before_mm": 11.04987562112089,
+    "objective": "geometric_pen_up_mm",
+    "origin_mm": [
+      0.0,
+      0.0
+    ],
+    "pens": [
+      {
+        "after_cleanup_mm": 10.04987562112089,
+        "after_mm": 10.04987562112089,
+        "before_mm": 11.04987562112089,
+        "layer_number": 1,
+        "pass_weighted_after_mm": 10.04987562112089,
+        "pass_weighted_before_mm": 11.04987562112089
+      }
+    ],
+    "per_pen_restart": true,
+    "return_home_leg": false
+  }
+}

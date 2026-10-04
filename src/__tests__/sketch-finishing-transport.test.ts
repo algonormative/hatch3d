@@ -11,6 +11,9 @@ const runner = vi.hoisted(() => ({ inspectSketch: vi.fn(), renderSketch: vi.fn()
 vi.mock('../../cli/sketch/runner.js', () => ({ ...runner, SketchRunnerError: class extends Error {
   constructor(public code: string, message: string) { super(message); }
 } }));
+vi.mock('../../cli/sketch/source-stamp.js', () => ({
+  sourceStamp: vi.fn(async (entry: string) => (await import('node:fs/promises')).readFile(entry, 'utf8')),
+}));
 import { startSketchServer, type SketchServer } from '../../cli/sketch/server.ts';
 
 const result: RenderResult = {
@@ -78,7 +81,7 @@ describe('finishing transport', () => {
     expect(options.borderStyles).toHaveProperty('double');
     const finishing = { border: { style: 'double', pen: 'black', inset: 12, contentGap: 6 }, pens: { black: { passes: 2 } } };
     const response = await post(new URL('/api/render', server.url).href, { requestId: 1, params: {}, finishing });
-    expect(response.status).toBe(200);
+    expect(response.status, await response.clone().text()).toBe(200);
     expect(runner.renderSketch).toHaveBeenCalledWith(expect.objectContaining({ finishing }));
     expect((await post(new URL('/api/render', server.url).href, { requestId: 2, params: {}, typo: true })).status).toBe(400);
     expect(runner.renderSketch).toHaveBeenCalledTimes(1);
@@ -87,7 +90,8 @@ describe('finishing transport', () => {
   it('exports only the current identity and validates theme and scale', async () => {
     const endpoint = (identity: string, query = '') => new URL(`/api/export.png?identity=${identity}${query}`, server.url);
     expect((await fetch(endpoint('current'))).status).toBe(409);
-    expect((await post(new URL('/api/render', server.url).href, { requestId: 1 })).status).toBe(200);
+    const rendered = await post(new URL('/api/render', server.url).href, { requestId: 1 });
+    expect(rendered.status, await rendered.clone().text()).toBe(200);
     const exported = await fetch(endpoint('current', '&theme=dark&scale=4'));
     expect(exported.status).toBe(200);
     expect(exported.headers.get('cache-control')).toBe('no-store');

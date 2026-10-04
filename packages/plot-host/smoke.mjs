@@ -152,6 +152,54 @@ void [sketch, runnerError.code, parsed, host, inspectSketch({ entry: 'sketch.ts'
     assert.equal((await api(optional.url, '/plotter-upload-view.js')).status, 200);
     assert.equal(uploadCalls, 0);
   } finally { await optional.close(); }
+  if (process.env.PLOTPREP_SMOKE_BIN) {
+    const prepEntry = join(sketchDir, 'preparation.ts');
+    await writeFile(prepEntry, `export default {
+  name: 'Packed preparation', page: { width: 30, height: 20, margin: 0, paper: '#ffffff' },
+  pens: [{ id: 'ink', color: '#000000', width: 0.3 }], controls: [],
+  draw() { return [{ id: 'trace', pen: 'ink', paths: [
+    [{ x: 1, y: 10 }, { x: 10, y: 10 }], [{ x: 11, y: 10 }, { x: 20, y: 10 }],
+  ] }]; },
+};\n`);
+    const native = await startSketchServer({ entry: prepEntry, outputDir: join(consumer, 'native-pins'),
+      plotprepExecutable: process.env.PLOTPREP_SMOKE_BIN });
+    try {
+      const renderedResponse = await api(native.url, '/api/render', { requestId: 1 });
+      const renderedBody = await renderedResponse.text();
+      assert.equal(renderedResponse.status, 200, renderedBody);
+      const { result } = JSON.parse(renderedBody);
+      const preparedResponse = await api(native.url, '/api/preparation', { identity: result.identity,
+        operations: { sort: true, allowReverse: false, mergeToleranceMm: 1.1, mergeScope: 'named-parts' } });
+      const preparedBody = await preparedResponse.text();
+      assert.equal(preparedResponse.status, 200, preparedBody);
+      const { preparation } = JSON.parse(preparedBody);
+      assert.equal(preparation.sourceReport.geometry.normalized.paths, 2);
+      assert.equal(preparation.report.geometry.output.paths, 1);
+      const query = new URLSearchParams({ identity: result.identity, artifact: 'prepared', preparedKey: preparation.key });
+      const sourceSvg = await (await api(native.url, `/api/export.svg?identity=${result.identity}`)).text();
+      const preparedSvg = await (await api(native.url, `/api/export.svg?${query}`)).text();
+      assert.equal(sourceSvg, result.svg);
+      assert.notEqual(preparedSvg, sourceSvg);
+      const { createHash } = await import('node:crypto');
+      assert.equal(createHash('sha256').update(sourceSvg).digest('hex'), preparation.sourceSha256);
+      assert.equal(createHash('sha256').update(preparedSvg).digest('hex'), preparation.preparedSha256);
+      const png = await api(native.url, `/api/export.png?${query}&theme=paper&scale=6`);
+      assert.equal(png.status, 200);
+      const pngBytes = Buffer.from(await png.arrayBuffer());
+      assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+      assert.deepEqual([pngBytes.readUInt32BE(16), pngBytes.readUInt32BE(20)], [180, 120]);
+      const pinResponse = await api(native.url, '/api/pins', { identity: result.identity, artifact: 'prepared', preparedKey: preparation.key });
+      const pinBody = await pinResponse.text();
+      assert.equal(pinResponse.status, 201, pinBody);
+      const { pinId } = JSON.parse(pinBody);
+      assert.equal(readFileSync(join(consumer, 'native-pins', pinId, 'art.svg'), 'utf8'), sourceSvg);
+      assert.equal(readFileSync(join(consumer, 'native-pins', pinId, 'prepared.svg'), 'utf8'), preparedSvg);
+      assert.equal(await (await api(native.url, `/api/pins/${pinId}/svg`)).text(), preparedSvg);
+      await writeFile(prepEntry, `${readFileSync(prepEntry, 'utf8')}\n// changed after preparation\n`);
+      assert.equal((await api(native.url, `/api/export.svg?${query}`)).status, 409);
+      console.log('Packed external native preparation, derivative selection, PNG, pin, and source staleness passed.');
+    } finally { await native.close(); }
+  }
   console.log('Packed external host inspect/render/open, assets, exports, pins, reload, stale guard, abort, timeout, and optional upload gating passed.');
 } finally {
   rmSync(temp, { recursive: true, force: true });

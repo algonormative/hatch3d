@@ -1,5 +1,5 @@
 import { Resvg } from '@resvg/resvg-js';
-import type { RenderResult } from '../../src/sketch/types.ts';
+import type { Page, RenderResult } from '../../src/sketch/types.ts';
 
 export const PNG_SCALES = [1, 2, 3, 4, 6, 8] as const;
 export const DEFAULT_PNG_SCALE = 6;
@@ -21,22 +21,32 @@ export function pngOptions(theme: unknown = 'paper', scale: unknown = DEFAULT_PN
   return { theme, scale: number };
 }
 
-/** Presentation only: the canonical SVG and its physical ink colors stay untouched. */
-export function exportSketchPng(result: RenderResult, theme: PngTheme = 'paper', scale = DEFAULT_PNG_SCALE): Buffer {
+/** Presentation only: the SVG bytes and their physical ink colors stay untouched. */
+export function renderSvgPng(sourceSvg: string, page: Page, theme: PngTheme = 'paper', scale = DEFAULT_PNG_SCALE): Buffer {
   const selected = pngOptions(theme, scale);
-  const page = result.metadata.page;
   const width = Math.ceil(page.width * selected.scale);
   const height = Math.ceil(page.height * selected.scale);
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width * height > MAX_PNG_PIXELS) {
     throw new Error('PNG dimensions exceed the 32 million pixel limit');
   }
-  let svg = result.svg;
+  let svg = sourceSvg;
   if (selected.theme === 'dark') {
     svg = svg.replace(/stroke="([^"]+)"/gi, (_full, color: string) => `stroke="${darkPreviewInk(color)}"`);
   }
-  svg = svg.replace(/^<svg\b[^>]*>/, (root) => root
-    .replace(/\bwidth="[^"]*"/, `width="${width}px"`)
-    .replace(/\bheight="[^"]*"/, `height="${height}px"`));
+  const root = /^\uFEFF?\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg\b[^>]*>/i;
+  if (!root.test(svg)) throw new Error('PNG export requires an SVG root');
+  svg = svg.replace(root, matched => matched.replace(/<svg\b[^>]*>/i, tag => {
+    let sized = tag;
+    for (const [name, value] of [['width', width], ['height', height]] as const) {
+      const attribute = new RegExp(`\\b${name}\\s*=\\s*(["'])[^"']*\\1`, 'i');
+      sized = attribute.test(sized) ? sized.replace(attribute, `${name}="${value}px"`) : sized.replace(/\s*\/?>$/, ` ${name}="${value}px">`);
+    }
+    return sized;
+  }));
   const background = selected.theme === 'paper' ? page.paper ?? '#ffffff' : selected.theme === 'light' ? '#ffffff' : '#2a2a2f';
   return Buffer.from(new Resvg(svg, { background }).render().asPng());
+}
+
+export function exportSketchPng(result: RenderResult, theme: PngTheme = 'paper', scale = DEFAULT_PNG_SCALE): Buffer {
+  return renderSvgPng(result.svg, result.metadata.page, theme, scale);
 }

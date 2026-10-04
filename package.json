@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@hatch3d/plotprep-node": "file:packages/plot-host/vendor/hatch3d-plotprep-node-0.1.0.tgz",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.10.1",

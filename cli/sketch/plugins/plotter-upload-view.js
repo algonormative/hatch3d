@@ -13,7 +13,7 @@ if (exportButton && actions) {
   status.style.fontSize = '0.8rem';
   actions.append(button, status);
   let sending = false;
-  let lastQueuedIdentity = null;
+  let lastQueuedSelection = null;
   const sync = () => { button.disabled = sending || exportButton.disabled; };
   new MutationObserver(sync).observe(exportButton, { attributes: true, attributeFilter: ['disabled'] });
   sync();
@@ -26,14 +26,17 @@ if (exportButton && actions) {
       // No request occurs on page load. The viewer supplies this tab's current identity, never SVG or URL.
       const identity = exportButton.dataset.identity;
       if (!identity || exportButton.disabled) throw new Error('Current successful render unavailable');
+      const artifact = exportButton.dataset.artifact === 'prepared' ? 'prepared' : 'source';
+      const preparedKey = artifact === 'prepared' ? exportButton.dataset.preparedKey : undefined;
+      if (artifact === 'prepared' && !preparedKey) throw new Error('Prepared artifact is unavailable');
       const response = await fetch('/api/plugins/plotter-upload', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-sketch-action': 'plotter-upload' },
-        body: JSON.stringify({ identity }),
+        body: JSON.stringify({ identity, artifact, ...(preparedKey ? { preparedKey } : {}) }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Upload failed');
-      lastQueuedIdentity = identity;
+      lastQueuedSelection = `${identity}:${artifact}:${preparedKey || ''}`;
       status.textContent = `Queued ${payload.id}`;
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : 'Upload failed';
@@ -43,6 +46,8 @@ if (exportButton && actions) {
     }
   });
   // Status is tied to the selected render; a new successful render can be queued separately.
-  new MutationObserver(() => { if (exportButton.disabled && lastQueuedIdentity) status.textContent = ''; })
-    .observe(exportButton, { attributes: true, attributeFilter: ['disabled'] });
+  new MutationObserver(() => {
+    const selected = `${exportButton.dataset.identity}:${exportButton.dataset.artifact}:${exportButton.dataset.preparedKey || ''}`;
+    if (exportButton.disabled || (lastQueuedSelection && selected !== lastQueuedSelection)) status.textContent = '';
+  }).observe(exportButton, { attributes: true, attributeFilter: ['disabled', 'data-identity', 'data-artifact', 'data-prepared-key'] });
 }
