@@ -5,8 +5,10 @@ import { promisify } from 'node:util';
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import type { FinishingOptions, Params, RenderResult } from '../../src/sketch/types.ts';
-import { createExternalCheckpoint, findExternalProject, readBounded, replayExternalCheckpoint, type ExternalCheckpointManifest } from './checkpoint-external.ts';
+import { createExternalCheckpoint, findExternalProject, fingerprintExternalProject, fingerprintInstalledTree, readBounded, replayExternalCheckpoint, sourceFiles as externalSourceFiles, type ExternalCheckpointManifest } from './checkpoint-external.ts';
+import { inspectSketch } from './runner.ts';
 
 const git = promisify(execFile);
 const MANIFEST = 'checkpoint.json';
@@ -33,6 +35,7 @@ export interface CheckpointManifest {
 export interface CreatedCheckpoint { path: string; manifest: CheckpointManifest | ExternalCheckpointManifest }
 export interface CreateCheckpointOptions { entry: string; result: RenderResult; outputDir: string }
 export interface ReplayCheckpointOptions { checkpoint: string; repoRoot?: string }
+export interface SketchInputFingerprint { kind: 'external' | 'repository'; fingerprint: string; sourceSha256: string; dependencySha256: string; revision?: string; toolkit?: { core: string; host: string } }
 
 function within(base: string, path: string): boolean {
   const rel = relative(base, path);
@@ -117,6 +120,15 @@ function declarationsStayLocal(entry: string, sketchRoot: string, result: Render
   for (const [id, asset] of Object.entries(result.metadata.assets ?? {})) {
     const path = resolve(dirname(entry), asset.path);
     if (!within(sketchRoot, path)) throw new Error(`Asset ${id} escapes sketch directory: ${asset.path}`);
+  }
+}
+
+async function declaredAssetsInFiles(entry: string, sourceRoot: string, files: { path: string }[], timeoutMs: number): Promise<void> {
+  const metadata = await inspectSketch({ entry, timeoutMs });
+  const captured = new Set(files.map(file => resolve(sourceRoot, file.path)));
+  for (const [id, asset] of Object.entries(metadata.assets ?? {})) {
+    const path = resolve(dirname(entry), asset.path);
+    if (!within(sourceRoot, path) || !captured.has(path)) throw new Error(`Declared asset ${id} escapes or is missing from source family: ${asset.path}`);
   }
 }
 
@@ -266,4 +278,36 @@ export async function replayCheckpoint(options: ReplayCheckpointOptions): Promis
   if (version === 1) return replayCheckpointV1(options);
   if (version === 2) return replayExternalCheckpoint(options.checkpoint);
   throw new Error(`Unsupported checkpoint version ${String(version)}`);
+}
+
+/** Reuse the checkpoint source boundaries to key and guard experiment batches. */
+export async function fingerprintSketchInputs(entry: string, outputDir: string, timeoutMs = 10_000): Promise<SketchInputFingerprint> {
+  const external = await findExternalProject(entry);
+  const target = await canonicalTarget(outputDir);
+  const runtimeModule = await realpath(fileURLToPath(import.meta.url));
+  if (external) {
+    if (within(external.familyRoot, target)) throw new Error('Experiment output cannot be inside the captured family directory');
+    const installedHost = join(external.root, 'node_modules/@hatch3d/plot-host');
+    if (!within(installedHost, runtimeModule)) throw new Error('External experiment must run from this project’s installed @hatch3d/plot-host; use its plot-sketch bin or package API');
+    const snapshot = await fingerprintExternalProject(external);
+    const files = await externalSourceFiles(external.familyRoot);
+    if (sha256(JSON.stringify(files)) !== snapshot.sourceSha256) throw new Error('External source changed during fingerprinting');
+    await declaredAssetsInFiles(external.entry, external.familyRoot, files, timeoutMs);
+    if (sha256(JSON.stringify(await externalSourceFiles(external.familyRoot))) !== snapshot.sourceSha256) throw new Error('External source changed during asset inspection');
+    return { kind: 'external', ...snapshot };
+  }
+  const checked = await checkedRepo(entry);
+  const sketchRoot = join(checked.root, checked.sketchDir);
+  if (within(sketchRoot, target)) throw new Error('Experiment output cannot be inside the sketch directory');
+  if (runtimeModule !== join(checked.root, 'cli/sketch/checkpoint.ts')) throw new Error('In-repository experiment must run from the Hatch3D source checkout CLI/API');
+  await requireCleanShared(checked.root, sketchRoot);
+  const files = await collectFiles(sketchRoot);
+  await declaredAssetsInFiles(join(sketchRoot, checked.relativeEntry), sketchRoot, files, timeoutMs);
+  if (JSON.stringify(await collectFiles(sketchRoot)) !== JSON.stringify(files)) throw new Error('Sketch source changed during asset inspection');
+  const lock = await readFile(join(checked.root, 'package-lock.json'));
+  const sourceSha256 = sha256(JSON.stringify(files));
+  const dependencySha256 = sha256(`${sha256(lock)}\0${await fingerprintInstalledTree(join(checked.root, 'node_modules'))}`);
+  return { kind: 'repository', revision: checked.revision, sourceSha256, dependencySha256,
+    fingerprint: sha256(JSON.stringify({ revision: checked.revision, sourceSha256, dependencySha256, node: process.version,
+      platform: process.platform, arch: process.arch })) };
 }

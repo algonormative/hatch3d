@@ -1,22 +1,25 @@
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exportSketchPng, pngOptions, type PngTheme } from './sketch/export-png.ts';
 import { createCheckpoint, replayCheckpoint } from './sketch/checkpoint.ts';
 import { comparePreserved } from './sketch/preserve.ts';
+import { runExperimentBatch } from './sketch/experiments.ts';
+import { readBounded } from './sketch/checkpoint-external.ts';
 import { inspectSketch, renderSketch, SketchRunnerError } from './sketch/runner.ts';
+import type { ExperimentMatrix } from '../packages/plot-host/src/experiment-types.js';
 import type { FinishingOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
-  return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare> <entry.ts|checkpoint-dir|before-result.json> [options]. open accepts --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
+  return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. open accepts --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
   inspect: ['timeout'], render: ['params', 'finishing', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload'],
-  checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'],
+  checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'], experiment: ['out', 'timeout'],
 };
 
 function options(command: string, args: string[]): { entry: string; flags: Record<string, string> } {
@@ -142,6 +145,17 @@ export async function main(args: string[]): Promise<void> {
     const comparison = comparePreserved(before, after, selection);
     console.log(JSON.stringify(comparison));
     if (!comparison.ok) process.exitCode = 2;
+    return;
+  }
+  if (command === 'experiment') {
+    const matrixPath = resolve(entry);
+    const matrix = JSON.parse((await readBounded(matrixPath, 2 * 1024 * 1024)).toString('utf8')) as ExperimentMatrix;
+    const timeoutMs = integer(flags.timeout, 'timeout');
+    if (timeoutMs === 0) throw new SketchRunnerError('invalid_option', 'timeout must be positive');
+    const outputDir = resolve(required(flags, 'out'));
+    const manifest = await runExperimentBatch({ matrix, baseDir: dirname(matrixPath), outputDir, timeoutMs });
+    console.log(JSON.stringify({ manifest: join(outputDir, 'manifest.json'), contactSheet: join(outputDir, 'contact-sheet.html'), status: manifest.status,
+      successes: manifest.candidates.filter(candidate => candidate.status === 'success').length, failures: manifest.candidates.filter(candidate => candidate.status === 'failed').length }));
     return;
   }
   const timeoutMs = integer(flags.timeout, 'timeout');

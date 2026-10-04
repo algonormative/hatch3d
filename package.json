@@ -33,7 +33,8 @@
     "pref:learn": "tsx cli/preference-sync.ts --learn",
     "pref:stats": "tsx cli/preference-sync.ts --stats",
     "plot-family:smoke": "npm run plot-host:build && node packages/plot-host/family-smoke.mjs",
-    "plot-checkpoint:smoke": "npm run plot-host:build && node --import tsx packages/plot-host/checkpoint-smoke.mjs"
+    "plot-checkpoint:smoke": "npm run plot-host:build && node --import tsx packages/plot-host/checkpoint-smoke.mjs",
+    "plot-experiment:smoke": "npm run plot-host:build && node packages/plot-host/experiment-smoke.mjs"
   },
   "dependencies": {
     "@endonny/inksight": "^0.2.0",

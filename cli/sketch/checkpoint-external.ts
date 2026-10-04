@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { createRequire } from 'node:module';
-import { cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -104,7 +104,7 @@ export async function findExternalProject(entry: string): Promise<ExternalProjec
   }
 }
 
-async function sourceFiles(root: string): Promise<ExternalSourceFile[]> {
+export async function sourceFiles(root: string): Promise<ExternalSourceFile[]> {
   if (!(await lstat(root)).isDirectory()) throw new Error('External family source must be a real directory');
   const files: ExternalSourceFile[] = [];
   let bytes = 0;
@@ -247,6 +247,70 @@ export async function installedNodes(project: ExternalProject, lock: Record<stri
     }
   }
   return nodes;
+}
+
+/** A bounded digest of the same installed source/dependency closure used by v2 capture. */
+export async function fingerprintExternalProject(project: ExternalProject): Promise<{ sourceSha256: string; dependencySha256: string; fingerprint: string; toolkit: { core: string; host: string } }> {
+  const files = await sourceFiles(project.familyRoot);
+  await auditImports(project, files);
+  const packageBytes = await readBounded(join(project.root, 'package.json'), MAX_DOCUMENT_BYTES);
+  const lockBytes = await readBounded(join(project.root, 'package-lock.json'), MAX_DOCUMENT_BYTES);
+  const lock = json(lockBytes, 'project lock');
+  const nodes = await installedNodes(project, lock);
+  const digest = createHash('sha256');
+  let count = 0, bytes = 0;
+  async function visit(root: string, dir: string): Promise<void> {
+    for (const item of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (item.name === 'node_modules') continue; // Nested lock nodes are visited under their own full path.
+      const full = join(dir, item.name);
+      const rel = relative(root, full).split(sep).join('/');
+      const info = await lstat(full);
+      if (info.isSymbolicLink()) throw new Error(`Symlinked installed dependency input is unsupported: ${full}`);
+      if (info.isDirectory()) { await visit(root, full); continue; }
+      if (!info.isFile()) throw new Error(`Unsupported installed dependency input: ${full}`);
+      if (++count > 20_000 || (bytes += info.size) > MAX_EXPANDED_BYTES) throw new Error('Installed dependency source exceeds fingerprint limits');
+      digest.update(`${rel}\0${info.mode}\0${info.size}\0`);
+      digest.update(hash(await readBounded(full, MAX_EXPANDED_BYTES)));
+    }
+  }
+  for (const node of nodes.sort((a, b) => a.nodePath.localeCompare(b.nodePath))) {
+    digest.update(`${node.nodePath}\0${node.name}\0${node.version}\0`);
+    await visit(node.dir, node.dir);
+  }
+  const sourceSha256 = hash(JSON.stringify(files));
+  const dependencySha256 = digest.digest('hex');
+  const toolkit = { core: nodes.find(node => node.name === '@hatch3d/plot-core')!.version,
+    host: nodes.find(node => node.name === '@hatch3d/plot-host')!.version };
+  return { sourceSha256, dependencySha256, fingerprint: hash(JSON.stringify({ sourceSha256, dependencySha256,
+    packageSha256: hash(packageBytes), lockSha256: hash(lockBytes), toolkit, node: process.version, platform: process.platform, arch: process.arch })), toolkit };
+}
+
+/** The source-checkout host executes from its installed root dependency tree, including dev loaders. */
+export async function fingerprintInstalledTree(root: string): Promise<string> {
+  const actualRoot = await realpath(root);
+  if (!(await lstat(root)).isDirectory()) throw new Error('Installed dependency tree must be a real directory');
+  const digest = createHash('sha256');
+  let count = 0, bytes = 0;
+  async function visit(dir: string): Promise<void> {
+    for (const item of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = join(dir, item.name);
+      const rel = relative(root, full).split(sep).join('/');
+      const info = await lstat(full);
+      if (info.isSymbolicLink()) {
+        const target = await realpath(full);
+        if (!within(actualRoot, target)) throw new Error(`Installed dependency symlink escapes tree: ${rel}`);
+        digest.update(`${rel}\0link\0${await readlink(full)}\0`);
+        continue;
+      }
+      if (info.isDirectory()) { await visit(full); continue; }
+      if (!info.isFile()) throw new Error(`Unsupported installed dependency input: ${rel}`);
+      if (++count > 30_000 || (bytes += info.size) > 512 * 1024 * 1024) throw new Error('Installed dependency tree exceeds fingerprint limits');
+      digest.update(`${rel}\0${info.mode}\0${info.size}\0`);
+      digest.update(hash(await readBounded(full, 256 * 1024 * 1024)));
+    }
+  }
+  await visit(root);
+  return digest.digest('hex');
 }
 
 function expandedTar(bytes: Buffer, expectedName: string, expectedVersion: string): number {

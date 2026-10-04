@@ -33,4 +33,5 @@ for (const file of ['control-values.js', 'control-geometry.js', 'navigator-view.
 execFileSync(resolve(checkout, 'node_modules/.bin/tsc'), ['--project', join(root, 'tsconfig.json')], { stdio: 'inherit' });
 copyFileSync(join(dist, 'types/packages/plot-host/src/index.d.ts'), join(dist, 'index.d.ts'));
 copyFileSync(join(dist, 'types/packages/plot-host/src/errors.d.ts'), join(dist, 'errors.d.ts'));
+copyFileSync(join(dist, 'types/packages/plot-host/src/experiment-types.d.ts'), join(dist, 'experiment-types.d.ts'));
 rmSync(join(dist, 'types'), { recursive: true, force: true });
