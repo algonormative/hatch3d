@@ -1,0 +1,4 @@
+node_modules/
+output/
+pins/
+.sketch-output/

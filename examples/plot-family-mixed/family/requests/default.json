@@ -1,0 +1,7 @@
+{
+  "seed": 5,
+  "finishing": {
+    "border": { "style": "simple", "pen": "rings", "inset": 12, "contentGap": 6 },
+    "pens": { "rings": { "passes": 2 }, "curve": { "passes": 1 } }
+  }
+}

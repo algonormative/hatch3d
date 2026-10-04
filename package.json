@@ -31,7 +31,8 @@
     "pref:sync": "tsx cli/preference-sync.ts",
     "pref:collect": "tsx cli/preference-sync.ts --collect",
     "pref:learn": "tsx cli/preference-sync.ts --learn",
-    "pref:stats": "tsx cli/preference-sync.ts --stats"
+    "pref:stats": "tsx cli/preference-sync.ts --stats",
+    "plot-family:smoke": "npm run plot-host:build && node packages/plot-host/family-smoke.mjs"
   },
   "dependencies": {
     "@endonny/inksight": "^0.2.0",

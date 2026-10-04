@@ -88,6 +88,14 @@ void [sketch, runnerError.code, parsed, host, inspectSketch({ entry: 'sketch.ts'
   const aborted = renderSketch({ entry: join(sketchDir, 'hang.ts'), timeoutMs: 5_000, signal: controller.signal });
   setTimeout(() => controller.abort(), 100);
   await assert.rejects(aborted, error => error instanceof SketchRunnerError && error.code === 'aborted');
+  const previousCwd = process.cwd();
+  process.chdir(sketchDir);
+  try {
+    const defaultServer = await startSketchServer({ entry });
+    await defaultServer.close();
+    assert(existsSync(join(consumer, '.sketch-output/study/pins')), 'Default pins should live outside the sketch source');
+    assert(!existsSync(join(sketchDir, '.sketch-output')), 'Default pins must not enter sketch source');
+  } finally { process.chdir(previousCwd); }
   const cliServer = spawn(process.execPath, [cli, 'open', entry, '--out', join(consumer, 'cli-pins')], { cwd: consumer, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     const cliUrl = await new Promise((resolveUrl, rejectUrl) => {
