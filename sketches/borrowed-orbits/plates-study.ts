@@ -6,11 +6,12 @@
  *
  * SI scales (all plates use G = 6.6743e-11, y grows downward like page millimetres, the world domain is the
  * 48 m x 78 m of the first round and every system sits at its centre):
- *   hohmann    dt 1 s, central mass 1.0e9 kg pinned, outer orbit 16 m (period ~1556 s = steps), 8 substeps.
- *   lagrange   dt 1 s, separation a = 12 m, binary period 40 s (40 steps), total mass 6.39e11 kg, 24 substeps.
+ *   hohmann    dt 1 s, central mass 1.0e9 kg pinned, outer orbit 16 m (period 1557 s = 1557 steps), 8 substeps.
+ *   lagrange   separation a = 12 m, binary period 40 s, total mass 6.39e11 kg. Every libration orbit is its own run of 2400
+ *              recorded steps of exactly one period (dt = T / 2400, about 0.2 to 0.5 s; 8 to 64 substeps, libration.ts).
  *   threebody  length unit L0 = 4 m, mass unit m0 = 1e11 kg (each body), time unit tau0 = sqrt(L0^3 / (G m0)) = 3.097 s,
- *              so a catalog entry in G = m = 1 units maps by x -> L0 x, v -> (L0 / tau0) v, t -> tau0 t. One period
- *              is exactly 2400 steps (dt = T tau0 / 2400), 64 substeps.
+ *              so a catalog entry in G = m = 1 units maps by x -> L0 x, v -> (L0 / tau0) v, t -> tau0 t. One period is
+ *              k x 2400 steps (k per catalog entry), dt = T tau0 / (2400 k), 64 substeps.
  */
 import type { Point, SketchContext } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
@@ -19,7 +20,7 @@ import { G, LIMITS } from './model.ts';
 import type { Attractor, History, Impulse, OrbitStudyConfig, ParticleInit, Vec2 } from './model.ts';
 import { lagrangePoints, librationMode } from './lagrange.ts';
 import { orbitConfig, solveLibration } from './libration.ts';
-import type { BinarySetup, SolvedOrbit } from './libration.ts';
+import type { BinarySetup, SolvedOrbit, Trace } from './libration.ts';
 import { circularSpeed, numeric } from './study.ts';
 
 export const PLATES = ['hohmann', 'lagrange', 'threebody'] as const;
@@ -124,7 +125,13 @@ export interface LagrangePlan {
   orbits: LagrangeOrbit[];
 }
 /** The integrated plate: one history per run (a Lagrange plate has one per orbit, each with its own step) and the solved libration orbits. */
-export interface PlateRun { histories: History[]; solved: SolvedOrbit[] }
+export interface PlateRun {
+  /** The recorded positions of each run. */
+  histories: Trace[];
+  solved: SolvedOrbit[];
+  /** State key of the first run: the identity of the whole integration. */
+  stateKey: string;
+}
 export interface ThreebodyPlan { entry: Choreography; length: number; time: number; /** Recorded steps in one period (segments x 2400). */ steps: number; segments: number }
 
 export interface PlateMarks {
@@ -270,7 +277,7 @@ export function lagrangeSetup(opts: { mu: number; tadpoles: number; amplitude: n
   const orbits: LagrangeOrbit[] = [];
   const add = (kind: LagrangeOrbit['kind'], near: LagrangeOrbit['near'], offset: number, phi: number, fallbackPeriodS: number): void => {
     const r = 1 + offset;
-    const xi = r * Math.cos(phi), eta = r * Math.sin(phi);
+    const xi = r * Math.cos(phi), eta = kind === 'horseshoe' ? 0 : r * Math.sin(phi);
     // Circular Kepler orbit about the barycentre (total mass 1, unit radius): inertial speed r^-1/2, counter-clockwise; rotating velocity subtracts the frame's rotation.
     const speed = Math.sqrt(1 / r);
     const u = (-speed * eta) / r + eta, v = (speed * xi) / r - xi;
@@ -338,7 +345,7 @@ export function buildPlate(ctx: SketchContext): PlateStudy {
   const base = { plate, integrate, marks, fit, frame };
   if (plate === 'lagrange') {
     const s = lagrangeSetup({
-      mu: numeric(ctx, 'massRatio', 0.001, 0.001, 0.038),
+      mu: numeric(ctx, 'massRatio', 0.001, 0.001, 0.01),
       tadpoles: Math.round(numeric(ctx, 'tadpoleCount', 3, 0, 3)),
       amplitude: numeric(ctx, 'tadpoleAmplitude', 0.013, 0.005, 0.015),
       horseshoe: ctx.params.horseshoe !== false,
@@ -362,8 +369,8 @@ export function buildPlate(ctx: SketchContext): PlateStudy {
 /**
  * Integrate a plate. Hohmann: one history. Three-body: one history, joined from consecutive runs when the period is longer than
  * one run's step limit (each run resumes from the exact final state of the previous one: the state is synchronized at a step
- * boundary, so the chain is the same computation as one long run; `final` carries the last snapshot with the hashes of the
- * first run, the identity of the whole integration). Lagrange: one history per libration orbit, each integrated for exactly one
+ * boundary, so the chain is the same computation as one long run; the joined trace has no single final snapshot and `stateKey`
+ * is the first run's, the identity of the whole integration). Lagrange: one history per libration orbit, each integrated for exactly one
  * period at its own step (libration.ts shoots the periodic orbit through the start), cached by its inputs.
  */
 export function runPlate(study: PlateStudy, run: (config: OrbitStudyConfig, from: number, to: number) => History): PlateRun {
@@ -371,31 +378,36 @@ export function runPlate(study: PlateStudy, run: (config: OrbitStudyConfig, from
     const plan = study.lagrange;
     const histories: History[] = [];
     const solved: SolvedOrbit[] = [];
+    let first: History | null = null;
     for (const orbit of plan.orbits) {
       const key = JSON.stringify([plan.mu, plan.a, plan.omega, orbit.xi, orbit.eta, orbit.guess]);
       let hit = shot.get(key);
-      if (!hit) { hit = solveLibration(plan.binary, orbit.xi, orbit.eta, orbit.guess, orbit.fallbackPeriodS, run); shot.set(key, hit); }
+      if (!hit) { hit = solveLibration(plan.binary, orbit.xi, orbit.eta, orbit.guess, orbit.fallbackPeriodS, run, orbit.kind === 'horseshoe'); shot.set(key, hit); }
+      first ??= hit.history;
       histories.push(hit.history);
       solved.push(hit.solved);
     }
-    return { histories, solved };
+    if (!first) {
+      // No orbits: the binary alone (two records are enough to place the bodies).
+      first = run(study.config, 0, 2);
+      histories.push(first);
+    }
+    return { histories, solved, stateKey: first.final.hashes.stateKey };
   }
   const segments = study.threebody?.segments ?? 1;
-  if (segments === 1) return { histories: [run(study.config, 0, study.steps)], solved: [] };
+  if (segments === 1) { const h = run(study.config, 0, study.steps); return { histories: [h], solved: [], stateKey: h.final.hashes.stateKey }; }
   const per = study.steps / segments;
   const xs: Float64Array[] = [], ys: Float64Array[] = [], ax: Float64Array[] = [], ay: Float64Array[] = [];
   let config = study.config;
   let firstHashes: History['final']['hashes'] | null = null;
-  let last: History | null = null;
   for (let k = 0; k < segments; k++) {
     const h = run(config, 0, per);
     firstHashes ??= h.final.hashes;
     // Drop the duplicated boundary record of every segment after the first.
     for (let i = k === 0 ? 0 : 1; i < h.xs.length; i++) { xs.push(h.xs[i]); ys.push(h.ys[i]); ax.push(h.ax[i]); ay.push(h.ay[i]); }
-    last = h;
     config = { ...config, attractors: config.attractors.map((a, i) => ({ ...a, position: { ...h.final.attractors[i].position }, velocity: { ...h.final.attractors[i].velocity } })) };
   }
-  return { histories: [{ fromStep: 0, toStep: study.steps, xs, ys, ax, ay, final: { ...last!.final, step: study.steps, hashes: firstHashes! } }], solved: [] };
+  return { histories: [{ fromStep: 0, toStep: study.steps, xs, ys, ax, ay }], solved: [], stateKey: firstHashes!.stateKey };
 }
 
 const shot = new Map<string, ReturnType<typeof solveLibration>>();

@@ -99,8 +99,12 @@ export function contourLines(field: (x: number, y: number) => number, gradient: 
       const g = gradient(x, y);
       const n2 = g.x * g.x + g.y * g.y;
       if (!(n2 > 1e-24) || !Number.isFinite(f)) break;
-      x -= (f * g.x) / n2;
-      y -= (f * g.y) / n2;
+      // Where the gradient is tiny (a shallow saddle) a full Newton step jumps away: never move farther than a cell.
+      let dx = (f * g.x) / n2, dy = (f * g.y) / n2;
+      const m = Math.hypot(dx, dy);
+      if (m > size) { dx *= size / m; dy *= size / m; }
+      x -= dx;
+      y -= dy;
     }
     return { x, y };
   };

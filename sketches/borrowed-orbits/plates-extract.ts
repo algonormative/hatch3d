@@ -10,9 +10,10 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { clipPolylineToRect } from '../../packages/plot-core/src/clip.ts';
 import { circlePath, simplify } from './extract.ts';
-import { criticalLevels, jacobiConstant, lagrangePoints, zeroVelocityCurves } from './lagrange.ts';
+import { criticalCurves, criticalLevels, jacobiConstant, lagrangePoints, zeroVelocityCurves } from './lagrange.ts';
 import { rotatingPath } from './libration.ts';
-import type { History, Vec2 } from './model.ts';
+import type { Trace } from './libration.ts';
+import type { Vec2 } from './model.ts';
 import type { PlateMarks, PlateRun, PlateStudy } from './plates-study.ts';
 
 /** RDP tolerance for every drawn line, page mm. */
@@ -29,7 +30,18 @@ export type Glyph =
   | { part: string; pen: PenRole; kind: 'circle'; at: Vec2; mm: number }
   | { part: string; pen: PenRole; kind: 'cross'; at: Vec2; mm: number }
   | { part: string; pen: PenRole; kind: 'tick'; at: Vec2; dir: Vec2; mm: number; side: Vec2 };
-export interface Scene { lines: SceneLine[]; glyphs: Glyph[] }
+export interface Scene {
+  lines: SceneLine[];
+  glyphs: Glyph[];
+  /**
+   * Reference geometry the plate is scaled to (world units): the nominal orbit radii, the bodies, the Lagrange points and the
+   * zero-velocity curves. Absent: every point of every line, which is right where the lines are the geometry (three-body).
+   * An orbit that strays (an escaping or ejected one) must not shrink the plate; it is clipped to the plate box instead.
+   */
+  fit?: Vec2[];
+  /** Ids of integrated orbits not drawn because libration shooting did not converge. */
+  skipped?: string[];
+}
 
 export interface Mapper {
   /** Millimetres of page per metre. */
@@ -43,25 +55,27 @@ export interface Mapper {
 }
 
 const rad = (deg: number): number => (deg * Math.PI) / 180;
-const path = (h: History, particle: number, from: number, to: number): Vec2[] => {
+const path = (h: Trace, particle: number, from: number, to: number): Vec2[] => {
   const out: Vec2[] = [];
   for (let s = from; s <= to; s++) out.push({ x: h.xs[s - h.fromStep][particle], y: h.ys[s - h.fromStep][particle] });
   return out;
 };
-const where = (h: History, particle: number, step: number): Vec2 => ({ x: h.xs[step - h.fromStep][particle], y: h.ys[step - h.fromStep][particle] });
-const attractorPath = (h: History, index: number, from: number, to: number): Vec2[] => {
+const where = (h: Trace, particle: number, step: number): Vec2 => ({ x: h.xs[step - h.fromStep][particle], y: h.ys[step - h.fromStep][particle] });
+const attractorPath = (h: Trace, index: number, from: number, to: number): Vec2[] => {
   const out: Vec2[] = [];
   for (let s = from; s <= to; s++) out.push({ x: h.ax[s - h.fromStep][index], y: h.ay[s - h.fromStep][index] });
   return out;
 };
 
 /** Hohmann plate: circles and transfer arcs integrated, burns from the scheduled impulses at the integrated burn points. */
-function hohmannScene(study: PlateStudy, h: History | null): Scene {
+function hohmannScene(study: PlateStudy, h: Trace | null): Scene {
   const plan = study.hohmann!;
   const marks = study.marks;
   const scene: Scene = { lines: [], glyphs: [] };
   const centre = h ? { x: h.ax[0][0], y: h.ay[0][0] } : plan.centre;
   scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: centre, mm: marks.bodyRadius * 1.5 });
+  const reach = Math.max(...plan.radii);
+  scene.fit = [{ x: plan.centre.x - reach, y: plan.centre.y }, { x: plan.centre.x + reach, y: plan.centre.y }, { x: plan.centre.x, y: plan.centre.y - reach }, { x: plan.centre.x, y: plan.centre.y + reach }];
   if (!h) return scene;
   plan.orbitParticles.forEach((p, k) => scene.lines.push({ part: 'orbits', pen: 'orbit', points: path(h, p, 0, plan.periodSteps[k]) }));
   if (marks.showTransfers) {
@@ -111,6 +125,8 @@ function lagrangeScene(study: PlateStudy, run: PlateRun | null): Scene {
     // Each libration orbit is its own run; its rotating-frame path is the integrated inertial path rotated by minus the
     // integrated binary angle about the integrated barycentre, so the primaries stand still on the page.
     run.histories.forEach((h, i) => {
+      if (!run.solved[i]) return;
+      if (!run.solved[i].converged) { (scene.skipped ??= []).push(`${i}-${plan.orbits[i].kind}-${plan.orbits[i].near.toLowerCase()}`); return; }
       scene.lines.push({ part: plan.orbits[i].kind === 'horseshoe' ? 'horseshoe' : 'tadpoles', pen: 'orbit', points: rotatingPath(plan.binary, h).map(scale) });
       if (marks.orbitBoundaries) boundaryLevels.push(run.solved[i] ? jacobiConstant(mu, plan.orbits[i].xi, plan.orbits[i].eta, run.solved[i].u, run.solved[i].v) : 0);
     });
@@ -137,13 +153,24 @@ function lagrangeScene(study: PlateStudy, run: PlateRun | null): Scene {
   const box = { xMin: -half, xMax: half, yMin: -half, yMax: half };
   // A plate is at most about 120 page mm per unit of separation; 0.015 mm of chord error in those units.
   const tol = 0.015 / 120;
-  for (const level of levels) for (const line of zeroVelocityCurves(mu, level, box, 900, tol)) scene.lines.push({ part: 'zero-velocity', pen: 'reference', points: line.map(scale) });
+  if (marks.zvcMode === 'critical') {
+    // Critical levels pass through their saddle: trace the lobes exactly (marching squares misses the shallow L3 saddle).
+    const saddles = lagrangePoints(mu);
+    (['L1', 'L2', 'L3'] as const).slice(0, marks.zvcCount).forEach(name => {
+      for (const line of criticalCurves(mu, saddles[name], box, 900, tol)) scene.lines.push({ part: 'zero-velocity', pen: 'reference', points: line.map(scale) });
+    });
+  } else {
+    for (const level of levels) for (const line of zeroVelocityCurves(mu, level, box, 900, tol)) scene.lines.push({ part: 'zero-velocity', pen: 'reference', points: line.map(scale) });
+  }
   for (const level of boundaryLevels) for (const line of zeroVelocityCurves(mu, level, box, 900, tol)) scene.lines.push({ part: 'orbit-boundaries', pen: 'reference', points: line.map(scale) });
+  // Scale to the references only: the bodies, the Lagrange points and the zero-velocity curves.
+  const references = [...Object.values(lagrangePoints(mu)).map(scale), scale({ x: -mu, y: 0 }), scale({ x: 1 - mu, y: 0 })];
+  scene.fit = [...references, ...scene.lines.filter(l => l.part === 'zero-velocity' || l.part === 'orbit-boundaries').flatMap(l => l.points)];
   return scene;
 }
 
 /** Three-body plate: one full period of every body (or of body 1), bodies as circles at a phase. */
-function threebodyScene(study: PlateStudy, h: History | null): Scene {
+function threebodyScene(study: PlateStudy, h: Trace | null): Scene {
   const plan = study.threebody!;
   const marks = study.marks;
   const scene: Scene = { lines: [], glyphs: [] };
@@ -172,7 +199,7 @@ export function plateScene(study: PlateStudy, run: PlateRun | null): Scene {
  */
 export function makeMapper(study: PlateStudy, scene: Scene): Mapper {
   const { fit, marks } = study;
-  const points: Vec2[] = [...scene.lines.flatMap(l => l.points), ...scene.glyphs.map(g => g.at)];
+  const points: Vec2[] = scene.fit ?? [...scene.lines.flatMap(l => l.points), ...scene.glyphs.map(g => g.at)];
   const target = fit.target;
   const attempt = (rotationDeg: number) => {
     const c = Math.cos(rad(rotationDeg)), s = Math.sin(rad(rotationDeg));
@@ -221,7 +248,10 @@ export function extractPlate(study: PlateStudy, run: PlateRun | null): Part[] {
     if (!parts.has(id)) parts.set(id, { pen: roles[pen], paths: [] });
     return parts.get(id)!.paths;
   };
-  const inFrame = (paths: Point[][]): Point[][] => paths.flatMap(p => clipPolylineToRect(p, frame));
+  // The plate box: the poster target inset by half the margin. Orbits are clipped to it, so a stray one never leaves the plate.
+  const bw = frame.xMax - frame.xMin, bh = frame.yMax - frame.yMin, inset = study.marks.margin / 2;
+  const box = { xMin: frame.xMin + inset * bw, xMax: frame.xMax - inset * bw, yMin: frame.yMin + inset * bh, yMax: frame.yMax - inset * bh };
+  const inFrame = (paths: Point[][]): Point[][] => paths.flatMap(p => clipPolylineToRect(p, box));
   for (const line of scene.lines) bucket(line.part, line.pen).push(...inFrame([simplify(line.points.map(map.toArt), tolerance)]));
   for (const g of scene.glyphs) {
     const centre = map.toArt(g.at);
@@ -244,6 +274,7 @@ export function extractPlate(study: PlateStudy, run: PlateRun | null): Part[] {
   }
   const ordered = [...parts.keys()].sort((x, y) => PART_ORDER.indexOf(x) - PART_ORDER.indexOf(y));
   const out: Part[] = ordered.map(id => ({ id, pen: parts.get(id)!.pen, paths: parts.get(id)!.paths }));
-  out.push({ id: plateStateId(study.plate, run ? run.histories[0].final.hashes.stateKey : null), pen: roles.orbit, paths: [], diagnostic: true });
+  for (const id of scene.skipped ?? []) out.push({ id: `libration-unconverged-${id}`, pen: roles.orbit, paths: [], diagnostic: true });
+  out.push({ id: plateStateId(study.plate, run ? run.stateKey : null), pen: roles.orbit, paths: [], diagnostic: true });
   return out;
 }

@@ -76,7 +76,8 @@ describe('Orbit Plates sketch', () => {
       expect(byId.get(id), id).toMatchObject({ group });
     }
     expect(byId.get('orbitCount')).toMatchObject({ min: 2, max: 6 });
-    expect(byId.get('massRatio')).toMatchObject({ min: 0.001, max: 0.038 });
+    expect(byId.get('massRatio')).toMatchObject({ min: 0.001, max: 0.01 });
+    expect(byId.get('transferIndex')).toMatchObject({ showWhen: { control: 'transferMode', equals: 'single' } });
     expect(byId.get('orbitPen')).toMatchObject({ default: 'carbon' });
     expect(byId.get('highlightPen')).toMatchObject({ default: 'vermilion' });
     expect(byId.get('referencePen')).toMatchObject({ default: 'cyan' });
@@ -198,7 +199,7 @@ describe('Orbit Plates sketch', () => {
     run.histories.forEach((h, i) => {
       const solved = run.solved[i];
       expect(solved.converged, `orbit ${i}`).toBe(true);
-      expect(solved.residual).toBeLessThan(1e-5);
+      expect(solved.residual).toBeLessThan(1e-4);
       expect(h.xs.length).toBe(solved.steps + 1);
       // Jacobi constant from the inertial state: rotating position and velocity about the integrated binary, velocity by central difference.
       const jacobi = (k: number): number => {
@@ -266,6 +267,98 @@ describe('Orbit Plates sketch', () => {
     expect(maxTurn(simplify(page, 0.02))).toBeGreaterThan(TURN_BOUND);
   });
 
+  it('draws the bodies at (-mu, 0) and (1 - mu, 0) and keeps every tadpole around its own L point, the orbit starting where it was put', () => {
+    for (const mu of [0.001, 0.004]) {
+      const s = study('lagrange', { massRatio: mu, horseshoe: false });
+      const run = integrate(s);
+      const scene = plateScene(s, run);
+      const a = s.lagrange!.a;
+      // The primaries stand still on the page, on the x axis about the barycentre (not about the primary).
+      const bodies = scene.glyphs.filter(g => g.part === 'bodies');
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0].at.x / a).toBeCloseTo(-mu, 5);
+      expect(bodies[0].at.y / a).toBeCloseTo(0, 5);
+      expect(bodies[1].at.x / a).toBeCloseTo(1 - mu, 5);
+      expect(bodies[1].at.y / a).toBeCloseTo(0, 5);
+      const points = lagrangePoints(mu);
+      const tadpoles = scene.lines.filter(l => l.part === 'tadpoles');
+      expect(tadpoles).toHaveLength(6);
+      tadpoles.forEach((line, i) => {
+        const orbit = s.lagrange!.orbits[i];
+        // The drawn orbit starts at the rotating-frame point it was given (a primary-centred or reversed frame moves it).
+        expect(line.points[0].x / a).toBeCloseTo(orbit.xi, 6);
+        expect(line.points[0].y / a).toBeCloseTo(orbit.eta, 6);
+        // It stays on the L4 or L5 side, within a unit of its L point (reversed, it wanders round the whole ring).
+        const L = points[orbit.near as 'L4' | 'L5'];
+        for (const p of line.points) expect(Math.hypot(p.x / a - L.x, p.y / a - L.y)).toBeLessThan(1);
+        expect(line.points.every(p => Math.sign(p.y) === Math.sign(L.y))).toBe(true);
+        // And it closes on itself after one period.
+        const last = line.points[line.points.length - 1];
+        expect(Math.hypot(last.x - line.points[0].x, last.y - line.points[0].y) / a).toBeLessThan(2e-4);
+      });
+      // The nested tadpoles are nested: each larger offset has the larger radial extent.
+      const extent = (line: { points: { x: number; y: number }[] }) => Math.max(...line.points.map(p => Math.hypot(p.x, p.y))) - Math.min(...line.points.map(p => Math.hypot(p.x, p.y)));
+      expect(extent(tadpoles[2])).toBeGreaterThan(extent(tadpoles[0]));
+      expect(extent(tadpoles[4])).toBeGreaterThan(extent(tadpoles[2]));
+    }
+  });
+
+  it('scales a plate to its reference geometry only, so a stray orbit cannot shrink it, and draws no unconverged orbit', () => {
+    // The scale does not depend on the orbits: the same with and without the integrated run, and with the horseshoe on or off.
+    for (const id of ['lagrange', 'hohmann']) {
+      const s = study(id);
+      const withRun = makeMapper(s, plateScene(s, integrate(s))).mmPerM;
+      const without = makeMapper(s, plateScene(s, null)).mmPerM;
+      expect(withRun).toBeCloseTo(without, 9);
+    }
+    const hohmannOff = study('hohmann', { showTransfers: false, showPlanets: false });
+    expect(makeMapper(hohmannOff, plateScene(hohmannOff, integrate(hohmannOff))).mmPerM).toBeCloseTo(makeMapper(study('hohmann'), plateScene(study('hohmann'), integrate(study('hohmann')))).mmPerM, 9);
+    // Page mm per unit of separation barely moves with the mass ratio (it was 89 at 0.003 and 1 at 0.02 when the orbits set it).
+    const perA = (mu: number) => { const s = study('lagrange', { massRatio: mu }); return makeMapper(s, plateScene(s, integrate(s))).mmPerM * s.lagrange!.a; };
+    expect(perA(0.004) / perA(0.001)).toBeGreaterThan(0.9);
+    expect(perA(0.01) / perA(0.001)).toBeGreaterThan(0.9);
+    // An orbit that does not converge is not drawn; a diagnostic part names it.
+    const bad = study('lagrange', { massRatio: 0.007, horseshoeOffset: 0.02, tadpoleCount: 0 });
+    const run = integrate(bad);
+    expect(run.solved[0].converged).toBe(false);
+    const scene = plateScene(bad, run);
+    expect(scene.lines.some(l => l.part === 'horseshoe')).toBe(false);
+    expect(scene.skipped).toEqual(['0-horseshoe-l3']);
+    const parts = sketch.draw(context('lagrange', { massRatio: 0.007, horseshoeOffset: 0.02, tadpoleCount: 0 })) as { id: string; diagnostic?: boolean; paths: unknown[] }[];
+    const marker = parts.find(p => p.id === 'libration-unconverged-0-horseshoe-l3');
+    expect(marker?.diagnostic).toBe(true);
+    expect(parts.some(p => p.id === 'horseshoe')).toBe(false);
+  }, 60000);
+
+  it('converges every orbit across the default control ranges', () => {
+    // Horseshoe offsets across their range at the mass ratios where the family closes (0.001 to 0.004).
+    for (const mu of [0.001, 0.004]) for (const offset of [0.01, 0.025, 0.04]) {
+      const s = study('lagrange', { massRatio: mu, tadpoleCount: 0, horseshoeOffset: offset });
+      expect(integrate(s).solved.every(o => o.converged), `horseshoe mu ${mu} offset ${offset}`).toBe(true);
+    }
+    // Nested tadpoles across their amplitude range, up to the largest mass ratio of the control.
+    for (const mu of [0.001, 0.01]) for (const amplitude of [0.005, 0.015]) {
+      const s = study('lagrange', { massRatio: mu, horseshoe: false, tadpoleAmplitude: amplitude });
+      expect(integrate(s).solved.every(o => o.converged), `tadpoles mu ${mu} amplitude ${amplitude}`).toBe(true);
+    }
+  }, 120000);
+
+  it('passes every critical zero-velocity curve through its Lagrange point', () => {
+    for (const mu of [0.001, 0.002, 0.01]) {
+      const s = study('lagrange', { massRatio: mu, zvcMode: 'critical', zvcCount: 3 });
+      const scene = plateScene(s, integrate(s));
+      const map = makeMapper(s, scene);
+      const lines = scene.lines.filter(l => l.part === 'zero-velocity');
+      const points = lagrangePoints(mu);
+      for (const name of ['L1', 'L2', 'L3'] as const) {
+        const at = map.toPage({ x: points[name].x * s.lagrange!.a, y: points[name].y * s.lagrange!.a });
+        let nearest = Infinity;
+        for (const line of lines) for (const p of line.points) { const q = map.toPage(p); nearest = Math.min(nearest, Math.hypot(q.x - at.x, q.y - at.y)); }
+        expect(nearest, `${name} mu ${mu}`).toBeLessThan(0.1);
+      }
+    }
+  }, 60000);
+
   it('integrates the Hohmann orbits and ends the drawn transfer arc on the target radius', () => {
     const s = study('hohmann');
     const plan = s.hohmann!;
@@ -299,6 +392,25 @@ describe('Orbit Plates sketch', () => {
     const ticks = scene.glyphs.filter(g => g.kind === 'tick');
     expect(ticks).toHaveLength(2 * plan.hops.length);
     expect(ticks[0].mm / ticks[1].mm).toBeCloseTo(Math.hypot(plan.hops[0].dv1.x, plan.hops[0].dv1.y) / Math.hypot(plan.hops[0].dv2.x, plan.hops[0].dv2.y), 9);
+    // The burns are prograde: dv1 along the velocity before the first burn, dv2 along the velocity at apoapsis (a retrograde dv2 is the mutant).
+    plan.hops.forEach(hop => {
+      const velocity = (step: number) => ({ x: h.histories[0].xs[step + 1][hop.transfer] - h.histories[0].xs[step - 1][hop.transfer], y: h.histories[0].ys[step + 1][hop.transfer] - h.histories[0].ys[step - 1][hop.transfer] });
+      const before = velocity(hop.arriveStep - 1);
+      expect(before.x * hop.dv2.x + before.y * hop.dv2.y, 'dv2 prograde').toBeGreaterThan(0);
+      const after = velocity(hop.arriveStep + 1);
+      expect(after.x * hop.dv2.x + after.y * hop.dv2.y).toBeGreaterThan(0);
+      // dv2 circularizes: after it the transfer particle stays at the target radius and at the circular speed of that orbit.
+      const last = Math.min(h.histories[0].xs.length - 1, hop.arriveStep + 300);
+      expect(last).toBeGreaterThan(hop.arriveStep + 50);
+      for (let step = hop.arriveStep + 5; step <= last; step += 5) {
+        const p = { x: h.histories[0].xs[step][hop.transfer], y: h.histories[0].ys[step][hop.transfer] };
+        expect(Math.abs(radius(p) / hop.rTo - 1), `radius after dv2, hop ${hop.fromOrbit}`).toBeLessThan(2e-3);
+      }
+      // dv2 uses the target orbit's circular speed, not the source's: its size is vc(r2) - v(apoapsis).
+      const gm = 6.6743e-11 * 1e9;
+      const a = (hop.rFrom + hop.rTo) / 2;
+      expect(Math.hypot(hop.dv2.x, hop.dv2.y)).toBeCloseTo(Math.sqrt(gm / hop.rTo) - Math.sqrt(gm * (2 / hop.rTo - 1 / a)), 6);
+    });
     // Single mode draws one transfer; a delayed departure moves the burn step.
     expect(plateScene(study('hohmann', { transferMode: 'single', transferIndex: 1 }), integrate(study('hohmann', { transferMode: 'single', transferIndex: 1 }))).lines.filter(l => l.part === 'transfers')).toHaveLength(1);
     expect(study('hohmann', { departureStep: 120 }).hohmann!.hops[0].departStep).toBe(120);

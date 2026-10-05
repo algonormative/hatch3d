@@ -127,8 +127,8 @@ export interface SimulationSettings {
   /** m beyond the domain rectangle at which an `open` particle escapes. */
   escapeMargin: number;
   /**
-   * Integration substeps per recorded step (integer ≥ 1; absent = 1 and omitted from hashes, so existing
-   * snapshots keep their keys). Each recorded step runs `substeps` KDK substeps of dt/substeps; capture and
+   * Integration substeps per recorded step (integer ≥ 1; absent and 1 are the same setting and hash identically,
+   * and neither enters the hash; a MODEL version bump changes every key regardless). Each recorded step runs `substeps` KDK substeps of dt/substeps; capture and
    * escape are tested on every substep's drift segment; snapshots and history() still sample once per step.
    * It decouples integration accuracy (close encounters) from drawing resolution. Work counts substeps.
    */

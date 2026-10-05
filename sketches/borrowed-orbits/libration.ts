@@ -23,6 +23,9 @@ export interface BinarySetup {
   attractors: Attractor[];
 }
 
+/** The recorded positions of a run: all the drawing needs (a chained run has no single final snapshot). */
+export type Trace = Pick<History, 'fromStep' | 'toStep' | 'xs' | 'ys' | 'ax' | 'ay'>;
+
 export type Runner = (config: OrbitStudyConfig, from: number, to: number) => History;
 
 /** A rotating-frame state in normalized units. */
@@ -96,7 +99,7 @@ export function finalRotatingState(binary: BinarySetup, h: History): RotatingSta
 }
 
 /** Rotating-frame positions (normalized) of particle 0 at every record of a history. */
-export function rotatingPath(binary: BinarySetup, h: History): Vec2[] {
+export function rotatingPath(binary: BinarySetup, h: Trace): Vec2[] {
   const masses = binary.attractors.map(m => m.mass);
   const total = masses[0] + masses[1];
   return h.xs.map((_xs, k) => {
@@ -106,6 +109,17 @@ export function rotatingPath(binary: BinarySetup, h: History): Vec2[] {
     const c = Math.cos(-angle), s = Math.sin(-angle);
     const dx = h.xs[k][0] - bx, dy = h.ys[k][0] - by;
     return { x: (dx * c - dy * s) / binary.a, y: (dx * s + dy * c) / binary.a };
+  });
+}
+
+/** Moving average over `window` samples (one binary period), which removes the epicycle and leaves the slow libration; edges use the samples that exist. */
+export function binaryAverage(path: Vec2[], window: number): Vec2[] {
+  const half = Math.floor(window / 2);
+  const sx = [0], sy = [0];
+  path.forEach((p, i) => { sx.push(sx[i] + p.x); sy.push(sy[i] + p.y); });
+  return path.map((_p, i) => {
+    const lo = Math.max(0, i - half), hi = Math.min(path.length, i + half + 1);
+    return { x: (sx[hi] - sx[lo]) / (hi - lo), y: (sy[hi] - sy[lo]) / (hi - lo) };
   });
 }
 
@@ -158,18 +172,99 @@ function solve3(A: number[][], b: number[]): number[] {
   return x;
 }
 
+/** Sum of squared second differences of a path (normalized units): the epicycle's contribution dominates it. */
+export function roughness(path: Vec2[]): number {
+  let sum = 0;
+  for (let i = 1; i < path.length - 1; i++) {
+    const dx = path[i + 1].x - 2 * path[i].x + path[i - 1].x, dy = path[i + 1].y - 2 * path[i].y + path[i - 1].y;
+    sum += dx * dx + dy * dy;
+  }
+  return sum;
+}
+
+/**
+ * Mirror-symmetric periodic orbits (the horseshoe): the CR3BP is symmetric under (x, y, u, v, t) -> (x, -y, -u, v, -t), so an orbit
+ * that leaves the x axis perpendicularly (eta = 0, u = 0) and meets it perpendicularly again after half a period is periodic.
+ * That is two unknowns (v, T) for two conditions (eta = 0 and u = 0 at T/2), far better conditioned than shooting the whole
+ * period, and it only integrates half. `xi` is the start on the axis. Returns the half-period solution or null.
+ */
+function solveSymmetric(binary: BinarySetup, xi: number, guess: { v: number }, period0: number, run: Runner): { v: number; period: number; residual: number } | null {
+  const half = (v: number, T: number): number[] | null => {
+    if (!(T > 0.2 * period0 && T < 3 * period0)) return null;
+    const dt = T / STEPS;
+    const h = run(orbitConfig(binary, { xi, eta: 0, u: 0, v }, dt, substepsFor(dt)), 0, STEPS / 2);
+    const end = finalRotatingState(binary, h);
+    return [end.eta, end.u];
+  };
+  let v = guess.v, T = period0;
+  let r = half(v, T);
+  for (let iteration = 0; iteration < 40 && r && Math.hypot(...r) > 1e-9; iteration++) {
+    const dv = 1e-6, dT = 1e-5 * T;
+    const rv = half(v + dv, T), rT = half(v, T + dT);
+    if (!rv || !rT) return null;
+    const J = [[(rv[0] - r[0]) / dv, (rT[0] - r[0]) / dT], [(rv[1] - r[1]) / dv, (rT[1] - r[1]) / dT]];
+    const det = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+    if (!Number.isFinite(det) || det === 0) return null;
+    const step = [-(J[1][1] * r[0] - J[0][1] * r[1]) / det, -(-J[1][0] * r[0] + J[0][0] * r[1]) / det];
+    let scale = 1, improved = false;
+    for (let tries = 0; tries < 8; tries++) {
+      const next = half(v + scale * step[0], T + scale * step[1]);
+      if (next && Math.hypot(...next) < Math.hypot(...r)) { v += scale * step[0]; T += scale * step[1]; r = next; improved = true; break; }
+      scale /= 2;
+    }
+    if (!improved) break;
+  }
+  return r ? { v, period: T, residual: Math.hypot(...r) } : null;
+}
+
 /**
  * Shoot the periodic orbit through the rotating-frame position (xi, eta): from a guess velocity and the period found by a
  * trial integration, Gauss-Newton on (u, v, T) until the rotating-frame state returns. Returns the solution and the final
  * integrated history (2400 records of one period), or the guess if the shooting does not converge.
  */
-export function solveLibration(binary: BinarySetup, xi: number, eta: number, guess: { u: number; v: number }, fallbackPeriodS: number, run: Runner): { solved: SolvedOrbit; history: History } {
+export function solveLibration(binary: BinarySetup, xi: number, eta: number, guess: { u: number; v: number }, fallbackPeriodS: number, run: Runner, symmetric = false): { solved: SolvedOrbit; history: History } {
   // 1. Period guess: a trial integration at 1 s steps (2400 s covers a tadpole and a horseshoe at the mass ratios used).
   const trial = run(orbitConfig(binary, { xi, eta, ...guess }, TRIAL_DT, TRIAL_SUBSTEPS), 0, STEPS);
-  const found = returnTime(rotatingPath(binary, trial), TRIAL_DT);
-  let period = found ?? fallbackPeriodS;
+  const found = returnTime(binaryAverage(rotatingPath(binary, trial), Math.round((2 * Math.PI) / binary.omega / TRIAL_DT)), TRIAL_DT);
+  const raw = returnTime(rotatingPath(binary, trial), TRIAL_DT);
+  // Shooting is local, so try several period guesses (the epicycle-free return, the raw return, the linear estimate, and
+  // slightly longer or shorter ones: a nonlinear libration is longer) and keep the first that closes, else the best.
+  const base = found ?? raw ?? fallbackPeriodS;
+  const primary = [base, ...(raw && raw !== base ? [raw] : []), fallbackPeriodS];
+  const secondary = [base * 1.04, base * 0.96, base * 1.1, base * 1.2];
+  // Several periodic orbits can pass through one start (resonances with the epicycle, which differ in how much epicycle they
+  // carry): of those that close, keep the smoothest, the one with the least second difference along its rotating-frame path.
+  let best: { solved: SolvedOrbit; history: History } | null = null;
+  let bestRough = Infinity;
+  let fallback: { solved: SolvedOrbit; history: History } | null = null;
+  const seen: number[] = [];
+  for (const guessPeriod of [...primary, ...secondary]) {
+    // The longer and shorter guesses are only tried when none of the first three closed.
+    if (best && secondary.includes(guessPeriod)) break;
+    if (seen.some(t => Math.abs(t - guessPeriod) < 0.5)) continue;
+    seen.push(guessPeriod);
+    const attempt = shoot(guessPeriod);
+    if (!attempt.solved.converged) {
+      if (!fallback || attempt.solved.residual < fallback.solved.residual) fallback = attempt;
+      continue;
+    }
+    const rough = roughness(rotatingPath(binary, attempt.history));
+    if (rough < bestRough) { best = attempt; bestRough = rough; }
+  }
+  if (!best) best = fallback!;
+  return best!;
+
+  function shoot(period0: number): { solved: SolvedOrbit; history: History } {
+  let period = period0;
   let u = guess.u, v = guess.v;
+  if (symmetric && eta === 0) {
+    // Mirror-symmetric orbit through a point on the axis: shoot half a period, then take the full-period run for the history.
+    const half = solveSymmetric(binary, xi, guess, period, run);
+    if (half) { u = 0; v = half.v; period = half.period; }
+  }
   const evaluate = (uu: number, vv: number, T: number): { r: number[]; history: History } => {
+    // A wild Newton step can ask for a nonsensical period; give it a large residual instead of an error.
+    if (!(T > 0.2 * period0 && T < 3 * period0)) return { r: [1e3, 1e3, 1e3, 1e3], history: trial };
     const dt = T / STEPS;
     const history = run(orbitConfig(binary, { xi, eta, u: uu, v: vv }, dt, substepsFor(dt)), 0, STEPS);
     const end = finalRotatingState(binary, history);
@@ -178,7 +273,9 @@ export function solveLibration(binary: BinarySetup, xi: number, eta: number, gue
   const norm = (r: number[]): number => Math.hypot(...r);
   let current = evaluate(u, v, period);
   let iterations = 0;
-  for (; iterations < 14 && norm(current.r) > 1e-5; iterations++) {
+  let lambda = 1e-6;
+  // Levenberg-Marquardt on (u, v, T): the Gauss-Newton step with a damping that grows until the residual falls.
+  for (; iterations < 24 && norm(current.r) > 2e-6; iterations++) {
     const steps = [1e-6, 1e-6, 1e-5 * period];
     const columns: number[][] = [];
     for (let k = 0; k < 3; k++) {
@@ -189,21 +286,27 @@ export function solveLibration(binary: BinarySetup, xi: number, eta: number, gue
     }
     const A = [0, 1, 2].map(i => [0, 1, 2].map(j => columns[i].reduce((s, value, k) => s + value * columns[j][k], 0)));
     const b = [0, 1, 2].map(i => -columns[i].reduce((s, value, k) => s + value * current.r[k], 0));
-    const d = solve3(A, b);
-    if (!d.every(Number.isFinite)) break;
-    // Damped step: halve until the residual falls.
-    let scale = 1, next = current;
-    for (let tries = 0; tries < 6; tries++) {
-      next = evaluate(u + scale * d[0], v + scale * d[1], period + scale * d[2]);
-      if (norm(next.r) < norm(current.r)) break;
-      scale /= 2;
+    let improved = false;
+    for (let tries = 0; tries < 10 && !improved; tries++) {
+      const damped = A.map((row, i) => row.map((value, j) => (i === j ? value * (1 + lambda) + 1e-30 : value)));
+      const d = solve3(damped, b);
+      if (d.every(Number.isFinite)) {
+        const next = evaluate(u + d[0], v + d[1], period + d[2]);
+        if (norm(next.r) < norm(current.r)) {
+          u += d[0]; v += d[1]; period += d[2];
+          current = next;
+          lambda = Math.max(1e-9, lambda / 4);
+          improved = true;
+          break;
+        }
+      }
+      lambda *= 8;
     }
-    if (!(norm(next.r) < norm(current.r))) break;
-    u += scale * d[0]; v += scale * d[1]; period += scale * d[2];
-    current = next;
+    if (!improved) break;
   }
   const residual = norm(current.r);
-  const converged = residual < 1e-5;
+  const converged = residual < 1e-4;
   const dt = period / STEPS;
   return { solved: { u, v, periodS: period, steps: STEPS, substeps: substepsFor(dt), residual, iterations, converged }, history: current.history };
+  }
 }

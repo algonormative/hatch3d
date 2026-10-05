@@ -91,3 +91,94 @@ export function librationMode(mu: number, side: 1 | -1): { omega: number; bRe: n
   const norm = denRe * denRe + denIm * denIm;
   return { omega, bRe: (numRe * denRe) / norm, bIm: (-numRe * denIm) / norm };
 }
+
+/**
+ * The curve of a critical Jacobi level through its saddle (L1, L2 or L3), traced exactly. Marching squares cannot draw it: at the
+ * saddle the level set is an X, the field is flat there (shallowest at L3, where the y curvature is of order mu) and a grid reads
+ * the crossing as gaps. The four branches leave the saddle along the directions where the Hessian's quadratic form vanishes;
+ * each is followed by predictor-corrector steps of arc length `step` (tangent from the gradient, Newton projection onto the
+ * level) until it returns to the saddle, which closes a lobe, or leaves `box`. Lobes are returned as closed polylines through
+ * the saddle, so every one passes through the L point exactly.
+ */
+export function traceSaddleCurves(mu: number, saddle: P2, box: Box, step = 0.0015): P2[][] {
+  const level = jacobiField(mu, saddle.x, saddle.y);
+  const field = (p: P2): number => jacobiField(mu, p.x, p.y) - level;
+  const grad = (p: P2): P2 => jacobiGradient(mu, p.x, p.y);
+  // Hessian of 2U at the saddle by central differences of the gradient.
+  const e = 1e-5;
+  const gxp = grad({ x: saddle.x + e, y: saddle.y }), gxm = grad({ x: saddle.x - e, y: saddle.y });
+  const gyp = grad({ x: saddle.x, y: saddle.y + e }), gym = grad({ x: saddle.x, y: saddle.y - e });
+  const hxx = (gxp.x - gxm.x) / (2 * e), hyy = (gyp.y - gym.y) / (2 * e), hxy = (gxp.y - gxm.y + gyp.x - gym.x) / (4 * e);
+  // Eigen-decomposition of [[hxx, hxy], [hxy, hyy]]: lambda1 > 0 > lambda2 at a saddle.
+  const mean = (hxx + hyy) / 2, radius = Math.hypot((hxx - hyy) / 2, hxy);
+  const l1 = mean + radius, l2 = mean - radius;
+  const theta = 0.5 * Math.atan2(2 * hxy, hxx - hyy);
+  const ex = { x: Math.cos(theta), y: Math.sin(theta) }, ey = { x: -Math.sin(theta), y: Math.cos(theta) };
+  const slope = Math.sqrt(Math.max(0, -l1 / l2));
+  // Rays: x' = s, y' = +/- slope s, for s = +/-1, in the eigenbasis (l1 along ex).
+  const rays: P2[] = [];
+  for (const sx of [1, -1]) for (const sy of [1, -1]) {
+    const dx = sx, dy = sy * slope, n = Math.hypot(dx, dy);
+    rays.push({ x: (ex.x * dx + ey.x * dy) / n, y: (ex.y * dx + ey.y * dy) / n });
+  }
+  const inside = (p: P2): boolean => p.x >= box.xMin && p.x <= box.xMax && p.y >= box.yMin && p.y <= box.yMax;
+  const project = (p: P2): P2 => {
+    let { x, y } = p;
+    for (let i = 0; i < 4; i++) {
+      const g = grad({ x, y }), n2 = g.x * g.x + g.y * g.y, f = field({ x, y });
+      if (!(n2 > 1e-30)) break;
+      // Never move farther than a step: near the saddle the gradient is tiny and a full Newton step would jump away.
+      let dx = (f * g.x) / n2, dy = (f * g.y) / n2;
+      const m = Math.hypot(dx, dy);
+      if (m > step) { dx *= step / m; dy *= step / m; }
+      x -= dx; y -= dy;
+    }
+    return { x, y };
+  };
+  const loops: P2[][] = [];
+  const arrivals: P2[] = [];
+  for (const ray of rays) {
+    // Skip a ray that an earlier loop already arrived along (the same lobe, traversed the other way).
+    if (arrivals.some(a => a.x * ray.x + a.y * ray.y > 0.99)) continue;
+    let p = project({ x: saddle.x + 4 * step * ray.x, y: saddle.y + 4 * step * ray.y });
+    let direction = { x: ray.x, y: ray.y };
+    const line: P2[] = [{ ...saddle }, p];
+    let travelled = 0, closed = false;
+    for (let i = 0; i < 60000; i++) {
+      const g = grad(p), n = Math.hypot(g.x, g.y);
+      if (!(n > 0)) break;
+      let t = { x: -g.y / n, y: g.x / n };
+      if (t.x * direction.x + t.y * direction.y < 0) t = { x: -t.x, y: -t.y };
+      // Midpoint predictor, then project.
+      const mid = { x: p.x + (t.x * step) / 2, y: p.y + (t.y * step) / 2 };
+      const gm = grad(mid), nm = Math.hypot(gm.x, gm.y) || 1;
+      let tm = { x: -gm.y / nm, y: gm.x / nm };
+      if (tm.x * t.x + tm.y * t.y < 0) tm = { x: -tm.x, y: -tm.y };
+      const next = project({ x: p.x + tm.x * step, y: p.y + tm.y * step });
+      direction = { x: next.x - p.x, y: next.y - p.y };
+      const dn = Math.hypot(direction.x, direction.y) || 1;
+      direction = { x: direction.x / dn, y: direction.y / dn };
+      travelled += dn;
+      p = next;
+      if (!inside(p)) break;
+      line.push(p);
+      if (travelled > 30 * step && Math.hypot(p.x - saddle.x, p.y - saddle.y) < 3 * step) {
+        closed = true;
+        arrivals.push({ x: saddle.x - p.x, y: saddle.y - p.y });
+        const n2 = Math.hypot(arrivals[arrivals.length - 1].x, arrivals[arrivals.length - 1].y) || 1;
+        arrivals[arrivals.length - 1] = { x: -arrivals[arrivals.length - 1].x / n2, y: -arrivals[arrivals.length - 1].y / n2 };
+        break;
+      }
+    }
+    if (closed) line.push({ ...saddle });
+    loops.push(line);
+  }
+  return loops;
+}
+
+/** Zero-velocity curves of a critical level: the marched components away from the saddle, and the traced lobes through it. */
+export function criticalCurves(mu: number, saddle: P2, box: Box, cells = 900, tolerance = 0): P2[][] {
+  const level = jacobiField(mu, saddle.x, saddle.y);
+  const marched = zeroVelocityCurves(mu, level, box, cells, tolerance).filter(line => !line.some(p => Math.hypot(p.x - saddle.x, p.y - saddle.y) < 0.08));
+  return [...marched, ...traceSaddleCurves(mu, saddle, box)];
+}

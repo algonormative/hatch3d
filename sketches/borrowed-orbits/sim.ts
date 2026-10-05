@@ -132,6 +132,16 @@ export function validateConfig(config: OrbitStudyConfig): void {
     }
     vec(`impulses[${i}].dv`, m.dv);
   });
+  // Several burns at one (particle, step) add: the sum must stay finite (two of 1e308 would overflow to Infinity).
+  const burn = new Map<string, Vec2>();
+  for (const m of impulses) {
+    const key = `${m.particle}:${m.step}`;
+    const sum = burn.get(key) ?? { x: 0, y: 0 };
+    sum.x += m.dv.x;
+    sum.y += m.dv.y;
+    burn.set(key, sum);
+    if (!Number.isFinite(sum.x) || !Number.isFinite(sum.y)) throw new RangeError(`impulses at particle ${m.particle}, step ${m.step} sum to a non-finite dv`);
+  }
   const totalEdges = forbidden.reduce((n, f) => n + (Array.isArray(f.polygon) ? f.polygon.length : 0), 0);
   if (totalEdges > LIMITS.maxForbiddenEdges) {
     throw new RangeError(`${totalEdges} forbidden edges is above the limit of ${LIMITS.maxForbiddenEdges}`);
@@ -184,7 +194,7 @@ export function configHashes(config: OrbitStudyConfig): SnapshotHashes {
   const geometry = stableHash({ domain: config.domain, forbidden: config.forbidden });
   const transform = stableHash(config.transforms);
   const simulation = stableHash({
-    // substeps 1 and impulses [] are the defaults and stay out of the hash, so older keys survive.
+    // substeps 1 and impulses [] are the defaults: absent, 1 and [] hash identically and stay out of the hash.
     settings: { ...config.settings, substeps: (config.settings.substeps ?? 1) > 1 ? config.settings.substeps : undefined },
     impulses: config.impulses && config.impulses.length > 0 ? config.impulses : undefined,
     // `hidden` is a diagnostics flag with no effect on the physics.
