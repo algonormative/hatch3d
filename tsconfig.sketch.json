@@ -33,6 +33,7 @@
     "sketches/breach-cathedral/**/*.ts",
     "sketches/chamber-bloom/**/*.ts",
     "sketches/load-bearing-silence/**/*.ts",
-    "sketches/cloud-advection/**/*.ts"
+    "sketches/cloud-advection/**/*.ts",
+    "sketches/borrowed-orbits/**/*.ts"
   ]
 }
