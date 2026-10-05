@@ -47,3 +47,18 @@ Simulation controls are `expensive`; the Marks group (`trailSteps`, `taper`, `tr
 - A forbidden region is never physical: it is a perfect absorber at a gap from its drawn edge, and it is cut out of the guides.
 - Seed points that fall inside a forbidden region (the arc and gate cross the guides) are captured at step 0 and draw no trail.
 - Trails are an extraction of the history, not the history: simplified, dashed, clipped and optionally thinned.
+
+## Rapier evaluation (vault-28f4e)
+
+This was evaluated as a decision, not installed. Rapier is not needed for this study.
+
+- **What Borrowed Orbits needs.** It needs pair attraction toward a few point masses. It needs exact capture against static polygons and moving discs. It needs bitwise resume under its own hashed snapshot.
+  - Capture is a swept test on each step's straight drift segment. That segment is the integrator's own path, so the test is exact. The whole pilot (300 particles, 2 masses, 8 bars) runs at about 13,000 steps/s.
+  - Nothing bounces, rotates or stacks, so there is no contact response to solve.
+- **What Rapier offers** (rapier.rs JS guide, checked 2026-10-04):
+  - rigid bodies, colliders and joints, with CCD sweeping for fast bodies;
+  - uniform world gravity with a per-body scale;
+  - persistent per-body forces through `addForce`/`resetForces`;
+  - cross-platform determinism for identical construction and order, with `world.takeSnapshot()` bytes that can be hashed.
+- **The gap.** Rapier has no pair or central gravity. Using it would still mean computing the Newtonian force here and pushing it in with `addForce` each step. Rapier's own integrator would then replace the leapfrog, so the energy behaviour measured in the sim tests would have to be re-established. The snapshot hash would also cover Rapier's world bytes, so it would change with every Rapier version.
+- **When to revisit.** Only for physical contact as an art goal: particles that bounce off architecture with restitution, or architecture that is knocked over or hinged. The Capture and Slingshot follow-up (vault-2t1zs) is the likely first candidate. Even then, keep the force provider here and use Rapier only for contact.
