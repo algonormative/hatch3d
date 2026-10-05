@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { inspectSketch, renderSketch } from '../../cli/sketch/runner.ts';
 import { resolveFinishing, resolveMacroParams, resolveParams } from '../../packages/plot-core/src/index.ts';
-import { extractMarks, parseOrbitStateId, particleTrails, trailMarks } from '../../sketches/borrowed-orbits/extract.ts';
+import { extractMarks, parseOrbitStateId, particleTrails, taperTrail, trailMarks } from '../../sketches/borrowed-orbits/extract.ts';
 import { FORBIDDEN_CLEARANCE_M } from '../../sketches/borrowed-orbits/layout.ts';
 import { LIMITS } from '../../sketches/borrowed-orbits/model.ts';
 import { buildStudy, massFromPeriod } from '../../sketches/borrowed-orbits/study.ts';
@@ -293,4 +293,16 @@ describe('Borrowed Orbits sketch', () => {
     const dashed = trailMarks(study({ taper: 1 }), history(on.config, 200, 800)).paths;
     expect(dashed.length).toBeGreaterThan(solid.length);
   }, 60000);
+  it('keeps the trail head at every dash phase, even fully tapered', () => {
+    // A gap straddling the head once dropped it in up to half of all phases at taper 1.
+    for (const length of [10, 50, 333]) {
+      const path = Array.from({ length: 101 }, (_, i) => ({ x: (length * i) / 100, y: 0 }));
+      for (let k = 0; k < 200; k++) {
+        const pieces = taperTrail(path, 1, k / 200, 1);
+        const head = pieces[pieces.length - 1];
+        expect(head[head.length - 1].x).toBe(length);
+        expect(head[head.length - 1].x - head[0].x).toBeGreaterThanOrEqual(0.5 - 1e-9);
+      }
+    }
+  });
 });

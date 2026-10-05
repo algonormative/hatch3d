@@ -42,6 +42,7 @@ Simulation controls are `expensive`; the Marks group (`trailSteps`, `taper`, `tr
 
 - Restricted problem: particles neither attract each other nor pull on the masses.
 - Leapfrog is second order and symplectic but not exact; orbits close to a mass with the 0.1 s step are the least accurate, and `softening` keeps close passes finite.
+- The hidden mass is pinned by default (`massPinned`): it is treated as far heavier than the perturber, so the pass bends the trails without carrying the centre away. In the pilot, with the mass free, a 0.35 mass-ratio pass flung both masses off the page and the drawing stopped describing a displaced centre. Turning `massPinned` off restores two-body motion.
 - Mass scale (10^11 kg) is an artistic departure so that tens-of-metres orbits take tens of seconds. The law is unchanged.
 - A forbidden region is never physical: it is a perfect absorber at a gap from its drawn edge, and it is cut out of the guides.
 - Seed points that fall inside a forbidden region (the arc and gate cross the guides) are captured at step 0 and draw no trail.

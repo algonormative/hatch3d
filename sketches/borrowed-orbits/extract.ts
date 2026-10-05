@@ -158,8 +158,13 @@ export function taperTrail(path: Point[], taper: number, phase: number, artToMm:
     if (b > a) pieces.push([a, b]);
     s += on + gap;
   }
+  // The head is always drawn. The final piece starts at the faded boundary, or one minimum dash before the head if
+  // that is earlier, so a gap straddling the head (taper 1) cannot erase it; a dash reaching that start runs on.
+  const headStart = Math.max(0, Math.min(faded, total - DASH_ON_MIN_MM * mm));
+  while (pieces.length > 0 && pieces[pieces.length - 1][0] > headStart) pieces.pop();
   const last = pieces[pieces.length - 1];
-  if (last && last[1] >= faded) last[1] = total; else pieces.push([faded, total]);
+  if (last && last[1] >= headStart) last[1] = total;
+  else pieces.push([headStart, total]);
   return pieces.map(([a, b]) => slice(path, cum, a, b));
 }
 

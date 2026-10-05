@@ -18,8 +18,9 @@ export type ForbiddenKind = 'bar' | 'arc' | 'slab';
 export interface GuideSet { centre: Vec2; radii: number[] }
 
 /**
- * A precise forbidden solid. `polygon` is what the pen draws; `capture` is the same shape grown by
- * FORBIDDEN_CLEARANCE_M and is what the simulation and the guide cut use.
+ * A precise forbidden solid. `polygon` is what the pen draws; `capture` is the same shape with its side lengths
+ * grown by FORBIDDEN_CLEARANCE_M per side (not a Euclidean offset: the clearance is 0.1 m along edges and up to
+ * about 0.15 m at corners and arc ends) and is what the simulation and the guide cut use.
  */
 export interface ForbiddenMember {
   /** Simulation id, `forbidden-<name>`. */

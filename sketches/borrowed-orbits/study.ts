@@ -164,7 +164,9 @@ export function buildStudy(ctx: SketchContext): OrbitStudy {
   const primaryMass = massFromPeriod(middleRadius(guideInner, guideOuter), numeric(ctx, 'orbitPeriod', 60, 20, 180));
   const attractors: Attractor[] = [{
     id: 'mass-primary', kind: 'attractor', mass: primaryMass, position: primaryPosition, velocity: { x: 0, y: 0 },
-    softening, captureRadius, dynamic: true, hidden: true,
+    // Pinned by default: a mass far heavier than the perturber, so the pass bends the trails without carrying the
+    // centre away. An artistic departure from two-body motion, labelled in the brief; `massPinned` off restores it.
+    softening, captureRadius, dynamic: ctx.params.massPinned === false, hidden: true,
   }];
   const ratio = numeric(ctx, 'perturberRatio', 0.35, 0, 1.5);
   if (ctx.params.perturberEnabled !== false && ratio > 0) {

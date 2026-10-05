@@ -43,6 +43,7 @@ const sketch: Sketch = {
     slider('borrow', 'Borrowed velocity', 1, 0, 1, 0.01, 'Particles', sim),
     slider('speedJitter', 'Speed jitter', 0.03, 0, 0.3, 0.005, 'Particles', sim),
     { type: 'select', id: 'spin', label: 'Direction of revolution', default: 'cw', options: ['cw', 'ccw'], optionLabels: { cw: 'Clockwise', ccw: 'Counter-clockwise' }, group: 'Particles', ...sim },
+    { type: 'toggle', id: 'massPinned', label: 'Hidden mass pinned', default: true, group: 'Hidden mass', ...sim },
     { type: 'toggle', id: 'perturberEnabled', label: 'Unseen perturber', default: true, group: 'Perturber', ...sim },
     slider('perturberRatio', 'Perturber mass (× hidden mass)', 0.35, 0, 1.5, 0.05, 'Perturber', sim),
     slider('perturberAngle', 'Approach direction', 25, -180, 180, 1, 'Perturber', { units: 'deg', ...sim }),

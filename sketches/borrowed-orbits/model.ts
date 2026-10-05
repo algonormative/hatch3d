@@ -38,24 +38,33 @@ export const G = 6.6743e-11;
 
 export const MODEL = Object.freeze({
   id: 'softened-newtonian-restricted-nbody',
-  version: '1.0.0',
+  version: '1.1.0',
   backend: 'ts-cpu-kdk-leapfrog',
-  backendVersion: '1.0.0',
+  backendVersion: '1.1.0',
 });
 
 export const SNAPSHOT_SCHEMA = 'hatch3d.borrowed-orbits.snapshot.v1';
 
 /**
- * Hard bounds that keep a render bounded. `maxWork` caps
- * steps × (particles × attractors + attractors²) force evaluations for one
- * advance/simulate/history call.
+ * Hard bounds that keep a render bounded.
+ * - `maxWork` caps steps × (particles × attractors + attractors² + particles × forbiddenEdges)
+ *   (force evaluations plus swept-edge tests) for one advance/simulate/history call.
+ *   Arithmetic: the sketch's practical ceiling is 2700 particles, 2 attractors and about
+ *   160 capture edges (the default 8 members of about 20 edges) over
+ *   2400 steps: 2400 × (2700 × 2 + 4 + 2700 × 160) ≈ 1.05e9, which fits under 1.5e9. The
+ *   declared maxima (4000 particles, 16 attractors, 4096 edges, 2400 steps ≈ 3.9e10) do not.
+ * - `maxForbiddenEdges` caps the total edge count over all forbidden polygons.
+ * - `maxHistoryBytes` caps one history() window: steps × (particles + attractors) × 16 B
+ *   (x and y Float64 per body per step). The declared maxima give 2401 × 4016 × 16 ≈ 154 MB.
  */
 export const LIMITS = Object.freeze({
   maxSteps: 2400,
   maxParticles: 4000,
   maxAttractors: 16,
   maxForbidden: 64,
-  maxWork: 200_000_000,
+  maxForbiddenEdges: 4096,
+  maxWork: 1_500_000_000,
+  maxHistoryBytes: 268_435_456,
 });
 
 /**
@@ -63,7 +72,8 @@ export const LIMITS = Object.freeze({
  * - `open`: particles that leave the domain keep integrating and may return.
  *   Extraction clips trails to the frame. A particle farther than
  *   `settings.escapeMargin` metres outside the domain rectangle (Euclidean
- *   distance to the rectangle) becomes `escaped` and stops integrating.
+ *   distance to the rectangle) becomes `escaped` and stops integrating, at the point
+ *   where its drift segment crossed that threshold (unless a capture came first).
  * - `absorb`: the domain edge is a capture boundary. A particle whose drift
  *   segment of a step crosses the rectangle is `captured` at the crossing
  *   point (reason `edge`).
@@ -78,7 +88,12 @@ export interface Attractor {
   position: Vec2; // m, at step 0
   velocity: Vec2; // m/s, at step 0
   softening: number; // m, ε > 0
-  /** A particle whose drift segment comes within this distance of the attractor is captured (reason `attractor`). m, ≥ 0. */
+  /**
+   * A particle is captured (reason `attractor`) when, during a step, its distance to the attractor drops to this
+   * value. Both drift in straight lines within a step, so the test sweeps the RELATIVE segment (particle drift
+   * minus attractor displacement) against a disc fixed at the attractor's step-n position and takes the first
+   * entry; the capture point is the particle's absolute position at that moment. A moving attractor therefore
+   * cannot pass through a particle between steps. m, ≥ 0. */
   captureRadius: number;
   /** Responds to the other attractors; false = pinned in place (velocity must be 0). */
   dynamic: boolean;
@@ -89,7 +104,7 @@ export interface Attractor {
 /**
  * Static capture region. Polygon vertices in metres; may be thinner than one
  * step of particle travel. A particle whose drift segment crosses the polygon
- * boundary, or that starts inside it, is captured at the first crossing
+ * boundary, or that starts inside it or on it (boundaries are closed), is captured at the first crossing
  * (reason `forbidden`). Capture is a swept-segment test against every edge:
  * leapfrog drifts in a straight line, so the test is exact for the
  * integrator's own path and nothing tunnels.

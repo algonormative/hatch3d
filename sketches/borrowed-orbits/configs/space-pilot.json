@@ -1,0 +1,94 @@
+{
+  "base": {
+    "seed": 311,
+    "params": {
+      "posterMode": "abstract",
+      "posterFace": "wire",
+      "posterTitle": "PHASE GARDEN",
+      "posterKicker": "LIVE ELECTRONIC SYSTEMS",
+      "posterSubtitle": "BORROWED ORBITS",
+      "posterFooter": "CONCERT STUDY / O1",
+      "orbitsEnabled": true
+    },
+    "finishing": {
+      "border": {
+        "style": "double",
+        "pen": "carbon",
+        "inset": 12,
+        "contentGap": 0
+      }
+    }
+  },
+  "n": 48,
+  "seed": 17,
+  "ranges": {
+    "massDX": [
+      -9,
+      11
+    ],
+    "massDY": [
+      -9,
+      13
+    ],
+    "orbitPeriod": [
+      35,
+      110
+    ],
+    "borrow": [
+      0.3,
+      1
+    ],
+    "speedJitter": [
+      0,
+      0.12
+    ],
+    "perturberRatio": [
+      0.1,
+      1
+    ],
+    "perturberAngle": [
+      -180,
+      180
+    ],
+    "perturberImpact": [
+      -18,
+      18
+    ],
+    "perturberSpeed": [
+      1,
+      4.5
+    ],
+    "perturberStep": [
+      200,
+      900
+    ],
+    "trailSteps": [
+      150,
+      700
+    ],
+    "taper": [
+      0,
+      1
+    ],
+    "frameStart": [
+      200,
+      900
+    ],
+    "frameDelta": [
+      100,
+      400
+    ]
+  },
+  "categorical": {
+    "forbiddenLayout": [
+      "bars",
+      "arc",
+      "gate"
+    ]
+  },
+  "steps": [
+    300,
+    600,
+    900
+  ]
+}

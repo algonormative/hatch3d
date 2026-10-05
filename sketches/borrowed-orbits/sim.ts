@@ -19,11 +19,22 @@
  * does (accelerations are never stored).
  *
  * Choices where model.ts is silent or loose (all reported to the owner):
- * - Attractor capture is the ENTRY point of the capture disc along the drift
- *   segment (distance exactly captureRadius), not the segment's closest
- *   approach: an infall through the centre is captured at the radius, and a
- *   particle that merely starts inside the disc is captured where it stands.
- *   The disc sits at the attractor's midpoint position for the step.
+ * - Attractor capture is the ENTRY point of the capture disc, not the segment's closest
+ *   approach: an infall through the centre is captured at the radius. The test sweeps the
+ *   RELATIVE segment: the particle's drift minus the attractor's displacement over the
+ *   step (both straight; the attractor drifts at its half-kicked velocity) against a disc
+ *   fixed at the attractor's step-n position, earliest entry wins, and the capture point is
+ *   the particle's absolute position at that time. A moving attractor cannot tunnel
+ *   through a particle. A particle already inside the disc at the start of the step is
+ *   captured where it stands.
+ * - Boundaries are CLOSED: a particle on a forbidden polygon's boundary (any edge or corner) is
+ *   inside it and is captured at step 0; a segment that merely touches a polygon boundary
+ *   (including one running along an edge line into a corner) crosses it. The domain
+ *   rectangle is closed the other way round: on its edge is inside (free), and
+ *   in `absorb` mode a start on any of the four edges stays free until it drifts out.
+ * - `open` escape happens where the drift segment crosses the escape threshold (the
+ *   rectangle grown by escapeMargin, a rounded rectangle), not at the segment end, unless a
+ *   capture hit comes at or before that point along the segment (ties go to the capture).
  * - Step-0 state: a particle that starts inside a forbidden polygon, inside an
  *   attractor's capture disc, outside the rectangle in `absorb` mode, or farther
  *   than escapeMargin outside it in `open` mode is stopped at step 0 in place
@@ -34,8 +45,8 @@
  *   to rounding) only for equal softenings.
  * - `hidden` and nothing else of the attractor list is excluded from the
  *   simulation hash (hidden is diagnostics only and never alters the physics).
- * - The work bound counts every particle for every step, stopped or not
- *   (conservative: stopped particles cost no force evaluations).
+ * - The work bound steps × (P·A + A² + P·E) counts every particle for every step, stopped
+ *   or not (conservative: stopped particles cost no force evaluations or edge tests).
  * - `stateHash` follows the documented byte order exactly and does not include
  *   the step number, so two snapshots at different steps of a fully stopped
  *   system share a hash; compare `step` as well.
@@ -95,6 +106,10 @@ export function validateConfig(config: OrbitStudyConfig): void {
   if (particles.length > LIMITS.maxParticles) {
     throw new RangeError(`${particles.length} particles is above the limit of ${LIMITS.maxParticles}`);
   }
+  const totalEdges = forbidden.reduce((n, f) => n + (Array.isArray(f.polygon) ? f.polygon.length : 0), 0);
+  if (totalEdges > LIMITS.maxForbiddenEdges) {
+    throw new RangeError(`${totalEdges} forbidden edges is above the limit of ${LIMITS.maxForbiddenEdges}`);
+  }
   attractors.forEach((a, i) => {
     vec(`attractors[${i}].position`, a.position);
     vec(`attractors[${i}].velocity`, a.velocity);
@@ -125,14 +140,15 @@ function checkSteps(name: string, steps: number): void {
   }
 }
 
-/** Force evaluations for `steps` steps: steps × (particles × attractors + attractors²). */
+/** Work for `steps` steps: steps × (particles × attractors + attractors² + particles × forbidden edges). */
 function checkWork(config: OrbitStudyConfig, steps: number): void {
   if (steps > LIMITS.maxSteps) throw new RangeError(`${steps} steps is above the limit of ${LIMITS.maxSteps}`);
   const P = config.particles.length;
   const A = config.attractors.length;
-  const work = steps * (P * A + A * A);
+  const E = config.forbidden.reduce((n, f) => n + f.polygon.length, 0);
+  const work = steps * (P * A + A * A + P * E);
   if (work > LIMITS.maxWork) {
-    throw new RangeError(`${steps} steps of ${P} particles and ${A} attractors needs ${work} force evaluations, above the limit of ${LIMITS.maxWork}`);
+    throw new RangeError(`${steps} steps of ${P} particles, ${A} attractors and ${E} forbidden edges needs ${work} force evaluations and edge tests, above the limit of ${LIMITS.maxWork}`);
   }
 }
 
@@ -299,7 +315,7 @@ interface State {
   pay: Float64Array;
   aax: Float64Array;
   aay: Float64Array;
-  // Scratch: attractor positions at the start of the step.
+  // Scratch: attractor positions at the start of the step (the sweep's fixed disc centres).
   ox: Float64Array;
   oy: Float64Array;
 }
@@ -315,11 +331,23 @@ function blankState(nA: number, nP: number): State {
   };
 }
 
+/** Closed polygon: a point on any edge or corner counts as inside (even-odd rule elsewhere). */
 function pointInPolygon(poly: Vec2[], x: number, y: number): boolean {
+  const scale = Math.max(1, Math.abs(x), Math.abs(y));
   let inside = false;
   for (let k = 0, m = poly.length - 1; k < poly.length; m = k++) {
     const a = poly[k];
     const b = poly[m];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const cross = ex * (y - a.y) - ey * (x - a.x);
+    const len = Math.sqrt(ex * ex + ey * ey);
+    const tol = HIT_EPS * scale;
+    if (
+      Math.abs(cross) <= tol * len &&
+      x >= Math.min(a.x, b.x) - tol && x <= Math.max(a.x, b.x) + tol &&
+      y >= Math.min(a.y, b.y) - tol && y <= Math.max(a.y, b.y) + tol
+    ) return true;
     if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
   }
   return inside;
@@ -383,13 +411,81 @@ const HIT_EPS = 1e-12;
 // Result of sweep(): parameter along the segment, reason code, and capture point.
 const SWEEP = { t: Infinity, reason: 0, x: 0, y: 0 };
 
+/** Internal reason code for an open-mode escape found by sweep() (not a REASON_CODE). */
+const ESCAPE = -1;
+
+/** Largest t in [0,1] with the segment inside the box, or −1 if it never is. */
+function boxExit(x0: number, y0: number, rx: number, ry: number, bx0: number, by0: number, bx1: number, by1: number): number {
+  let lo = 0;
+  let hi = 1;
+  const pp = [-rx, rx, -ry, ry];
+  const qq = [x0 - bx0, bx1 - x0, y0 - by0, by1 - y0];
+  for (let k = 0; k < 4; k++) {
+    if (pp[k] === 0) {
+      if (qq[k] < 0) return -1;
+    } else {
+      const r = qq[k] / pp[k];
+      if (pp[k] < 0) {
+        if (r > hi) return -1;
+        if (r > lo) lo = r;
+      } else {
+        if (r < lo) return -1;
+        if (r < hi) hi = r;
+      }
+    }
+  }
+  return hi;
+}
+
+/** Largest t in [0,1] with the segment inside the disc, or −1 if it never is. */
+function discExit(x0: number, y0: number, rx: number, ry: number, cx: number, cy: number, R: number): number {
+  const ex = x0 - cx;
+  const ey = y0 - cy;
+  const A = rx * rx + ry * ry;
+  const C = ex * ex + ey * ey - R * R;
+  if (A === 0) return C <= 0 ? 1 : -1;
+  const B = ex * rx + ey * ry;
+  const disc = B * B - A * C;
+  if (disc < 0) return -1;
+  const root = Math.sqrt(disc);
+  const lo = (-B - root) / A;
+  const hi = (-B + root) / A;
+  if (hi < 0 || lo > 1) return -1;
+  return Math.min(1, hi);
+}
+
 /**
- * Earliest capture of the straight drift segment (x0,y0)→(x1,y1) while the
- * attractors sit at (mx, my) (their midpoint positions for the step). Ties
- * resolve forbidden, then attractor, then edge. Fills SWEEP.
+ * Where the segment leaves the escape region (the domain rectangle grown by escapeMargin, a rounded
+ * rectangle), or Infinity if its endpoint is still inside. The region is convex, so a segment that starts
+ * inside it stays inside up to one exit parameter: the largest exit over the region's six convex pieces
+ * (two boxes and four corner discs).
+ */
+function escapeParam(p: Prep, x0: number, y0: number, x1: number, y1: number): number {
+  const m = p.escapeMargin;
+  if (distanceOutside(p, x1, y1) <= m) return Infinity;
+  const rx = x1 - x0;
+  const ry = y1 - y0;
+  const exits = [
+    boxExit(x0, y0, rx, ry, p.xMin - m, p.yMin, p.xMax + m, p.yMax),
+    boxExit(x0, y0, rx, ry, p.xMin, p.yMin - m, p.xMax, p.yMax + m),
+    discExit(x0, y0, rx, ry, p.xMin, p.yMin, m),
+    discExit(x0, y0, rx, ry, p.xMax, p.yMin, m),
+    discExit(x0, y0, rx, ry, p.xMin, p.yMax, m),
+    discExit(x0, y0, rx, ry, p.xMax, p.yMax, m),
+  ];
+  return Math.min(1, Math.max(0, ...exits));
+}
+
+/**
+ * Earliest stopping event of the particle's straight drift segment (x0,y0)→(x1,y1) over one step. The
+ * attractors move in straight lines too, from (ox, oy) to (nx, ny); the capture disc is swept as the relative
+ * segment against a disc fixed at the start position. Ties resolve forbidden, then attractor, then edge, and
+ * an open-mode escape only wins if it happens strictly before every capture. Fills SWEEP (reason ESCAPE for
+ * an escape; the point is always the particle's absolute position).
  */
 function sweep(
-  p: Prep, mx: Float64Array, my: Float64Array, x0: number, y0: number, x1: number, y1: number,
+  p: Prep, ox: Float64Array, oy: Float64Array, nx: Float64Array, ny: Float64Array,
+  x0: number, y0: number, x1: number, y1: number,
 ): void {
   const rx = x1 - x0;
   const ry = y1 - y0;
@@ -404,7 +500,7 @@ function sweep(
     const sx = edges[e * 4 + 2];
     const sy = edges[e * 4 + 3];
     const denom = rx * sy - ry * sx;
-    if (denom === 0) continue; // parallel: a grazing pass does not cross
+    if (denom === 0) continue; // parallel: a segment along an edge line is caught at the adjacent edge's corner
     const qx = cx - x0;
     const qy = cy - y0;
     const t = (qx * sy - qy * sx) / denom;
@@ -416,18 +512,20 @@ function sweep(
   }
   if (best !== Infinity) best = Math.min(1, Math.max(0, best));
 
-  // Attractor capture discs: entry point of the segment.
-  const A = rx * rx + ry * ry;
+  // Attractor capture discs: first entry of the relative segment.
   for (let j = 0; j < p.nA; j++) {
     const R = p.captureR[j];
-    const ex = x0 - mx[j];
-    const ey = y0 - my[j];
+    const ex = x0 - ox[j];
+    const ey = y0 - oy[j];
+    const sx = rx - (nx[j] - ox[j]);
+    const sy = ry - (ny[j] - oy[j]);
+    const A = sx * sx + sy * sy;
     const C = ex * ex + ey * ey - R * R;
     let t: number;
     if (C <= 0) t = 0;
     else {
       if (A === 0) continue;
-      const B = ex * rx + ey * ry;
+      const B = ex * sx + ey * sy;
       const disc = B * B - A * C;
       if (disc < 0) continue;
       t = (-B - Math.sqrt(disc)) / A;
@@ -439,19 +537,35 @@ function sweep(
     }
   }
 
-  // Domain edge (absorb): where the segment leaves the rectangle.
+  // Domain edge (absorb): where the segment leaves the rectangle. The axis (or axes) that cross at the earliest
+  // t land exactly on the boundary coordinate.
+  let snapX = Number.NaN;
+  let snapY = Number.NaN;
   if (p.absorb) {
-    let t = Infinity;
-    if (x1 > p.xMax) t = Math.min(t, (p.xMax - x0) / rx);
-    else if (x1 < p.xMin) t = Math.min(t, (p.xMin - x0) / rx);
-    if (y1 > p.yMax) t = Math.min(t, (p.yMax - y0) / ry);
-    else if (y1 < p.yMin) t = Math.min(t, (p.yMin - y0) / ry);
+    let tx = Infinity;
+    let ty = Infinity;
+    let bx = 0;
+    let by = 0;
+    if (x1 > p.xMax) { tx = (p.xMax - x0) / rx; bx = p.xMax; }
+    else if (x1 < p.xMin) { tx = (p.xMin - x0) / rx; bx = p.xMin; }
+    if (y1 > p.yMax) { ty = (p.yMax - y0) / ry; by = p.yMax; }
+    else if (y1 < p.yMin) { ty = (p.yMin - y0) / ry; by = p.yMin; }
+    const t = Math.min(tx, ty);
     if (t !== Infinity) {
-      t = Math.min(1, Math.max(0, t));
-      if (t < best) {
-        best = t;
+      const tc = Math.min(1, Math.max(0, t));
+      if (tc < best) {
+        best = tc;
         reason = REASON_CODE.edge;
+        if (tx <= ty) snapX = bx;
+        if (ty <= tx) snapY = by;
       }
+    }
+  } else {
+    // Open: the escape threshold crossing, if strictly before every capture hit.
+    const t = escapeParam(p, x0, y0, x1, y1);
+    if (t < best) {
+      best = t;
+      reason = ESCAPE;
     }
   }
 
@@ -460,9 +574,9 @@ function sweep(
   if (reason === REASON_CODE.none) return;
   let cx = x0 + best * rx;
   let cy = y0 + best * ry;
-  if (reason === REASON_CODE.edge) { // land exactly on the rectangle boundary
-    cx = Math.min(p.xMax, Math.max(p.xMin, cx));
-    cy = Math.min(p.yMax, Math.max(p.yMin, cy));
+  if (reason === REASON_CODE.edge) { // the crossing axis lands exactly on the boundary (x0 + t·rx can be an ulp off)
+    if (!Number.isNaN(snapX)) cx = snapX;
+    if (!Number.isNaN(snapY)) cy = snapY;
   }
   SWEEP.x = cx;
   SWEEP.y = cy;
@@ -503,11 +617,6 @@ function stepOnce(p: Prep, st: State): void {
     st.ax[j] += st.avx[j] * dt;
     st.ay[j] += st.avy[j] * dt;
   }
-  // Attractor midpoint positions for this step (reuse ox/oy as the midpoints).
-  for (let j = 0; j < p.nA; j++) {
-    st.ox[j] = 0.5 * (st.ox[j] + st.ax[j]);
-    st.oy[j] = 0.5 * (st.oy[j] + st.ay[j]);
-  }
   for (let i = 0; i < p.nP; i++) {
     if (st.status[i] !== STATUS_CODE.free) continue;
     st.vx[i] += st.pax[i] * half;
@@ -516,17 +625,18 @@ function stepOnce(p: Prep, st: State): void {
     const y0 = st.py[i];
     const x1 = x0 + st.vx[i] * dt;
     const y1 = y0 + st.vy[i] * dt;
-    sweep(p, st.ox, st.oy, x0, y0, x1, y1);
-    if (SWEEP.reason !== REASON_CODE.none) {
+    sweep(p, st.ox, st.oy, st.ax, st.ay, x0, y0, x1, y1);
+    if (SWEEP.reason === ESCAPE) {
+      st.px[i] = SWEEP.x;
+      st.py[i] = SWEEP.y;
+      stop(st, i, STATUS_CODE.escaped, REASON_CODE.none, n + 1);
+    } else if (SWEEP.reason !== REASON_CODE.none) {
       st.px[i] = SWEEP.x;
       st.py[i] = SWEEP.y;
       stop(st, i, STATUS_CODE.captured, SWEEP.reason, n + 1);
     } else {
       st.px[i] = x1;
       st.py[i] = y1;
-      if (!p.absorb && distanceOutside(p, x1, y1) > p.escapeMargin) {
-        stop(st, i, STATUS_CODE.escaped, REASON_CODE.none, n + 1);
-      }
     }
   }
   st.step = n + 1;
@@ -748,6 +858,10 @@ export function history(config: OrbitStudyConfig, fromStep: number, toStep: numb
   if (fromStep > toStep) throw new RangeError('fromStep must not exceed toStep');
   const p = prepare(config);
   checkWork(config, toStep);
+  const bytes = (toStep - fromStep + 1) * (p.nP + p.nA) * 16; // x and y Float64 per body per recorded step
+  if (bytes > LIMITS.maxHistoryBytes) {
+    throw new RangeError(`a history window of ${toStep - fromStep + 1} steps needs ${bytes} bytes, above the limit of ${LIMITS.maxHistoryBytes}; narrow the window`);
+  }
   const st = initialState(p);
   const xs: Float64Array[] = [];
   const ys: Float64Array[] = [];

@@ -415,7 +415,8 @@ describe('edge modes', () => {
     expect(f.status[0]).toBe(STATUS_CODE.escaped);
     expect(f.reason[0]).toBe(REASON_CODE.none);
     const k = f.stoppedAt[0];
-    expect(f.px[0] - 100).toBeGreaterThan(margin); // stopped beyond the margin
+    // Escape happens where the drift crossed the threshold: on the margin line, not at the segment end.
+    expect(Math.abs(f.px[0] - 100 - margin)).toBeLessThan(1e-9);
     expect(h.xs[k - 1][0] - 100).toBeLessThanOrEqual(margin); // and not before it
     expect(f.px[0]).toBe(h.xs[k][0]);
     expect(f.vx[0]).toBe(0);
@@ -587,6 +588,52 @@ describe('hash scoping', () => {
   });
 });
 
+describe('every config field reaches the right hash', () => {
+  const base = (): OrbitStudyConfig => makeConfig({
+    attractors: [
+      att('mass-0', 50, 50, M_BIG, { softening: 0.5, captureRadius: 0.2 }),
+      att('mass-1', 30, 50, 1e11, { softening: 0.3, dynamic: true, velocity: { x: 0, y: 1 } }),
+    ],
+    forbidden: [rect('forbidden-0', 10, 10, 20, 20)],
+    particles: [part(30, 30, 1, 0)],
+  });
+  type Which = 'geometry' | 'transform' | 'simulation';
+  const cases: [string, Which, (c: OrbitStudyConfig) => void][] = [
+    ['domain.origin.x', 'geometry', (c) => { c.domain.origin.x = 1; }],
+    ['domain.size.y', 'geometry', (c) => { c.domain.size.y = 120; }],
+    ['forbidden polygon vertex', 'geometry', (c) => { c.forbidden[0].polygon[1].y = 11; }],
+    ['forbidden id', 'geometry', (c) => { c.forbidden[0].id = 'forbidden-9'; }],
+    ['worldToPage.scale', 'transform', (c) => { c.transforms.worldToPage.scale = 4; }],
+    ['worldToPage.offset.y', 'transform', (c) => { c.transforms.worldToPage.offset.y = 21; }],
+    ['settings.dt', 'simulation', (c) => { c.settings.dt = 0.05; }],
+    ['settings.boundary', 'simulation', (c) => { c.settings.boundary = 'absorb'; }],
+    ['settings.escapeMargin', 'simulation', (c) => { c.settings.escapeMargin = 7; }],
+    ['particleMass', 'simulation', (c) => { c.particleMass = 2; }],
+    ['particles[0].position', 'simulation', (c) => { c.particles[0].position.y = 31; }],
+    ['particles[0].velocity', 'simulation', (c) => { c.particles[0].velocity.x = 1.5; }],
+    ['particle added', 'simulation', (c) => { c.particles.push(part(1, 1, 0, 0)); }],
+    ['attractor id', 'simulation', (c) => { c.attractors[0].id = 'mass-9'; }],
+    ['attractor mass', 'simulation', (c) => { c.attractors[0].mass *= 2; }],
+    ['attractor position', 'simulation', (c) => { c.attractors[0].position.x = 51; }],
+    ['attractor velocity (dynamic)', 'simulation', (c) => { c.attractors[1].velocity.y = 2; }],
+    ['attractor softening', 'simulation', (c) => { c.attractors[0].softening = 0.6; }],
+    ['attractor captureRadius', 'simulation', (c) => { c.attractors[0].captureRadius = 0.3; }],
+    ['attractor dynamic flag', 'simulation', (c) => { c.attractors[0].dynamic = true; }],
+    ['attractor removed', 'simulation', (c) => { c.attractors.pop(); }],
+  ];
+  it.each(cases)('%s changes only the %s hash (and stateKey)', (_name, which, mutate) => {
+    const a = configHashes(base());
+    const c = base();
+    mutate(c);
+    const b = configHashes(c);
+    for (const key of ['geometry', 'transform', 'simulation'] as const) {
+      if (key === which) expect(b[key]).not.toBe(a[key]);
+      else expect(b[key]).toBe(a[key]);
+    }
+    expect(b.stateKey).not.toBe(a.stateKey);
+  });
+});
+
 describe('limits and validation', () => {
   const ok = (): OrbitStudyConfig => makeConfig({ attractors: [att('mass-0', 50, 50, M_BIG)], particles: [part(60, 50, 0, 1)] });
   const mutate = (fn: (c: OrbitStudyConfig) => void): OrbitStudyConfig => {
@@ -612,27 +659,59 @@ describe('limits and validation', () => {
     expect(() => simulate(ok(), [LIMITS.maxSteps])).not.toThrow();
   });
 
-  it('rejects a call whose steps × (particles × attractors + attractors²) exceeds maxWork', async () => {
-    // At the real LIMITS the product tops out at 2400 × (4000 × 16 + 16²) = 1.54e8 < 2e8, so the work bound is a
-    // backstop; exercise it by loading the sim against a model with a tighter maxWork.
-    expect(LIMITS.maxSteps * (LIMITS.maxParticles * LIMITS.maxAttractors + LIMITS.maxAttractors ** 2)).toBeLessThanOrEqual(LIMITS.maxWork);
+  it('rejects work above maxWork at the declared maxima, with no mocking', () => {
+    // 1000 particles × 4096 edges × 2400 steps ≈ 9.8e9 edge tests > maxWork (1.5e9).
+    const edgeHeavy = makeConfig({
+      forbidden: range(0, 63).map((k) => ({
+        id: `forbidden-${k}`, kind: 'forbidden' as const,
+        polygon: range(0, 63).map((v) => ({ x: 10 + 0.01 * v, y: 10 + 0.01 * k + 0.0001 * v })),
+      })),
+      particles: range(0, 999).map(() => part(50, 50, 0, 0)),
+    });
+    expect(() => validateConfig(edgeHeavy)).not.toThrow(); // exactly 64 × 64 = 4096 edges is allowed
+    expect(() => simulate(edgeHeavy, [LIMITS.maxSteps])).toThrow(/force evaluations and edge tests/);
+    expect(() => history(edgeHeavy, LIMITS.maxSteps, LIMITS.maxSteps)).toThrow(RangeError);
+    // The declared maxima as a whole (4000 particles, 16 attractors, 4096 edges).
+    const maxima = { ...edgeHeavy, attractors: range(0, LIMITS.maxAttractors - 1).map((k) => att(`mass-${k}`, 1, 1, 1)), particles: range(0, LIMITS.maxParticles - 1).map(() => part(50, 50, 0, 0)) };
+    expect(() => validateConfig(maxima)).not.toThrow();
+    expect(() => simulate(maxima, [LIMITS.maxSteps])).toThrow(/force evaluations and edge tests/);
+    // Edges are part of the formula: particles and attractors alone at their maxima are within the bound.
+    expect(LIMITS.maxSteps * (LIMITS.maxParticles * LIMITS.maxAttractors + LIMITS.maxAttractors ** 2)).toBeLessThan(LIMITS.maxWork);
+    expect(LIMITS.maxSteps * (1000 * 4096)).toBeGreaterThan(LIMITS.maxWork);
+    // Realistic sketch ceiling: 2700 particles, 2 attractors, ~160 edges, 2400 steps stays under the bound.
+    expect(LIMITS.maxSteps * (2700 * 2 + 4 + 2700 * 160)).toBeLessThan(LIMITS.maxWork);
+  });
+
+  it('caps the total number of forbidden edges', () => {
+    const quads = (n: number): OrbitStudyConfig => makeConfig({
+      forbidden: range(1, n).map((k) => ({
+        id: `forbidden-${k}`, kind: 'forbidden' as const,
+        polygon: range(0, 63).map((v) => ({ x: v, y: k + 0.001 * v })),
+      })),
+    });
+    expect(() => validateConfig(quads(64))).not.toThrow();
+    // One more vertex than the cap, inside the 64-region limit.
+    const over = quads(64);
+    over.forbidden[0].polygon.push({ x: 0, y: 99 });
+    expect(() => validateConfig(over)).toThrow(/forbidden edges/);
+  });
+
+  it('caps the history window memory (loaded against a smaller model limit)', async () => {
+    // At the declared maxima a window is 2401 × 4016 × 16 B ≈ 154 MB, below maxHistoryBytes (256 MB), so the cap
+    // is a backstop: check the arithmetic here and exercise the throw against a tightened model.
+    expect((LIMITS.maxSteps + 1) * (LIMITS.maxParticles + LIMITS.maxAttractors) * 16).toBeLessThan(LIMITS.maxHistoryBytes);
     vi.resetModules();
     vi.doMock('../../sketches/borrowed-orbits/model.ts', async (importOriginal) => {
       const real = await importOriginal<typeof import('../../sketches/borrowed-orbits/model.ts')>();
-      return { ...real, LIMITS: Object.freeze({ ...real.LIMITS, maxWork: 1000 }) };
+      return { ...real, LIMITS: Object.freeze({ ...real.LIMITS, maxHistoryBytes: 1000 }) };
     });
     try {
       const tight = await import('../../sketches/borrowed-orbits/sim.ts');
-      const config = makeConfig({
-        attractors: [att('mass-0', 50, 50, M_BIG), att('mass-1', 30, 50, M_BIG)],
-        particles: range(0, 9).map(() => part(60, 50, 0, 1)),
-      });
-      // 2 attractors, 10 particles: 24 evaluations per step, so 41 steps = 984 <= 1000 and 42 steps = 1008 > 1000.
-      expect(() => tight.simulate(config, [42])).toThrow(RangeError);
-      expect(() => tight.history(config, 0, 42)).toThrow(RangeError);
-      expect(() => tight.simulate(config, [42])).toThrow(/force evaluations/);
-      expect(() => tight.simulate(config, [42])).not.toThrow(SnapshotMismatchError);
-      expect(tight.simulate(config, [41]).length).toBe(1);
+      const config = makeConfig({ attractors: [att('mass-0', 50, 50, M_BIG)], particles: range(0, 9).map(() => part(60, 50, 0, 1)) });
+      // 11 bodies × 16 B = 176 B per step: 5 steps (6 records) = 1056 B > 1000, 4 steps (5 records) = 880 B.
+      expect(() => tight.history(config, 0, 5)).toThrow(/bytes/);
+      expect(tight.history(config, 0, 4).xs.length).toBe(5);
+      expect(() => tight.history(config, 1, 6)).toThrow(RangeError);
     } finally {
       vi.doUnmock('../../sketches/borrowed-orbits/model.ts');
       vi.resetModules();
@@ -672,6 +751,207 @@ describe('limits and validation', () => {
     expect(() => simulate(ok(), [1.5])).toThrow(RangeError);
     expect(() => history(ok(), 5, 4)).toThrow(RangeError);
     expect(() => advance(ok(), initialSnapshot(ok()), -1)).toThrow(RangeError);
+  });
+});
+
+describe('moving attractors are swept, not sampled', () => {
+  // The perturber has negligible mass (1e-20 kg), so particles feel nothing and it flies straight at its set speed.
+  const mover = (x: number, y: number, vx: number, R: number): Attractor => att('mass-0', x, y, 1e-20, {
+    dynamic: true, velocity: { x: vx, y: 0 }, captureRadius: R,
+  });
+
+  it('captures a stationary particle that an attractor sweeps across within one step', () => {
+    // dt = 1: the attractor goes (40,50) → (60,50), R = 1, the particle sits at (45,50). A disc fixed at the
+    // midpoint (50,50) misses it by 5 m; the relative segment enters the disc at t = 0.2.
+    const config = makeConfig({ dt: 1, attractors: [mover(40, 50, 20, 1)], particles: [part(45, 50, 0, 0), part(45, 51.5, 0, 0)] });
+    const s = simulate(config, [1])[0];
+    expect(s.attractors[0].position.x).toBe(60);
+    expect(s.status).toEqual([STATUS_CODE.captured, STATUS_CODE.free]); // the second passes 1.5 m away
+    expect(s.reason[0]).toBe(REASON_CODE.attractor);
+    expect(s.stoppedAt[0]).toBe(1);
+    expect([s.px[0], s.py[0]]).toEqual([45, 50]);
+  });
+
+  it('captures a particle crossed by a fast perturber (speed 8, captureRadius 0.3, 0.8 m per step)', () => {
+    // Step midpoints sit at 40.4 + 0.8k, which are 0.4 m from a particle at 49.6, so midpoint discs of radius 0.3
+    // never touch it. The swept disc enters at x = 49.3 during step 11 (t = 0.625).
+    const config = makeConfig({
+      dt: 0.1, attractors: [mover(40, 50, 8, 0.3)], particles: [part(49.6, 50, 0, 0), part(49.6, 50.5, 0, 0)],
+    });
+    const h = history(config, 0, 40);
+    const f = h.final;
+    expect(f.status).toEqual([STATUS_CODE.captured, STATUS_CODE.free]);
+    expect(f.stoppedAt[0]).toBe(12);
+    expect([f.px[0], f.py[0]]).toEqual([49.6, 50]);
+    expect(h.ax[12][0]).toBeCloseTo(49.6, 9);
+  });
+});
+
+describe('closed boundaries', () => {
+  const poly = rect('forbidden-0', 60, 40, 62, 60);
+
+  it('captures a particle on any edge or corner of a forbidden polygon at step 0', () => {
+    const onBoundary: [string, number, number][] = [
+      ['left edge', 60, 50], ['right edge', 62, 50], ['top edge', 61, 40], ['bottom edge', 61, 60],
+      ['corner', 60, 40], ['far corner', 62, 60],
+    ];
+    const config = makeConfig({
+      forbidden: [poly],
+      particles: [...onBoundary.map(([, x, y]) => part(x, y, 0, 0)), part(61, 50, 0, 0), part(59.9999, 50, 0, 0), part(61, 60.0001, 0, 0)],
+    });
+    const s = initialSnapshot(config);
+    onBoundary.forEach(([name], i) => {
+      expect(s.status[i], name).toBe(STATUS_CODE.captured);
+      expect(s.reason[i], name).toBe(REASON_CODE.forbidden);
+      expect(s.stoppedAt[i], name).toBe(0);
+    });
+    expect(s.status[6]).toBe(STATUS_CODE.captured); // interior
+    expect(s.status[7]).toBe(STATUS_CODE.free); // 0.1 mm outside
+    expect(s.status[8]).toBe(STATUS_CODE.free);
+    // A slanted edge: the hypotenuse of a triangle is on the boundary too.
+    const tri: ForbiddenRegion = { id: 'forbidden-1', kind: 'forbidden', polygon: [{ x: 20, y: 20 }, { x: 30, y: 20 }, { x: 20, y: 30 }] };
+    const t = initialSnapshot(makeConfig({ forbidden: [tri], particles: [part(25, 25, 0, 0), part(25.001, 25.001, 0, 0)] }));
+    expect(t.status).toEqual([STATUS_CODE.captured, STATUS_CODE.free]);
+  });
+
+  it('treats a segment running along an edge line into a corner as a crossing', () => {
+    const config = makeConfig({
+      dt: 0.2, forbidden: [poly],
+      particles: [part(50, 60, 7, 0), part(61, 70, 0, -7), part(50, 40, 7, 0), part(72, 40, -7, 0)],
+    });
+    const f = simulate(config, [100])[0];
+    expect(f.status).toEqual([1, 1, 1, 1]);
+    expect(Math.hypot(f.px[0] - 60, f.py[0] - 60)).toBeLessThan(1e-9); // along y = 60 into the corner (60, 60)
+    expect(Math.abs(f.px[1] - 61)).toBeLessThan(1e-9); // straight down onto the bottom edge
+    expect(Math.abs(f.py[1] - 60)).toBeLessThan(1e-9);
+    expect(Math.hypot(f.px[2] - 60, f.py[2] - 40)).toBeLessThan(1e-9); // along y = 40 into (60, 40)
+    expect(Math.hypot(f.px[3] - 62, f.py[3] - 40)).toBeLessThan(1e-9); // and from the other side into (62, 40)
+  });
+
+  it('treats the domain rectangle consistently on all four edges (on the edge is inside)', () => {
+    const edges: [number, number, number, number][] = [ // x, y, outward vx, outward vy
+      [0, 50, -1, 0], [100, 50, 1, 0], [50, 0, 0, -1], [50, 100, 0, 1],
+    ];
+    for (const [x, y, ox, oy] of edges) {
+      const config = makeConfig({ dt: 0.1, boundary: 'absorb', particles: [part(x, y, 0, 0), part(x, y, -ox, -oy), part(x, y, ox, oy)] });
+      expect(initialSnapshot(config).status).toEqual([0, 0, 0]); // a start on any edge is free
+      const s = simulate(config, [1])[0];
+      expect(s.status).toEqual([STATUS_CODE.free, STATUS_CODE.free, STATUS_CODE.captured]);
+      expect(s.reason[2]).toBe(REASON_CODE.edge);
+      expect([s.px[2], s.py[2]]).toEqual([x, y]);
+      expect(s.stoppedAt[2]).toBe(1);
+    }
+    // Corners too, and a segment running along an edge stays free.
+    const corner = makeConfig({ dt: 0.1, boundary: 'absorb', particles: [part(0, 0, 1, 0), part(100, 100, -1, 0), part(10, 0, 5, 0)] });
+    expect(simulate(corner, [5])[0].status).toEqual([0, 0, 0]);
+  });
+
+  it('absorb lands on the boundary exactly for any approach angle', () => {
+    const rnd = lcg(5);
+    const particles = range(0, 299).map(() => {
+      const a = rnd() * 2 * Math.PI;
+      return part(30 + rnd() * 40, 30 + rnd() * 40, 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    const s = simulate(makeConfig({ dt: 0.37, boundary: 'absorb', particles }), [20])[0];
+    expect(s.status.every((c) => c === STATUS_CODE.captured)).toBe(true);
+    s.px.forEach((x, i) => {
+      const y = s.py[i];
+      expect(x >= 0 && x <= 100 && y >= 0 && y <= 100).toBe(true);
+      expect(x === 0 || x === 100 || y === 0 || y === 100).toBe(true); // exactly on an edge, not an ulp off
+    });
+  });
+});
+
+describe('escape threshold in open mode', () => {
+  const dist = (x: number, y: number): number => Math.hypot(Math.max(-x, 0, x - 100), Math.max(-y, 0, y - 100));
+
+  it('escapes at the threshold crossing, on the rounded rectangle, including past a corner', () => {
+    const rnd = lcg(11);
+    const margin = 3;
+    const particles = range(0, 119).map(() => {
+      const a = rnd() * 2 * Math.PI;
+      return part(2 + rnd() * 96, 2 + rnd() * 96, 60 * Math.cos(a), 60 * Math.sin(a)); // up to 30 m per step
+    });
+    const config = makeConfig({ dt: 0.5, escapeMargin: margin, particles: [...particles, part(90, 50, 100, 0), part(95, 95, 60, 60)] });
+    const f = simulate(config, [10])[0];
+    expect(f.status.every((c) => c === STATUS_CODE.escaped)).toBe(true);
+    f.px.forEach((x, i) => expect(Math.abs(dist(x, f.py[i]) - margin), `particle ${i}`).toBeLessThan(1e-9));
+    const n = particles.length;
+    expect(Math.abs(f.px[n] - 103)).toBeLessThan(1e-9); // (90,50) → x = 100 + margin on a straight line
+    expect(f.py[n]).toBe(50);
+    expect(f.stoppedAt[n]).toBe(1);
+    expect(f.stoppedAt.every((k) => k >= 1)).toBe(true);
+  });
+
+  it('lets a capture before the threshold win, and an escape before the capture win', () => {
+    const wallIn = rect('forbidden-0', 102, 45, 104, 55); // inside the 5 m band
+    const wallOut = rect('forbidden-1', 106, 45, 108, 55); // beyond it
+    const run = (walls: ForbiddenRegion[]): OrbitSnapshot => simulate(makeConfig({
+      dt: 0.2, escapeMargin: 5, forbidden: walls, particles: [part(90, 50, 100, 0)],
+    }), [3])[0];
+    const hit = run([wallIn]);
+    expect(hit.status[0]).toBe(STATUS_CODE.captured);
+    expect(hit.reason[0]).toBe(REASON_CODE.forbidden);
+    expect(Math.abs(hit.px[0] - 102)).toBeLessThan(1e-9);
+    const out = run([wallOut]);
+    expect(out.status[0]).toBe(STATUS_CODE.escaped);
+    expect(Math.abs(out.px[0] - 105)).toBeLessThan(1e-9);
+    // Same instant: the wall face sits exactly on the threshold (x = 105): the capture wins the tie.
+    const tie = run([rect('forbidden-2', 105, 45, 110, 55)]);
+    expect(tie.status[0]).toBe(STATUS_CODE.captured);
+    expect(tie.px[0]).toBeCloseTo(105, 9);
+  });
+});
+
+describe('tie order and step-0 discs', () => {
+  it('breaks forbidden/edge and attractor/edge ties toward the first', () => {
+    // The particle reaches x = 100 (the domain edge) at t = 0.5 of the step, exactly where a wall face and a
+    // capture disc both begin. Exact binary fractions keep the three parameters equal.
+    const base = { dt: 1, boundary: 'absorb' as const, particles: [part(90, 50, 20, 0)] };
+    const wall = simulate(makeConfig({ ...base, forbidden: [rect('forbidden-0', 100, 40, 110, 60)] }), [1])[0];
+    expect(wall.reason[0]).toBe(REASON_CODE.forbidden);
+    const disc = simulate(makeConfig({ ...base, attractors: [att('mass-0', 101, 50, 1e-20, { captureRadius: 1 })] }), [1])[0];
+    expect(disc.reason[0]).toBe(REASON_CODE.attractor);
+    expect(disc.px[0]).toBe(100);
+    const edge = simulate(makeConfig(base), [1])[0];
+    expect(edge.reason[0]).toBe(REASON_CODE.edge);
+  });
+
+  it('captures a particle that starts inside an attractor disc at step 0, not step 1', () => {
+    const config = makeConfig({
+      attractors: [att('mass-0', 50, 50, M_BIG, { captureRadius: 2 })], particles: [part(51, 50, 0.5, 0.5), part(53, 50, 0, 0)],
+    });
+    const s = initialSnapshot(config);
+    expect(s.status).toEqual([STATUS_CODE.captured, STATUS_CODE.free]);
+    expect(s.reason[0]).toBe(REASON_CODE.attractor);
+    expect(s.stoppedAt[0]).toBe(0);
+    expect([s.px[0], s.py[0], s.vx[0], s.vy[0]]).toEqual([51, 50, 0, 0]);
+  });
+});
+
+describe('softening belongs to the source attractor', () => {
+  it('uses the other attractor\'s ε for each dynamic attractor (exact one-step accelerations)', () => {
+    const m0 = 1e12;
+    const m1 = 2e12;
+    const e0 = 1;
+    const e1 = 5;
+    const d = 4;
+    const dt = 0.01;
+    const config = makeConfig({
+      dt, attractors: [
+        att('mass-0', 40, 50, m0, { softening: e0, dynamic: true }),
+        att('mass-1', 40 + d, 50, m1, { softening: e1, dynamic: true }),
+      ],
+    });
+    const s = simulate(config, [1])[0];
+    // From rest, one step moves each attractor by ½·a·dt² (first half kick, then drift).
+    const a0 = (G * m1 * d) / (d * d + e1 * e1) ** 1.5; // on mass-0, from mass-1: ε of mass-1
+    const a1 = (G * m0 * d) / (d * d + e0 * e0) ** 1.5; // on mass-1, from mass-0: ε of mass-0
+    expect(Math.abs((s.attractors[0].position.x - 40) / (0.5 * a0 * dt * dt) - 1)).toBeLessThan(1e-9);
+    expect(Math.abs((44 - s.attractors[1].position.x) / (0.5 * a1 * dt * dt) - 1)).toBeLessThan(1e-9);
+    // And the swapped (wrong) assignment is far from both.
+    const w0 = (G * m1 * d) / (d * d + e0 * e0) ** 1.5;
+    expect(Math.abs(w0 / a0 - 1)).toBeGreaterThan(0.5);
   });
 });
 
