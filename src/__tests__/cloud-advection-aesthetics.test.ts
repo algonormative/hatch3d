@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildCandidates, repairFrames, snapToControl, stepCap } from '../../sketches/cloud-advection/explore.ts';
+import { LIMITS_EXPLORE, buildCandidates, parseIntFlag, pendingCandidates, repairFrames, requestKey, snapToControl, stepCap, validateSpace, type ResultRecord, type Space } from '../../sketches/cloud-advection/explore.ts';
 import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import {
-  BANDS, LIMITS, MEASURE, PROFILES, interiorInk, sunGeometry, balance, bandDesirability, connectedComponents, componentStats, coreHalo, frameContact, frameGeometry, frameMetrics, jaccardDistance,
+  BANDS, CLOUD_PART_PREFIXES, LIMITS, MEASURE, cloudInkM, isCloudPart, PROFILES, interiorInk, sunGeometry, balance, bandDesirability, connectedComponents, componentStats, coreHalo, frameContact, frameGeometry, frameMetrics, jaccardDistance,
   latinHypercube, occupancy, resamplePaths, ropeAndSpacing, score, type FrameGeometry, type FramePart, type FrameMetrics, type Pt,
 } from '../../sketches/cloud-advection/aesthetics.ts';
 
@@ -275,5 +275,61 @@ describe('cloud-advection aesthetics', () => {
     expect(c.map(x => x.id)).toEqual(['w0', 'w1', 'w2', 'w3']);
     expect(c.map(x => x.params.weatherSeed)).toEqual([0, 1, 2, 10]);
     expect(c.every(x => x.params.windX === 0.4 && x.steps.join() === '116,149,182')).toBe(true);
+  });
+
+  it('streak parts count as cloud ink, diagnostics never do, and the predicate is configurable', () => {
+    const streaks: FramePart[] = [{ id: 'streak-coral', pen: 'coral', paths: [line(20, 100, 120, 100)] }];
+    expect(CLOUD_PART_PREFIXES).toEqual(['cloud-', 'streak-']);
+    expect(cloudInkM(streaks)).toBeCloseTo(0.1, 9);
+    expect(frameMetrics({ parts: streaks, geometry, cloudHatchPitch: 2 }, 0).fill).toBeGreaterThan(0);
+    expect(occupancy(streaks, content).size).toBeGreaterThan(0);
+    expect(cloudInkM([{ id: 'streak-coral', pen: 'coral', paths: [line(0, 0, 50, 0)], diagnostic: true }])).toBe(0);
+    expect(cloudInkM([{ id: 'structure-a01', pen: 'carbon', paths: [line(0, 0, 50, 0)] }])).toBe(0);
+    expect(isCloudPart(streaks[0], ['cloud-'])).toBe(false);
+    expect(isCloudPart(streaks[0])).toBe(true);
+  });
+
+  const baseSpace = (): Space => ({ base: { seed: 211, params: { windX: 0.4 }, finishing: { border: { style: 'double', pen: 'carbon', inset: 12 } } }, n: 4, seed: 1, ranges: { windX: [-1, 1] }, steps: [0, 30, 60] });
+
+  it('explore reuses a prior result only when the whole effective request and source match', () => {
+    const space = baseSpace();
+    const cand = buildCandidates(space)[1];
+    const key = requestKey(space, cand, 'src-a');
+    expect(requestKey(space, cand, 'src-a')).toBe(key);
+    expect(requestKey({ ...space, base: { ...space.base, seed: 212 } }, cand, 'src-a')).not.toBe(key);
+    expect(requestKey({ ...space, base: { ...space.base, finishing: { border: { style: 'simple', pen: 'carbon' } } } }, cand, 'src-a')).not.toBe(key);
+    expect(requestKey({ ...space, profile: 'precise' }, cand, 'src-a')).not.toBe(key);
+    expect(requestKey(space, { ...cand, steps: [1, 31, 61] }, 'src-a')).not.toBe(key);
+    expect(requestKey(space, { ...cand, params: { ...cand.params, windX: 0.5 } }, 'src-a')).not.toBe(key);
+    expect(requestKey(space, cand, 'src-b')).not.toBe(key);
+    const record = { id: cand.id, params: cand.params, varied: cand.varied, steps: cand.steps, requestKey: key } as ResultRecord;
+    const existing = new Map([[cand.id, record]]);
+    const all = buildCandidates(space);
+    const keys = (s: Space, src: string) => new Map(all.map(c => [c.id, requestKey(s, c, src)]));
+    expect(pendingCandidates(all, existing, keys(space, 'src-a')).map(c => c.id)).not.toContain(cand.id);
+    // Only the seed changed: the stale result must be re-run.
+    expect(pendingCandidates(all, existing, keys({ ...space, base: { ...space.base, seed: 999 } }, 'src-a')).map(c => c.id)).toContain(cand.id);
+    // A record without a key (older run) or with an error is never reused.
+    expect(pendingCandidates(all, new Map([[cand.id, { ...record, requestKey: undefined }]]), keys(space, 'src-a')).map(c => c.id)).toContain(cand.id);
+    expect(pendingCandidates(all, new Map([[cand.id, { ...record, error: 'boom' }]]), keys(space, 'src-a')).map(c => c.id)).toContain(cand.id);
+  });
+
+  it('explore validates n, jobs, sweeps and ranges with clear errors', () => {
+    expect(() => buildCandidates({ ...baseSpace(), n: LIMITS_EXPLORE.maxN + 1 })).toThrow(/space\.n must be an integer from 0 to 512/);
+    expect(() => buildCandidates({ ...baseSpace(), n: -1 })).toThrow(/space\.n/);
+    expect(() => buildCandidates({ ...baseSpace(), n: 2.5 })).toThrow(/space\.n/);
+    expect(() => buildCandidates({ ...baseSpace(), n: Number.NaN })).toThrow(/space\.n/);
+    expect(() => buildCandidates({ ...baseSpace(), ranges: { windX: [1, -1] } })).toThrow(/ranges\.windX/);
+    expect(() => buildCandidates({ ...baseSpace(), steps: [0, 30] })).toThrow(/three frame steps/);
+    expect(() => buildCandidates({ ...baseSpace(), steps: [0, 30, stepCap() + 1] })).toThrow(/steps\[2\]/);
+    expect(() => validateSpace({ ...baseSpace(), profile: 'bogus' as never })).toThrow(/profile/);
+    expect(() => validateSpace({ ...baseSpace(), sweep: { param: 'weatherSeed', values: Array.from({ length: 513 }, (_, i) => i) } })).toThrow(/1 to 512/);
+    expect(() => validateSpace({ ...baseSpace(), sweep: { param: 'weatherSeed', values: [] } })).toThrow(/1 to 512/);
+    expect(() => validateSpace({ ...baseSpace(), sweep: { param: 'weatherSeed', values: [1, Number.NaN] } })).toThrow(/values\[1\]/);
+    expect(() => validateSpace({ ...baseSpace(), sweep: { param: 'weatherSeed', values: [0, 1] } })).not.toThrow();
+    expect(parseIntFlag('--jobs', undefined, 4, 1, 16)).toBe(4);
+    expect(parseIntFlag('--jobs', '8', 4, 1, 16)).toBe(8);
+    for (const bad of ['NaN', '0', '17', '3.5', '', 'abc', '-2']) expect(() => parseIntFlag('--jobs', bad, 4, 1, 16)).toThrow(/--jobs must be an integer from 1 to 16/);
+    expect(() => parseIntFlag('--n', '9999', 24, 0, 512)).toThrow(/--n/);
   });
 });

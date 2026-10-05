@@ -429,12 +429,19 @@ function diffusionSubsteps(settings: { dt: number; diffusivity: number }, h: num
 }
 
 /** Total gather/diffusion work for `steps` steps, rejected before any is done. */
+/** Most vortices that can be active at once: static plus the train cap. */
+const vortexBound = (config: CloudStudyConfig): number => config.vortices.length + (config.eddyTrain ? config.eddyTrain.maxActive : 0);
+
 function checkWork(domain: CloudDomain, steps: number): void {
   const substeps = diffusionSubsteps(domain.config.settings, domain.spacing);
   // A drifting-eddy step rebuilds the backtrace stencil: about five gathers' worth of work per cell (measured,
   // and it runs alongside the diffusion substeps), so it counts as at least five updates per cell-step.
-  const perCellStep = Math.max(1, substeps, isMoving(domain.config) ? 5 : 0);
-  const work = domain.cols * domain.rows * steps * perCellStep;
+  // Each vortex adds about 1/8 of that per velocity evaluation (measured), and kirchhoff adds 2 stages of m² pair terms.
+  const m = vortexBound(domain.config);
+  const moving = isMoving(domain.config);
+  const perCellStep = Math.max(1, substeps, moving ? 5 + m / 8 : 0);
+  const pairWork = moving && driftOf(domain.config) === 'kirchhoff' ? 2 * m * m * steps : 0;
+  const work = domain.cols * domain.rows * steps * perCellStep + pairWork;
   if (work > LIMITS.maxWork) {
     throw new RangeError(`${steps} steps on ${domain.cols * domain.rows} cells needs ${work} cell updates, above the limit of ${LIMITS.maxWork}`);
   }
@@ -442,6 +449,9 @@ function checkWork(domain: CloudDomain, steps: number): void {
 
 function validateConfig(config: CloudStudyConfig): void {
   const { domain, transforms, settings, wind, vortices, source, solids } = config;
+  if (vortices.length > LIMITS.maxVortices) {
+    throw new RangeError(`${vortices.length} vortices is above the limit of ${LIMITS.maxVortices} (static vortices plus eddyTrain.maxActive)`);
+  }
   vec('domain.origin', domain.origin);
   vec('domain.size', domain.size);
   positive('domain.size.x', domain.size.x);
@@ -496,6 +506,9 @@ function validateConfig(config: CloudStudyConfig): void {
     if (t.removeMargin < 0) throw new RangeError('eddyTrain.removeMargin must be nonnegative');
     int('eddyTrain.maxActive', t.maxActive, 1);
     if (t.maxActive > LIMITS.maxTrainEddies) throw new RangeError(`eddyTrain.maxActive must be <= ${LIMITS.maxTrainEddies}`);
+    if (vortices.length + t.maxActive > LIMITS.maxVortices) {
+      throw new RangeError(`static vortices plus eddyTrain.maxActive must be <= ${LIMITS.maxVortices}`);
+    }
     if (typeof t.alternate !== 'boolean') throw new RangeError('eddyTrain.alternate must be a boolean');
     if (config.vortices.some((v) => v.id.startsWith('train-'))) throw new RangeError("static vortex ids must not start with 'train-'");
   }
@@ -824,10 +837,14 @@ function sampleStencil(
     const cj = j0 + dj;
     if (ci < 0 || ci >= cols || cj < 0 || cj >= rows) {
       if (!closed) {
+        const gxw = ox + (ci + 0.5) * h;
+        const gyw = oy + (cj + 0.5) * h;
+        // inflow: a ghost corner behind a solid edge is excluded and renormalized away, like an in-grid corner
+        if (ghost && nEdges > 0 && dualInRange && dualHasEdge[dualIdx] && firstSolidHit(n, qx, qy, gxw, gyw) !== Infinity) continue;
         wsum += w; // open: zero-valued ghost corner keeps its weight
         if (ghost) { // inflow: the ghost corner reads the upstream field at its world position
-          ghost.x[ghost.n] = ox + (ci + 0.5) * h;
-          ghost.y[ghost.n] = oy + (cj + 0.5) * h;
+          ghost.x[ghost.n] = gxw;
+          ghost.y[ghost.n] = gyw;
           ghost.w[ghost.n] = w;
           ghost.n++;
         }
@@ -920,6 +937,8 @@ interface Engine {
   openS?: Uint8Array;
   substeps: number;
   kappa: number;
+  /** Inflow diffusion: the face between an edge cell and its ghost cell is open (no solid edge between their centres). */
+  ghostOpen?: { l: Uint8Array; r: Uint8Array; t: Uint8Array; b: Uint8Array };
   /** Backtrace stencil for the initial (fixed) vortex layout; built lazily. */
   fixed?: Stencil;
 }
@@ -1009,7 +1028,21 @@ function getEngine(domain: CloudDomain): Engine {
     substeps = diffusionSubsteps(config.settings, h);
     kappa = (diffusivity * (dt / substeps)) / (h * h);
   }
-  n.engine = { openE, openS, substeps, kappa };
+  let ghostOpen: Engine['ghostOpen'];
+  if (diffusivity > 0 && n.inflow) {
+    ghostOpen = { l: new Uint8Array(rows), r: new Uint8Array(rows), t: new Uint8Array(cols), b: new Uint8Array(cols) };
+    for (let j = 0; j < rows; j++) {
+      const cy = oy + (j + 0.5) * h;
+      if (!solid[j * cols]) ghostOpen.l[j] = firstSolidHit(n, ox + 0.5 * h, cy, ox - 0.5 * h, cy) === Infinity ? 1 : 0;
+      if (!solid[j * cols + cols - 1]) ghostOpen.r[j] = firstSolidHit(n, ox + (cols - 0.5) * h, cy, ox + (cols + 0.5) * h, cy) === Infinity ? 1 : 0;
+    }
+    for (let i = 0; i < cols; i++) {
+      const cx = ox + (i + 0.5) * h;
+      if (!solid[i]) ghostOpen.t[i] = firstSolidHit(n, cx, oy + 0.5 * h, cx, oy - 0.5 * h) === Infinity ? 1 : 0;
+      if (!solid[(rows - 1) * cols + i]) ghostOpen.b[i] = firstSolidHit(n, cx, oy + (rows - 0.5) * h, cx, oy + (rows + 0.5) * h) === Infinity ? 1 : 0;
+    }
+  }
+  n.engine = { openE, openS, substeps, kappa, ghostOpen };
   return n.engine;
 }
 
@@ -1035,6 +1068,7 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
   const { cols, rows, solid, closed } = n;
   const N = cols * rows;
   const { openE, openS, substeps, kappa } = engine;
+  const gOpen = engine.ghostOpen;
   const { front, windX, windY, ox, oy, h } = n;
   const { config } = domain;
   const dt = config.settings.dt;
@@ -1104,10 +1138,10 @@ function advanceDomain(domain: CloudDomain, snapshot: CloudSnapshot, steps: numb
             if (solid[c]) { nxt[c] = 0; continue; }
             const a = cur[c];
             let acc = 0;
-            if (i + 1 < cols) { if (openE[c]) acc += cur[c + 1] - a; } else if (!closed) acc += (diffGhost ? diffGhost.r[j] : 0) - a;
-            if (i > 0) { if (openE[c - 1]) acc += cur[c - 1] - a; } else if (!closed) acc += (diffGhost ? diffGhost.l[j] : 0) - a;
-            if (j + 1 < rows) { if (openS[c]) acc += cur[c + cols] - a; } else if (!closed) acc += (diffGhost ? diffGhost.b[i] : 0) - a;
-            if (j > 0) { if (openS[c - cols]) acc += cur[c - cols] - a; } else if (!closed) acc += (diffGhost ? diffGhost.t[i] : 0) - a;
+            if (i + 1 < cols) { if (openE[c]) acc += cur[c + 1] - a; } else if (!closed) { if (!diffGhost) acc += 0 - a; else if (gOpen?.r[j]) acc += diffGhost.r[j] - a; }
+            if (i > 0) { if (openE[c - 1]) acc += cur[c - 1] - a; } else if (!closed) { if (!diffGhost) acc += 0 - a; else if (gOpen?.l[j]) acc += diffGhost.l[j] - a; }
+            if (j + 1 < rows) { if (openS[c]) acc += cur[c + cols] - a; } else if (!closed) { if (!diffGhost) acc += 0 - a; else if (gOpen?.b[i]) acc += diffGhost.b[i] - a; }
+            if (j > 0) { if (openS[c - cols]) acc += cur[c - cols] - a; } else if (!closed) { if (!diffGhost) acc += 0 - a; else if (gOpen?.t[i]) acc += diffGhost.t[i] - a; }
             nxt[c] = a + kappa * acc + 0;
           }
         }

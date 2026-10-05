@@ -154,7 +154,14 @@ export function sunGeometry(worldToPage: WorldToPage, finishing: FinishingLike, 
   };
 }
 
-const isCloud = (part: FramePart) => part.id.startsWith('cloud-') && !part.diagnostic;
+/**
+ * Cloud ink is every non-diagnostic part whose id starts with one of these: contour wisps
+ * (`cloud-<pen>`) and flow streaks (`streak-<pen>`), so a streaks-only render is not scored as blank.
+ */
+export const CLOUD_PART_PREFIXES: readonly string[] = ['cloud-', 'streak-'];
+export const isCloudPart = (part: FramePart, prefixes: readonly string[] = CLOUD_PART_PREFIXES): boolean =>
+  !part.diagnostic && prefixes.some(prefix => part.id.startsWith(prefix));
+const isCloud = (part: FramePart) => isCloudPart(part);
 const isStructure = (part: FramePart) => part.id.startsWith('structure-') && !part.diagnostic;
 
 export function pathLength(path: Pt[]): number {

@@ -1,7 +1,7 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { hatchAtmosphere, maskAtmospherePaths, type AtmosphereField } from '../../packages/plot-core/src/atmosphere.ts';
-import type { CloudSnapshot, Vec2 } from './model.ts';
-import { velocityAt, type CloudDomain } from './sim.ts';
+import type { ActiveVortex, CloudSnapshot, Vec2 } from './model.ts';
+import { velocityAtTime, type CloudDomain } from './sim.ts';
 import type { CloudStudy } from './study.ts';
 
 /** Extraction-only settings that are not part of MarkSettings. */
@@ -79,7 +79,7 @@ export function memberDrawings(study: CloudStudy, pitchMm: number): MemberDrawin
     y0: Math.min(...ring.map(p => p.y)), y1: Math.max(...ring.map(p => p.y)),
   }));
   return study.structure.map((member, i) => {
-    // Stroke members (rays, ring bands, filaments) are drawn as given and never overlap one another.
+    // Stroke members (rays, ring bands, filaments) are drawn as given. They do not overlap one another: the sun clamps its noise so that adjacent rays keep a gap.
     if (member.strokes) return { outline: member.strokes.map(line => line.map(study.worldToArt)), hatch: [] };
     const ring = rings[i];
     const pitch = Math.max(pitchMm * member.pitch, 0.05) / study.fit.scale;
@@ -401,7 +401,7 @@ function hash01(seed: number, a: number, b: number): number {
  * grows with the field (fixed mapping, no per-frame normalization). A streak stops at a solid, the
  * domain edge, or when the field drops under the threshold. Art coordinates.
  */
-export function traceStreaks(domain: CloudDomain, study: CloudStudy, field: (art: Point) => number): Point[][] {
+export function traceStreaks(domain: CloudDomain, study: CloudStudy, field: (art: Point) => number, vortices: ReadonlyArray<ActiveVortex>): Point[][] {
   const { config, fit, pageMmPerM } = study;
   const sArt = study.streak.spacing / fit.scale;
   const a = study.worldToArt(config.domain.origin);
@@ -410,7 +410,8 @@ export function traceStreaks(domain: CloudDomain, study: CloudStudy, field: (art
   const cols = Math.ceil(Math.abs(b.x - a.x) / sArt), rows = Math.ceil(Math.abs(b.y - a.y) / sArt);
   const fieldAt = (w: Vec2): number => field(study.worldToArt(w));
   const dir = (w: Vec2, sign: number): Vec2 | null => {
-    const v = velocityAt(config, w);
+    // The velocity at this snapshot's time: drifting and trained eddies are where they are at this step.
+    const v = velocityAtTime(config, vortices, w);
     const n = Math.hypot(v.x, v.y);
     return n < 1e-9 ? null : { x: (sign * v.x) / n, y: (sign * v.y) / n };
   };
@@ -451,6 +452,24 @@ export function traceStreaks(domain: CloudDomain, study: CloudStudy, field: (art
   // Over budget: keep a seeded subset, so the cap never depends on frame order.
   const keep = STREAK_POINT_CAP / points;
   return streaks.filter((_s, i) => hash01(study.streak.seed ^ 0x5bd1, i, 7) < keep);
+}
+
+/**
+ * Keep a seeded subset of the paths when their points exceed `cap`: paths are ranked by a stateless hash of
+ * (seed, index) and taken in that order while they fit, then restored to their original order. The cap holds
+ * exactly and never depends on frame order.
+ */
+function capPoints(paths: Point[][], cap: number, seed: number): Point[][] {
+  if (paths.reduce((n, path) => n + path.length, 0) <= cap) return paths;
+  const order = paths.map((_path, i) => i).sort((a, b) => hash01(seed ^ 0x2c1b, a, 11) - hash01(seed ^ 0x2c1b, b, 11) || a - b);
+  const kept = new Set<number>();
+  let used = 0;
+  for (const i of order) {
+    if (used + paths[i].length > cap) continue;
+    kept.add(i);
+    used += paths[i].length;
+  }
+  return paths.filter((_path, i) => kept.has(i));
 }
 
 /** Diagnostic part id: carries snapshot identity into result.json. Ids may not hold spaces or `=`. */
@@ -550,7 +569,7 @@ export function extractMarks(
     return kept.filter(path => pathLength(path) >= minLength);
   };
   const cloud = finish(wisps, (marks.hatchSpacing * 0.75) / fit.scale, study.contourMinSpacing * marks.hatchSpacing);
-  const streaks = finish((study.style === 'contours' ? [] : traceStreaks(domain, study, field)), (study.streak.spacing * 0.5) / fit.scale);
+  const streaks = capPoints(finish((study.style === 'contours' ? [] : traceStreaks(domain, study, field, snapshot.vortices)), (study.streak.spacing * 0.5) / fit.scale), STREAK_POINT_CAP, study.streak.seed);
 
   return [
     ...structureParts,

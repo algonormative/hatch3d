@@ -31,7 +31,8 @@ export interface StructureMember {
   tonal: boolean;
   /**
    * World-metre polylines drawn instead of outline plus hatch (rays, ring strokes, filaments). The
-   * polygon is still the simulation solid. Such members never overlap one another.
+   * polygon is still the simulation solid (unless `solid` is false). They are meant not to overlap one
+   * another; the sun clamps its noise so adjacent rays keep a gap.
    */
   strokes?: Vec2[][];
   /**
@@ -380,7 +381,8 @@ export function sunLayout(o: SunOptions): StructureMember[] {
     const long = k % 2 === 0;
     const length = (reach - inner) * (long ? 1 : Math.max(0.1, Math.min(1, o.alternate))) * (1 + noise * 0.4 * dLength);
     rays.push({
-      angle: step * k + noise * 0.3 * step * dAngle,
+      // At most 0.14 of a step: with the widest taper (1.4 × the base width, 0.63 of a step) two neighbours still keep a gap.
+      angle: step * k + noise * 0.14 * step * dAngle,
       length,
       width: Math.max(0.3, baseWidth * (1 + noise * 0.4 * dWidth)),
     });

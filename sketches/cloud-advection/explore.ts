@@ -22,10 +22,12 @@
  * exporter and laid out in contact-sheet.html. The score is a shortlisting proxy;
  * humans choose.
  */
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import { renderSketch } from '../../cli/sketch/runner.ts';
+import { sourceStamp } from '../../cli/sketch/source-stamp.ts';
 import { exportSketchPng } from '../../cli/sketch/export-png.ts';
 import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import type { FinishingOptions, Params } from '../../src/sketch/types.ts';
@@ -60,6 +62,8 @@ export interface ResultRecord {
   varied: Record<string, number>;
   steps: number[];
   profile?: ProfileId;
+  /** Hash of the whole effective request (see requestKey); a prior record is reused only when it matches. */
+  requestKey?: string;
   metrics?: { frames: FrameMetrics[]; change01: number; change12: number };
   score?: Score;
   /** Sum of child-process render durations for this candidate, seconds. */
@@ -130,7 +134,71 @@ function clampAll(ranges: Record<string, [number, number]>): Record<string, [num
   return Object.fromEntries(Object.entries(ranges).map(([id, r]) => [id, clampRange(id, r, ranges)]));
 }
 
+/** Limits that keep a typo from allocating or running something enormous. */
+export const LIMITS_EXPLORE = { maxN: 512, maxJobs: 16, maxSweep: 512, maxTop: 200 } as const;
+
+function integerIn(name: string, value: unknown, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** Validate a space.json before anything is allocated or rendered. Throws a clear error. */
+export function validateSpace(space: Space): void {
+  if (!space || typeof space !== 'object' || !space.base || typeof space.base !== 'object') throw new Error('space.base is required');
+  if (!Number.isSafeInteger(space.base.seed) || space.base.seed < 0) throw new Error('space.base.seed must be a nonnegative integer');
+  if (!space.base.params || typeof space.base.params !== 'object') throw new Error('space.base.params is required');
+  if (!Number.isSafeInteger(space.seed) || space.seed < 0) throw new Error(`space.seed must be a nonnegative integer, got ${JSON.stringify(space.seed)}`);
+  if (!Array.isArray(space.steps) || space.steps.length !== 3) throw new Error('space.steps must be three frame steps');
+  space.steps.forEach((step, i) => integerIn(`space.steps[${i}]`, step, 0, stepCap()));
+  if (space.profile !== undefined && space.profile !== 'default' && space.profile !== 'precise') throw new Error(`space.profile must be 'default' or 'precise', got ${JSON.stringify(space.profile)}`);
+  if (space.sweep) {
+    const { param, values } = space.sweep;
+    if (typeof param !== 'string' || !param) throw new Error('space.sweep.param must be a control id');
+    if (!Array.isArray(values) || values.length < 1 || values.length > LIMITS_EXPLORE.maxSweep) {
+      throw new Error(`space.sweep.values must be an array of 1 to ${LIMITS_EXPLORE.maxSweep} numbers`);
+    }
+    values.forEach((v, i) => { if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`space.sweep.values[${i}] must be a finite number`); });
+    return;
+  }
+  integerIn('space.n', space.n, 0, LIMITS_EXPLORE.maxN);
+  if (!space.ranges || typeof space.ranges !== 'object') throw new Error('space.ranges is required');
+  for (const [id, range] of Object.entries(space.ranges)) {
+    if (!Array.isArray(range) || range.length !== 2 || !range.every(v => typeof v === 'number' && Number.isFinite(v)) || range[0] > range[1]) {
+      throw new Error(`space.ranges.${id} must be [min, max] with finite min <= max`);
+    }
+  }
+}
+
+/** Validated CLI integer: --jobs 1..16, --top 0..200, --n 0..512. */
+export function parseIntFlag(name: string, raw: string | undefined, fallback: number, min: number, max: number): number {
+  if (raw === undefined) return fallback;
+  if (!/^-?\d+$/.test(raw.trim())) throw new Error(`${name} must be an integer from ${min} to ${max}, got '${raw}'`);
+  return integerIn(name, Number(raw), min, max);
+}
+
+/**
+ * Identity of everything a candidate's result depends on: effective request (seed, finishing, params),
+ * its frames, the scoring profile, and the sketch source stamp. Results are reused only on an exact match.
+ */
+export function requestKey(space: Space, candidate: Candidate, source: string): string {
+  return createHash('sha256').update(stable({
+    seed: space.base.seed, finishing: space.base.finishing ?? {}, params: candidate.params,
+    steps: candidate.steps, profile: space.profile ?? 'default', source,
+  })).digest('hex');
+}
+
+/** Candidates still to run: no prior successful record with the same request key. */
+export function pendingCandidates(candidates: Candidate[], existing: Map<string, ResultRecord>, keys: Map<string, string>): Candidate[] {
+  return candidates.filter(c => {
+    const prior = existing.get(c.id);
+    return !(prior && !prior.error && prior.requestKey !== undefined && prior.requestKey === keys.get(c.id));
+  });
+}
+
 export function buildCandidates(space: Space, prefix = 'c'): Candidate[] {
+  validateSpace(space);
   if (space.sweep) {
     const { param, values } = space.sweep;
     const width = String(values.length - 1).length;
@@ -182,7 +250,7 @@ async function pool<T>(items: T[], jobs: number, work: (item: T) => Promise<void
   }));
 }
 
-interface RunContext { space: Space; jobs: number; offCache: Map<string, Promise<number>> }
+interface RunContext { space: Space; jobs: number; offCache: Map<string, Promise<number>>; keys: Map<string, string> }
 
 async function evaluate(candidate: Candidate, ctx: RunContext): Promise<ResultRecord> {
   const { space } = ctx;
@@ -223,7 +291,7 @@ async function evaluate(candidate: Candidate, ctx: RunContext): Promise<ResultRe
   const metrics = { frames, change01: jaccardDistance(grids[0], grids[1]), change12: jaccardDistance(grids[1], grids[2]) };
   const profile = space.profile ?? 'default';
   return {
-    id: candidate.id, params: candidate.params, varied: candidate.varied, steps: candidate.steps, profile, metrics, score: score(metrics, profile),
+    id: candidate.id, params: candidate.params, varied: candidate.varied, steps: candidate.steps, profile, requestKey: ctx.keys.get(candidate.id), metrics, score: score(metrics, profile),
     renderSeconds: Number(renderSeconds.toFixed(2)), wallSeconds: Number(((Date.now() - started) / 1000).toFixed(2)),
   };
 }
@@ -288,12 +356,12 @@ async function runSet(space: Space, candidates: Candidate[], dir: string, opts: 
   mkdirSync(dir, { recursive: true });
   const resultsPath = join(dir, 'results.jsonl');
   const existing = readResults(resultsPath);
-  const todo = candidates.filter(c => {
-    const prior = existing.get(c.id);
-    return !(prior && !prior.error && stable(prior.params) === stable(c.params) && stable(prior.steps) === stable(c.steps) && (prior.profile ?? 'default') === (space.profile ?? 'default'));
-  });
+  let source = 'unstamped';
+  try { source = await sourceStamp(entry, {}); } catch { /* an unstampable source is never reused across edits we cannot see */ source = `unstamped-${Date.now()}`; }
+  const keys = new Map(candidates.map(c => [c.id, requestKey(space, c, source)]));
+  const todo = pendingCandidates(candidates, existing, keys);
   console.log(`${candidates.length} candidates, ${candidates.length - todo.length} already done, ${todo.length} to run (jobs ${opts.jobs})`);
-  const ctx: RunContext = { space, jobs: opts.jobs, offCache: new Map() };
+  const ctx: RunContext = { space, jobs: opts.jobs, offCache: new Map(), keys };
   const batchStart = Date.now();
   let done = 0;
   await pool(todo, opts.jobs, async candidate => {
@@ -333,7 +401,10 @@ async function runSet(space: Space, candidates: Candidate[], dir: string, opts: 
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const value = args[i + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`${name} needs a value`);
+  return value;
 }
 
 export async function main(argv: string[]): Promise<void> {
@@ -345,9 +416,10 @@ export async function main(argv: string[]): Promise<void> {
   if (!spacePath || !outDir) throw new Error('usage: explore.ts <space.json> <outDir> [--top K] [--jobs J] [--png-scale S] [--no-png] [--refine <id> --radius R --n N]');
   const space = JSON.parse(readFileSync(spacePath, 'utf8')) as Space;
   space.steps ??= [0, 30, 60];
-  const top = Number(flag(argv, '--top') ?? 12);
-  const jobs = Number(flag(argv, '--jobs') ?? Math.max(1, Math.min(4, cpus().length - 2)));
-  const pngScale = Number(flag(argv, '--png-scale') ?? 2);
+  validateSpace(space);
+  const top = parseIntFlag('--top', flag(argv, '--top'), 12, 0, LIMITS_EXPLORE.maxTop);
+  const jobs = parseIntFlag('--jobs', flag(argv, '--jobs'), Math.max(1, Math.min(4, cpus().length - 2)), 1, LIMITS_EXPLORE.maxJobs);
+  const pngScale = parseIntFlag('--png-scale', flag(argv, '--png-scale'), 2, 1, 8);
   const png = !argv.includes('--no-png');
   const out = resolve(outDir);
   const refine = flag(argv, '--refine');
@@ -356,7 +428,8 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   const radius = Number(flag(argv, '--radius') ?? 0.15);
-  const n = Number(flag(argv, '--n') ?? 24);
+  if (!Number.isFinite(radius) || radius <= 0 || radius > 1) throw new Error(`--radius must be a number in (0, 1], got '${flag(argv, '--radius')}'`);
+  const n = parseIntFlag('--n', flag(argv, '--n'), 24, 0, LIMITS_EXPLORE.maxN);
   // `--from <dir>`: read the centre candidate from another run's results.jsonl and write the refinement straight into outDir.
   const from = flag(argv, '--from');
   const fromPath = join(from ? resolve(from) : out, 'results.jsonl');

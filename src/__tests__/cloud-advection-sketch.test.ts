@@ -5,7 +5,7 @@ import { inspectSketch, renderSketch } from '../../cli/sketch/runner.ts';
 import { resolveFinishing } from '../../packages/plot-core/src/index.ts';
 import { MEMBER_CLEARANCE_MM, distanceToSegment, extractMarks, parseCloudStateId } from '../../sketches/cloud-advection/extract.ts';
 import { studyContext } from '../../sketches/cloud-advection/evidence.ts';
-import { buildDomain, configHashes, simulate } from '../../sketches/cloud-advection/sim.ts';
+import { buildDomain, configHashes, simulate, velocityAt, velocityAtTime } from '../../sketches/cloud-advection/sim.ts';
 import { CORE_CENTER, CORE_KEEP_OUT, WORLD, distanceToPolygon, colonnadeLayout, portalLayout, ringLayout, sunLayout } from '../../sketches/cloud-advection/layout.ts';
 import sketch from '../../sketches/cloud-advection/sketch.ts';
 import { buildStudy } from '../../sketches/cloud-advection/study.ts';
@@ -292,7 +292,7 @@ describe('Prescribed Weather sketch', () => {
     const setup = (change: Params = {}) => {
       const study = buildStudy(studyContext({ seed: 211, params: { ...inflow, ...change } }));
       const domain = buildDomain(study.config);
-      const snapshot = simulate(study.config, [30])[0];
+      const snapshot = simulate(study.config, [Number(change.step ?? 30)])[0];
       return { study, domain, snapshot };
     };
     const parts = (change: Params = {}) => {
@@ -351,6 +351,40 @@ describe('Prescribed Weather sketch', () => {
       }
       // Not vacuous: streaks do run right up to members.
       expect(closest).toBeLessThan(6);
+    }, 30000);
+
+    it('follow the flow at the snapshot time: with drifting eddies the direction matches velocityAtTime, not the initial layout', () => {
+      const { study, domain, snapshot } = setup({ eddyDrift: 'wind', windX: 0.5, windY: 0, eddyX: 5, eddyY: 39, eddyCirculation: 80, eddyCore: 3,
+        frontAmplitude: 1, frontCoverage: 0.95, frontScale: 12, step: 60, obscure: 0, coreRadius: 0, markStyle: 'streaks', streakSpacing: 3 });
+      const parts = extractMarks(domain, snapshot, study, { cloudEnabled: true, hatchPitch: 1.35 });
+      const lines = streakPaths(parts);
+      expect(lines.length).toBeGreaterThan(100);
+      const moved = snapshot.vortices.find(v => v.key.startsWith('eddy-a'))!.center;
+      expect(moved.x).toBeGreaterThan(15); // carried by the wind from x = 5
+      let withTime = 0, stale = 0, n = 0;
+      for (const line of lines) {
+        for (let i = 1; i < line.length; i++) {
+          const a = study.artToWorld(line[i - 1]), b = study.artToWorld(line[i]);
+          const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          if (Math.hypot(mid.x - moved.x, mid.y - moved.y) > 16) continue;
+          const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+          if (len < 1e-9) continue;
+          const cosine = (v: { x: number; y: number }) => Math.abs(dx * v.x + dy * v.y) / (len * Math.hypot(v.x, v.y));
+          withTime += cosine(velocityAtTime(study.config, snapshot.vortices, mid));
+          stale += cosine(velocityAt(study.config, mid));
+          n++;
+        }
+      }
+      expect(n).toBeGreaterThan(100);
+      expect(withTime / n).toBeGreaterThan(0.97);
+      expect(stale / n).toBeLessThan(withTime / n - 0.03);
+    }, 30000);
+
+    it('caps the final streak ink at 40,000 points, even at the densest spacing', () => {
+      const { study, domain, snapshot } = setup({ streakSpacing: 2, frontCoverage: 0.95, frontAmplitude: 1, coreRadius: 0, obscure: 0 });
+      const points = streakPaths(extractMarks(domain, snapshot, study, { cloudEnabled: true, hatchPitch: 1.35 })).reduce((n, path) => n + path.length, 0);
+      expect(points).toBeGreaterThan(10_000);
+      expect(points).toBeLessThanOrEqual(40_000);
     }, 30000);
 
     it('use the fixed mapping: a thinner cloud draws fewer, shorter streaks', () => {
@@ -592,7 +626,7 @@ describe('Prescribed Weather sketch', () => {
       }
     });
 
-    it('wires the controls, stays within the path budget, and lets wakes form behind thin rays', async () => {
+    it('wires the controls and stays within the structure path budget (the off render)', async () => {
       const sunParams: Params = { layout: 'sun', sunRays: 48, sunRings: 3, sunNoise: 0.4 };
       const off = await render(config('off'), sunParams);
       expect(off.stats.pathCount).toBeLessThanOrEqual(2500);
@@ -607,6 +641,52 @@ describe('Prescribed Weather sketch', () => {
       const dense = await render(config('off'), { layout: 'sun', sunRays: 72, sunRings: 3 });
       expect(dense.stats.pathCount).toBeLessThanOrEqual(2500);
     }, 60000);
+
+    it('lets a wake form: concentration just downstream of a thin ray is far below the same distance upstream', () => {
+      // Wind straight down, no eddies, weather arriving through the top edge. The k = 0 ray points along +x, so it
+      // lies across the wind: cloud piles on its upper face and the lee below it is clean.
+      const params = { ...config('step-30').params, layout: 'sun', sunNoise: 0, boundary: 'inflow', sourceEnabled: false,
+        windX: 0, windY: 1, eddyCirculation: 0, frontAmplitude: 1, frontScale: 12, frontCoverage: 0.95, frontSoftness: 0.3, fillInterior: true, step: 40 };
+      const study = buildStudy(studyContext({ seed: 211, params }));
+      const domain = buildDomain(study.config);
+      const snapshot = simulate(study.config, [40])[0];
+      const ray = study.structure.find(m => m.name === 'ray01')!;
+      expect(study.config.solids.some(solid => solid.id === ray.id)).toBe(true);
+      const h = study.config.transforms.worldToGrid.spacing;
+      const at = (x: number, y: number) => snapshot.density[Math.floor(y / h) * domain.cols + Math.floor(x / h)];
+      let upstream = 0, behind = 0;
+      for (const x of [36, 37, 38, 39, 40, 41]) {
+        // Half-width of the wedge at this x, so the samples start just off its edge.
+        const [a, tip, b] = ray.polygon;
+        const along = (x - CORE_CENTER.x - 10.5) / (tip.x - a.x);
+        const half = (Math.abs(a.y - b.y) / 2) * (1 - along);
+        for (const d of [0.8, 1.2, 1.6, 2.0]) {
+          upstream += at(x, CORE_CENTER.y - half - d);
+          behind += at(x, CORE_CENTER.y + half + d);
+        }
+      }
+      expect(upstream).toBeGreaterThan(3);
+      expect(behind).toBeLessThan(upstream * 0.5);
+    });
+
+    it('keeps neighbouring rays apart at the highest noise (no double-inked bases)', () => {
+      type P = { x: number; y: number };
+      // Separating-axis test for two triangles.
+      const overlap = (a: P[], b: P[]): boolean => ![a, b].some(poly => poly.some((p, i) => {
+        const q = poly[(i + 1) % poly.length];
+        const nx = q.y - p.y, ny = p.x - q.x;
+        const range = (r: P[]) => r.map(v => v.x * nx + v.y * ny);
+        const [ra, rb] = [range(a), range(b)];
+        return Math.max(...ra) <= Math.min(...rb) || Math.max(...rb) <= Math.min(...ra);
+      }));
+      for (let seed = 1; seed <= 40; seed++) {
+        const rays = sunLayout({ rays: 72, inner: 10.5, reach: 20, alternate: 0.55, rings: 0, noise: 1, random: studyContext({ seed, params: {} }).random('sun-noise') })
+          .filter(m => m.kind === 'ray');
+        for (let k = 0; k < rays.length; k++) expect(overlap(rays[k].polygon, rays[(k + 1) % rays.length].polygon), `seed ${seed} ray ${k}`).toBe(false);
+      }
+      const wide = sunLayout({ rays: 12, inner: 16, reach: 40, alternate: 1, rings: 0, noise: 1, random: studyContext({ seed: 9, params: {} }).random('sun-noise') }).filter(m => m.kind === 'ray');
+      for (let k = 0; k < wide.length; k++) expect(overlap(wide[k].polygon, wide[(k + 1) % wide.length].polygon)).toBe(false);
+    });
 
     it('draws the corona (and, by default, the ring bands) without making solids; sunSolidRings turns the bands solid', () => {
       const params = { layout: 'sun', sunRays: 22, sunRings: 2 };
@@ -657,14 +737,18 @@ describe('Prescribed Weather sketch', () => {
   describe('weatherSeed', () => {
     const base = (): Request => JSON.parse(readFileSync(resolve('sketches/cloud-advection/configs/weather-b-mid.json'), 'utf8')) as Request;
 
-    it('0 reproduces the pre-weatherSeed drawing exactly (state key, density hash, parts)', async () => {
-      // Baseline recorded from configs/weather-b-mid.json before the control existed. The render identity
-      // hashes the control list, so it necessarily changed with the new slider; the drawing did not.
+    it('0 uses exactly the plain stream names (so every existing config is unchanged) and is the default', async () => {
+      // Proven once against the pre-control code: configs/weather-b-mid.json gave identical parts, SVG and stats
+      // (state key 37b804d46fd36d63) before and after the control was added. Pinning that hash would break with every
+      // MODEL version bump, so the lasting check is that the seeds come from the unsuffixed streams.
+      const ctx = studyContext({ seed: 211, params: { ...base().params, trainEnabled: true } });
+      const first = (id: string): number => Math.floor(ctx.random(id)() * 0x100000000) >>> 0;
+      const study = buildStudy(ctx);
+      expect(study.config.front!.seed).toBe(first('weather-front'));
+      expect(study.config.source.seed).toBe(first('smoke-source'));
+      expect(study.config.eddyTrain!.seed).toBe(first('eddy-train'));
+      expect(study.marks.wispSeed).toBe(first('cloud-wisps'));
       const result = await render(base());
-      const id = parseCloudStateId(state(result))!;
-      expect(id.stateKey).toBe('37b804d46fd36d63');
-      expect(id.densityHash).toBe('eac7d04ffd5085c1');
-      expect(result.stats).toMatchObject({ pathCount: 926, pointCount: 24276, lengthMm: 16101.575 });
       expect((await render(base(), { weatherSeed: 0 })).identity).toBe(result.identity);
     }, 30000);
 

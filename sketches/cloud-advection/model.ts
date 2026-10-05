@@ -16,9 +16,9 @@ export interface Vec2 { x: number; y: number }
 
 export const MODEL = Object.freeze({
   id: 'prescribed-passive-advection',
-  version: '1.3.0',
+  version: '1.3.1',
   backend: 'ts-cpu-semi-lagrangian-rk2-bilinear',
-  backendVersion: '1.3.0',
+  backendVersion: '1.3.1',
 });
 
 export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v3';
@@ -26,7 +26,8 @@ export const SNAPSHOT_SCHEMA = 'hatch3d.cloud-advection.snapshot.v3';
 /**
  * Hard bounds that keep a render bounded. `maxDiffusionSubsteps` caps the
  * explicit-diffusion substeps per step; `maxWork` caps
- * cells × steps × max(1, substeps, 5 when eddies drift) for one advance/simulate call.
+ * cells × steps × max(1, substeps, 5 + m/8 when eddies drift) plus steps × 2m² vortex-pair
+ * evaluations under kirchhoff, for one advance/simulate call (m = static vortices + train maxActive).
  */
 export const LIMITS = Object.freeze({
   maxCells: 100_000,
@@ -34,6 +35,8 @@ export const LIMITS = Object.freeze({
   maxDiffusionSubsteps: 16,
   // Hard cap on `eddyTrain.maxActive`.
   maxTrainEddies: 12,
+  // Hard cap on static vortices plus `eddyTrain.maxActive`.
+  maxVortices: 64,
   // The art grid (23,400 cells) at 240 steps and the 16-substep cap is 89.9M.
   maxWork: 90_000_000,
 });

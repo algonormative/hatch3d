@@ -425,11 +425,11 @@ describe('cloud advection: numerical fixtures', () => {
     it('front configs without softness keep their pre-softness hashes', () => {
       const [s40] = simulate(richConfig(), [40]);
       expect(s40.densityHash).toBe('11d588b63b0ff896');
-// Pinned with MODEL 1.2.0 before eddyDrift existed; an absent eddyDrift must keep these.
-      // Pinned with MODEL 1.3.0 before eddyTrain existed; an absent eddyTrain must keep these.
-      expect(configHashes(richConfig()).simulation).toBe('62e60b8d61285a5b');
-      expect(configHashes(makeConfig({ wind: { x: 0.8, y: 0.15 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('c4e54b1406e2d69c');
-      expect(configHashes(makeConfig({ eddyDrift: 'kirchhoff', vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('70ed5a57d1907af5');
+      // Re-pinned for MODEL 1.3.1 (the version string is part of the simulation hash; nothing else about these configs
+      // changed). They guard that an absent eddyDrift / eddyTrain / softness is omitted from the hash.
+      expect(configHashes(richConfig()).simulation).toBe('9250c2424f3bfc53');
+      expect(configHashes(makeConfig({ wind: { x: 0.8, y: 0.15 }, vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('c726f7cdd88e643c');
+      expect(configHashes(makeConfig({ eddyDrift: 'kirchhoff', vortices: [vortex('eddy-1', 12, 9, 6, 1.5)] })).simulation).toBe('c058467a2f8cfc55');
     });
 
     it('softness: absent equals 0.12, is validated, hashed, and widens the bank edge', () => {
@@ -514,8 +514,8 @@ describe('cloud advection: numerical fixtures', () => {
     it('5c. snapshots from an older model version refuse to resume', () => {
       const config = makeConfig({ boundary: 'inflow', front: front() });
       const snap = initialSnapshot(config);
-      expect(MODEL.version).toBe('1.3.0');
-      expect(MODEL.backendVersion).toBe('1.3.0');
+      expect(MODEL.version).toBe('1.3.1');
+      expect(MODEL.backendVersion).toBe('1.3.1');
       const old = { ...snap, model: { ...snap.model, version: '1.0.0', backendVersion: '1.0.0' } } as unknown as typeof snap;
       expect(() => advance(old, config, 1)).toThrow(SnapshotMismatchError);
     });
@@ -1013,6 +1013,79 @@ describe('cloud advection: numerical fixtures', () => {
       expect(ms).toBeLessThan(4000);
       expect(counts[3]).toBeGreaterThan(3); // the train is still alive at the end
     });
+  });
+
+  describe('inflow never leaks through a wall near the edge (ghost reachability)', () => {
+    const allCloud: WeatherFront = { id: 'weather-front', kind: 'frozen-field', amplitude: 1, scale: 3, coverage: 1, seed: 5, fillInterior: false };
+    const T = 0.01; // half thickness
+    /** Four thin full-span walls forming a ring `a` m inside each edge (a = 0 puts them on the edge itself). */
+    const ring = (a: number): SolidRegion[] => [
+      rect('solid-left', a - T, -1, a + T, 21), rect('solid-right', 20 - a - T, -1, 20 - a + T, 21),
+      rect('solid-top', -1, a - T, 21, a + T), rect('solid-bottom', -1, 20 - a - T, 21, 20 - a + T),
+    ];
+    const modes: Array<[string, Partial<Parameters<typeof makeConfig>[0]>]> = [
+      ['fixed', { vortices: [vortex('eddy-1', 8, 10, 6, 1.5)] }],
+      ['wind drift', { eddyDrift: 'wind', vortices: [vortex('eddy-1', 8, 10, 6, 1.5)] }],
+      ['kirchhoff + train', {
+        eddyDrift: 'kirchhoff', vortices: [vortex('eddy-1', 8, 10, 6, 1.5)],
+        eddyTrain: { id: 'eddy-train', period: 10, firstStep: 2, circulation: 5, coreRadius: 1.5, alternate: true, lateralJitter: 0.6, timingJitter: 2, seed: 4, removeMargin: 4, maxActive: 6 },
+      }],
+    ];
+    const peak = (config: CloudStudyConfig, steps: number[]): number => {
+      let m = 0;
+      for (const snap of simulate(config, steps)) for (const v of snap.density) m = Math.max(m, v);
+      return m;
+    };
+
+    it('a sealing ring of thin walls (abutting or crossing the edge) keeps the inside exactly 0', () => {
+      for (const [mode, extra] of modes) {
+        for (const diffusivity of [0, 0.1]) {
+          const base = { boundary: 'inflow' as const, front: allCloud, amplitude: 0, wind: { x: 0.9, y: 0.35 }, diffusivity, ...extra };
+          const control = peak(makeConfig(base), [5, 20, 60]);
+          const results: string[] = [];
+          for (const [label, a] of [['abutting 0.1 m inside', 0.1], ['crossing the edge', 0]] as const) {
+            const leaked = peak(makeConfig({ ...base, solids: ring(a) }), [1, 5, 20, 60]);
+            results.push(`${label}: ${leaked}`);
+            expect(leaked, `${mode} D=${diffusivity} ${label}`).toBe(0);
+          }
+          console.log(`[cloud-advection] inflow ring (${mode}, D=${diffusivity}): ${results.join('; ')}; no-wall control peak = ${control.toFixed(3)}`);
+          expect(control).toBeGreaterThan(0.3);
+        }
+      }
+    });
+
+    it('a single thin wall abutting the inflow edge stops advective inflow (small-grid probe)', () => {
+      const wall = (): SolidRegion => rect('solid-w', 0.14, -1, 0.16, 6);
+      const base = { cols: 4, rows: 5, spacing: 1, dt: 1, boundary: 'inflow' as const, front: allCloud, amplitude: 0, center: { x: 2, y: 2 }, radii: { x: 1, y: 1 } };
+      const col0 = (c: CloudStudyConfig): number[] => { const s1 = simulate(c, [1])[0]; return [0, 1, 2, 3, 4].map((j) => s1.density[j * 4]); };
+      // advection, D=0: the q -> ghost-corner segment crosses the wall, so column 0 reads nothing
+      const advWall = col0(makeConfig({ ...base, wind: { x: 0.2, y: 0 }, solids: [wall()] }));
+      const advFree = col0(makeConfig({ ...base, wind: { x: 0.2, y: 0 } }));
+      console.log(`[cloud-advection] probe advection column 0: wall ${Math.max(...advWall)} (was 0.200), no wall ${Math.max(...advFree).toFixed(3)}`);
+      expect(Math.max(...advWall)).toBe(0);
+      expect(Math.max(...advFree)).toBeGreaterThan(0.1);
+      // diffusion, wind 0: the ghost face is closed, so the middle rows of column 0 get nothing
+      const difWall = col0(makeConfig({ ...base, wind: { x: 0, y: 0 }, diffusivity: 0.1, solids: [wall()] }));
+      const difFree = col0(makeConfig({ ...base, wind: { x: 0, y: 0 }, diffusivity: 0.1 }));
+      console.log(`[cloud-advection] probe diffusion column 0 rows 1-3: wall ${Math.max(...difWall.slice(1, 4))} (was 0.200), no wall ${Math.min(...difFree.slice(1, 4)).toFixed(3)}`);
+      expect(difWall.slice(1, 4)).toEqual([0, 0, 0]);
+      expect(Math.min(...difFree.slice(1, 4))).toBeGreaterThan(0.05);
+    });
+  });
+
+  it('rejects vortex counts that would blow the work budget, before doing any work', () => {
+    const many = (n: number): Vortex[] => Array.from({ length: n }, (_, i) => vortex(`eddy-${i}`, 1 + (i % 18), 1 + (i % 17), 1, 1));
+    const t0 = performance.now();
+    expect(() => simulate(makeConfig({ eddyDrift: 'kirchhoff', vortices: many(5000) }), [240])).toThrow(/vortices/);
+    expect(() => buildDomain(makeConfig({ vortices: many(LIMITS.maxVortices + 1) }))).toThrow(/vortices/);
+    expect(() => buildDomain(makeConfig({ vortices: many(LIMITS.maxVortices) }))).not.toThrow();
+    const train = { id: 'eddy-train' as const, period: 10, firstStep: 0, circulation: 1, coreRadius: 1, alternate: true, lateralJitter: 0, timingJitter: 0, seed: 1, removeMargin: 3, maxActive: 12 };
+    expect(() => buildDomain(makeConfig({ eddyDrift: 'wind', vortices: many(LIMITS.maxVortices - 11), eddyTrain: train }))).toThrow(/maxActive/);
+    expect(() => buildDomain(makeConfig({ eddyDrift: 'wind', vortices: many(LIMITS.maxVortices - 12), eddyTrain: train }))).not.toThrow();
+    // many vortices on a big grid also exhaust the budget (one vortex alone is already 5.1 per cell-step)
+    const big = makeConfig({ cols: 316, rows: 316, eddyDrift: 'kirchhoff', vortices: many(40), center: { x: 80, y: 80 }, radii: { x: 10, y: 10 } });
+    expect(() => simulate(big, [240])).toThrow(/cell updates/);
+    expect(performance.now() - t0).toBeLessThan(1500);
   });
 
   it('simulate returns ascending unique steps', () => {

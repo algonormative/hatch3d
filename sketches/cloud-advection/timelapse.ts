@@ -17,8 +17,8 @@
  * (the frame at the window midpoint, or the last frame without a window).
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { delimiter, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { Resvg } from '@resvg/resvg-js';
 import { PNG } from 'pngjs';
@@ -27,6 +27,7 @@ import { mapFinishingPoint, resolveFinishing } from '../../packages/plot-core/sr
 import type { FinishingOptions, Params } from '../../src/sketch/types.ts';
 import { studyContext } from './evidence.ts';
 import { advance, buildDomain, initialSnapshot, velocityAtTime } from './sim.ts';
+import { LIMITS } from './model.ts';
 import type { ActiveVortex, CloudSnapshot } from './model.ts';
 import sketch from './sketch.ts';
 import { buildStudy } from './study.ts';
@@ -141,7 +142,13 @@ function parseArgs(argv: string[]): { requestArg: string; outDir: string; option
     else positional.push(a);
   }
   if (positional.length !== 2) throw new Error('Usage: timelapse.ts <request.json | inline-json> <outDir> [--every N] [--fps F] [--window start,delta] [--steps 240] [--jobs 5]');
-  if (!(options.every >= 1) || !(options.fps > 0) || !(options.steps >= 1) || !(options.jobs >= 1)) throw new Error('--every/--fps/--steps/--jobs must be positive');
+  const integerIn = (name: string, value: number, min: number, max: number): void => {
+    if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  };
+  integerIn('--steps', options.steps, 1, LIMITS.maxSteps);
+  integerIn('--every', options.every, 1, options.steps);
+  if (!Number.isFinite(options.fps) || options.fps < 1 || options.fps > 60) throw new Error('--fps must be a number from 1 to 60');
+  integerIn('--jobs', options.jobs, 1, 16);
   if (options.window && options.window[0] + 2 * options.window[1] > options.steps) throw new Error('--window start+2·delta exceeds --steps');
   return { requestArg: positional[0], outDir: resolve(positional[1]), options };
 }
@@ -153,6 +160,24 @@ function loadRequest(arg: string): Request {
     return { seed: typeof parsed.seed === 'number' ? parsed.seed : 0, params: parsed.params as Params, finishing: parsed.finishing as FinishingOptions | undefined };
   }
   return { seed: typeof parsed.seed === 'number' ? parsed.seed : 0, params: Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'seed')) as Params };
+}
+
+/** ffmpeg from the FFMPEG env var, else the first executable named ffmpeg on PATH. */
+function findFfmpeg(): string {
+  const fromEnv = process.env.FFMPEG?.trim();
+  if (fromEnv) {
+    if (!existsSync(fromEnv)) throw new Error(`FFMPEG is set to ${fromEnv}, which does not exist`);
+    return fromEnv;
+  }
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { /* not here */ }
+  }
+  throw new Error('ffmpeg not found: install it or set the FFMPEG environment variable to its path');
 }
 
 async function pool<T>(items: T[], jobs: number, work: (item: T) => Promise<void>): Promise<void> {
@@ -167,6 +192,7 @@ async function main(): Promise<void> {
   const t0 = performance.now();
   const { requestArg, outDir, options } = parseArgs(process.argv.slice(2));
   const request = loadRequest(requestArg);
+  const ffmpeg = findFfmpeg(); // fail before the long render, not after
   const framesDir = join(outDir, 'frames');
   rmSync(framesDir, { recursive: true, force: true });
   mkdirSync(framesDir, { recursive: true });
@@ -449,7 +475,7 @@ ${printed ? `<rect x="${leftX - 5}" y="${panelY - 5}" width="${PANEL_W + 10}" he
   const tEnc = performance.now();
   let crf = 20;
   for (;;) {
-    execFileSync('/opt/homebrew/bin/ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
+    execFileSync(ffmpeg, ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
       '-vf', `fps=${options.fps},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p`, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf),
       '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mp4], { stdio: 'inherit' });
     if (statSync(mp4).size < 14.5e6 || crf >= 34) break;
