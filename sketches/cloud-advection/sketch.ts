@@ -40,6 +40,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'eddyX', label: 'Eddy X', default: 20, min: 0, max: WORLD.width, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
     { type: 'slider', id: 'eddyY', label: 'Eddy Y', default: 34, min: 0, max: WORLD.height, step: 0.5, units: 'm', group: 'Simulation', expensive: true },
     { type: 'select', id: 'eddyDrift', label: 'Eddy motion', default: 'fixed', options: ['fixed', 'wind', 'kirchhoff'], optionLabels: { fixed: 'Fixed centres', wind: 'Carried by the wind', kirchhoff: 'Wind and each other' }, group: 'Simulation', expensive: true },
+    { type: 'slider', id: 'weatherSeed', label: 'Weather seed', default: 0, min: 0, max: 999, step: 1, group: 'Simulation', expensive: true },
     { type: 'toggle', id: 'trainEnabled', label: 'Eddy train', default: false, group: 'Eddy train', expensive: true },
     { type: 'slider', id: 'trainPeriod', label: 'Train period', default: 20, min: 8, max: 60, step: 1, units: 'steps', group: 'Eddy train', expensive: true },
     { type: 'slider', id: 'trainCirculation', label: 'Train circulation', default: 40, min: 10, max: 120, step: 1, units: 'm²/s', group: 'Eddy train', expensive: true },

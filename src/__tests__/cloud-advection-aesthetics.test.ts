@@ -268,4 +268,12 @@ describe('cloud-advection aesthetics', () => {
     const bigCore = interiorInk(samplesOf([circle(139.5, 216, 60)]), { ...geom, core: { ...geom.core, r: 70 } });
     expect(bigCore).toBe(0);
   });
+
+  it('explore sweep mode makes one candidate per value with no hypercube', () => {
+    const space = { base: { seed: 1, params: { windX: 0.4 } }, n: 99, seed: 1, ranges: {}, steps: [116, 149, 182], sweep: { param: 'weatherSeed', values: [0, 1, 2, 10] } };
+    const c = buildCandidates(space);
+    expect(c.map(x => x.id)).toEqual(['w0', 'w1', 'w2', 'w3']);
+    expect(c.map(x => x.params.weatherSeed)).toEqual([0, 1, 2, 10]);
+    expect(c.every(x => x.params.windX === 0.4 && x.steps.join() === '116,149,182')).toBe(true);
+  });
 });

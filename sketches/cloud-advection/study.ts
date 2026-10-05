@@ -83,6 +83,11 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
   };
 
   const layout: LayoutId = (['span', 'colonnade', 'portal', 'ring', 'sun'] as const).find(id => id === ctx.params.layout) ?? 'orbit';
+  // `weatherSeed` perturbs only the simulation's weather streams. 0 uses the plain names exactly, so every
+  // existing config is unchanged; n > 0 asks for `<name>#<n>`. Structure, sun and the mark streams
+  // (`cloud-wisps`, `cloud-streaks`) never depend on it: wisp gaps are a drawing choice, not weather.
+  const weatherSeed = Math.round(numeric(ctx, 'weatherSeed', 0, 0, 999));
+  const weatherStream = (id: string): (() => number) => ctx.random(weatherSeed > 0 ? `${id}#${weatherSeed}` : id);
   const structure = buildStructure(ctx.random('structure'), layout, numeric(ctx, 'structureDensity', 0.6, 0, 1), Math.round(numeric(ctx, 'ringCount', 8, 4, 12)), {
     rays: Math.round(numeric(ctx, 'sunRays', 22, 12, 72)), inner: numeric(ctx, 'sunInner', 10.5, 10, 16), reach: numeric(ctx, 'sunReach', 20, 14, 40), solidRings: ctx.params.sunSolidRings === true,
     alternate: numeric(ctx, 'sunAlternate', 0.55, 0.2, 1), rings: Math.round(numeric(ctx, 'sunRings', 2, 0, 3)), noise: numeric(ctx, 'sunNoise', 0.15, 0, 1),
@@ -102,7 +107,7 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
     });
   }
   const sourceSize = numeric(ctx, 'sourceSize', 8, 1, 20);
-  const smokeRandom = ctx.random('smoke-source');
+  const smokeRandom = weatherStream('smoke-source');
   const trainOn = ctx.params.trainEnabled === true;
   const boundaryMode = ctx.params.boundary === 'closed' || ctx.params.boundary === 'inflow' ? ctx.params.boundary : 'open';
   const config: CloudStudyConfig = {
@@ -133,13 +138,13 @@ export function buildStudy(ctx: SketchContext): CloudStudy {
       id: 'eddy-train' as const, period: Math.round(numeric(ctx, 'trainPeriod', 20, 8, 60)), firstStep: 0,
       circulation: numeric(ctx, 'trainCirculation', 40, 10, 120), coreRadius: numeric(ctx, 'trainCore', 2.5, 1, 6),
       alternate: ctx.params.trainAlternate !== false, lateralJitter: numeric(ctx, 'trainJitter', 0.3, 0, 1), timingJitter: 0,
-      seed: uint32(ctx.random('eddy-train')), removeMargin: TRAIN_REMOVE_MARGIN_M, maxActive: TRAIN_MAX_ACTIVE,
+      seed: uint32(weatherStream('eddy-train')), removeMargin: TRAIN_REMOVE_MARGIN_M, maxActive: TRAIN_MAX_ACTIVE,
     } } : {}),
     // Upstream weather arrives through the upwind edges only in `inflow` mode; it is hashed whenever present.
     ...(boundaryMode === 'inflow' ? { front: {
       id: 'weather-front' as const, kind: 'frozen-field' as const,
       amplitude: numeric(ctx, 'frontAmplitude', 0.8, 0, 2), scale: numeric(ctx, 'frontScale', 12, 2, 40),
-      coverage: numeric(ctx, 'frontCoverage', 0.5, 0, 1), softness: numeric(ctx, 'frontSoftness', 0.12, 0.02, 0.5), seed: uint32(ctx.random('weather-front')),
+      coverage: numeric(ctx, 'frontCoverage', 0.5, 0, 1), softness: numeric(ctx, 'frontSoftness', 0.12, 0.02, 0.5), seed: uint32(weatherStream('weather-front')),
       fillInterior: ctx.params.fillInterior !== false,
     } } : {}),
   };

@@ -9,7 +9,8 @@
  * `frameStart` and `frameDelta` are extra, non-control dimensions (integers, in sim
  * steps): a candidate's frames are start, start + delta, start + 2 delta, capped at
  * min(240, the sketch's `step` slider max) by a deterministic repair (shrink delta
- * toward its range minimum, then lower start). `steps` is the fallback when they are
+ * toward its range minimum, then lower start). `sweep: { param, values }` replaces the
+ * hypercube with one candidate per value (ids w00, w01, ...). `steps` is the fallback when they are
  * not in `ranges`. `profile` selects the scoring profile (`default` or `precise`).
  *
  * Candidate c000 is the base params; c001..cNNN are n seeded Latin-hypercube points.
@@ -49,6 +50,8 @@ export interface Space {
   steps: number[];
   /** Scoring profile (aesthetics.ts PROFILES); default 'default'. Use 'precise' for the sun. */
   profile?: ProfileId;
+  /** Sweep mode: one candidate per value of a single param (no LHS; ranges and n are ignored). */
+  sweep?: { param: string; values: number[] };
 }
 export interface Candidate { id: string; params: Params; varied: Record<string, number>; steps: number[] }
 export interface ResultRecord {
@@ -128,6 +131,16 @@ function clampAll(ranges: Record<string, [number, number]>): Record<string, [num
 }
 
 export function buildCandidates(space: Space, prefix = 'c'): Candidate[] {
+  if (space.sweep) {
+    const { param, values } = space.sweep;
+    const width = String(values.length - 1).length;
+    return values.map((value, i) => ({
+      id: `w${String(i).padStart(width, '0')}`,
+      params: { ...space.base.params, [param]: value },
+      varied: { [param]: value },
+      steps: [...space.steps],
+    }));
+  }
   const ids = Object.keys(space.ranges);
   const clamped = clampAll(space.ranges);
   const baseSteps = space.steps;
@@ -344,8 +357,11 @@ export async function main(argv: string[]): Promise<void> {
   }
   const radius = Number(flag(argv, '--radius') ?? 0.15);
   const n = Number(flag(argv, '--n') ?? 24);
-  const center = readResults(join(out, 'results.jsonl')).get(refine);
-  if (!center) throw new Error(`Candidate ${refine} not found in ${join(out, 'results.jsonl')}`);
+  // `--from <dir>`: read the centre candidate from another run's results.jsonl and write the refinement straight into outDir.
+  const from = flag(argv, '--from');
+  const fromPath = join(from ? resolve(from) : out, 'results.jsonl');
+  const center = readResults(fromPath).get(refine);
+  if (!center) throw new Error(`Candidate ${refine} not found in ${fromPath}`);
   const ranges: Record<string, [number, number]> = {};
   const global = clampAll(space.ranges);
   for (const id of Object.keys(space.ranges)) {
@@ -356,7 +372,7 @@ export async function main(argv: string[]): Promise<void> {
   // Deterministic per candidate: the local hypercube seed derives from the space seed and the id.
   const idSeed = [...refine].reduce((h, ch) => (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0, 7);
   const local: Space = { ...space, steps: center.steps, base: { ...space.base, params: { ...center.params } }, ranges, n, seed: (space.seed + idSeed) >>> 0 };
-  await runSet(local, buildCandidates(local, `${refine}.r`), join(out, `refine-${refine}`), { top, jobs, pngScale, png, title: `Refinement of ${refine} (radius ${radius}, n ${n})` });
+  await runSet(local, buildCandidates(local, `${refine}.r`), (from ? out : join(out, `refine-${refine}`)), { top, jobs, pngScale, png, title: `Refinement of ${refine} (radius ${radius}, n ${n})` });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {

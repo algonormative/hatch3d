@@ -40,7 +40,7 @@ describe('Prescribed Weather sketch', () => {
     expect(navigators[4]).toMatchObject({ axes: ['sourceX', 'sourceY', 'sourceSize'], axisLabels: ['X', 'Y', 'Size'] });
     expect((metadata.macros ?? []).map(m => m.control)).toEqual(['turbulence', 'drift']);
     const ids = new Set(metadata.controls.map(c => c.id));
-    for (const id of ['layout', 'ringCount', 'sunRays', 'sunInner', 'sunReach', 'sunAlternate', 'sunRings', 'sunNoise', 'trainEnabled', 'trainPeriod', 'trainCirculation', 'trainCore', 'trainAlternate', 'trainJitter', 'eddyDrift', 'markStyle', 'streakPen', 'streakSpacing', 'sourceEnabled', 'contourMinSpacing', 'structureDensity', 'frontSoftness', 'frontAmplitude', 'frontScale', 'frontCoverage', 'fillInterior', 'cloudEnabled', 'step', 'windX', 'windY', 'eddyX', 'eddyY', 'eddyCirculation', 'eddyCore', 'dispersion', 'boundary',
+    for (const id of ['layout', 'ringCount', 'weatherSeed', 'sunRays', 'sunInner', 'sunReach', 'sunAlternate', 'sunRings', 'sunNoise', 'trainEnabled', 'trainPeriod', 'trainCirculation', 'trainCore', 'trainAlternate', 'trainJitter', 'eddyDrift', 'markStyle', 'streakPen', 'streakSpacing', 'sourceEnabled', 'contourMinSpacing', 'structureDensity', 'frontSoftness', 'frontAmplitude', 'frontScale', 'frontCoverage', 'fillInterior', 'cloudEnabled', 'step', 'windX', 'windY', 'eddyX', 'eddyY', 'eddyCirculation', 'eddyCore', 'dispersion', 'boundary',
       'sourceX', 'sourceY', 'sourceSize', 'referenceDensity', 'cloudHatchPitch', 'cloudPen', 'obscure', 'coreRadius', 'coreX', 'coreY', 'hatchPitch']) {
       expect(ids.has(id), id).toBe(true);
     }
@@ -652,5 +652,41 @@ describe('Prescribed Weather sketch', () => {
       const marked = buildStudy(studyContext({ seed: 211, params: { ...base, trainEnabled: true, trainPeriod: 24, trainCirculation: 55, trainCore: 3, trainAlternate: false, trainJitter: 0.6, obscure: 0.3, cloudHatchPitch: 3 } }));
       expect(configHashes(marked.config).stateKey).toBe(configHashes(train.config).stateKey);
     });
+  });
+
+  describe('weatherSeed', () => {
+    const base = (): Request => JSON.parse(readFileSync(resolve('sketches/cloud-advection/configs/weather-b-mid.json'), 'utf8')) as Request;
+
+    it('0 reproduces the pre-weatherSeed drawing exactly (state key, density hash, parts)', async () => {
+      // Baseline recorded from configs/weather-b-mid.json before the control existed. The render identity
+      // hashes the control list, so it necessarily changed with the new slider; the drawing did not.
+      const result = await render(base());
+      const id = parseCloudStateId(state(result))!;
+      expect(id.stateKey).toBe('37b804d46fd36d63');
+      expect(id.densityHash).toBe('eac7d04ffd5085c1');
+      expect(result.stats).toMatchObject({ pathCount: 926, pointCount: 24276, lengthMm: 16101.575 });
+      expect((await render(base(), { weatherSeed: 0 })).identity).toBe(result.identity);
+    }, 30000);
+
+    it('changes the weather but never the structure, deterministically', async () => {
+      const zero = await render(base());
+      const one = await render(base(), { weatherSeed: 1 });
+      const again = await render(base(), { weatherSeed: 1 });
+      expect(again.parts).toEqual(one.parts);
+      expect(parseCloudStateId(state(one))!.stateKey).not.toBe(parseCloudStateId(state(zero))!.stateKey);
+      expect(cloud(one)).not.toEqual(cloud(zero));
+      // The drawn structure is only concealed by weather, so compare it with obscuration off (and with the cloud off).
+      const clear = { obscure: 0 };
+      expect(structure(await render(base(), { ...clear, weatherSeed: 1 }))).toEqual(structure(await render(base(), clear)));
+      expect(structure(await render(base(), { cloudEnabled: false, weatherSeed: 1 }))).toEqual(structure(await render(base(), { cloudEnabled: false })));
+      const study = (weatherSeed: number) => buildStudy(studyContext({ seed: 211, params: { ...base().params, weatherSeed } }));
+      expect(study(7).structure).toEqual(study(0).structure);
+      expect(study(7).marks.wispSeed).toBe(study(0).marks.wispSeed);
+      expect(study(7).config.front!.seed).not.toBe(study(0).config.front!.seed);
+      expect(study(7).config.source.seed).not.toBe(study(0).config.source.seed);
+      const train = { trainEnabled: true };
+      const t0 = buildStudy(studyContext({ seed: 211, params: { ...base().params, ...train } })).config.eddyTrain!.seed;
+      expect(buildStudy(studyContext({ seed: 211, params: { ...base().params, ...train, weatherSeed: 7 } })).config.eddyTrain!.seed).not.toBe(t0);
+    }, 60000);
   });
 });
