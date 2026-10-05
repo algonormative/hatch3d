@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { inspectSketch, renderSketch } from '../../cli/sketch/runner.ts';
 import { resolveFinishing, resolveParams } from '../../packages/plot-core/src/index.ts';
 import { contourLines } from '../../sketches/borrowed-orbits/contour.ts';
+import { simplify } from '../../sketches/borrowed-orbits/extract.ts';
 import { criticalLevels, jacobiField, lagrangePoints, librationMode, potentialGradient, zeroVelocityCurves } from '../../sketches/borrowed-orbits/lagrange.ts';
+import { orbitConfig, returnTime, rotatingPath } from '../../sketches/borrowed-orbits/libration.ts';
 import { makeMapper, plateScene, zeroVelocityLevels } from '../../sketches/borrowed-orbits/plates-extract.ts';
 import { buildPlate, CATALOG, runPlate } from '../../sketches/borrowed-orbits/plates-study.ts';
 import type { PlateStudy } from '../../sketches/borrowed-orbits/plates-study.ts';
@@ -49,8 +51,8 @@ const IDS = ['hohmann', 'lagrange', 'lagrange-off', 'threebody-figure8', 'threeb
 
 /** Largest distance of a vertex from the chord of its neighbours, page mm (a bound on the polygonization of a smooth curve). */
 function worstChord(s: PlateStudy, parts: string[]): number {
-  const h = integrate(s);
-  const scene = plateScene(s, h);
+  const run = integrate(s);
+  const scene = plateScene(s, run);
   const map = makeMapper(s, scene);
   let worst = 0;
   for (const line of scene.lines.filter(l => parts.includes(l.part))) {
@@ -117,7 +119,7 @@ describe('Orbit Plates sketch', () => {
     const hohmann = configHashes(study('hohmann').config).stateKey;
     for (const change of [{ orbitCount: 5 }, { spacing: 1.4 }, { stagger: 20 }, { transferMode: 'single' }, { departureStep: 50 }]) expect(configHashes(study('hohmann', change).config).stateKey).not.toBe(hohmann);
     const lagrange = configHashes(study('lagrange').config).stateKey;
-    for (const change of [{ massRatio: 0.01 }, { tadpoleCount: 3 }, { horseshoe: false }]) expect(configHashes(study('lagrange', change).config).stateKey).not.toBe(lagrange);
+    for (const change of [{ massRatio: 0.01 }, { tadpoleCount: 1 }, { horseshoe: false }, { horseshoeOffset: 0.02 }]) expect(configHashes(study('lagrange', change).config).stateKey).not.toBe(lagrange);
     expect(configHashes(study('threebody-moth').config).stateKey).not.toBe(configHashes(study('threebody-butterfly').config).stateKey);
     // And through the runner: the diagnostic part carries the key, which a mark-only change leaves alone.
     const base = await render(config('hohmann'));
@@ -185,34 +187,83 @@ describe('Orbit Plates sketch', () => {
     for (const p of circle[0]) expect(Math.hypot(p.x, p.y)).toBeCloseTo(3, 9);
   });
 
-  it('integrates the Lagrange orbits in the inertial frame and keeps their Jacobi constant', () => {
+  it('integrates every Lagrange orbit in the inertial frame for exactly one period and conserves its Jacobi constant', () => {
     const s = study('lagrange');
-    const h = integrate(s);
-    const { mu, a, omega } = s.lagrange!;
+    const run = integrate(s);
+    const { mu, a, omega, orbits } = s.lagrange!;
+    expect(run.histories).toHaveLength(orbits.length);
+    expect(orbits.filter(o => o.kind === 'tadpole')).toHaveLength(6);
+    expect(orbits.filter(o => o.kind === 'horseshoe')).toHaveLength(1);
     const m = s.config.attractors.map(x => x.mass);
-    // Jacobi constant along each integrated orbit, from the inertial state: rotating position and velocity about the integrated binary.
-    for (const particle of s.lagrange!.particles) {
+    run.histories.forEach((h, i) => {
+      const solved = run.solved[i];
+      expect(solved.converged, `orbit ${i}`).toBe(true);
+      expect(solved.residual).toBeLessThan(1e-5);
+      expect(h.xs.length).toBe(solved.steps + 1);
+      // Jacobi constant from the inertial state: rotating position and velocity about the integrated binary, velocity by central difference.
       const jacobi = (k: number): number => {
         const p1 = { x: h.ax[k][0], y: h.ay[k][0] }, p2 = { x: h.ax[k][1], y: h.ay[k][1] };
         const bary = { x: (m[0] * p1.x + m[1] * p2.x) / (m[0] + m[1]), y: (m[0] * p1.y + m[1] * p2.y) / (m[0] + m[1]) };
         const theta = Math.atan2(p2.y - p1.y, p2.x - p1.x);
         const c = Math.cos(-theta), sn = Math.sin(-theta);
-        const x = h.xs[k][particle.particle] - bary.x, y = h.ys[k][particle.particle] - bary.y;
+        const x = h.xs[k][0] - bary.x, y = h.ys[k][0] - bary.y;
         const k1 = Math.min(k + 1, h.xs.length - 1), k0 = Math.max(k - 1, 0);
-        // Inertial velocity by central difference over the recorded step, then into the rotating frame: v_rot = R(-theta) v - Omega x r.
-        const dt = (k1 - k0) * s.config.settings.dt;
-        const vx = (h.xs[k1][particle.particle] - h.xs[k0][particle.particle]) / dt, vy = (h.ys[k1][particle.particle] - h.ys[k0][particle.particle]) / dt;
+        const dt = (k1 - k0) * (solved.periodS / solved.steps);
+        const vx = (h.xs[k1][0] - h.xs[k0][0]) / dt, vy = (h.ys[k1][0] - h.ys[k0][0]) / dt;
         const rx = (x * c - y * sn) / a, ry = (x * sn + y * c) / a;
         const ux = (vx * c - vy * sn) / (a * omega) + ry, uy = (vx * sn + vy * c) / (a * omega) - rx;
         return jacobiField(mu, rx, ry) - (ux * ux + uy * uy);
       };
-      const c0 = jacobi(40), c1 = jacobi(Math.floor(h.xs.length / 2)), c2 = jacobi(h.xs.length - 40);
-      // Central differencing over 80 steps per period costs a little; conservation to 1e-3 of a unit that is about 3.
+      const c0 = jacobi(100), c1 = jacobi(Math.floor(h.xs.length / 2)), c2 = jacobi(h.xs.length - 100);
       expect(Math.abs(c1 - c0)).toBeLessThan(2e-3);
       expect(Math.abs(c2 - c0)).toBeLessThan(2e-3);
-      expect(Math.abs(c0 - particle.jacobi)).toBeLessThan(2e-2);
-    }
+    });
     expect(librationMode(0.002, 1).omega).toBeCloseTo(Math.sqrt((-1 + Math.sqrt(1 - 27 * 0.002 * 0.998)) / -2), 12);
+  });
+
+  it('closes every libration orbit to within 0.1 page mm and keeps it free of epicycle loops, which the old start did not', () => {
+    const s = study('lagrange');
+    const run = integrate(s);
+    const scene = plateScene(s, run);
+    const map = makeMapper(s, scene);
+    /** Largest turning angle between consecutive segments of the line after RDP at 0.02 mm. */
+    const maxTurn = (pts: { x: number; y: number }[]): number => {
+      let worst = 0;
+      for (let i = 1; i < pts.length - 1; i++) {
+        const a = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x), b = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x);
+        const d = Math.abs(b - a);
+        worst = Math.max(worst, d > Math.PI ? 2 * Math.PI - d : d);
+      }
+      return worst;
+    };
+    const lines = scene.lines.filter(l => l.part === 'tadpoles' || l.part === 'horseshoe');
+    expect(lines).toHaveLength(7);
+    const TURN_BOUND = 1.6;
+    for (const line of lines) {
+      const page = line.points.map(map.toPage);
+      expect(Math.hypot(page[0].x - page[page.length - 1].x, page[0].y - page[page.length - 1].y), line.part).toBeLessThan(0.1);
+      expect(maxTurn(simplify(page, 0.02)), line.part).toBeLessThan(TURN_BOUND);
+    }
+    // The horseshoe is a full closed horseshoe: it reaches both sides of the ring and passes the L3 side without a kink.
+    const horseshoe = lines.find(l => l.part === 'horseshoe')!;
+    expect(maxTurn(simplify(horseshoe.points.map(map.toPage), 0.02))).toBeLessThan(0.5);
+    const angles = horseshoe.points.map(p => Math.atan2(p.y, p.x));
+    expect(Math.max(...angles) - Math.min(...angles)).toBeGreaterThan(5);
+    // The old start (released at rest in the rotating frame, displaced along the circle about the primary, mu 0.002) fails both:
+    // one libration later it is not where it started, and its path turns through epicycle loops.
+    const mu = 0.002, a = 12, omega = (2 * Math.PI) / 40;
+    const total = (omega * omega * a ** 3) / 6.6743e-11;
+    const base = s.lagrange!.binary;
+    const attractors = base.attractors.map((x, i) => ({ ...x, mass: i === 0 ? (1 - mu) * total : mu * total, position: { x: base.bary.x + (i === 0 ? -mu * a : (1 - mu) * a), y: base.bary.y }, velocity: { x: 0, y: (i === 0 ? -mu : 1 - mu) * a * omega } }));
+    const binary = { mu, a, omega, bary: base.bary, attractors };
+    const L4 = lagrangePoints(mu).L4, er = { x: L4.x + mu, y: L4.y }, n = Math.hypot(er.x, er.y);
+    const old = rotatingPath(binary, history(orbitConfig(binary, { xi: L4.x + (-er.y / n) * 0.06, eta: L4.y + (er.x / n) * 0.06, u: 0, v: 0 }, 1, 16), 0, 700));
+    const ret = returnTime(old, 1)!;
+    expect(ret).toBeGreaterThan(100);
+    // About 80 page mm per unit of separation, as on the plate.
+    const page = old.slice(0, Math.round(ret) + 1).map(p => ({ x: 80 * p.x, y: 80 * p.y }));
+    expect(Math.hypot(page[0].x - page[page.length - 1].x, page[0].y - page[page.length - 1].y)).toBeGreaterThan(0.5);
+    expect(maxTurn(simplify(page, 0.02))).toBeGreaterThan(TURN_BOUND);
   });
 
   it('integrates the Hohmann orbits and ends the drawn transfer arc on the target radius', () => {
@@ -256,9 +307,9 @@ describe('Orbit Plates sketch', () => {
   it('closes every choreography to within 0.1 page mm and keeps the lines smooth', () => {
     for (const id of ['threebody-figure8', 'threebody-butterfly', 'threebody-moth', 'threebody-yinyang']) {
       const s = study(id);
-      const h = integrate(s);
-      expect(h.xs.length).toBe(s.threebody!.steps + 1);
-      const scene = plateScene(s, h);
+      const run = integrate(s);
+      expect(run.histories[0].xs.length).toBe(s.threebody!.steps + 1);
+      const scene = plateScene(s, run);
       const map = makeMapper(s, scene);
       const orbits = scene.lines.filter(l => l.part === 'orbits');
       expect(orbits).toHaveLength(3);
@@ -271,7 +322,7 @@ describe('Orbit Plates sketch', () => {
     expect(Object.keys(CATALOG)).toEqual(['figure-eight', 'butterfly', 'yin-yang', 'moth']);
     // Zero total momentum and the barycentre at rest: the recorded barycentre stays put.
     const s = study('threebody-butterfly', { choreography: 'butterfly' });
-    const h = integrate(s);
+    const h = integrate(s).histories[0];
     const bary = (k: number) => ({ x: (h.ax[k][0] + h.ax[k][1] + h.ax[k][2]) / 3, y: (h.ay[k][0] + h.ay[k][1] + h.ay[k][2]) / 3 });
     expect(Math.hypot(bary(h.xs.length - 1).x - bary(0).x, bary(h.xs.length - 1).y - bary(0).y)).toBeLessThan(1e-6);
     // The first-body option draws one curve; the phase moves the circles but not the curves.
@@ -294,7 +345,7 @@ describe('Orbit Plates sketch', () => {
     // The runner runs in a child process, so also call draw directly.
     sketch.draw(context('lagrange-off'));
     expect(simCalls.n).toBe(0);
-    sketch.draw(context('lagrange', { periods: 5, tadpoleCount: 1 }));
+    sketch.draw(context('lagrange', { massRatio: 0.003, tadpoleCount: 1, horseshoe: false }));
     expect(simCalls.n).toBeGreaterThan(0);
   }, 60000);
 });

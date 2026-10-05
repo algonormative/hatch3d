@@ -42,16 +42,14 @@ const sketch: Sketch = {
     { type: 'toggle', id: 'showTransfers', label: 'Draw transfers and burn ticks', default: true, group: 'Hohmann', ...when('hohmann') },
     { type: 'toggle', id: 'showPlanets', label: 'Draw planets at departure and arrival', default: true, group: 'Hohmann', ...when('hohmann') },
     slider('tickScale', 'Burn tick length', 1200, 100, 6000, 50, 'Hohmann', { units: 'mm per m/s', ...when('hohmann') }),
-    slider('massRatio', 'Mass ratio μ (Routh-stable below 0.0385)', 0.002, 0.001, 0.038, 0.001, 'Lagrange', { ...when('lagrange'), ...sim }),
-    slider('tadpoleCount', 'Tadpole orbits', 2, 0, 3, 1, 'Lagrange', { ...when('lagrange'), ...sim }),
-    slider('tadpoleAmplitude', 'Tadpole amplitude', 0.09, 0.03, 0.12, 0.005, 'Lagrange', { units: 'a', ...when('lagrange'), ...sim }),
-    slider('tadpoleCycles', 'Tadpole libration cycles drawn', 1, 0.5, 4, 0.5, 'Lagrange', { ...when('lagrange'), ...sim }),
-    { type: 'toggle', id: 'horseshoe', label: 'Horseshoe orbit (for μ up to about 0.002)', default: true, group: 'Lagrange', ...when('lagrange'), ...sim },
-    slider('horseshoeOffset', 'Horseshoe radial offset', 0.02, 0.01, 0.03, 0.005, 'Lagrange', { units: 'a', ...when('lagrange'), ...sim }),
-    slider('periods', 'Binary periods integrated (horseshoe length)', 15, 5, 30, 1, 'Lagrange', { ...when('lagrange'), ...sim }),
+    slider('massRatio', 'Mass ratio μ (the horseshoe needs 0.002 or less)', 0.001, 0.001, 0.038, 0.001, 'Lagrange', { ...when('lagrange'), ...sim }),
+    slider('tadpoleCount', 'Nested tadpoles at each of L4 and L5', 3, 0, 3, 1, 'Lagrange', { ...when('lagrange'), ...sim }),
+    slider('tadpoleAmplitude', 'Innermost tadpole radial offset (the others are 2x, 3x)', 0.013, 0.005, 0.015, 0.001, 'Lagrange', { units: 'a', ...when('lagrange'), ...sim }),
+    { type: 'toggle', id: 'horseshoe', label: 'Horseshoe orbit', default: true, group: 'Lagrange', ...when('lagrange'), ...sim },
+    slider('horseshoeOffset', 'Horseshoe radial offset', 0.03, 0.01, 0.04, 0.005, 'Lagrange', { units: 'a', ...when('lagrange'), ...sim }),
     { type: 'toggle', id: 'showPoints', label: 'Lagrange points', default: true, group: 'Lagrange', ...when('lagrange') },
     { type: 'select', id: 'zvcMode', label: 'Zero-velocity curves', default: 'necks', options: ['off', 'necks', 'critical'], optionLabels: { off: 'Off', necks: 'Necks opening one by one', critical: 'Critical levels' }, group: 'Lagrange', ...when('lagrange') },
-    slider('zvcCount', 'Curve levels', 3, 2, 4, 1, 'Lagrange', when('lagrange')),
+    slider('zvcCount', 'Curve levels', 2, 2, 4, 1, 'Lagrange', when('lagrange')),
     { type: 'toggle', id: 'orbitBoundaries', label: "Each orbit's own zero-velocity boundary", default: false, group: 'Lagrange', ...when('lagrange') },
     { type: 'select', id: 'choreography', label: 'Choreography', default: 'figure-eight', options: Object.keys(CATALOG), optionLabels: Object.fromEntries(Object.values(CATALOG).map(c => [c.id, c.label])), group: 'Three-body', ...when('threebody'), ...sim },
     { type: 'select', id: 'bodies', label: 'Curves drawn', default: 'all', options: ['all', 'first'], optionLabels: { all: 'All three bodies', first: 'Body 1 only' }, group: 'Three-body', ...when('threebody') },
@@ -65,8 +63,8 @@ const sketch: Sketch = {
   draw(ctx) {
     const study = buildPlate(ctx);
     // Off state: bodies and analytic references only; the simulation is never called.
-    const record = study.integrate ? runPlate(study, history) : null;
-    return composePoster(ctx, extractPlate(study, record), { page: TABLOID_PAGE, subtitle: 'ORBIT PLATES', edition: 'O2' });
+    const run = study.integrate ? runPlate(study, history) : null;
+    return composePoster(ctx, extractPlate(study, run), { page: TABLOID_PAGE, subtitle: 'ORBIT PLATES', edition: 'O2' });
   },
 };
 

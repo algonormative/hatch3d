@@ -17,7 +17,9 @@ import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
 import { WORLD } from './layout.ts';
 import { G, LIMITS } from './model.ts';
 import type { Attractor, History, Impulse, OrbitStudyConfig, ParticleInit, Vec2 } from './model.ts';
-import { jacobiConstant, lagrangePoints, librationMode } from './lagrange.ts';
+import { lagrangePoints, librationMode } from './lagrange.ts';
+import { orbitConfig, solveLibration } from './libration.ts';
+import type { BinarySetup, SolvedOrbit } from './libration.ts';
 import { circularSpeed, numeric } from './study.ts';
 
 export const PLATES = ['hohmann', 'lagrange', 'threebody'] as const;
@@ -99,7 +101,18 @@ export interface HohmannPlan {
   orbitParticles: number[];
   hops: HohmannHop[];
 }
-export interface LagrangeParticle { particle: number; kind: 'tadpole' | 'horseshoe'; near: 'L4' | 'L5' | 'L3'; amplitude: number; jacobi: number; /** Steps of its path that are drawn (a tadpole is drawn for its libration cycles, a horseshoe for the whole run). */ drawSteps: number }
+/** A libration orbit to integrate: its start position in the rotating frame (normalized) and the velocity guess shooting starts from. */
+export interface LagrangeOrbit {
+  kind: 'tadpole' | 'horseshoe';
+  near: 'L4' | 'L5' | 'L3';
+  /** Radial offset of the start from the unit circle, units of a. */
+  offset: number;
+  xi: number;
+  eta: number;
+  guess: { u: number; v: number };
+  /** Period to fall back on if the trial integration finds no return, s. */
+  fallbackPeriodS: number;
+}
 export interface LagrangePlan {
   mu: number;
   /** Separation, m. */
@@ -107,8 +120,11 @@ export interface LagrangePlan {
   /** Binary angular velocity, rad/s. */
   omega: number;
   bary: Vec2;
-  particles: LagrangeParticle[];
+  binary: BinarySetup;
+  orbits: LagrangeOrbit[];
 }
+/** The integrated plate: one history per run (a Lagrange plate has one per orbit, each with its own step) and the solved libration orbits. */
+export interface PlateRun { histories: History[]; solved: SolvedOrbit[] }
 export interface ThreebodyPlan { entry: Choreography; length: number; time: number; /** Recorded steps in one period (segments x 2400). */ steps: number; segments: number }
 
 export interface PlateMarks {
@@ -226,13 +242,20 @@ export function hohmannSetup(opts: { orbitCount: number; spacing: number; chain:
 
 export const LAGRANGE = Object.freeze({ dt: 0.5, separation: 12, binaryPeriodSteps: 80, substeps: 16, softening: 1e-4 });
 
-/** Total mass of the binary: Omega^2 a^3 / G with Omega = 2 pi / (40 dt). */
+/** Total mass of the binary: Omega^2 a^3 / G with Omega = 2 pi / (80 dt) = 2 pi / 40 s. */
 export const lagrangeTotalMass = (): number => {
   const omega = (2 * Math.PI) / (LAGRANGE.binaryPeriodSteps * LAGRANGE.dt);
   return (omega * omega * LAGRANGE.separation ** 3) / G;
 };
 
-export function lagrangeSetup(opts: { mu: number; tadpoles: number; amplitude: number; horseshoe: boolean; horseshoeOffset: number; periods: number; cycles: number }): { config: OrbitStudyConfig; plan: LagrangePlan; steps: number } {
+/**
+ * The libration orbits of a Lagrange plate. Each starts on the circle of radius 1 + offset about the barycentre, at the angle
+ * of L4 or L5 (tadpoles; offsets `amplitude`, 2 `amplitude`, ... nested on both sides) or opposite the secondary (the horseshoe),
+ * with the circular Keplerian velocity about the barycentre as the guess. `runPlate` then shoots the exactly periodic orbit
+ * through each start (libration.ts), so each closes and carries no epicycle. The simulation configuration returned here
+ * (the binary and the guess particles at the nominal step) only identifies the plate: its stateKey depends on the sim controls.
+ */
+export function lagrangeSetup(opts: { mu: number; tadpoles: number; amplitude: number; horseshoe: boolean; horseshoeOffset: number }): { config: OrbitStudyConfig; plan: LagrangePlan; steps: number } {
   const { dt, separation: a, binaryPeriodSteps, substeps, softening } = LAGRANGE;
   const mu = opts.mu;
   const omega = (2 * Math.PI) / (binaryPeriodSteps * dt);
@@ -242,47 +265,27 @@ export function lagrangeSetup(opts: { mu: number; tadpoles: number; amplitude: n
     attractor('mass-primary', (1 - mu) * total, { x: bary.x - mu * a, y: bary.y }, { x: 0, y: -mu * a * omega }, softening, true),
     attractor('mass-secondary', mu * total, { x: bary.x + (1 - mu) * a, y: bary.y }, { x: 0, y: (1 - mu) * a * omega }, softening, true),
   ];
-  const particles: ParticleInit[] = [];
-  const plan: LagrangeParticle[] = [];
-  /** A particle from rotating-frame position (xi, eta) and velocity (u, v), both normalized (unit a, unit a*Omega). */
-  const seed = (xi: number, eta: number, u: number, v: number): ParticleInit => ({
-    position: { x: bary.x + a * xi, y: bary.y + a * eta },
-    velocity: { x: a * omega * (u - eta), y: a * omega * (v + xi) },
-  });
   const points = lagrangePoints(mu);
-  const wholeSteps = Math.min(LIMITS.maxSteps, Math.round(opts.periods) * binaryPeriodSteps);
-  let needed = opts.horseshoe ? wholeSteps : 0;
+  const phi4 = Math.atan2(points.L4.y, points.L4.x);
+  const orbits: LagrangeOrbit[] = [];
+  const add = (kind: LagrangeOrbit['kind'], near: LagrangeOrbit['near'], offset: number, phi: number, fallbackPeriodS: number): void => {
+    const r = 1 + offset;
+    const xi = r * Math.cos(phi), eta = r * Math.sin(phi);
+    // Circular Kepler orbit about the barycentre (total mass 1, unit radius): inertial speed r^-1/2, counter-clockwise; rotating velocity subtracts the frame's rotation.
+    const speed = Math.sqrt(1 / r);
+    const u = (-speed * eta) / r + eta, v = (speed * xi) / r - xi;
+    orbits.push({ kind, near, offset, xi, eta, guess: { u, v }, fallbackPeriodS });
+  };
+  const tadpolePeriod = (2 * Math.PI) / librationMode(mu, 1).omega / omega;
   for (let k = 0; k < opts.tadpoles; k++) {
-    const near = k % 2 === 0 ? 'L4' : 'L5';
-    const side = near === 'L4' ? 1 : -1;
-    const amp = opts.amplitude * (1 + 0.3 * k);
-    const L = points[near];
-    // Position along the libration mode of the linearized motion (librationMode), velocity of the circular Kepler orbit about
-    // the primary at that point: almost no epicycle is excited (at small mu), so the tadpole is a clean banana rather than
-    // a banana strung with loops. (Released at rest, or in the pure linear mode, the epicycle is excited by the nonlinearity.)
-    const mode = librationMode(mu, side);
-    const xi = L.x + amp, eta = L.y + amp * mode.bRe;
-    const rho = Math.hypot(xi + mu, eta), speed = Math.sqrt((1 - mu) / rho);
-    const vix = (speed * -eta) / rho, viy = (speed * (xi + mu)) / rho - mu;
-    const u = vix + eta, v = viy - xi;
-    particles.push(seed(xi, eta, u, v));
-    const drawSteps = Math.min(LIMITS.maxSteps, Math.max(2, Math.round((opts.cycles * 2 * Math.PI / mode.omega / (2 * Math.PI)) * binaryPeriodSteps)));
-    needed = Math.max(needed, drawSteps);
-    plan.push({ particle: particles.length - 1, kind: 'tadpole', near, amplitude: amp, jacobi: jacobiConstant(mu, xi, eta, u, v), drawSteps });
+    add('tadpole', 'L4', opts.amplitude * (k + 1), phi4, tadpolePeriod);
+    add('tadpole', 'L5', opts.amplitude * (k + 1), -phi4, tadpolePeriod);
   }
-  if (opts.horseshoe) {
-    // On the circular Kepler orbit about the primary at radius 1 + offset, opposite the secondary.
-    const xi = -(1 + opts.horseshoeOffset), eta = 0;
-    const rho = Math.hypot(xi + mu, eta);
-    const speed = Math.sqrt((1 - mu) / rho);
-    const tx = -eta / rho, ty = (xi + mu) / rho;
-    const vix = speed * tx, viy = speed * ty - mu;
-    const u = vix + eta, v = viy - xi;
-    particles.push(seed(xi, eta, u, v));
-    plan.push({ particle: particles.length - 1, kind: 'horseshoe', near: 'L3', amplitude: opts.horseshoeOffset, jacobi: jacobiConstant(mu, xi, eta, u, v), drawSteps: wholeSteps });
-  }
-  const steps = Math.max(1, Math.min(LIMITS.maxSteps, needed));
-  return { config: baseConfig(dt, substeps, attractors, particles, []), plan: { mu, a, omega, bary, particles: plan }, steps };
+  if (opts.horseshoe) add('horseshoe', 'L3', opts.horseshoeOffset, Math.PI, 30 * (2 * Math.PI) / omega);
+  const binary: BinarySetup = { mu, a, omega, bary, attractors };
+  // Identity configuration: the binary and every guess start at the nominal step.
+  const particles = orbits.map(o => orbitConfig(binary, { xi: o.xi, eta: o.eta, u: o.guess.u, v: o.guess.v }, dt, substeps).particles[0]);
+  return { config: baseConfig(dt, substeps, attractors, particles, []), plan: { mu, a, omega, bary, binary, orbits }, steps: LIMITS.maxSteps };
 }
 
 // ------------------------------------------------------------------ three-body
@@ -326,7 +329,7 @@ export function buildPlate(ctx: SketchContext): PlateStudy {
     tickScale: numeric(ctx, 'tickScale', 1200, 100, 6000),
     showPoints: ctx.params.showPoints !== false,
     zvcMode: pick(ctx.params.zvcMode, ['off', 'necks', 'critical'] as const, 'necks'),
-    zvcCount: Math.round(numeric(ctx, 'zvcCount', 3, 2, 4)),
+    zvcCount: Math.round(numeric(ctx, 'zvcCount', 2, 2, 4)),
     orbitBoundaries: ctx.params.orbitBoundaries === true,
     bodies: pick(ctx.params.bodies, ['all', 'first'] as const, 'all'),
     bodyPhase: numeric(ctx, 'bodyPhase', 0, 0, 1),
@@ -335,13 +338,11 @@ export function buildPlate(ctx: SketchContext): PlateStudy {
   const base = { plate, integrate, marks, fit, frame };
   if (plate === 'lagrange') {
     const s = lagrangeSetup({
-      mu: numeric(ctx, 'massRatio', 0.002, 0.001, 0.038),
-      tadpoles: Math.round(numeric(ctx, 'tadpoleCount', 2, 0, 3)),
-      amplitude: numeric(ctx, 'tadpoleAmplitude', 0.09, 0.03, 0.12),
+      mu: numeric(ctx, 'massRatio', 0.001, 0.001, 0.038),
+      tadpoles: Math.round(numeric(ctx, 'tadpoleCount', 3, 0, 3)),
+      amplitude: numeric(ctx, 'tadpoleAmplitude', 0.013, 0.005, 0.015),
       horseshoe: ctx.params.horseshoe !== false,
-      horseshoeOffset: numeric(ctx, 'horseshoeOffset', 0.02, 0.01, 0.03),
-      periods: numeric(ctx, 'periods', 15, 5, 30),
-      cycles: numeric(ctx, 'tadpoleCycles', 1, 0.5, 4),
+      horseshoeOffset: numeric(ctx, 'horseshoeOffset', 0.03, 0.01, 0.04),
     });
     return { ...base, config: s.config, steps: s.steps, lagrange: s.plan };
   }
@@ -359,14 +360,28 @@ export function buildPlate(ctx: SketchContext): PlateStudy {
 }
 
 /**
- * Integrate a plate: the history of recorded steps 0..study.steps. A three-body period longer than one run's step limit is
- * integrated as consecutive runs, each resumed from the exact final state of the previous one (the state is synchronized at
- * a step boundary, so the chain is the same computation as one long run) and joined into one history. `final` carries the
- * last snapshot with the hashes of the first run, the identity of the whole integration.
+ * Integrate a plate. Hohmann: one history. Three-body: one history, joined from consecutive runs when the period is longer than
+ * one run's step limit (each run resumes from the exact final state of the previous one: the state is synchronized at a step
+ * boundary, so the chain is the same computation as one long run; `final` carries the last snapshot with the hashes of the
+ * first run, the identity of the whole integration). Lagrange: one history per libration orbit, each integrated for exactly one
+ * period at its own step (libration.ts shoots the periodic orbit through the start), cached by its inputs.
  */
-export function runPlate(study: PlateStudy, run: (config: OrbitStudyConfig, from: number, to: number) => History): History {
+export function runPlate(study: PlateStudy, run: (config: OrbitStudyConfig, from: number, to: number) => History): PlateRun {
+  if (study.lagrange) {
+    const plan = study.lagrange;
+    const histories: History[] = [];
+    const solved: SolvedOrbit[] = [];
+    for (const orbit of plan.orbits) {
+      const key = JSON.stringify([plan.mu, plan.a, plan.omega, orbit.xi, orbit.eta, orbit.guess]);
+      let hit = shot.get(key);
+      if (!hit) { hit = solveLibration(plan.binary, orbit.xi, orbit.eta, orbit.guess, orbit.fallbackPeriodS, run); shot.set(key, hit); }
+      histories.push(hit.history);
+      solved.push(hit.solved);
+    }
+    return { histories, solved };
+  }
   const segments = study.threebody?.segments ?? 1;
-  if (segments === 1) return run(study.config, 0, study.steps);
+  if (segments === 1) return { histories: [run(study.config, 0, study.steps)], solved: [] };
   const per = study.steps / segments;
   const xs: Float64Array[] = [], ys: Float64Array[] = [], ax: Float64Array[] = [], ay: Float64Array[] = [];
   let config = study.config;
@@ -380,8 +395,10 @@ export function runPlate(study: PlateStudy, run: (config: OrbitStudyConfig, from
     last = h;
     config = { ...config, attractors: config.attractors.map((a, i) => ({ ...a, position: { ...h.final.attractors[i].position }, velocity: { ...h.final.attractors[i].velocity } })) };
   }
-  return { fromStep: 0, toStep: study.steps, xs, ys, ax, ay, final: { ...last!.final, step: study.steps, hashes: firstHashes! } };
+  return { histories: [{ fromStep: 0, toStep: study.steps, xs, ys, ax, ay, final: { ...last!.final, step: study.steps, hashes: firstHashes! } }], solved: [] };
 }
+
+const shot = new Map<string, ReturnType<typeof solveLibration>>();
 
 /** Page-mm point to art coordinates, for the poster fit. */
 export const pageToArt = (fit: PosterFit, p: Point): Point => fit.inverse(p);

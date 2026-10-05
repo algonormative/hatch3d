@@ -10,9 +10,10 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { clipPolylineToRect } from '../../packages/plot-core/src/clip.ts';
 import { circlePath, simplify } from './extract.ts';
-import { criticalLevels, lagrangePoints, zeroVelocityCurves } from './lagrange.ts';
+import { criticalLevels, jacobiConstant, lagrangePoints, zeroVelocityCurves } from './lagrange.ts';
+import { rotatingPath } from './libration.ts';
 import type { History, Vec2 } from './model.ts';
-import type { PlateMarks, PlateStudy } from './plates-study.ts';
+import type { PlateMarks, PlateRun, PlateStudy } from './plates-study.ts';
 
 /** RDP tolerance for every drawn line, page mm. */
 export const PLATE_SIMPLIFY_MM = 0.02;
@@ -99,33 +100,30 @@ export function zeroVelocityLevels(mu: number, mode: PlateMarks['zvcMode'], coun
 }
 
 /** Lagrange plate in the rotating frame: world metres are rotating-frame metres about the barycentre. */
-function lagrangeScene(study: PlateStudy, h: History | null): Scene {
+function lagrangeScene(study: PlateStudy, run: PlateRun | null): Scene {
   const plan = study.lagrange!;
   const marks = study.marks;
   const { mu, a } = plan;
   const scene: Scene = { lines: [], glyphs: [] };
   const scale = (p: Vec2): Vec2 => ({ x: p.x * a, y: p.y * a });
-  const masses = study.config.attractors.map(m => m.mass);
-  const total = masses[0] + masses[1];
-  const frameAt = (get: (index: number) => Vec2): { bary: Vec2; angle: number } => {
-    const p1 = get(0), p2 = get(1);
-    return { bary: { x: (masses[0] * p1.x + masses[1] * p2.x) / total, y: (masses[0] * p1.y + masses[1] * p2.y) / total }, angle: Math.atan2(p2.y - p1.y, p2.x - p1.x) };
-  };
-  // Rotate by minus the integrated binary angle about the integrated barycentre: the primaries stand still on the page.
-  const toRotating = (p: Vec2, frame: { bary: Vec2; angle: number }): Vec2 => {
-    const dx = p.x - frame.bary.x, dy = p.y - frame.bary.y, c = Math.cos(-frame.angle), s = Math.sin(-frame.angle);
-    return { x: dx * c - dy * s, y: dx * s + dy * c };
-  };
-  if (h) {
-    const frames = Array.from({ length: h.xs.length }, (_v, k) => frameAt(index => ({ x: h.ax[k][index], y: h.ay[k][index] })));
-    for (const particle of plan.particles) {
-      const points = path(h, particle.particle, h.fromStep, Math.min(h.toStep, particle.drawSteps)).map((p, k) => toRotating(p, frames[k]));
-      scene.lines.push({ part: particle.kind === 'horseshoe' ? 'horseshoe' : 'tadpoles', pen: 'orbit', points });
-    }
-    const last = frames.length - 1;
-    for (const index of [0, 1]) {
-      scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: toRotating({ x: h.ax[last][index], y: h.ay[last][index] }, frames[last]), mm: marks.bodyRadius * (index === 0 ? 1.5 : 1) });
-    }
+  const boundaryLevels: number[] = [];
+  if (run) {
+    // Each libration orbit is its own run; its rotating-frame path is the integrated inertial path rotated by minus the
+    // integrated binary angle about the integrated barycentre, so the primaries stand still on the page.
+    run.histories.forEach((h, i) => {
+      scene.lines.push({ part: plan.orbits[i].kind === 'horseshoe' ? 'horseshoe' : 'tadpoles', pen: 'orbit', points: rotatingPath(plan.binary, h).map(scale) });
+      if (marks.orbitBoundaries) boundaryLevels.push(run.solved[i] ? jacobiConstant(mu, plan.orbits[i].xi, plan.orbits[i].eta, run.solved[i].u, run.solved[i].v) : 0);
+    });
+    const h = run.histories[0];
+    const last = h.xs.length - 1;
+    const masses = study.config.attractors.map(m => m.mass);
+    const total = masses[0] + masses[1];
+    const p1 = { x: h.ax[last][0], y: h.ay[last][0] }, p2 = { x: h.ax[last][1], y: h.ay[last][1] };
+    const bary = { x: (masses[0] * p1.x + masses[1] * p2.x) / total, y: (masses[0] * p1.y + masses[1] * p2.y) / total };
+    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x), c = Math.cos(-angle), sn = Math.sin(-angle);
+    [p1, p2].forEach((p, index) => scene.glyphs.push({
+      part: 'bodies', pen: 'orbit', kind: 'circle', at: { x: (p.x - bary.x) * c - (p.y - bary.y) * sn, y: (p.x - bary.x) * sn + (p.y - bary.y) * c }, mm: marks.bodyRadius * (index === 0 ? 1.5 : 1),
+    }));
   } else {
     scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: scale({ x: -mu, y: 0 }), mm: marks.bodyRadius * 1.5 });
     scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: scale({ x: 1 - mu, y: 0 }), mm: marks.bodyRadius });
@@ -134,7 +132,6 @@ function lagrangeScene(study: PlateStudy, h: History | null): Scene {
     for (const p of Object.values(lagrangePoints(mu))) scene.glyphs.push({ part: 'lagrange-points', pen: 'highlight', kind: 'cross', at: scale(p), mm: marks.crossSize });
   }
   const levels = zeroVelocityLevels(mu, marks.zvcMode, marks.zvcCount);
-  const boundaryLevels = marks.orbitBoundaries && h ? plan.particles.map(p => p.jacobi) : [];
   const top = Math.max(0, ...levels, ...boundaryLevels);
   const half = Math.max(1.5, 1.12 * Math.sqrt(top));
   const box = { xMin: -half, xMax: half, yMin: -half, yMax: half };
@@ -161,8 +158,9 @@ function threebodyScene(study: PlateStudy, h: History | null): Scene {
   return scene;
 }
 
-export function plateScene(study: PlateStudy, h: History | null): Scene {
-  if (study.plate === 'lagrange') return lagrangeScene(study, h);
+export function plateScene(study: PlateStudy, run: PlateRun | null): Scene {
+  if (study.plate === 'lagrange') return lagrangeScene(study, run);
+  const h = run ? run.histories[0] : null;
   if (study.plate === 'threebody') return threebodyScene(study, h);
   return hohmannScene(study, h);
 }
@@ -212,8 +210,8 @@ const PART_ORDER = ['zero-velocity', 'orbit-boundaries', 'orbits', 'tadpoles', '
 export const plateStateId = (plate: string, key: string | null): string => (key === null ? `plate-state-${plate}-off` : `plate-state-${plate}-key-${key.replace(/[^A-Za-z0-9]/g, '_')}`);
 
 /** Draw one plate. All coordinates are art coordinates; composePoster maps them to the page. */
-export function extractPlate(study: PlateStudy, h: History | null): Part[] {
-  const scene = plateScene(study, h);
+export function extractPlate(study: PlateStudy, run: PlateRun | null): Part[] {
+  const scene = plateScene(study, run);
   const map = makeMapper(study, scene);
   const roles = pens(study.marks);
   const { fit, frame } = study;
@@ -246,6 +244,6 @@ export function extractPlate(study: PlateStudy, h: History | null): Part[] {
   }
   const ordered = [...parts.keys()].sort((x, y) => PART_ORDER.indexOf(x) - PART_ORDER.indexOf(y));
   const out: Part[] = ordered.map(id => ({ id, pen: parts.get(id)!.pen, paths: parts.get(id)!.paths }));
-  out.push({ id: plateStateId(study.plate, h ? h.final.hashes.stateKey : null), pen: roles.orbit, paths: [], diagnostic: true });
+  out.push({ id: plateStateId(study.plate, run ? run.histories[0].final.hashes.stateKey : null), pen: roles.orbit, paths: [], diagnostic: true });
   return out;
 }
