@@ -1,0 +1,20 @@
+{
+  "seed": 411,
+  "params": {
+    "posterMode": "abstract",
+    "posterFace": "wire",
+    "posterTitle": "PHASE GARDEN",
+    "posterKicker": "LIVE ELECTRONIC SYSTEMS",
+    "posterSubtitle": "ORBIT PLATES",
+    "posterFooter": "CONCERT STUDY / O2",
+    "plate": "lagrange"
+  },
+  "finishing": {
+    "border": {
+      "style": "double",
+      "pen": "carbon",
+      "inset": 12,
+      "contentGap": 0
+    }
+  }
+}

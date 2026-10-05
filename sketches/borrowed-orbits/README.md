@@ -16,3 +16,17 @@ npm run sketch -- open sketches/borrowed-orbits/sketch.ts
 ```
 
 Checks: `npx vitest run src/__tests__/borrowed-orbits-sim.test.ts src/__tests__/borrowed-orbits-sketch.test.ts`.
+
+## Plates
+
+`plates.ts` is a second sketch, Orbit Plates: three plates of clean, integrated orbital systems drawn as lines only (orbits, small exact circles for bodies, small crosses for Lagrange points, short ticks for burns; no text, no arrows). The `plate` select chooses `hohmann` (circular orbits with integrated Hohmann transfers and scheduled burns), `lagrange` (restricted three-body in the rotating frame, with zero-velocity curves) or `threebody` (figure-eight, butterfly I, moth I, yin-yang Ia). The first-round sketch above is untouched. See "Plates: Orbit Plates" in the [brief](brief.md) for the SI scales and the catalog verification.
+
+- `plates-study.ts` sets up each plate (SI scales, initial conditions, scheduled impulses, the chained runs for long periods); `plates-extract.ts` draws it; `lagrange.ts` and `contour.ts` hold the drawn-only references (Lagrange points, Jacobi field, marching-squares contours).
+
+```bash
+for id in hohmann lagrange lagrange-off threebody-figure8 threebody-butterfly threebody-moth threebody-yinyang; do
+  npm run sketch -- render sketches/borrowed-orbits/plates.ts --config sketches/borrowed-orbits/configs/plate-$id.json --out .sketch-output/borrowed-orbits/plates/$id
+done
+```
+
+Checks: `npx vitest run src/__tests__/borrowed-orbits-plates.test.ts`.
