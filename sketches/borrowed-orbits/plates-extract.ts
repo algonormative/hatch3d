@@ -9,7 +9,7 @@
  */
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { clipPolylineToRect } from '../../packages/plot-core/src/clip.ts';
-import { circlePath, simplify } from './extract.ts';
+import { circlePath } from './extract.ts';
 import { criticalCurves, criticalLevels, jacobiConstant, lagrangePoints, zeroVelocityCurves } from './lagrange.ts';
 import { rotatingPath } from './libration.ts';
 import type { Trace } from './libration.ts';
@@ -24,12 +24,14 @@ export const TICK_OFFSET_MM = 2.4;
 export const PLATE_CIRCLE_CHORD_MM = 0.02;
 
 export type PenRole = 'orbit' | 'highlight' | 'reference';
-export interface SceneLine { part: string; pen: PenRole; points: Vec2[] }
+/** `timing`: point i of the line is reached at simulation time t0 + i dt (s); absent for static references. */
+export interface SceneLine { part: string; pen: PenRole; points: Vec2[]; timing?: { t0: number; dt: number } }
 /** Items whose size is set in page mm, not metres. A tick is displaced along the world unit vector `side` by TICK_OFFSET_MM, so it stands beside the orbit instead of on it. */
+/** `time`: the simulation time (s) at which the glyph appears; absent means always. */
 export type Glyph =
-  | { part: string; pen: PenRole; kind: 'circle'; at: Vec2; mm: number }
-  | { part: string; pen: PenRole; kind: 'cross'; at: Vec2; mm: number }
-  | { part: string; pen: PenRole; kind: 'tick'; at: Vec2; dir: Vec2; mm: number; side: Vec2 };
+  | { part: string; pen: PenRole; kind: 'circle'; at: Vec2; mm: number; time?: number }
+  | { part: string; pen: PenRole; kind: 'cross'; at: Vec2; mm: number; time?: number }
+  | { part: string; pen: PenRole; kind: 'tick'; at: Vec2; dir: Vec2; mm: number; side: Vec2; time?: number };
 export interface Scene {
   lines: SceneLine[];
   glyphs: Glyph[];
@@ -77,25 +79,26 @@ function hohmannScene(study: PlateStudy, h: Trace | null): Scene {
   const reach = Math.max(...plan.radii);
   scene.fit = [{ x: plan.centre.x - reach, y: plan.centre.y }, { x: plan.centre.x + reach, y: plan.centre.y }, { x: plan.centre.x, y: plan.centre.y - reach }, { x: plan.centre.x, y: plan.centre.y + reach }];
   if (!h) return scene;
-  plan.orbitParticles.forEach((p, k) => scene.lines.push({ part: 'orbits', pen: 'orbit', points: path(h, p, 0, plan.periodSteps[k]) }));
+  const dt = study.config.settings.dt;
+  plan.orbitParticles.forEach((p, k) => scene.lines.push({ part: 'orbits', pen: 'orbit', points: path(h, p, 0, plan.periodSteps[k]), timing: { t0: 0, dt } }));
   if (marks.showTransfers) {
     for (const hop of plan.hops) {
-      scene.lines.push({ part: 'transfers', pen: 'highlight', points: path(h, hop.transfer, hop.departStep, hop.arriveStep) });
+      scene.lines.push({ part: 'transfers', pen: 'highlight', points: path(h, hop.transfer, hop.departStep, hop.arriveStep), timing: { t0: hop.departStep * dt, dt } });
       for (const [step, dv] of [[hop.departStep, hop.dv1], [hop.arriveStep, hop.dv2]] as const) {
         const len = Math.hypot(dv.x, dv.y);
         const at = where(h, hop.transfer, step);
         const out = Math.hypot(at.x - centre.x, at.y - centre.y);
         scene.glyphs.push({
           part: 'burns', pen: 'highlight', kind: 'tick', at, dir: { x: dv.x / len, y: dv.y / len }, mm: marks.tickScale * len,
-          side: { x: (at.x - centre.x) / out, y: (at.y - centre.y) / out },
+          side: { x: (at.x - centre.x) / out, y: (at.y - centre.y) / out }, time: step * dt,
         });
       }
     }
   }
   if (marks.showPlanets) {
     for (const hop of plan.hops) {
-      scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: where(h, hop.sourcePlanet, hop.departStep), mm: marks.bodyRadius });
-      scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: where(h, hop.targetPlanet, hop.arriveStep), mm: marks.bodyRadius });
+      scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: where(h, hop.sourcePlanet, hop.departStep), mm: marks.bodyRadius, time: hop.departStep * dt });
+      scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: where(h, hop.targetPlanet, hop.arriveStep), mm: marks.bodyRadius, time: hop.arriveStep * dt });
     }
   }
   return scene;
@@ -127,7 +130,7 @@ function lagrangeScene(study: PlateStudy, run: PlateRun | null): Scene {
     run.histories.forEach((h, i) => {
       if (!run.solved[i]) return;
       if (!run.solved[i].converged) { (scene.skipped ??= []).push(`${i}-${plan.orbits[i].kind}-${plan.orbits[i].near.toLowerCase()}`); return; }
-      scene.lines.push({ part: plan.orbits[i].kind === 'horseshoe' ? 'horseshoe' : 'tadpoles', pen: 'orbit', points: rotatingPath(plan.binary, h).map(scale) });
+      scene.lines.push({ part: plan.orbits[i].kind === 'horseshoe' ? 'horseshoe' : 'tadpoles', pen: 'orbit', points: rotatingPath(plan.binary, h).map(scale), timing: { t0: 0, dt: run.solved[i].periodS / run.solved[i].steps } });
       if (marks.orbitBoundaries) boundaryLevels.push(run.solved[i] ? jacobiConstant(mu, plan.orbits[i].xi, plan.orbits[i].eta, run.solved[i].u, run.solved[i].v) : 0);
     });
     const h = run.histories[0];
@@ -179,7 +182,7 @@ function threebodyScene(study: PlateStudy, h: Trace | null): Scene {
     return scene;
   }
   const count = marks.bodies === 'first' ? 1 : 3;
-  for (let i = 0; i < count; i++) scene.lines.push({ part: 'orbits', pen: 'orbit', points: attractorPath(h, i, 0, plan.steps) });
+  for (let i = 0; i < count; i++) scene.lines.push({ part: 'orbits', pen: 'orbit', points: attractorPath(h, i, 0, plan.steps), timing: { t0: 0, dt: study.config.settings.dt } });
   const step = Math.round(marks.bodyPhase * plan.steps) % plan.steps;
   for (let i = 0; i < 3; i++) scene.glyphs.push({ part: 'bodies', pen: 'orbit', kind: 'circle', at: attractorPath(h, i, step, step)[0], mm: marks.bodyRadius });
   return scene;
@@ -236,42 +239,77 @@ const PART_ORDER = ['zero-velocity', 'orbit-boundaries', 'orbits', 'tadpoles', '
 /** Part id of the diagnostic that carries the state key (or the off marker). */
 export const plateStateId = (plate: string, key: string | null): string => (key === null ? `plate-state-${plate}-off` : `plate-state-${plate}-key-${key.replace(/[^A-Za-z0-9]/g, '_')}`);
 
+/** RDP at `tolerance`, returning the indices of the kept vertices (both ends always kept). */
+export function simplifyKeep(path: Point[], tolerance: number): number[] {
+  if (path.length < 3) return path.map((_p, i) => i);
+  const keep = new Uint8Array(path.length);
+  keep[0] = keep[path.length - 1] = 1;
+  const stack: [number, number][] = [[0, path.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    const pa = path[a], pb = path[b];
+    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    const sq = dx * dx + dy * dy;
+    let worst = -1, at = -1;
+    for (let i = a + 1; i < b; i++) {
+      const p = path[i];
+      const t = sq === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - pa.x) * dx + (p.y - pa.y) * dy) / sq));
+      const d = Math.hypot(p.x - pa.x - t * dx, p.y - pa.y - t * dy);
+      if (d > worst) { worst = d; at = i; }
+    }
+    if (worst > tolerance) { keep[at] = 1; stack.push([a, at], [at, b]); }
+  }
+  const out: number[] = [];
+  keep.forEach((k, i) => { if (k) out.push(i); });
+  return out;
+}
+
+/** The plate box in art coordinates: the poster target inset by half the margin. Orbits are clipped to it, so a stray one never leaves the plate. */
+export function plateBox(study: PlateStudy): { xMin: number; xMax: number; yMin: number; yMax: number } {
+  const { frame } = study;
+  const bw = frame.xMax - frame.xMin, bh = frame.yMax - frame.yMin, inset = study.marks.margin / 2;
+  return { xMin: frame.xMin + inset * bw, xMax: frame.xMax - inset * bw, yMin: frame.yMin + inset * bh, yMax: frame.yMax - inset * bh };
+}
+
+/** A glyph as unclipped polylines in art coordinates. */
+export function glyphToArt(study: PlateStudy, map: Mapper, g: Glyph): Point[][] {
+  const { fit } = study;
+  const centre = map.toArt(g.at);
+  const mm = g.mm / fit.scale;
+  if (g.kind === 'circle') return [circlePath(centre, mm, g.mm, PLATE_CIRCLE_CHORD_MM)];
+  if (g.kind === 'cross') return [
+    [{ x: centre.x - mm / 2, y: centre.y }, { x: centre.x + mm / 2, y: centre.y }],
+    [{ x: centre.x, y: centre.y - mm / 2 }, { x: centre.x, y: centre.y + mm / 2 }],
+  ];
+  const unit = (v: Vec2): Point => {
+    const a = map.toArt({ x: g.at.x + v.x * 1e-3, y: g.at.y + v.y * 1e-3 });
+    const n = Math.hypot(a.x - centre.x, a.y - centre.y) || 1;
+    return { x: (a.x - centre.x) / n, y: (a.y - centre.y) / n };
+  };
+  const u = unit(g.dir), side = unit(g.side);
+  const c = { x: centre.x + (side.x * TICK_OFFSET_MM) / fit.scale, y: centre.y + (side.y * TICK_OFFSET_MM) / fit.scale };
+  return [[{ x: c.x - (u.x * mm) / 2, y: c.y - (u.y * mm) / 2 }, { x: c.x + (u.x * mm) / 2, y: c.y + (u.y * mm) / 2 }]];
+}
+
 /** Draw one plate. All coordinates are art coordinates; composePoster maps them to the page. */
 export function extractPlate(study: PlateStudy, run: PlateRun | null): Part[] {
   const scene = plateScene(study, run);
   const map = makeMapper(study, scene);
   const roles = pens(study.marks);
-  const { fit, frame } = study;
+  const { fit } = study;
   const tolerance = PLATE_SIMPLIFY_MM / fit.scale;
   const parts = new Map<string, { pen: string; paths: Point[][] }>();
   const bucket = (id: string, pen: PenRole): Point[][] => {
     if (!parts.has(id)) parts.set(id, { pen: roles[pen], paths: [] });
     return parts.get(id)!.paths;
   };
-  // The plate box: the poster target inset by half the margin. Orbits are clipped to it, so a stray one never leaves the plate.
-  const bw = frame.xMax - frame.xMin, bh = frame.yMax - frame.yMin, inset = study.marks.margin / 2;
-  const box = { xMin: frame.xMin + inset * bw, xMax: frame.xMax - inset * bw, yMin: frame.yMin + inset * bh, yMax: frame.yMax - inset * bh };
+  const box = plateBox(study);
   const inFrame = (paths: Point[][]): Point[][] => paths.flatMap(p => clipPolylineToRect(p, box));
-  for (const line of scene.lines) bucket(line.part, line.pen).push(...inFrame([simplify(line.points.map(map.toArt), tolerance)]));
-  for (const g of scene.glyphs) {
-    const centre = map.toArt(g.at);
-    const mm = g.mm / fit.scale;
-    if (g.kind === 'circle') bucket(g.part, g.pen).push(...inFrame([circlePath(centre, mm, g.mm, PLATE_CIRCLE_CHORD_MM)]));
-    else if (g.kind === 'cross') bucket(g.part, g.pen).push(...inFrame([
-      [{ x: centre.x - mm / 2, y: centre.y }, { x: centre.x + mm / 2, y: centre.y }],
-      [{ x: centre.x, y: centre.y - mm / 2 }, { x: centre.x, y: centre.y + mm / 2 }],
-    ]));
-    else {
-      const unit = (v: Vec2): Point => {
-        const a = map.toArt({ x: g.at.x + v.x * 1e-3, y: g.at.y + v.y * 1e-3 });
-        const n = Math.hypot(a.x - centre.x, a.y - centre.y) || 1;
-        return { x: (a.x - centre.x) / n, y: (a.y - centre.y) / n };
-      };
-      const u = unit(g.dir), side = unit(g.side);
-      const c = { x: centre.x + (side.x * TICK_OFFSET_MM) / fit.scale, y: centre.y + (side.y * TICK_OFFSET_MM) / fit.scale };
-      bucket(g.part, g.pen).push(...inFrame([[{ x: c.x - (u.x * mm) / 2, y: c.y - (u.y * mm) / 2 }, { x: c.x + (u.x * mm) / 2, y: c.y + (u.y * mm) / 2 }]]));
-    }
+  for (const line of scene.lines) {
+    const art = line.points.map(map.toArt);
+    bucket(line.part, line.pen).push(...inFrame([simplifyKeep(art, tolerance).map(i => art[i])]));
   }
+  for (const g of scene.glyphs) bucket(g.part, g.pen).push(...inFrame(glyphToArt(study, map, g)));
   const ordered = [...parts.keys()].sort((x, y) => PART_ORDER.indexOf(x) - PART_ORDER.indexOf(y));
   const out: Part[] = ordered.map(id => ({ id, pen: parts.get(id)!.pen, paths: parts.get(id)!.paths }));
   for (const id of scene.skipped ?? []) out.push({ id: `libration-unconverged-${id}`, pen: roles.orbit, paths: [], diagnostic: true });
