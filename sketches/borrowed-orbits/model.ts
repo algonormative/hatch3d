@@ -38,22 +38,23 @@ export const G = 6.6743e-11;
 
 export const MODEL = Object.freeze({
   id: 'softened-newtonian-restricted-nbody',
-  version: '1.1.0',
+  version: '1.2.0',
   backend: 'ts-cpu-kdk-leapfrog',
-  backendVersion: '1.1.0',
+  backendVersion: '1.2.0',
 });
 
 export const SNAPSHOT_SCHEMA = 'hatch3d.borrowed-orbits.snapshot.v1';
 
 /**
  * Hard bounds that keep a render bounded.
- * - `maxWork` caps steps × (particles × attractors + attractors² + particles × forbiddenEdges)
+ * - `maxWork` caps steps × substeps × (particles × attractors + attractors² + particles × forbiddenEdges)
  *   (force evaluations plus swept-edge tests) for one advance/simulate/history call.
  *   Arithmetic: the sketch's practical ceiling is 2700 particles, 2 attractors and about
  *   160 capture edges (the default 8 members of about 20 edges) over
  *   2400 steps: 2400 × (2700 × 2 + 4 + 2700 × 160) ≈ 1.05e9, which fits under 1.5e9. The
  *   declared maxima (4000 particles, 16 attractors, 4096 edges, 2400 steps ≈ 3.9e10) do not.
  * - `maxForbiddenEdges` caps the total edge count over all forbidden polygons.
+ * - `maxSubsteps` caps `settings.substeps`; `maxImpulses` caps `config.impulses`.
  * - `maxHistoryBytes` caps one history() window: steps × (particles + attractors) × 16 B
  *   (x and y Float64 per body per step). The declared maxima give 2401 × 4016 × 16 ≈ 154 MB.
  */
@@ -63,6 +64,8 @@ export const LIMITS = Object.freeze({
   maxAttractors: 16,
   maxForbidden: 64,
   maxForbiddenEdges: 4096,
+  maxSubsteps: 64,
+  maxImpulses: 256,
   maxWork: 1_500_000_000,
   maxHistoryBytes: 268_435_456,
 });
@@ -123,6 +126,26 @@ export interface SimulationSettings {
   boundary: BoundaryMode;
   /** m beyond the domain rectangle at which an `open` particle escapes. */
   escapeMargin: number;
+  /**
+   * Integration substeps per recorded step (integer ≥ 1; absent = 1 and omitted from hashes, so existing
+   * snapshots keep their keys). Each recorded step runs `substeps` KDK substeps of dt/substeps; capture and
+   * escape are tested on every substep's drift segment; snapshots and history() still sample once per step.
+   * It decouples integration accuracy (close encounters) from drawing resolution. Work counts substeps.
+   */
+  substeps?: number;
+}
+
+/**
+ * An instantaneous velocity change (an impulsive burn) applied to one particle. Applied at the step boundary
+ * `step` (time step·dt), where leapfrog velocities are synchronized: after the closing half-kick of step
+ * step−1 → step (or to the initial state when step = 0), so the snapshot at `step` already includes it and
+ * the next step starts from v + dv. Several impulses at one (particle, step) add in config order. An impulse
+ * on a stopped particle is ignored. Impulses enter the simulation hash (absent or empty is omitted).
+ */
+export interface Impulse {
+  particle: number; // index into `particles`
+  step: number; // integer ≥ 0
+  dv: Vec2; // m/s
 }
 
 /**
@@ -142,6 +165,8 @@ export interface OrbitStudyConfig {
   forbidden: ForbiddenRegion[];
   particleMass: number; // kg, > 0
   particles: ParticleInit[];
+  /** Scheduled burns; absent or empty is omitted from hashes. */
+  impulses?: Impulse[];
 }
 
 export interface SnapshotHashes {

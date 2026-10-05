@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   G, LIMITS, REASON_CODE, STATUS_CODE,
-  type Attractor, type ForbiddenRegion, type OrbitSnapshot, type OrbitStudyConfig, type ParticleInit, type Vec2,
+  type Attractor, type ForbiddenRegion, type Impulse, type OrbitSnapshot, type OrbitStudyConfig, type ParticleInit, type Vec2,
 } from '../../sketches/borrowed-orbits/model.ts';
 import {
   SnapshotMismatchError, accelerationAt, advance, configHashes, forceOn, history, initialSnapshot,
@@ -17,21 +17,24 @@ interface Opts {
   particleMass: number;
   particles: ParticleInit[];
   scale: number;
+  substeps: number;
+  impulses: Impulse[];
 }
 
 function makeConfig(over: Partial<Opts> = {}): OrbitStudyConfig {
-  const o: Opts = {
+  const o: Partial<Opts> & Omit<Opts, 'substeps' | 'impulses'> = {
     dt: 0.1, boundary: 'open', escapeMargin: 1e9, attractors: [], forbidden: [], particleMass: 1, particles: [],
     scale: 3, ...over,
   };
   return {
     domain: { origin: { x: 0, y: 0 }, size: { x: 100, y: 100 } },
     transforms: { worldToPage: { scale: o.scale, offset: { x: 10, y: 20 } } },
-    settings: { dt: o.dt, boundary: o.boundary, escapeMargin: o.escapeMargin },
+    settings: { dt: o.dt, boundary: o.boundary, escapeMargin: o.escapeMargin, ...(o.substeps !== undefined ? { substeps: o.substeps } : {}) },
     attractors: o.attractors,
     forbidden: o.forbidden,
     particleMass: o.particleMass,
     particles: o.particles,
+    ...(o.impulses !== undefined ? { impulses: o.impulses } : {}),
   };
 }
 
@@ -77,6 +80,22 @@ function specificEnergy(s: OrbitSnapshot, i: number, cx: number, cy: number, M: 
   const dy = s.py[i] - cy;
   return 0.5 * (s.vx[i] ** 2 + s.vy[i] ** 2) - (G * M) / Math.sqrt(dx * dx + dy * dy + eps * eps);
 }
+
+/** A busy fixture: two dynamic attractors, one pinned, two walls, 60 particles, absorbing edges. */
+const rich = (): OrbitStudyConfig => {
+  const rnd = lcg(42);
+  const particles = range(0, 59).map(() => part(10 + rnd() * 80, 10 + rnd() * 80, rnd() * 2 - 1, rnd() * 2 - 1));
+  return makeConfig({
+    dt: 0.05, boundary: 'absorb',
+    attractors: [
+      att('mass-0', 40, 50, 2e12, { softening: 0.8, captureRadius: 0.4, dynamic: true, velocity: { x: 0, y: -0.9 } }),
+      att('mass-1', 60, 50, 1e12, { softening: 0.8, captureRadius: 0.4, dynamic: true, velocity: { x: 0, y: 1.8 } }),
+      att('mass-2', 50, 80, 5e11, { softening: 1.2, captureRadius: 0.4 }),
+    ],
+    forbidden: [rect('forbidden-0', 45, 20, 55, 24), rect('forbidden-1', 70, 60, 70.05, 90)],
+    particles,
+  });
+};
 
 describe('free flight without attractors', () => {
   it('moves every particle in an exact straight line', () => {
@@ -463,21 +482,6 @@ describe('attractor capture radius', () => {
 });
 
 describe('determinism, snapshots and resume', () => {
-  const rich = (): OrbitStudyConfig => {
-    const rnd = lcg(42);
-    const particles = range(0, 59).map(() => part(10 + rnd() * 80, 10 + rnd() * 80, rnd() * 2 - 1, rnd() * 2 - 1));
-    return makeConfig({
-      dt: 0.05, boundary: 'absorb',
-      attractors: [
-        att('mass-0', 40, 50, 2e12, { softening: 0.8, captureRadius: 0.4, dynamic: true, velocity: { x: 0, y: -0.9 } }),
-        att('mass-1', 60, 50, 1e12, { softening: 0.8, captureRadius: 0.4, dynamic: true, velocity: { x: 0, y: 1.8 } }),
-        att('mass-2', 50, 80, 5e11, { softening: 1.2, captureRadius: 0.4 }),
-      ],
-      forbidden: [rect('forbidden-0', 45, 20, 55, 24), rect('forbidden-1', 70, 60, 70.05, 90)],
-      particles,
-    });
-  };
-
   it('reproduces the same stateHash on repeated runs', () => {
     const a = simulate(rich(), [0, 500, 2400]);
     const b = simulate(rich(), [2400, 500, 0, 500]);
@@ -952,6 +956,362 @@ describe('softening belongs to the source attractor', () => {
     // And the swapped (wrong) assignment is far from both.
     const w0 = (G * m1 * d) / (d * d + e0 * e0) ** 1.5;
     expect(Math.abs(w0 / a0 - 1)).toBeGreaterThan(0.5);
+  });
+});
+
+describe('substeps', () => {
+  // stateHash does not include the model version, so these literals were recorded from the single-step
+  // integrator before substeps and impulses existed: absent or 1 substep must keep reproducing them bit for bit.
+  const BASELINE: Record<number, string> = {
+    0: '6191519fe55224b3', 500: 'c07cb5bf32b222a8', 1200: '3f4d9865e2748468', 2400: '2abcde91be843b71',
+  };
+  const BASELINE_OPEN: Record<number, string> = { 1200: 'e57b6e44f9726f88', 2400: 'cd1871230f913488' };
+
+  it('absent, 1 and impulses [] are bitwise the single-step integrator, with the same hashes', () => {
+    const plain = rich();
+    const one = rich();
+    one.settings.substeps = 1;
+    one.impulses = [];
+    expect(configHashes(one)).toEqual(configHashes(plain));
+    const steps = [0, 500, 1200, 2400];
+    const a = simulate(plain, steps);
+    const b = simulate(one, steps);
+    steps.forEach((k, i) => {
+      expect(a[i].stateHash).toBe(BASELINE[k]);
+      expect(b[i]).toEqual(a[i]);
+    });
+    const open = rich();
+    open.settings.boundary = 'open';
+    simulate(open, [1200, 2400]).forEach((s) => expect(s.stateHash).toBe(BASELINE_OPEN[s.step]));
+  });
+
+  it('S substeps of dt/S are bitwise S·n steps of dt/S, sampled once per recorded step', () => {
+    const fine = rich(); // dt = 0.05, one substep
+    const coarse = rich();
+    coarse.settings.dt = 0.2;
+    coarse.settings.substeps = 4; // dt/4 = 0.05 exactly
+    const a = simulate(fine, [400, 1200])[1]; // step 1200 of dt 0.05
+    const h = history(coarse, 0, 300);
+    const b = h.final; // step 300 of dt 0.2 = 1200 substeps
+    expect(h.xs.length).toBe(301); // one record per step, not per substep
+    expect(b.step).toBe(300);
+    expect(b.timeS).toBe(300 * 0.2);
+    expect(b.px).toEqual(a.px);
+    expect(b.py).toEqual(a.py);
+    expect(b.vx).toEqual(a.vx);
+    expect(b.vy).toEqual(a.vy);
+    expect(b.attractors).toEqual(a.attractors);
+    expect(b.status).toEqual(a.status);
+    a.stoppedAt.forEach((k, i) => expect(b.stoppedAt[i]).toBe(k < 0 ? -1 : Math.ceil(k / 4))); // recorded-step units
+    expect(a.status.some((c) => c === STATUS_CODE.captured)).toBe(true);
+    expect(configHashes(coarse).simulation).not.toBe(configHashes(rich()).simulation);
+    // Resume across a substepped run is bitwise too.
+    const mid = simulate(coarse, [123])[0];
+    expect(advance(coarse, parseSnapshot(coarse, serializeSnapshot(mid)), 300 - 123).stateHash).toBe(b.stateHash);
+  });
+
+  it('tests capture on every substep drift: a thin wall crossed mid-step, stoppedAt in recorded steps', () => {
+    // 50 m/s, dt 0.2 s (10 m per recorded step), 4 substeps of 2.5 m; a 1 cm wall at x = 61 is crossed at t = 0.82 s.
+    const config = makeConfig({
+      dt: 0.2, substeps: 4, forbidden: [rect('forbidden-0', 61, 40, 61.01, 60)], particles: [part(20, 50, 50, 0)],
+    });
+    const f = simulate(config, [10])[0];
+    expect(f.status[0]).toBe(STATUS_CODE.captured);
+    expect(f.stoppedAt[0]).toBe(5); // the step 4 → 5 (0.8 s to 1.0 s) contains the crossing
+    expect(Math.abs(f.px[0] - 61)).toBeLessThan(1e-9);
+  });
+
+  it('is validated and counted in the work bound', () => {
+    const base = (): OrbitStudyConfig => makeConfig({ attractors: [att('mass-0', 50, 50, M_BIG)], particles: [part(60, 50, 0, 1)] });
+    for (const bad of [0, -1, 1.5, Number.NaN, Infinity, LIMITS.maxSubsteps + 1]) {
+      const c = base();
+      c.settings.substeps = bad;
+      expect(() => validateConfig(c), String(bad)).toThrow(RangeError);
+    }
+    const c = base();
+    c.settings.substeps = LIMITS.maxSubsteps;
+    expect(() => validateConfig(c)).not.toThrow();
+    // 4000 particles × 16 attractors is 1.5e8 over 2400 steps: fine at 1 substep, rejected at 64.
+    const big = makeConfig({
+      attractors: range(0, 15).map((k) => att(`mass-${k}`, 1, 1, 1)), particles: range(0, 3999).map(() => part(50, 50, 0, 0)), substeps: LIMITS.maxSubsteps,
+    });
+    expect(() => simulate(big, [LIMITS.maxSteps])).toThrow(/force evaluations and edge tests/);
+    expect(() => history(big, 0, LIMITS.maxSteps)).toThrow(RangeError);
+  });
+});
+
+describe('impulses', () => {
+  const free = (over: Partial<Opts> = {}): OrbitStudyConfig => makeConfig({ dt: 0.1, particles: [part(10, 10, 1, 0.5), part(90, 90, 0, 0)], ...over });
+
+  it('adds dv to the synchronized velocity at its step, included in that step\'s snapshot', () => {
+    const config = free({ impulses: [{ particle: 0, step: 5, dv: { x: 2, y: -1 } }] });
+    const [s0, s4, s5, s6] = simulate(config, [0, 4, 5, 6]);
+    expect([s4.vx[0], s4.vy[0]]).toEqual([1, 0.5]); // not yet
+    expect([s5.vx[0], s5.vy[0]]).toEqual([3, -0.5]); // already in the snapshot at the burn step
+    expect(s5.px[0]).toBeCloseTo(10 + 0.5, 12); // the burn moves nothing by itself
+    expect(s6.px[0]).toBeCloseTo(10 + 0.5 + 0.1 * 3, 12); // the next step drifts at v + dv
+    expect(s6.py[0]).toBeCloseTo(10 + 0.25 - 0.05, 12);
+    expect([s0.vx[1], s5.vx[1]]).toEqual([0, 0]); // other particles untouched
+    // Step 0 is applied to the initial state, in the very first snapshot.
+    const at0 = initialSnapshot(free({ impulses: [{ particle: 1, step: 0, dv: { x: 0.5, y: 0 } }] }));
+    expect(at0.vx[1]).toBe(0.5);
+    // Several impulses at one (particle, step) add in config order.
+    const twice = simulate(free({ impulses: [{ particle: 0, step: 3, dv: { x: 1, y: 0 } }, { particle: 0, step: 3, dv: { x: 0, y: 1 } }] }), [3])[0];
+    expect([twice.vx[0], twice.vy[0]]).toEqual([2, 1.5]);
+  });
+
+  it('is ignored by a stopped particle and enters the simulation hash (absent and [] do not)', () => {
+    const wall = [rect('forbidden-0', 20, 0, 21, 100)];
+    const config = free({ forbidden: wall, impulses: [{ particle: 0, step: 150, dv: { x: 5, y: 5 } }] });
+    const f = simulate(config, [200])[0];
+    expect(f.status[0]).toBe(STATUS_CODE.captured);
+    expect([f.vx[0], f.vy[0]]).toEqual([0, 0]);
+    const none = free();
+    const empty = free({ impulses: [] });
+    const some = free({ impulses: [{ particle: 0, step: 5, dv: { x: 2, y: -1 } }] });
+    expect(configHashes(empty)).toEqual(configHashes(none));
+    expect(configHashes(some).simulation).not.toBe(configHashes(none).simulation);
+    expect(configHashes(some).geometry).toBe(configHashes(none).geometry);
+    for (const change of [{ particle: 1 }, { step: 6 }, { dv: { x: 2, y: -1.5 } }]) {
+      const c = free({ impulses: [{ particle: 0, step: 5, dv: { x: 2, y: -1 }, ...change }] });
+      expect(configHashes(c).simulation, JSON.stringify(change)).not.toBe(configHashes(some).simulation);
+    }
+  });
+
+  it('validates particle index, step and dv, and caps the count', () => {
+    const imp = (over: Partial<Impulse>): Impulse => ({ particle: 0, step: 5, dv: { x: 1, y: 0 }, ...over });
+    const bad: Impulse[] = [
+      imp({ particle: 2 }), imp({ particle: -1 }), imp({ particle: 0.5 }), imp({ step: -1 }), imp({ step: 2.5 }),
+      imp({ step: LIMITS.maxSteps + 1 }), imp({ dv: { x: Number.NaN, y: 0 } }), imp({ dv: { x: 0, y: Infinity } }),
+    ];
+    for (const b of bad) expect(() => validateConfig(free({ impulses: [b] })), JSON.stringify(b)).toThrow(RangeError);
+    expect(() => validateConfig(free({ impulses: [imp({ step: 0 }), imp({ step: LIMITS.maxSteps })] }))).not.toThrow();
+    expect(() => validateConfig(free({ impulses: range(1, LIMITS.maxImpulses).map((k) => imp({ step: k })) }))).not.toThrow();
+    expect(() => validateConfig(free({ impulses: range(0, LIMITS.maxImpulses).map((k) => imp({ step: k })) }))).toThrow(RangeError);
+  });
+
+  it('resumes bitwise across an impulse step (at the step and one before), with substeps and gravity', () => {
+    const config = rich();
+    config.settings.substeps = 3;
+    config.impulses = [
+      { particle: 4, step: 300, dv: { x: 0.7, y: -0.3 } }, { particle: 9, step: 300, dv: { x: -0.2, y: 0.4 } },
+      { particle: 4, step: 301, dv: { x: 0.1, y: 0.1 } }, { particle: 20, step: 0, dv: { x: 0.3, y: 0 } },
+    ];
+    const direct = simulate(config, [600])[0];
+    const noBurn = simulate({ ...config, impulses: [] }, [600])[0];
+    expect(direct.stateHash).not.toBe(noBurn.stateHash); // the burns matter
+    for (const k of [299, 300, 301]) {
+      const mid = simulate(config, [k])[0];
+      const resumed = advance(config, parseSnapshot(config, serializeSnapshot(mid)), 600 - k);
+      expect(resumed.stateHash, `k=${k}`).toBe(direct.stateHash);
+      expect(resumed).toEqual(direct);
+    }
+    // And a history pass agrees with simulate through the burn.
+    expect(history(config, 290, 310).final.stateHash).toBe(simulate(config, [310])[0].stateHash);
+  });
+});
+
+describe('Hohmann transfer', () => {
+  const mu = GM;
+  const r1 = 4;
+  const r2 = 8;
+  const a = (r1 + r2) / 2;
+  const half = Math.PI * Math.sqrt(a ** 3 / mu); // transfer half period
+  const N = 500;
+  const dt = half / N; // the second burn lands exactly on step N
+  const v1 = Math.sqrt(mu / r1);
+  const dv1 = v1 * (Math.sqrt((2 * r2) / (r1 + r2)) - 1);
+  const dv2 = Math.sqrt(mu / r2) * (1 - Math.sqrt((2 * r1) / (r1 + r2)));
+  const N2 = Math.round((2 * Math.PI * Math.sqrt(r2 ** 3 / mu)) / dt); // one orbit at r2
+  const run = (substeps: number): { rN: number; posErr: number; band: number } => {
+    // Start at (50 + r1, 50) moving +y; burn 1 at step 0 along +y, burn 2 at step N along −y (prograde at apoapsis).
+    const config = makeConfig({
+      dt, substeps, attractors: [att('mass-0', 50, 50, M_BIG, { softening: 1e-6 })],
+      particles: [part(50 + r1, 50, 0, v1)],
+      impulses: [{ particle: 0, step: 0, dv: { x: 0, y: dv1 } }, { particle: 0, step: N, dv: { x: 0, y: -dv2 } }],
+    });
+    const h = history(config, 0, N + N2);
+    const radius = (k: number): number => Math.hypot(h.xs[k][0] - 50, h.ys[k][0] - 50);
+    let band = 0;
+    for (let k = N; k <= N + N2; k++) band = Math.max(band, Math.abs(radius(k) - r2));
+    return { rN: radius(N), posErr: Math.hypot(h.xs[N][0] - (50 - r2), h.ys[N][0] - 50), band };
+  };
+
+  it('reaches r2 opposite the burn after the half period and circularizes there', () => {
+    const fine = run(2);
+    const coarse = run(1);
+    // Measured at 2 substeps: |r − r2|/r2 = 1.4e-5, position error/r2 = 3.1e-5, radius band over a full orbit
+    // 1.4e-5·r2. Tolerances are about 3× those.
+    expect(Math.abs(fine.rN - r2) / r2).toBeLessThan(5e-5);
+    expect(fine.posErr / r2).toBeLessThan(1e-4);
+    expect(fine.band / r2).toBeLessThan(5e-5);
+    // Second order: halving the substep length quarters the opposite-point error (measured ratio 4.0).
+    expect(coarse.posErr / fine.posErr).toBeGreaterThan(3.5);
+    expect(coarse.posErr / fine.posErr).toBeLessThan(4.5);
+    expect(Math.abs(coarse.rN - r2) / r2).toBeLessThan(2e-4); // 1 substep: 5.5e-5
+    // Without the second burn the particle would fall back toward periapsis, so the circularization is doing work.
+    expect(dv2).toBeGreaterThan(0.1);
+  });
+});
+
+describe('figure-eight three-body choreography', () => {
+  // Chenciner–Montgomery 2000 in G = m = 1 units, scaled to SI: τ = sqrt(L³/(G·M)). y points down here; the
+  // mirror image is also a solution, so the published numbers are used as given.
+  const L = 10;
+  const M = 1e12;
+  const tau = Math.sqrt(L ** 3 / (G * M));
+  const T = 6.32591398 * tau;
+  const N = 600;
+  const p1 = { x: -0.97000436, y: 0.24308753 };
+  const v3 = { x: -0.93240737, y: -0.86473146 };
+  const eps = 1e-6 * L;
+  const build = (substeps: number): OrbitStudyConfig => makeConfig({
+    dt: T / N, substeps,
+    attractors: [
+      att('mass-0', 50 + p1.x * L, 50 + p1.y * L, M, { softening: eps, dynamic: true, velocity: { x: (-v3.x / 2) * L / tau, y: (-v3.y / 2) * L / tau } }),
+      att('mass-1', 50 - p1.x * L, 50 - p1.y * L, M, { softening: eps, dynamic: true, velocity: { x: (-v3.x / 2) * L / tau, y: (-v3.y / 2) * L / tau } }),
+      att('mass-2', 50, 50, M, { softening: eps, dynamic: true, velocity: { x: v3.x * L / tau, y: v3.y * L / tau } }),
+    ],
+  });
+  const closure = (substeps: number): { err: number; dE: number; momentum: number; centre: number } => {
+    const snaps = simulate(build(substeps), range(0, N));
+    const s0 = snaps[0];
+    const sT = snaps[N];
+    let err = 0;
+    for (let j = 0; j < 3; j++) {
+      err = Math.max(err, Math.hypot(sT.attractors[j].position.x - s0.attractors[j].position.x, sT.attractors[j].position.y - s0.attractors[j].position.y) / L);
+    }
+    const e0 = s0.energy.attractorTotal;
+    let dE = 0;
+    let momentum = 0;
+    let centre = 0;
+    for (const s of snaps) {
+      dE = Math.max(dE, Math.abs(s.energy.attractorTotal / e0 - 1));
+      momentum = Math.max(momentum, Math.hypot(s.energy.attractorMomentum.x, s.energy.attractorMomentum.y) / ((M * L) / tau));
+      const cx = (s.attractors[0].position.x + s.attractors[1].position.x + s.attractors[2].position.x) / 3 - 50;
+      const cy = (s.attractors[0].position.y + s.attractors[1].position.y + s.attractors[2].position.y) / 3 - 50;
+      centre = Math.max(centre, Math.hypot(cx, cy) / L);
+    }
+    return { err, dE, momentum, centre };
+  };
+
+  it('returns to its start after one period with second-order convergence, conserving E, P and the centre', () => {
+    const c1 = closure(1);
+    const c4 = closure(4);
+    const c16 = closure(16);
+    // Measured position error / L after one T: 2.25e-4, 1.42e-5, 9.2e-7 at substeps 1, 4, 16 (ratios 15.9, 15.3).
+    expect(c1.err).toBeLessThan(5e-4);
+    expect(c4.err).toBeLessThan(3e-5);
+    expect(c16.err).toBeLessThan(2e-6);
+    expect(c1.err / c4.err).toBeGreaterThan(12);
+    expect(c1.err / c4.err).toBeLessThan(20);
+    expect(c4.err / c16.err).toBeGreaterThan(12);
+    expect(c4.err / c16.err).toBeLessThan(20);
+    // Energy drift at 16 substeps measured 2.6e-7 (6.6e-5 at 1); momentum 2.4e-14 and centre of mass 4.8e-14·L.
+    expect(c16.dE).toBeLessThan(1e-6);
+    expect(c1.dE).toBeLessThan(2e-4);
+    expect(c16.momentum).toBeLessThan(1e-12);
+    expect(c16.centre).toBeLessThan(1e-12);
+  });
+});
+
+describe('restricted three-body problem (L4)', () => {
+  const mu = 0.01;
+  const D = 20;
+  const Mt = 1e12;
+  const Om = Math.sqrt((G * Mt) / D ** 3);
+  const P = (2 * Math.PI) / Om;
+  const bar = { x: 50, y: 50 };
+  const eps = 1e-6 * D;
+  const m1 = (1 - mu) * Mt;
+  const m2 = mu * Mt;
+  const L4 = { x: (0.5 - mu) * D, y: (Math.sqrt(3) / 2) * D };
+  const rec = 100; // recorded steps per binary period
+
+  /** Corotating start at barycentric (x, y): v = Ω × r. */
+  const corotating = (x: number, y: number): ParticleInit => part(bar.x + x, bar.y + y, -Om * y, Om * x);
+  const run = (particles: ParticleInit[], substeps: number): OrbitSnapshot[] => simulate(makeConfig({
+    dt: P / rec, substeps,
+    attractors: [
+      att('mass-0', bar.x - mu * D, bar.y, m1, { softening: eps, dynamic: true, velocity: { x: 0, y: -Om * mu * D } }),
+      att('mass-1', bar.x + (1 - mu) * D, bar.y, m2, { softening: eps, dynamic: true, velocity: { x: 0, y: Om * (1 - mu) * D } }),
+    ],
+    particles,
+  }), range(0, 10 * rec));
+
+  /** Rotating-frame position, and the Jacobi constant ½|v'|² − ½Ω²|ξ|² − Σ G·m_i/|ξ − ξ_i|, for particle i. */
+  function rotating(s: OrbitSnapshot, i: number): { xi: Vec2; jacobi: number } {
+    const th = Om * s.timeS;
+    const c = Math.cos(th);
+    const sn = Math.sin(th);
+    const rot = (x: number, y: number): Vec2 => ({ x: c * x + sn * y, y: -sn * x + c * y }); // R(−θ)
+    const x = s.px[i] - bar.x;
+    const y = s.py[i] - bar.y;
+    const xi = rot(x, y);
+    const vr = rot(s.vx[i] + Om * y, s.vy[i] - Om * x); // inertial velocity minus Ω × r, rotated
+    const jacobi = 0.5 * (vr.x ** 2 + vr.y ** 2) - 0.5 * Om * Om * (xi.x ** 2 + xi.y ** 2)
+      - (G * m1) / Math.sqrt((xi.x + mu * D) ** 2 + xi.y ** 2 + eps ** 2)
+      - (G * m2) / Math.sqrt((xi.x - (1 - mu) * D) ** 2 + xi.y ** 2 + eps ** 2);
+    return { xi, jacobi };
+  }
+
+  const study = (snaps: OrbitSnapshot[], i: number): { maxFromL4: number; drift: number; minToSecondary: number; angle: [number, number]; radius: [number, number] } => {
+    let maxFromL4 = 0;
+    let drift = 0;
+    let minToSecondary = Infinity;
+    const angle: [number, number] = [Infinity, -Infinity];
+    const radius: [number, number] = [Infinity, -Infinity];
+    const j0 = rotating(snaps[0], i).jacobi;
+    for (const s of snaps) {
+      const { xi, jacobi } = rotating(s, i);
+      maxFromL4 = Math.max(maxFromL4, Math.hypot(xi.x - L4.x, xi.y - L4.y) / D);
+      drift = Math.max(drift, Math.abs(jacobi - j0) / Math.abs(j0));
+      minToSecondary = Math.min(minToSecondary, Math.hypot(xi.x - (1 - mu) * D, xi.y) / D);
+      const deg = (Math.atan2(xi.y, xi.x) * 180) / Math.PI;
+      angle[0] = Math.min(angle[0], deg);
+      angle[1] = Math.max(angle[1], deg);
+      radius[0] = Math.min(radius[0], Math.hypot(xi.x, xi.y) / D);
+      radius[1] = Math.max(radius[1], Math.hypot(xi.x, xi.y) / D);
+    }
+    return { maxFromL4, drift, minToSecondary, angle, radius };
+  };
+
+  it('holds a particle at L4 in the rotating frame for 10 binary periods', () => {
+    const snaps = run([corotating(L4.x, L4.y)], 16);
+    const r = study(snaps, 0);
+    // Measured: 3.2e-4·D from L4 (binary phase error of the integrator, 2nd order), Jacobi drift 7.8e-10 relative.
+    expect(r.maxFromL4).toBeLessThan(1e-3);
+    expect(r.drift).toBeLessThan(1e-8);
+  });
+
+  it('makes a bounded tadpole when displaced, conserving the Jacobi constant', () => {
+    const radial = corotating(L4.x + 0.02 * D, L4.y); // 0.02 D along x: excites the long libration
+    const tangential = corotating(L4.x - 0.02 * D * (Math.sqrt(3) / 2), L4.y + 0.02 * D * 0.5);
+    const snaps = run([radial, tangential], 16);
+    const t = study(snaps, 0);
+    // Measured: max 0.388 D from L4, polar angle 41°–83° (L4 is at 60.5°), never within 0.69 D of the secondary,
+    // radius 0.91–1.09 D: it librates around L4 and never gets near L3 or L5 or the secondary.
+    expect(t.maxFromL4).toBeLessThan(0.45);
+    expect(t.maxFromL4).toBeGreaterThan(0.2); // a real tadpole, not a stuck particle
+    expect(t.angle[0]).toBeGreaterThan(30);
+    expect(t.angle[1]).toBeLessThan(95);
+    expect(t.minToSecondary).toBeGreaterThan(0.5);
+    expect(t.radius[0]).toBeGreaterThan(0.85);
+    expect(t.radius[1]).toBeLessThan(1.15);
+    // Jacobi drift measured 2.3e-6 relative (16 substeps) and 1.2e-7 for the small tangential libration.
+    expect(t.drift).toBeLessThan(1e-5);
+    const small = study(snaps, 1);
+    expect(small.maxFromL4).toBeLessThan(0.05);
+    expect(small.drift).toBeLessThan(1e-6);
+  });
+
+  it('shows the Jacobi drift is integration error: second order in the substep', () => {
+    const radial = corotating(L4.x + 0.02 * D, L4.y);
+    const d4 = study(run([radial], 4), 0).drift; // measured 3.8e-5
+    const d16 = study(run([radial], 16), 0).drift; // measured 2.3e-6
+    expect(d4 / d16).toBeGreaterThan(10);
+    expect(d4 / d16).toBeLessThan(25);
+    expect(d4).toBeLessThan(1e-4);
   });
 });
 

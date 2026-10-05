@@ -18,6 +18,13 @@
  * recomputing it from stored positions, which is what a resume from a snapshot
  * does (accelerations are never stored).
  *
+ * Substeps: with settings.substeps = S > 1 a recorded step runs S KDK substeps of dt/S; every substep
+ * is a full step above (its own drift segment is swept for capture and escape). Snapshots, history and
+ * stoppedAt stay in recorded-step units. S absent or 1 runs exactly the single-step code with the same bits.
+ * Impulses are applied to the synchronized velocities at the end of the recorded step they name (or to the
+ * initial state at step 0), before the snapshot; accelerations depend only on positions, so the carried a_n
+ * stays valid across a burn.
+ *
  * Choices where model.ts is silent or loose (all reported to the owner):
  * - Attractor capture is the ENTRY point of the capture disc, not the segment's closest
  *   approach: an infall through the centre is captured at the radius. The test sweeps the
@@ -54,7 +61,7 @@
  */
 import { G, LIMITS, MODEL, REASON_CODE, SNAPSHOT_SCHEMA, STATUS_CODE } from './model.ts';
 import type {
-  EnergyBudget, History, OrbitSnapshot, OrbitStudyConfig, SnapshotHashes, Vec2,
+  EnergyBudget, History, Impulse, OrbitSnapshot, OrbitStudyConfig, SnapshotHashes, Vec2,
 } from './model.ts';
 import { hashFloat64, stableHash } from '../cloud-advection/sim.ts';
 
@@ -91,6 +98,12 @@ export function validateConfig(config: OrbitStudyConfig): void {
   positive('worldToPage.scale', transforms.worldToPage.scale);
   vec('worldToPage.offset', transforms.worldToPage.offset);
   positive('settings.dt', settings.dt);
+  if (settings.substeps !== undefined) {
+    finite('settings.substeps', settings.substeps);
+    if (!Number.isInteger(settings.substeps) || settings.substeps < 1 || settings.substeps > LIMITS.maxSubsteps) {
+      throw new RangeError(`settings.substeps must be an integer in [1, ${LIMITS.maxSubsteps}]`);
+    }
+  }
   if (settings.boundary !== 'open' && settings.boundary !== 'absorb') {
     throw new RangeError("settings.boundary must be 'open' or 'absorb'");
   }
@@ -106,6 +119,19 @@ export function validateConfig(config: OrbitStudyConfig): void {
   if (particles.length > LIMITS.maxParticles) {
     throw new RangeError(`${particles.length} particles is above the limit of ${LIMITS.maxParticles}`);
   }
+  const impulses = config.impulses ?? [];
+  if (!Array.isArray(impulses) || impulses.length > LIMITS.maxImpulses) {
+    throw new RangeError(`impulses must be an array of at most ${LIMITS.maxImpulses}`);
+  }
+  impulses.forEach((m, i) => {
+    if (!Number.isInteger(m.particle) || m.particle < 0 || m.particle >= particles.length) {
+      throw new RangeError(`impulses[${i}].particle must be an index into particles`);
+    }
+    if (!Number.isInteger(m.step) || m.step < 0 || m.step > LIMITS.maxSteps) {
+      throw new RangeError(`impulses[${i}].step must be an integer in [0, ${LIMITS.maxSteps}]`);
+    }
+    vec(`impulses[${i}].dv`, m.dv);
+  });
   const totalEdges = forbidden.reduce((n, f) => n + (Array.isArray(f.polygon) ? f.polygon.length : 0), 0);
   if (totalEdges > LIMITS.maxForbiddenEdges) {
     throw new RangeError(`${totalEdges} forbidden edges is above the limit of ${LIMITS.maxForbiddenEdges}`);
@@ -140,13 +166,13 @@ function checkSteps(name: string, steps: number): void {
   }
 }
 
-/** Work for `steps` steps: steps × (particles × attractors + attractors² + particles × forbidden edges). */
+/** Work for `steps` steps: steps × substeps × (particles × attractors + attractors² + particles × forbidden edges). */
 function checkWork(config: OrbitStudyConfig, steps: number): void {
   if (steps > LIMITS.maxSteps) throw new RangeError(`${steps} steps is above the limit of ${LIMITS.maxSteps}`);
   const P = config.particles.length;
   const A = config.attractors.length;
   const E = config.forbidden.reduce((n, f) => n + f.polygon.length, 0);
-  const work = steps * (P * A + A * A + P * E);
+  const work = steps * (config.settings.substeps ?? 1) * (P * A + A * A + P * E);
   if (work > LIMITS.maxWork) {
     throw new RangeError(`${steps} steps of ${P} particles, ${A} attractors and ${E} forbidden edges needs ${work} force evaluations and edge tests, above the limit of ${LIMITS.maxWork}`);
   }
@@ -158,7 +184,9 @@ export function configHashes(config: OrbitStudyConfig): SnapshotHashes {
   const geometry = stableHash({ domain: config.domain, forbidden: config.forbidden });
   const transform = stableHash(config.transforms);
   const simulation = stableHash({
-    settings: config.settings,
+    // substeps 1 and impulses [] are the defaults and stay out of the hash, so older keys survive.
+    settings: { ...config.settings, substeps: (config.settings.substeps ?? 1) > 1 ? config.settings.substeps : undefined },
+    impulses: config.impulses && config.impulses.length > 0 ? config.impulses : undefined,
     // `hidden` is a diagnostics flag with no effect on the physics.
     attractors: config.attractors.map(({ hidden: _hidden, ...rest }) => rest),
     particleMass: config.particleMass,
@@ -253,8 +281,35 @@ interface Prep {
   yMax: number;
   absorb: boolean;
   escapeMargin: number;
+  /** Recorded step length (snapshot time unit). */
   dt: number;
+  substeps: number;
+  /** dt / substeps: the KDK step length (equal to dt bitwise when substeps is 1). */
+  dtSub: number;
+  /** Impulses grouped by step, config order within a step. */
+  impulses: Map<number, Impulse[]>;
   particleMass: number;
+}
+
+function groupImpulses(list: Impulse[]): Map<number, Impulse[]> {
+  const out = new Map<number, Impulse[]>();
+  for (const m of list) {
+    const at = out.get(m.step);
+    if (at) at.push(m);
+    else out.set(m.step, [m]);
+  }
+  return out;
+}
+
+/** Burns scheduled for the synchronized step `step`; stopped particles ignore them. */
+function applyImpulses(p: Prep, st: State, step: number): void {
+  const list = p.impulses.get(step);
+  if (!list) return;
+  for (const m of list) {
+    if (st.status[m.particle] !== STATUS_CODE.free) continue;
+    st.vx[m.particle] += m.dv.x;
+    st.vy[m.particle] += m.dv.y;
+  }
 }
 
 function prepare(config: OrbitStudyConfig): Prep {
@@ -293,6 +348,9 @@ function prepare(config: OrbitStudyConfig): Prep {
     absorb: config.settings.boundary === 'absorb',
     escapeMargin: config.settings.escapeMargin,
     dt: config.settings.dt,
+    substeps: config.settings.substeps ?? 1,
+    dtSub: config.settings.dt / (config.settings.substeps ?? 1),
+    impulses: groupImpulses(config.impulses ?? []),
     particleMass: config.particleMass,
   };
 }
@@ -401,6 +459,7 @@ function initialState(p: Prep): State {
     if (p.absorb && out > 0) stop(st, i, STATUS_CODE.captured, REASON_CODE.edge, 0);
     else if (!p.absorb && out > p.escapeMargin) stop(st, i, STATUS_CODE.escaped, REASON_CODE.none, 0);
   }
+  applyImpulses(p, st, 0);
   return st;
 }
 
@@ -601,9 +660,12 @@ function computeAcc(p: Prep, st: State): void {
   }
 }
 
-/** One kick–drift–kick step. Requires st.pax/pay/aax/aay to hold a_n for the current positions. */
+/**
+ * One kick–drift–kick (sub)step of length dtSub. Requires st.pax/pay/aax/aay to hold a_n for the current
+ * positions. st.step is the recorded step in progress and is not advanced here.
+ */
 function stepOnce(p: Prep, st: State): void {
-  const dt = p.dt;
+  const dt = p.dtSub;
   const half = 0.5 * dt;
   const n = st.step;
 
@@ -639,7 +701,6 @@ function stepOnce(p: Prep, st: State): void {
       st.py[i] = y1;
     }
   }
-  st.step = n + 1;
 
   // a_{n+1} from the step-(n+1) positions, then the second kick.
   computeAcc(p, st);
@@ -659,7 +720,9 @@ function run(p: Prep, st: State, steps: number, onStep?: (st: State) => void): v
   if (steps === 0) return;
   computeAcc(p, st);
   for (let s = 0; s < steps; s++) {
-    stepOnce(p, st);
+    for (let k = 0; k < p.substeps; k++) stepOnce(p, st);
+    st.step++;
+    applyImpulses(p, st, st.step);
     if (onStep) onStep(st);
   }
 }
