@@ -105,7 +105,8 @@ function union(bs: (Bounds | null)[]): Bounds | null {
 export function placementOffset(layers: Layer[], page: Page, stack: Stack, center: FinalizeOptions['center']): { dx: number; dy: number; art: Bounds | null; area: Bounds } {
   const art = union(layers.filter(l => !isBorder(l)).map(l => l.bounds));
   const border = stack.border as { inset?: number; contentGap?: number; style?: string } | undefined;
-  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? 2 : 0) + (border.contentGap ?? 6) : page.margin ?? 18;
+  // Mirrors finishing's content inset: the border's inner line plus half its 0.25 mm stroke.
+  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? 2 : 0) + (border.contentGap ?? 6) + 0.25 : page.margin ?? 18;
   const area = { x0: inner, y0: inner, x1: page.width - inner, y1: page.height - inner };
   if (!art || center === 'none') return { dx: 0, dy: 0, art, area };
   const dy = (area.y0 + area.y1) / 2 - (art.y0 + art.y1) / 2;
@@ -148,6 +149,7 @@ export interface PieceReport {
 
 export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions): Promise<PieceReport> {
   const { page, pens } = await loadSketch(piece.sketch);
+  if (options.palette.inks.length < pens.length) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${pens.length} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
   mkdirSync(join(dir, 'source'), { recursive: true });
   const request = { seed: piece.seed, params: piece.params ?? {}, finishing: finishingFor(stack, page, pens, options.palette) };
@@ -163,8 +165,12 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   const { dx, dy, art, area } = placementOffset(layers, finalPage, stack, options.center);
 
   // Merge layers that share a color into the lowest-numbered one; the border joins its ink's layer too.
+  // Same ink, same pass count and same width only: merging must not change how any stroke is drawn.
   const byColor = new Map<string, Layer[]>();
-  for (const l of layers) byColor.set(l.color.toLowerCase(), [...(byColor.get(l.color.toLowerCase()) ?? []), l]);
+  for (const l of layers) {
+    const key = [l.color.toLowerCase(), l.attrs['data-passes'] ?? '1', l.attrs['stroke-width'] ?? ''].join('|');
+    byColor.set(key, [...(byColor.get(key) ?? []), l]);
+  }
   const moves: string[][] = [];
   const plan = new Map<number, { label: string; penId?: string; passes: number }>();
   for (const group of byColor.values()) {
@@ -173,7 +179,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
     const merged = options.mergeSameColor ? sorted : [keep];
     if (options.mergeSameColor && sorted.length > 1) moves.push(['lmove', sorted.slice(1).map(l => l.index).join(','), String(keep.index)]);
     const names = merged.map(l => l.label.replace(/^\d+-/, ''));
-    plan.set(keep.index, { label: `${keep.index}-${names.join('+')}`, penId: keep.attrs['data-pen-id'], passes: Math.max(...merged.map(l => Number(l.attrs['data-passes'] ?? 1))) });
+    plan.set(keep.index, { label: `${keep.index}-${names.join('+')}`, penId: keep.attrs['data-pen-id'], passes: Number(keep.attrs['data-passes'] ?? 1) });
     if (!options.mergeSameColor) for (const l of sorted.slice(1)) plan.set(l.index, { label: l.label, penId: l.attrs['data-pen-id'], passes: Number(l.attrs['data-passes'] ?? 1) });
   }
   const artLayers = layers.filter(l => !isBorder(l)).map(l => l.index).join(',');
@@ -258,7 +264,7 @@ async function serve(stackPath: string, port: number) {
     try {
       if (req.method === 'GET' && url.pathname === '/') return send(200, ui, TYPES['.html']);
       if (req.method === 'GET' && url.pathname === '/api/stack') {
-        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack),
+        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack), borderPen: (stack.border as { pen?: string } | undefined)?.pen ?? null,
           pieces: stack.pieces.map(p => ({ ...p, slug: slug(p.name), pens: previews.get(slug(p.name))!.pens })) }));
       }
       const preview = /^\/api\/preview\/([a-z0-9-]+)\.svg$/.exec(url.pathname);
@@ -270,14 +276,18 @@ async function serve(stackPath: string, port: number) {
       }
       if (req.method === 'POST' && url.pathname === '/api/finalize') {
         if (busy) return send(409, JSON.stringify({ error: 'A finalize run is already in progress' }));
-        let body = '';
-        for await (const chunk of req) { body += chunk; if (body.length > 1 << 20) return send(413, '{"error":"too large"}'); }
-        const input = JSON.parse(body) as { pieces: string[]; palette: Palette; center: FinalizeOptions['center']; mergeSameColor: boolean; vpype: Partial<VpypeOptions> };
-        const options = resolveOptions(stack, { palette: input.palette, center: input.center, mergeSameColor: input.mergeSameColor, vpype: input.vpype as VpypeOptions });
-        const chosen = stack.pieces.filter(p => input.pieces.includes(slug(p.name)));
-        if (!chosen.length) return send(400, '{"error":"no pieces selected"}');
+        // Local-only tool: refuse cross-site form posts.
+        if (!String(req.headers['content-type']).startsWith('application/json') || (req.headers.origin && !/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(req.headers.origin))) {
+          return send(403, JSON.stringify({ error: 'JSON from this page only' }));
+        }
         busy = true;
         try {
+          let body = '';
+          for await (const chunk of req) { body += chunk; if (body.length > 1 << 20) return send(413, '{"error":"too large"}'); }
+          const input = JSON.parse(body) as { pieces: string[]; palette: Palette; center: FinalizeOptions['center']; mergeSameColor: boolean; vpype: Partial<VpypeOptions> };
+          const options = resolveOptions(stack, { palette: input.palette, center: input.center, mergeSameColor: input.mergeSameColor, vpype: input.vpype as VpypeOptions });
+          const chosen = stack.pieces.filter(p => input.pieces.includes(slug(p.name)));
+          if (!chosen.length) return send(400, '{"error":"no pieces selected"}');
           const reports = [];
           for (const piece of chosen) reports.push(await finalizePiece(stack, piece, options));
           return send(200, JSON.stringify({ reports: reports.map(r => ({ ...r, url: `/out/${slug(r.name)}/` })) }));

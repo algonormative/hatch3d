@@ -88,7 +88,7 @@ async function boot() {
 /** Recolor by layer order: pen i (1-based layer number) takes palette ink i-1; the border takes its pen's ink. */
 function colored(slug) {
   const piece = S.pieces.find(p => p.slug === slug);
-  const borderPen = piece.pens.findIndex(p => p.id === 'carbon');
+  const borderPen = piece.pens.findIndex(p => p.id === S.borderPen);
   return svgs[slug].replace(/(<g\b[^>]*inkscape:label="(\d+)-([^"]*)"[^>]*\bstroke=")([^"]*)(")/g, (m, a, n, name, _c, z) => {
     const i = name === 'finishing-border' ? Math.max(0, borderPen) : Number(n) - 1;
     return a + palette.inks[i % palette.inks.length] + z;
