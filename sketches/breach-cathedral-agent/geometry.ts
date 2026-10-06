@@ -742,14 +742,20 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
  * The system pierces the agent: a few large slabs driven straight through the head along one
  * seeded direction, standing well out of the cage on both sides, longer on the far side.
  */
-function piercingBlocks(ctx: SketchContext, pose: Pose): Slab[] {
+function piercingBlocks(ctx: SketchContext, pose: Pose, forward: THREE.Vector3): Slab[] {
   const amount = n(ctx, 'pierce', 0.6, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('agent-pierce');
-  const { side, axis, face } = pose.gaze;
-  // One direction for the whole volley: somewhere across the head, never along the crown.
-  const yaw = (rng() - 0.5) * Math.PI * 1.4, lift = (rng() - 0.5) * 0.9;
-  const dir = face.clone().multiplyScalar(Math.cos(yaw)).addScaledVector(side, Math.sin(yaw))
+  const { side, axis } = pose.gaze;
+  // One direction for the whole volley: in through the side of the head, temple to temple,
+  // knocked off true by a seeded odd angle toward the face or the back, and up or down.
+  const sign = () => (rng() < 0.5 ? -1 : 1);
+  const odd = n(ctx, 'pierceAngle', 0.5, 0, 1);
+  const yaw = sign() * (0.14 + 0.48 * odd * (0.5 + rng())) , lift = sign() * (0.06 + 0.42 * odd * rng());
+  // Lateral as the eye reads it: across the head on the sheet, not along the view.
+  const across0 = side.clone().addScaledVector(forward, -side.dot(forward)).normalize();
+  const depth = forward.clone().addScaledVector(axis, -forward.dot(axis)).normalize();
+  const dir = across0.multiplyScalar(Math.cos(yaw)).addScaledVector(depth, Math.sin(yaw))
     .multiplyScalar(Math.cos(lift)).addScaledVector(axis, Math.sin(lift)).normalize();
   // A frame whose local z is the drive direction.
   const across = new THREE.Vector3().crossVectors(axis, dir).normalize();
@@ -769,10 +775,13 @@ function piercingBlocks(ctx: SketchContext, pose: Pose): Slab[] {
     const tilt = (rng() - 0.5) * 0.12;
     const d = dir.clone().addScaledVector(up, tilt).normalize();
     const mid = centre.clone().addScaledVector(across, offA).addScaledVector(up, offB).addScaledVector(d, (near - far) / 2);
-    const basis = new THREE.Matrix4().makeBasis(across, new THREE.Vector3().crossVectors(d, across).normalize(), d);
-    const roll = new THREE.Matrix4().makeRotationZ((rng() - 0.5) * 0.5);
+    // Length along local x, as the cathedral's slabs lie, so the long faces carry its hatch grammar.
+    const ly = up.clone().addScaledVector(d, -up.dot(d)).normalize();
+    const lz = new THREE.Vector3().crossVectors(d, ly);
+    const basis = new THREE.Matrix4().makeBasis(d, ly, lz);
+    const roll = new THREE.Matrix4().makeRotationX((rng() - 0.5) * 0.6);
     const e = new THREE.Euler().setFromRotationMatrix(basis.multiply(roll), 'XYZ');
-    out.push({ ...solid(mid.x, mid.y, mid.z, w, h, length, 200 + i, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 1.05 });
+    out.push({ ...solid(mid.x, mid.y, mid.z, length, h, w, 200 + i, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 1.05 });
   }
   return out;
 }
@@ -799,7 +808,7 @@ export function drawAgent(ctx: SketchContext): Part[] {
     dark: toneField(ctx, pose.head),
   };
   const system = architecture(ctx, pose.head);
-  const face = piercingBlocks(ctx, pose);
+  const face = piercingBlocks(ctx, pose, forward);
   const solids = [...system, ...pose.slabs, ...face];
   const faceFrom = system.length + pose.slabs.length;
   const beatRng = ctx.random('agent-rests');

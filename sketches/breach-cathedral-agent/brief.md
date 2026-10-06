@@ -11,7 +11,7 @@ A fork of [Breach Cathedral](../breach-cathedral/brief.md). The original is "a s
   - lapels, a striped tie and a collar sit over the trunk, and the shirt in the opening stays paper.
   
   `cloth: ribbon` swaps the suit for the helix membrane wound round the body, with 64-step rests.
-- **The force.** The head is one helix strand wound into an egg-shaped skull. Where it passes in front of the face it narrows to an opening that looks out. The system pierces it: a few large slabs, heavy beams or broad plates, are driven straight through the head along one seeded direction and stand well out of the cage on both sides (`pierce`). Above the crown a second strand joins the head strand, and both unwind and flare up into the breach. It stops short of the art edge, so it never reads as cropped.
+- **The force.** The head is one helix strand wound into an egg-shaped skull. Where it passes in front of the face it narrows to an opening that looks out. The system pierces it: a few large slabs, heavy beams or broad plates, are driven through the side of the head, across it as the eye reads the sheet, knocked off true by a seeded odd angle (`pierceAngle`). They stand well out of the cage on both sides (`pierce`), and their long faces carry the cathedral hatch. Above the crown a second strand joins the head strand, and both unwind and flare up into the breach. It stops short of the art edge, so it never reads as cropped.
 - **Impressionistic value.** The head is the light. Stripe density follows an aura that falls off with distance from the head, modulated by facing and broken up by seeded low-frequency noise:
   - near the head the suit blows out to paper;
   - the trousers and the base stay heavy.

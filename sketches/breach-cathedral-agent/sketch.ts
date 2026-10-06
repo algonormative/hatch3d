@@ -35,6 +35,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'gazeLift', label: 'Gaze lift', default: 24, min: 0, max: 60, step: 1, units: '°', group: 'Force' },
     { type: 'slider', id: 'beam', label: 'Beam from the face', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Force' },
     { type: 'slider', id: 'pierce', label: 'Blocks piercing the head', default: 0.6, min: 0, max: 1, step: 0.01, group: 'Force' },
+    { type: 'slider', id: 'pierceAngle', label: 'Piercing angle off the temples', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Force' },
     { type: 'slider', id: 'headTurns', label: 'Head turns', default: 4.2, min: 1, max: 6, step: 0.05, group: 'Force' },
     { type: 'slider', id: 'headWidth', label: 'Head ribbon width', default: 0.5, min: 0.25, max: 1.4, step: 0.05, group: 'Force' },
     { type: 'slider', id: 'rise', label: 'Unwinding rise', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Force' },
