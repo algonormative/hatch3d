@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
 import { lineRough, scratchLetterRun, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
+import { clamp, n } from '../kit/params.ts';
+import { clipToRect } from '../kit/page.ts';
+import { restPattern } from '../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../kit/strokes.ts';
 import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
@@ -38,11 +41,6 @@ const MIN_PITCH = 0.56 / MM_PER_UNIT;
 const BOT = -10.9, TOP = 10.6;
 const SIDE = 6.55; // outermost centre for anything that moves outward
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 export function camera(): THREE.OrthographicCamera {
   const view = new THREE.OrthographicCamera(-HALF_W, HALF_W, HALF_H, -HALF_H, 0.1, 80);
@@ -422,42 +420,10 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
   return out;
 }
 
-export function clipArt(points: Point[]): Point[][] {
-  const runs: Point[][] = [];
-  let run: Point[] = [];
-  const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    let enter = 0, exit = 1;
-    for (const [p, q] of [[-dx, a.x - ART.x0], [dx, ART.x1 - a.x], [-dy, a.y - ART.y0], [dy, ART.y1 - a.y]]) {
-      if (p === 0) { if (q < 0) { enter = 1; exit = 0; break; } }
-      else { const t = q / p; if (p < 0) enter = Math.max(enter, t); else exit = Math.min(exit, t); }
-    }
-    if (enter > exit) { flush(); continue; }
-    const lerp = (t: number): Point => ({ x: a.x + dx * t, y: a.y + dy * t });
-    const start = lerp(enter), end = lerp(exit);
-    if (run.length && (Math.hypot(run[run.length - 1].x - start.x, run[run.length - 1].y - start.y) > 0.001 || enter > 0)) flush();
-    if (!run.length) run.push(start);
-    run.push(end);
-    if (exit < 1) flush();
-  }
-  flush();
-  return runs;
-}
+/** Clip a page polyline to the art window. */
+export const clipArt = (points: Point[]): Point[][] => clipToRect(points, ART);
 
-export function simplify(points: Point[]): Point[] {
-  if (points.length < 3) return points;
-  const out = [points[0]];
-  for (let i = 1; i < points.length - 1; i++) {
-    const a = out[out.length - 1], b = points[i], c = points[i + 1];
-    const span = Math.hypot(b.x - a.x, b.y - a.y);
-    const area = Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x));
-    if (span > 1.4 || area > 0.15) out.push(b);
-  }
-  out.push(points[points.length - 1]);
-  return out;
-}
+export { simplify } from '../kit/page.ts';
 
 export interface TowerOptions {
   /** Depth occluders: the whole scene (default) or the architecture alone, for visibility audits. */
@@ -476,7 +442,7 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
   const rawInterruption = n(ctx, 'interruption', 0.32, 0, 1);
   const interruption = rawInterruption <= 0.32 ? rawInterruption : 0.32 + (rawInterruption - 0.32) * 1.6;
   const rng = ctx.random('slab-interruptions');
-  const beats = Array.from({ length: 64 }, () => rng() < interruption);
+  const beats = restPattern(rng, interruption);
   const view = camera();
   // The first six strokes of every solid are its outline edges (front, back, four depth edges).
   const strokes: Stroke[] = architecture.flatMap((s, owner) =>
@@ -504,51 +470,36 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
     // Ruled lettering: the slab-edge hand, scaled to each line's cap height.
     const ruled = letterScratch(ctx) === 'ruled';
     const letterLevel = { slogan: sloganSettings(ctx).rough, title: titleSettings(ctx).rough };
-    const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
-    const buckets = new Map<string, Point[][]>();
+    const buckets = new PartBuckets();
     const removeHidden = ctx.params.occlusion !== false;
     const scratch = lineRough(ctx);
     const scratchEnv = { depth, bias: 0.0014, mmPerPx: pageMmPerPx };
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = strokes[projection.sourceIndices[i]];
-      const key = `${stroke.group}-${stroke.ink}`;
-      const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', projection.sourceIndices[i]) : undefined;
-      const letterRough = ruled && (stroke.group === 'slogan' || stroke.group === 'title') ? letterLevel[stroke.group] : 0;
-      const lrng = letterRough > 0 ? scratchRandom(ctx.seed, 'letter-scratch', projection.sourceIndices[i]) : undefined;
-      const whole = projection.polylines[i];
-      const text = stroke.group === 'slogan' || stroke.group === 'title';
-      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        const seen = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        // Scratching acts on what is already visible; its added marks are depth-tested again.
-        const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
-        const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
-          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv))
-          : lrng ? seen.flatMap(run => scratchLetterRun(run, letterRough, lrng, scratchEnv, stroke.cap!)) : seen;
-        for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
-          for (const path of clipArt(mm)) {
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      hidden: () => removeHidden,
+      pieces: (c, stroke) => {
+        const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+        return bands ? clearBands(c, bands, pageMmPerPx) : [c];
+      },
+      begin: (stroke, index, whole) => {
+        const key = `${stroke.group}-${stroke.ink}`;
+        const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', index) : undefined;
+        const letterRough = ruled && (stroke.group === 'slogan' || stroke.group === 'title') ? letterLevel[stroke.group] : 0;
+        const lrng = letterRough > 0 ? scratchRandom(ctx.seed, 'letter-scratch', index) : undefined;
+        const text = stroke.group === 'slogan' || stroke.group === 'title';
+        return seen => {
+          // Scratching acts on what is already visible; its added marks are depth-tested again.
+          const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
+          const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
+            [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv))
+            : lrng ? seen.flatMap(run => scratchLetterRun(run, letterRough, lrng, scratchEnv, stroke.cap!)) : seen;
+          for (const run of runs) {
             // Glyph curves are millimetre-scale: keep every point.
-            const reduced = text ? path : simplify(path);
-            let length = 0;
-            for (let j = 1; j < reduced.length; j++) {
-              length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-            }
-            if (reduced.length > 1 && length > (text ? 0.05 : 0.5)) {
-              if (!buckets.has(key)) buckets.set(key, []);
-              buckets.get(key)!.push(reduced);
-            }
+            for (const path of clipArt(scalePoints(run, MM_X, MM_Y))) buckets.add(key, path, text);
           }
-        }
-      }
-    }
-    const parts: Part[] = [];
-    for (const group of GROUPS) for (const ink of [...INKS, 'lettering'] as Ink[]) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+        };
+      },
+    });
+    const parts = buckets.toParts(GROUPS, [...INKS, 'lettering']);
     return { parts, slogans };
   } finally {
     for (const geometry of geometries) geometry.dispose();

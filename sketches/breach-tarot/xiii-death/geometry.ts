@@ -1,15 +1,18 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import {
-  helixStrands, simplify, slabGeometry, slabMatrix, slabStrokes, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
+  helixStrands, slabGeometry, slabMatrix, slabStrokes, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
 } from '../../breach-cathedral-tower/geometry.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { densify, keepAlong } from '../page.ts';
+import { clamp, n, smooth } from '../../kit/params.ts';
+import { densify, keepAlong } from '../../kit/page.ts';
+import { horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { restPattern } from '../../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
 /**
  * XIII Death: a singularity on the horizon. The system, a long nave of cathedral slabs, recedes in
@@ -28,22 +31,13 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 export const SINGULARITY: Point = { x: TABLOID_PAGE.width / 2, y: HORIZON_Y };
 const EYE = 4.2;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
 /** One-point perspective down the nave, shifted so the vanishing point sits on the horizon. */
 export function deathCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  const view = new THREE.PerspectiveCamera(n(ctx, 'fov', 64, 40, 90), W / H, 0.5, 600);
-  view.position.set(0, EYE, 6);
-  view.lookAt(0, EYE, -100);
-  view.setViewOffset(W, H, 0, -(HORIZON_Y - TABLOID_PAGE.height / 2) / MM_Y, W, H);
-  view.updateProjectionMatrix();
-  view.updateMatrixWorld();
-  return view;
+  return horizonCamera({
+    fov: n(ctx, 'fov', 64, 40, 90), eye: [0, EYE, 6], target: [0, EYE, -100], far: 600,
+    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+  });
 }
 
 /** The nave: paired piers with inward cantilevers in the Breach Cathedral grammar, lintels, paving. */
@@ -289,7 +283,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
   const density = n(ctx, 'hatchDensity', 0.62, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
   const beatRng = ctx.random('death-rests');
-  const beats = Array.from({ length: 64 }, () => beatRng() < interruption);
+  const beats = restPattern(beatRng, interruption);
   // The first six strokes of every solid are its outline edges; the rest is hatch.
   const strokes: Stroke[] = architecture.flatMap((s, owner) => slabStrokes(s, density, beats[(s.beat * 7) % 64])
     .map((stroke, k): Stroke => ({ ink: stroke.ink, group: 'system', family: k < 6 ? 'edge' : 'hatch', points: stroke.points, owner })));
@@ -315,8 +309,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
     // The phrase lives where the drawing still holds: on near faces, well out from the point.
     const surfaces: SloganSurface[] = [];
     architecture.forEach((s, id) => {
-      const c = new THREE.Vector3(s.x, s.y, s.z + s.d / 2).project(view);
-      const p = { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height };
+      const p = pageOf(view, new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
       const inside = p.x > CARD.x0 + 10 && p.x < CARD.x1 - 10 && p.y > CARD.y0 + 8 && p.y < CARD.y1 - 8;
       if (s.role === 'stack' && inside && radius(p) > u.edges + 12) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
     });
@@ -327,21 +320,20 @@ export function drawDeath(ctx: SketchContext): Part[] {
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
-    const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const drawn: { key: string; path: Point[]; family: Family }[] = [];
     const words: { key: string; path: Point[] }[] = [];
     const removeHidden = ctx.params.occlusion !== false;
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = strokes[projection.sourceIndices[i]];
-      const key = `${stroke.group}-${stroke.ink}`;
-      const rank = rankOf(projection.sourceIndices[i]);
-      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      hidden: () => removeHidden,
+      pieces: (c, stroke) => {
+        const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+        return bands ? clearBands(c, bands, MM_Y) : [c];
+      },
+      begin: (stroke, index) => {
+        const key = `${stroke.group}-${stroke.ink}`;
+        const rank = rankOf(index);
+        return runs => { for (const run of runs) {
+          const mm = scalePoints(run, MM_X, MM_Y);
           if (stroke.family === 'text') { words.push({ key, path: mm }); continue; }
           const lensed = stroke.family !== 'membrane' || mode === 'world';
           if (stroke.family === 'membrane' && mode === 'torn') {
@@ -369,17 +361,17 @@ export function drawDeath(ctx: SketchContext): Part[] {
           // The faint secondary image: a few outline edges near the line of sight, broken and sparse.
           if ((stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world')) && rank < 0.16) {
             const ghost = densify(mm).filter(p => radius(p) < 70).map(p => bend.secondary(p));
-            let run: Point[] = [];
+            let ghostRun: Point[] = [];
             const flush = () => {
-              for (const path of keepAlong(run, (_, at) => at % 2.4 < 1.3)) drawn.push({ key, path, family: 'edge' });
-              run = [];
+              for (const path of keepAlong(ghostRun, (_, at) => at % 2.4 < 1.3)) drawn.push({ key, path, family: 'edge' });
+              ghostRun = [];
             };
-            for (const p of ghost) { if (p) run.push(p); else flush(); }
+            for (const p of ghost) { if (p) ghostRun.push(p); else flush(); }
             flush();
           }
-        }
-      }
-    }
+        } };
+      },
+    });
     const lettering = rigidWords(words, bend.primary);
     for (const w of lettering.words) for (const path of clipWindow(w.path)) drawn.push({ key: w.key, path, family: 'text' });
     const onWord = (p: Point) => lettering.boxes.some(b => {
@@ -388,20 +380,12 @@ export function drawDeath(ctx: SketchContext): Part[] {
     });
     // A separate helix stands in front of everything, the singularity's own marks included.
     const front = mode === 'apart' ? coverage(helixMeshes, view) : null;
-    const buckets = new Map<string, Point[][]>();
+    const buckets = new PartBuckets();
     const add = (key: string, path: Point[], family: Family | 'flat') => {
       const clear = (p: Point) => (!front || family === 'membrane' || !front(p)) && (family === 'text' || family === 'flat' || !onWord(p));
       const kept = front || lettering.boxes.length ? keepAlong(path, clear, 0.25) : [path];
-      for (const piece of kept) {
-        const reduced = family === 'text' || family === 'flat' ? piece : simplify(piece);
-        let length = 0;
-        for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-        const floor = family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5;
-        if (reduced.length > 1 && length > floor) {
-          if (!buckets.has(key)) buckets.set(key, []);
-          buckets.get(key)!.push(reduced);
-        }
-      }
+      const floor = family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5;
+      for (const piece of kept) buckets.add(key, piece, family === 'text' || family === 'flat', floor);
     };
     for (const d of drawn) add(d.key, d.path, d.family);
     // The flat marks: the horizon rule, unbent, broken at the point; the event horizon, a disc hatched
@@ -428,11 +412,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
       [{ x: CARD.x0, y: HORIZON_Y + 0.9 }, { x: SINGULARITY.x - gap, y: HORIZON_Y + 0.9 }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y + 0.9 }, { x: CARD.x1, y: HORIZON_Y + 0.9 }],
     ]) add('threshold-carbon', path, 'flat');
-    const parts: Part[] = [];
-    for (const group of ['system', 'helix', 'slogan', 'title']) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+    const parts = buckets.toParts(['system', 'helix', 'slogan', 'title'], INKS);
     for (const id of ['singularity-carbon', 'threshold-carbon']) parts.push({ id, pen: 'carbon', paths: buckets.get(id) ?? [] });
     parts.push(...cardFrame('XIII', 'DEATH'));
     return parts;

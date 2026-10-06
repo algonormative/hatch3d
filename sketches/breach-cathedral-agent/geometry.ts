@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
-import { clipArt, densityPitch, simplify, slabGeometry, slabMatrix, slabStrokes, solid, type Ink, type Role, type Slab } from '../breach-cathedral-tower/geometry.ts';
+import { clipArt, densityPitch, slabGeometry, slabMatrix, slabStrokes, solid, type Ink, type Role, type Slab } from '../breach-cathedral-tower/geometry.ts';
+import { clamp, n, smooth } from '../kit/params.ts';
+import { barPattern, restPattern } from '../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../kit/strokes.ts';
 import { clearBands, knockOut, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 /**
@@ -26,12 +28,6 @@ const MM_PER_UNIT = TABLOID_PAGE.height / (2 * HALF_H);
 const MIN_MM = 0.55;
 const TAU = Math.PI * 2;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 function camera(ctx: SketchContext): THREE.OrthographicCamera {
@@ -612,7 +608,7 @@ function rays(ctx: SketchContext, head: THREE.Vector3): Stroke[] {
   const amount = n(ctx, 'radiance', 0.5, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('agent-rays');
-  const pattern = Array.from({ length: 64 }, (_, k) => (k % 8 !== 7) && rng() < 0.7);
+  const pattern = barPattern(rng, 0.7);
   const count = 8 * Math.round(6 + 12 * amount);
   const z = -4.3, growth = 1.13;
   const out: Stroke[] = [];
@@ -812,7 +808,7 @@ export function drawAgent(ctx: SketchContext): Part[] {
   const system = architecture(ctx, pose.head);
   const solids = [...system, ...pose.slabs];
   const beatRng = ctx.random('agent-rests');
-  const beats = Array.from({ length: 64 }, () => beatRng() < rawInterruption);
+  const beats = restPattern(beatRng, rawInterruption);
   const strokes: Stroke[] = solids.flatMap((s, owner) => {
     const group: Group = owner < system.length && s.role !== 'stub' ? (s.z < -5 ? 'system' : 'throne') : 'figure';
     return slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, group, owner }));
@@ -859,41 +855,29 @@ export function drawAgent(ctx: SketchContext): Part[] {
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
     // The print title: one line on a low, clear slab face, always on the fine lettering pen.
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', points });
-    const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
-    const buckets = new Map<string, Point[][]>();
+    const buckets = new PartBuckets();
     const removeHidden = ctx.params.occlusion !== false;
     const censor = censorBars(ctx, pose, p => { const q = p.clone().project(view); return { x: (q.x * 0.5 + 0.5) * W * MM_X, y: (-q.y * 0.5 + 0.5) * H * MM_Y }; });
     const censorPx = censor.quads.map(q => q.map(c => ({ x: c.x / MM_X, y: c.y / MM_Y })));
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = strokes[projection.sourceIndices[i]];
-      const key = `${stroke.group}-${stroke.ink}`;
-      const text = stroke.group === 'slogan' || stroke.group === 'title';
-      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        const shown = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        const visible = censorPx.length && !text ? shown.flatMap(r => knockOut(r, censorPx)) : shown;
-        for (const run of visible) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
-          for (const path of clipArt(mm)) {
-            const reduced = text ? path : simplify(path);
-            let length = 0;
-            for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-            if (reduced.length > 1 && length > (text ? 0.05 : 0.5)) {
-              if (!buckets.has(key)) buckets.set(key, []);
-              buckets.get(key)!.push(reduced);
-            }
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      hidden: () => removeHidden,
+      pieces: (c, stroke) => {
+        const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+        return bands ? clearBands(c, bands, pageMmPerPx) : [c];
+      },
+      begin: stroke => {
+        const key = `${stroke.group}-${stroke.ink}`;
+        const text = stroke.group === 'slogan' || stroke.group === 'title';
+        return shown => {
+          const visible = censorPx.length && !text ? shown.flatMap(r => knockOut(r, censorPx)) : shown;
+          for (const run of visible) {
+            for (const path of clipArt(scalePoints(run, MM_X, MM_Y))) buckets.add(key, path, text);
           }
-        }
-      }
-    }
-    const parts: Part[] = [];
+        };
+      },
+    });
     const bars = censor.paths.flatMap(clipArt);
-    for (const group of GROUPS) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+    const parts = buckets.toParts(GROUPS, INKS);
     if (bars.length) parts.push({ id: 'censor-carbon', pen: 'carbon', paths: bars });
     return parts;
   } finally {

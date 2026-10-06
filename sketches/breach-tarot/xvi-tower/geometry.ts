@@ -1,16 +1,19 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import {
-  helixStrands, simplify, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, towerSlabs,
+  helixStrands, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, towerSlabs,
   type Ink, type Slab, type Strand,
 } from '../../breach-cathedral-tower/geometry.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { densify, keepAlong } from '../page.ts';
+import { n } from '../../kit/params.ts';
+import { densify, keepAlong } from '../../kit/page.ts';
+import { horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { barPattern } from '../../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
 /**
  * XVI The Tower: the page is struck, not the tower. A flat hatched lightning band runs down the
@@ -28,21 +31,12 @@ const EYE = 2.2;
 /** The tower's own frame: Breach Cathedral Tower coordinates run from −10.9 to 10.6; ground is 0 here. */
 const LIFT = 10.9, CROWN = 10.6 + LIFT;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-
 /** A level camera at eye height, shifted so the horizon sits on the set's shared line. */
 export function towerCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  const view = new THREE.PerspectiveCamera(n(ctx, 'fov', 56, 40, 80), W / H, 0.5, 400);
-  const distance = n(ctx, 'distance', 48, 30, 90);
-  view.position.set(0, EYE, distance);
-  view.lookAt(0, EYE, 0);
-  view.setViewOffset(W, H, 0, -(HORIZON_Y - TABLOID_PAGE.height / 2) / MM_Y, W, H);
-  view.updateProjectionMatrix();
-  view.updateMatrixWorld();
-  return view;
+  return horizonCamera({
+    fov: n(ctx, 'fov', 56, 40, 80), eye: [0, EYE, n(ctx, 'distance', 48, 30, 90)], target: [0, EYE, 0], far: 400,
+    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+  });
 }
 
 /** The cathedral tower on the ground, its crown slabs lifted off and turned like a lid. */
@@ -188,7 +182,7 @@ function storm(ctx: SketchContext): Stroke[] {
   const amount = n(ctx, 'storm', 0.5, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('tower-card-storm');
-  const pattern = Array.from({ length: 64 }, (_, k) => k % 8 !== 7 && rng() < 0.75);
+  const pattern = barPattern(rng, 0.75);
   const z = -32, top = 62, slant = -0.32, pitch = 0.62 - 0.22 * amount;
   const out: Stroke[] = [];
   for (let i = 0, x = -60; x < 60; i++, x += pitch * (0.85 + 0.3 * rng())) {
@@ -315,10 +309,10 @@ export function drawTower(ctx: SketchContext): Part[] {
   strokes.push(...storm(ctx));
   const geometries = architecture.map(slabGeometry);
   for (const s of strands) geometries.push(buildSurfaceMesh((u, v) => strandPoint(s, u, 2 * v - 1), {}, 480, 12));
-  const pageOf = (p: THREE.Vector3): Point => { const c = p.clone().project(view); return { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height }; };
+  const pageAt = (p: THREE.Vector3): Point => pageOf(view, p);
   const lidSlabs = architecture.filter(s => s.role === 'fallen');
   const lidY = lidSlabs.length ? lidSlabs.reduce((t, s) => t + s.y, 0) / lidSlabs.length : CROWN;
-  const { main: bolt, branch } = boltPath(ctx, pageOf(new THREE.Vector3(0, lidY, 0)), pageOf(new THREE.Vector3(0, 0, 4.5)));
+  const { main: bolt, branch } = boltPath(ctx, pageAt(new THREE.Vector3(0, lidY, 0)), pageAt(new THREE.Vector3(0, 0, 4.5)));
   const half = 3 + 4 * n(ctx, 'bolt', 0.5, 0, 1);
   // The slip runs along the bolt's overall line, with a little opening across it.
   const along = { x: bolt.at(-1)!.x - bolt[0].x, y: bolt.at(-1)!.y - bolt[0].y };
@@ -332,8 +326,8 @@ export function drawTower(ctx: SketchContext): Part[] {
       const out: SloganSurface[] = [];
       architecture.forEach((s, id) => {
         if (s.role !== 'stack' || s.w <= 1.2 || s.h <= 0.3) return;
-        const p = pageOf(new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
-        const shaftX = pageOf(new THREE.Vector3(0, s.y, 0)).x;
+        const p = pageAt(new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
+        const shaftX = pageAt(new THREE.Vector3(0, s.y, 0)).x;
         if (sideOf(bolt, p).dist > half + boltGap && Math.abs(p.x - shaftX) > shaftGap && p.x > CARD.x0 + 8 && p.x < CARD.x1 - 8) {
           out.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
         }
@@ -361,42 +355,26 @@ export function drawTower(ctx: SketchContext): Part[] {
       const st = strokes[k];
       if (st.owner !== undefined && lettered.has(st.owner) && st.family === 'hatch' && st.ink !== 'carbon') strokes.splice(k, 1);
     }
-    const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
-    const buckets = new Map<string, Point[][]>();
-    const add = (key: string, path: Point[], text: boolean) => {
-      const reduced = text ? path : simplify(path);
-      let length = 0;
-      for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-      if (reduced.length > 1 && length > (text ? 0.05 : 0.5)) {
-        if (!buckets.has(key)) buckets.set(key, []);
-        buckets.get(key)!.push(reduced);
-      }
-    };
+    const buckets = new PartBuckets();
     const removeHidden = ctx.params.occlusion !== false;
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = strokes[projection.sourceIndices[i]];
-      const key = `${stroke.group}-${stroke.ink}`;
-      const text = stroke.family === 'text';
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      // Lettering was placed against this depth pass already; the helix parts round it, so it is not hidden again.
+      hidden: stroke => removeHidden && stroke.family !== 'text',
       // Words read on top: every other line, the helix and piers in front included, parts round each placed word.
-      const bands = text || allBands.length === 0 ? undefined : allBands;
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        // Lettering was placed against this depth pass already; the helix parts round it, so it is not hidden again.
-        const runs = removeHidden && !text ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
-          for (const inside of clipWindow(mm)) for (const path of shear(inside, bolt, slip, half)) {
-            for (const kept of clipWindow(path)) add(key, kept, text);
+      pieces: (c, stroke) => stroke.family === 'text' || allBands.length === 0 ? [c] : clearBands(c, allBands, MM_Y),
+      begin: stroke => {
+        const key = `${stroke.group}-${stroke.ink}`;
+        const text = stroke.family === 'text';
+        return runs => {
+          for (const run of runs) {
+            for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) for (const path of shear(inside, bolt, slip, half)) {
+              for (const kept of clipWindow(path)) buckets.add(key, kept, text);
+            }
           }
-        }
-      }
-    }
-    const parts: Part[] = [];
-    for (const group of ['storm', 'system', 'helix', 'slogan', 'title']) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+        };
+      },
+    });
+    const parts = buckets.toParts(['storm', 'system', 'helix', 'slogan', 'title'], INKS);
     parts.push({ id: 'bolt-carbon', pen: 'carbon', paths: [...bandMarks(bolt, half), ...bandMarks(branch, half * 0.35)].flatMap(p => clipWindow(p)) });
     // The shared horizon, drawn on this card as the ground line either side of the tower.
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: shear([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], bolt, slip, half) });

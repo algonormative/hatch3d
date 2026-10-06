@@ -2,15 +2,18 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../../src/occlusion.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import {
-  helixStrands, simplify, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
+  helixStrands, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
 } from '../../breach-cathedral-tower/geometry.ts';
 import { planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { keepAlong, meshCoverage } from '../page.ts';
+import { n } from '../../kit/params.ts';
+import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { atPage, horizonCamera, onGround as groundPoint, pageOf } from '../../kit/perspective.ts';
+import { barPattern } from '../../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import { facetStrokes } from '../xvi-tower/geometry.ts';
 
 /**
@@ -30,29 +33,12 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 const EYE = 2.4;
 const SUN_DIST = 150;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-
 export function sunCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  const view = new THREE.PerspectiveCamera(n(ctx, 'fov', 54, 40, 80), W / H, 0.5, 800);
-  view.position.set(0, EYE, 0);
-  view.lookAt(0, EYE, -100);
-  view.setViewOffset(W, H, 0, -(HORIZON_Y - TABLOID_PAGE.height / 2) / MM_Y, W, H);
-  view.updateProjectionMatrix();
-  view.updateMatrixWorld();
-  return view;
+  return horizonCamera({
+    fov: n(ctx, 'fov', 54, 40, 80), eye: [0, EYE, 0], target: [0, EYE, -100], far: 800,
+    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+  });
 }
-
-const pageOf = (view: THREE.Camera, w: THREE.Vector3): Point => {
-  const q = w.clone().project(view);
-  return { x: (q.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-q.y * 0.5 + 0.5) * TABLOID_PAGE.height };
-};
-const atPage = (view: THREE.Camera, p: Point, dist: number): THREE.Vector3 => {
-  const ndc = new THREE.Vector3(p.x / TABLOID_PAGE.width * 2 - 1, -(p.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
-  return view.position.clone().addScaledVector(ndc.sub(view.position).normalize(), dist);
-};
 
 export interface Sun { page: Point; centre: THREE.Vector3; radius: number; rays: Slab[]; waves: { strand: Strand; turn: THREE.Matrix4 }[] }
 
@@ -185,11 +171,7 @@ export function drawSun(ctx: SketchContext): Part[] {
     const length = w.top / Math.tan(Math.asin(Math.max(0.05, toward.y)));
     const groundY = (z: number) => pageOf(view, new THREE.Vector3(0, 0, z)).y;
     const y0 = groundY(w.z + 0.8), y1 = Math.min(CARD.y1 - 0.5, groundY(Math.min(-5, w.z + length)));
-    const onGround = (p: Point): THREE.Vector3 => {
-      const ndc = new THREE.Vector3(p.x / TABLOID_PAGE.width * 2 - 1, -(p.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
-      const dir = ndc.sub(view.position);
-      return view.position.clone().addScaledVector(dir, -view.position.y / dir.y);
-    };
+    const onGround = (p: Point) => groundPoint(view, p);
     if (place === 'carved') {
       const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
         art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y } };
@@ -234,36 +216,28 @@ export function drawSun(ctx: SketchContext): Part[] {
     const glyphPaths: Point[][] = [];
     const lettering = projectPolylinesClipped(textStrokes, view, W, H);
     for (const line of lettering.polylines) for (const c of clipProjectedPolyline(line, W, H)) {
-      glyphPaths.push(...clipWindow(densifyProjectedPolyline(c).map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }))));
+      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
     const onGlyph = glyphMask(glyphPaths, place === 'carved' ? 0.55 : 0.8);
     const drawn = strokes;
-    const projection = projectPolylinesClipped(drawn.map(st => st.points), view, W, H);
-    const buckets = new Map<string, Point[][]>();
-    const add = (key: string, path: Point[], exact = false) => {
-      const reduced = exact ? path : simplify(path);
-      let length = 0;
-      for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-      if (reduced.length > 1 && length > (exact ? 0.05 : 0.4)) {
-        if (!buckets.has(key)) buckets.set(key, []);
-        buckets.get(key)!.push(reduced);
-      }
-    };
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const st = drawn[projection.sourceIndices[i]];
-      for (const clipped of clipProjectedPolyline(projection.polylines[i], W, H)) {
-        for (const run of splitPolylineByDepth(densifyProjectedPolyline(clipped), depth, 0.0014).visible) {
-          for (const inside of clipWindow(run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y })))) {
-            for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) add(`${st.group}-${st.ink}`, piece);
+    const buckets = new PartBuckets(0.4);
+    projectStrokes(drawn, { view, depth, width: W, height: H }, {
+      begin: st => {
+        const key = `${st.group}-${st.ink}`;
+        return runs => {
+          for (const run of runs) {
+            for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
+              for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(key, piece);
+            }
           }
-        }
-      }
-    }
+        };
+      },
+    });
     const disc = s.radius * TABLOID_PAGE.height / 2 / (SUN_DIST * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
     const solidThings = meshCoverage(geometries, view, TABLOID_PAGE, 1.4);
     // Fine rays over the whole sky, from just beyond the disc, in a fixed 64-step rhythm.
     const rng = ctx.random('sun-fine');
-    const pattern = Array.from({ length: 64 }, (_, k) => k % 8 !== 7 && rng() < 0.8);
+    const pattern = barPattern(rng, 0.8);
     const fine = Math.round(120 + 160 * n(ctx, 'radiance', 0.5, 0, 1));
     for (let k = 0; k < fine; k++) {
       const a = (k + 0.5) / fine * Math.PI * 2;
@@ -271,14 +245,14 @@ export function drawSun(ctx: SketchContext): Part[] {
       const line = [{ x: s.page.x + Math.cos(a) * r0, y: s.page.y + Math.sin(a) * r0 }, { x: s.page.x + Math.cos(a) * 400, y: s.page.y + Math.sin(a) * 400 }];
       for (const piece of clipWindow(line, { ...CARD, y1: HORIZON_Y - 1 })) {
         const keep = (p: Point, at: number) => !solidThings(p) && pattern[Math.floor(at / (2 + 0.04 * Math.hypot(p.x - s.page.x, p.y - s.page.y))) % 64];
-        for (const run of keepAlong(piece, keep, 0.25)) add(k % 6 === 0 ? 'radiance-vermilion' : 'radiance-acid', run);
+        for (const run of keepAlong(piece, keep, 0.25)) buckets.add(k % 6 === 0 ? 'radiance-vermilion' : 'radiance-acid', run);
       }
     }
     // The disc's rim: a few flat rings, broken only where a ray stands in front.
     for (let j = 0; j < 4; j++) {
       const r = disc - j * 0.8;
       const ring = Array.from({ length: 241 }, (_, i) => ({ x: s.page.x + r * Math.cos(i / 240 * Math.PI * 2), y: s.page.y + r * Math.sin(i / 240 * Math.PI * 2) }));
-      for (const piece of clipWindow(ring)) add('disc-vermilion', piece);
+      for (const piece of clipWindow(ring)) buckets.add('disc-vermilion', piece);
     }
     // The ground: the wall's long shadow toward the viewer, split by the shaft of light from the breach.
     const left = pageOf(view, new THREE.Vector3(w.breach[0], 0, w.z)), right = pageOf(view, new THREE.Vector3(w.breach[1], 0, w.z));
@@ -289,7 +263,7 @@ export function drawSun(ctx: SketchContext): Part[] {
       return p.x > l && p.x < r;
     };
     for (let y = y0, k = 0; y < y1; y += 0.75 + 0.02 * (y - y0), k++) {
-      for (const run of keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !shaft(p) && !onGlyph(p), 0.25)) add(k % 4 === 0 ? 'shadow-ultramarine' : 'shadow-carbon', run);
+      for (const run of keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !shaft(p) && !onGlyph(p), 0.25)) buckets.add(k % 4 === 0 ? 'shadow-ultramarine' : 'shadow-carbon', run);
     }
     // The ground: a cracked desert. Dried-mud plates (a seeded Voronoi on the ground plane), each drawn
     // as its own slightly shrunken outline so every crack is a double line; perspective does the rest.
@@ -343,15 +317,11 @@ export function drawSun(ctx: SketchContext): Part[] {
       const ys = page.map(p => p.y);
       if (Math.max(...ys) - Math.min(...ys) < 1.2 || Math.min(...ys) < HORIZON_Y) continue;
       for (const piece of clipWindow(page)) {
-        for (const run of keepAlong(piece, p => !inShadowRow(p) && !onGlyph(p), 0.2)) add('ground-carbon', run);
+        for (const run of keepAlong(piece, p => !inShadowRow(p) && !onGlyph(p), 0.2)) buckets.add('ground-carbon', run);
       }
     }
-    for (const path of glyphPaths) add('slogan-lettering', path, true);
-    const parts: Part[] = [];
-    for (const group of ['radiance', 'disc', 'rays', 'waves', 'wall', 'shadow', 'ground', 'slogan']) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+    for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
+    const parts = buckets.toParts(['radiance', 'disc', 'rays', 'waves', 'wall', 'shadow', 'ground', 'slogan'], INKS);
     // The horizon shows where the wall does not stand: beyond its ends and through the breach.
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidThings(p), 0.3) });
     parts.push(...cardFrame('XIX', 'THE SUN'));
