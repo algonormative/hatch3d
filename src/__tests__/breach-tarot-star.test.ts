@@ -17,14 +17,14 @@ describe('Breach Tarot: XVII The Star', () => {
       expect(p.y).toBeLessThanOrEqual(CARD.bottom + 0.01);
     }
     const ids = first.parts.map(p => p.id);
-    for (const id of ['night-carbon', 'star-carbon', 'ripple-ultramarine', 'horizon-carbon', 'card-frame']) expect(ids).toContain(id);
+    for (const id of ['night-carbon', 'star-carbon', 'water-ultramarine', 'horizon-carbon', 'card-frame']) expect(ids).toContain(id);
     expect(ids.some(id => id.startsWith('slogan-'))).toBe(true);
   }, 30_000);
 
   it('keeps the night above the horizon and the reflections below it', async () => {
     const result = await renderSketch({ entry, seed: 2 });
     const night = result.parts.filter(p => p.id.startsWith('night-')).flatMap(p => p.paths.flat());
-    const water = result.parts.filter(p => p.id.startsWith('water-') || p.id.startsWith('ripple-')).flatMap(p => p.paths.flat());
+    const water = result.parts.filter(p => p.id.startsWith('water-') || p.id.startsWith('glitter-')).flatMap(p => p.paths.flat());
     expect(night.length).toBeGreaterThan(100);
     expect(water.length).toBeGreaterThan(100);
     expect(Math.max(...night.map(p => p.y))).toBeLessThan(HORIZON_Y);

@@ -139,14 +139,44 @@ function night(ctx: SketchContext, covered: (p: Point) => boolean): Point[][][] 
   return out;
 }
 
-/** Ripple: a page point below the line, shifted sideways by its row, and kept only on the row's dashes. */
-function ripple(seed: number): { shift: (p: Point) => Point; keep: (p: Point) => boolean } {
-  const rowOf = (y: number) => Math.floor((y - HORIZON_Y) / (0.9 + 0.012 * (y - HORIZON_Y)));
-  const hash = (a: number, b: number) => { const s = Math.sin(a * 127.1 + b * 311.7 + seed * 74.7) * 43758.5453; return s - Math.floor(s); };
-  return {
-    shift: p => { const r = rowOf(p.y); return { x: p.x + 1.4 * Math.sin(r * 1.7 + seed) * (0.4 + 0.012 * (p.y - HORIZON_Y)), y: p.y }; },
-    keep: p => { const r = rowOf(p.y); return r % 3 !== 2 && hash(r, Math.floor(p.x / (2.5 + 0.03 * (p.y - HORIZON_Y)))) > 0.32; },
-  };
+/**
+ * The glitter path: a column of light on dark water under the star, like a low sun's. Each water row
+ * is a straight dark line broken only where the path crosses it; the path widens toward the viewer,
+ * its edge ragged row by row, and short sparkle dashes float inside it, thinning toward its edges.
+ */
+export function glitter(ctx: SketchContext, cx: number, streamsX: number[]): { rows: Point[][]; sparkle: Point[][]; refraction: Point[][] } {
+  const rng = ctx.random('star-glitter');
+  const width = 0.6 + 0.8 * n(ctx, 'glitter', 0.5, 0, 1);
+  const rows: Point[][] = [], sparkle: Point[][] = [], refraction: Point[][] = [];
+  const depthOf = (y: number) => (y - HORIZON_Y) / (CARD.y1 - HORIZON_Y);
+  let k = 0;
+  for (let y = HORIZON_Y + 1.1; y < CARD.y1 - 0.6; y += 0.85 + 2.2 * depthOf(y) ** 1.5, k++) {
+    const d = depthOf(y);
+    // The path's centre drifts a little, as a reflection does on moving water.
+    const c = cx + 2.4 * Math.sin(k * 0.37) * (0.3 + d);
+    const half = width * (4 + 38 * d ** 0.9) * (0.65 + 0.55 * rng());
+    const left: Point[] = [{ x: CARD.x0, y }, { x: Math.max(CARD.x0, c - half), y }];
+    const right: Point[] = [{ x: Math.min(CARD.x1, c + half), y }, { x: CARD.x1, y }];
+    for (const r of [left, right]) if (r[1].x - r[0].x > 0.5) rows.push(r);
+    // Sparkle inside the path: short dashes, more near its spine, every row but sparser low down.
+    const count = Math.round((2 + 5 * d) * width);
+    for (let j = 0; j < count; j++) {
+      const u = (rng() * 2 - 1) * (rng() ** 0.6);
+      const len = 0.8 + (1.2 + 6 * d) * rng() * (1 - 0.6 * Math.abs(u));
+      const x = c + u * (half - len / 2);
+      if (Math.abs(u) > 0.15 || rng() < 0.6) sparkle.push([{ x: x - len / 2, y }, { x: x + len / 2, y }]);
+    }
+  }
+  // The streams continue below the surface, refracted: slow wavering lines that fade with depth.
+  for (const sx of streamsX) {
+    const pts: Point[] = [];
+    for (let y = HORIZON_Y + 1.5; y < HORIZON_Y + (CARD.y1 - HORIZON_Y) * 0.55; y += 0.5) {
+      const d = depthOf(y);
+      pts.push({ x: sx + (sx - cx) * 0.6 * d + 2.2 * Math.sin(y * 0.28) * (0.3 + 1.6 * d), y });
+    }
+    refraction.push(...keepAlong(pts, (p, at) => at % (2 + 9 * depthOf(p.y)) < 2 - 0.8 * depthOf(p.y), 0.2));
+  }
+  return { rows, sparkle, refraction };
 }
 
 export function drawStar(ctx: SketchContext): Part[] {
@@ -160,14 +190,11 @@ export function drawStar(ctx: SketchContext): Part[] {
   const density = 0.55;
   for (const s of strands) for (const st of strandStrokes(s, density, 0.32, ctx, view)) strokes.push({ ink: st.ink, group: 'helix', family: 'membrane', points: st.points });
   // The reflection: every sky stroke mirrored in the water plane.
-  const mirror = (p: THREE.Vector3) => new THREE.Vector3(p.x, -p.y, p.z);
-  const reflected: Stroke[] = strokes.map(st => ({ ...st, group: 'water', points: st.points.map(mirror) }));
   const geometries = solids.map(slabGeometry);
   const helixMeshes = strands.map(s => buildSurfaceMesh((u, v) => strandPoint(s, u, 2 * v - 1), {}, 480, 12));
   geometries.push(...helixMeshes);
-  const mirrorGeometries = geometries.map(g => { const m = g.clone(); m.scale(1, -1, 1); return m; });
   try {
-    const depth = renderDepthBufferCPU([...geometries, ...mirrorGeometries], view, W, H);
+    const depth = renderDepthBufferCPU(geometries, view, W, H);
     const surfaces: SloganSurface[] = words.map((s, i) => ({ id: star.length + debris.length + i, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d }));
     const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: HORIZON_Y / MM_Y } };
@@ -178,7 +205,7 @@ export function drawStar(ctx: SketchContext): Part[] {
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) sky.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) sky.push({ ink: 'lettering', group: 'title', family: 'text', points });
-    const all = [...sky, ...reflected];
+    const all = sky;
     const projection = projectPolylinesClipped(all.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const add = (key: string, path: Point[], text: boolean) => {
@@ -190,7 +217,6 @@ export function drawStar(ctx: SketchContext): Part[] {
         buckets.get(key)!.push(reduced);
       }
     };
-    const water = ripple(ctx.seed % 997);
     const removeHidden = ctx.params.occlusion !== false;
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = all[projection.sourceIndices[i]];
@@ -203,12 +229,7 @@ export function drawStar(ctx: SketchContext): Part[] {
         const runs = removeHidden && !text ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
         for (const run of runs) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
-          if (stroke.group === 'water') {
-            // Reflections live only in the water, broken into ripples.
-            for (const inside of clipWindow(mm, { ...CARD, y0: HORIZON_Y + 1.5 })) {
-              for (const piece of keepAlong(inside.map(water.shift), water.keep, 0.2)) add(key, piece, false);
-            }
-          } else for (const inside of clipWindow(mm, { ...CARD, y1: HORIZON_Y - 0.5 })) add(key, inside, text);
+          for (const inside of clipWindow(mm, { ...CARD, y1: HORIZON_Y - 0.5 })) add(key, inside, text);
         }
       }
     }
@@ -239,15 +260,15 @@ export function drawStar(ctx: SketchContext): Part[] {
       const q = nodes[best];
       for (const piece of keepAlong([p, q], (x, at) => !shine(x) && at % 2.2 < 1.1, 0.2)) add('constellation-acid', piece, false);
     });
-    // The water line itself, and ripple rows across the whole water.
-    const rows: Point[][] = [];
-    // Rows open out toward the viewer; each is a broken line, its dashes set by the same ripple as the reflections.
-    for (let y = HORIZON_Y + 1.2; y < CARD.y1 - 0.5; y += 0.9 + 0.022 * (y - HORIZON_Y)) {
-      rows.push(...keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], water.keep, 0.3));
-    }
-    for (const p of rows) add('ripple-ultramarine', p, false);
+    // The water: dark rows parted by the star's glitter path, and the streams refracted below the surface.
+    const starX = pageOf(star[star.length - 1]).x;
+    const streamX = strands.map(st => pageOf(solid(st.x, 0, st.z, 0, 0, 0, 0, 'stub')).x);
+    const sea = glitter(ctx, starX, streamX);
+    sea.rows.forEach((p, i) => add(i % 5 === 2 ? 'water-carbon' : 'water-ultramarine', p, false));
+    for (const p of sea.sparkle) add('glitter-acid', p, false);
+    for (const p of sea.refraction) add('glitter-vermilion', p, false);
     const parts: Part[] = [];
-    for (const group of ['night', 'constellation', 'star', 'pieces', 'helix', 'water', 'ripple', 'slogan', 'title']) for (const ink of INKS) {
+    for (const group of ['night', 'constellation', 'star', 'pieces', 'helix', 'water', 'glitter', 'slogan', 'title']) for (const ink of INKS) {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
@@ -255,6 +276,6 @@ export function drawStar(ctx: SketchContext): Part[] {
     parts.push(...cardFrame('XVII', 'THE STAR'));
     return parts;
   } finally {
-    for (const g of [...geometries, ...mirrorGeometries]) g.dispose();
+    for (const g of geometries) g.dispose();
   }
 }
