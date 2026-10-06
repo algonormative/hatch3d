@@ -39,6 +39,7 @@
     "sketches/breach-cathedral-tower/**/*.ts",
     "sketches/breach-cathedral-agent/**/*.ts",
     "sketches/breach-tarot/**/*.ts",
+    "sketches/mannequin-proof/**/*.ts",
     "sketches/kit/**/*.ts",
     "sketches/breach-cathedral-extended/**/*.ts",
     "sketches/chamber-bloom-foam/**/*.ts",
