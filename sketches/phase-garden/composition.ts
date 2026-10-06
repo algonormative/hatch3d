@@ -4,7 +4,9 @@ import { measureStrokeText, strokeText, strokeTextOnPath, type StrokeFace } from
 /** 11 × 17 inch stock in millimeters; source art is authored on 297 × 420. */
 export const TABLOID_PAGE: Page = { width: 279.4, height: 431.8, margin: 18, paper: '#f4f0e6' };
 export const AUTHORED_ART = { x: 18, y: 76, width: 261, height: 281 } as const;
-type Rect = { x: number; y: number; width: number; height: number };
+/** Tall envelope for full-height works: exactly the abstract target, so abstract art is authored in page millimetres. */
+export const TALL_ART = { x: 18, y: 18, width: 243.4, height: 395.8 } as const;
+export type Rect = { x: number; y: number; width: number; height: number };
 
 export function posterControls(subtitle: string, edition: string): Control[] {
   const lettered = { control: 'posterMode', equals: 'lettered' } as const;
@@ -82,15 +84,15 @@ export function concertLettering(options: LetteringOptions): Part[] {
   ];
 }
 
-export function posterArtTransform(ctx: SketchContext, page: Page) {
+export function posterArtTransform(ctx: SketchContext, page: Page, authored: Rect = AUTHORED_ART) {
   const margin = page.margin ?? 18;
   const abstract = ctx.params.posterMode === 'abstract';
   const target: Rect = abstract
     ? { x: margin, y: margin, width: page.width - 2 * margin, height: page.height - 2 * margin }
     : { x: margin, y: 76, width: page.width - 2 * margin, height: page.height - 136 };
-  const scale = Math.min(target.width / AUTHORED_ART.width, target.height / AUTHORED_ART.height);
-  const dx = target.x + (target.width - AUTHORED_ART.width * scale) / 2 - AUTHORED_ART.x * scale;
-  const dy = target.y + (target.height - AUTHORED_ART.height * scale) / 2 - AUTHORED_ART.y * scale;
+  const scale = Math.min(target.width / authored.width, target.height / authored.height);
+  const dx = target.x + (target.width - authored.width * scale) / 2 - authored.x * scale;
+  const dy = target.y + (target.height - authored.height * scale) / 2 - authored.y * scale;
   return { target, scale, dx, dy, inverse: (p: Point): Point => ({ x: (p.x - dx) / scale, y: (p.y - dy) / scale }) };
 }
 
@@ -112,13 +114,16 @@ export interface ComposePosterOptions {
   subtitle: string;
   edition: string;
   pen?: string;
+  /** Authored art envelope; defaults to the original wide AUTHORED_ART. */
+  authored?: Rect;
 }
 
 /** Fit the fixed authored envelope without cropping or stretching; abstract centers it in the full sheet interior. */
 export function composePoster(ctx: SketchContext, art: Part[], options: ComposePosterOptions): Part[] {
   const page = options.page;
   const abstract = ctx.params.posterMode === 'abstract';
-  const mapped = fitParts(art, AUTHORED_ART, posterArtTransform(ctx, page).target);
+  const authored = options.authored ?? AUTHORED_ART;
+  const mapped = fitParts(art, authored, posterArtTransform(ctx, page, authored).target);
   if (abstract) return mapped;
   return [
     ...concertLettering({

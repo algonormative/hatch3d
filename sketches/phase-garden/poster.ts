@@ -1,7 +1,7 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { strokeText } from '../../src/sketch/stroke-text.ts';
 import { concertLettering } from './composition.ts';
-export { TABLOID_PAGE, AUTHORED_ART, posterControls, concertLettering, composePoster, posterArtTransform } from './composition.ts';
+export { TABLOID_PAGE, AUTHORED_ART, TALL_ART, posterControls, concertLettering, composePoster, posterArtTransform } from './composition.ts';
 
 /** Compatibility entry point for the original wire alphabet. */
 export function plotText(text: string, x: number, y: number, height: number, tracking = 1.8): Point[][] {
