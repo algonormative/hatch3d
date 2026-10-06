@@ -97,7 +97,7 @@ async function boot() {
   palette = structuredClone(S.defaults.palette);
   $('center').value = S.defaults.center; $('merge').checked = S.defaults.mergeSameColor;
   $('mergeTol').value = S.defaults.vpype.mergeTolerance; $('simpTol').value = S.defaults.vpype.simplifyTolerance; $('minLen').value = S.defaults.vpype.minLength;
-  const base = { key: 'none', label: 'no slogan', params: {}, svgs: {} };
+  const base = { key: 'none', label: 'stack settings', params: {}, svgs: {} };
   await Promise.all(S.pieces.map(async p => { base.svgs[p.slug] = await (await fetch(`/api/preview/${p.slug}.svg`)).text(); checked.add(p.slug); }));
   variants.push(base);
   cur = S.pieces[0].slug; drawSloganForm(); drawChips(); drawList(); drawPalettes(); drawPiece();

@@ -1,8 +1,20 @@
 {
   "title": "Breach Cathedral stack",
   "out": ".sketch-output/finalize/cathedral",
-  "edition": 1,
+  "edition": 2,
   "printTitle": "Breach Cathedral {version} {hash}",
+  "params": {
+    "slogan": "this was made by a machine",
+    "sloganCount": 1,
+    "sloganSpread": true,
+    "sloganFace": "cathedral",
+    "sloganSize": 2.2,
+    "sloganPlacement": "face",
+    "sloganPen": "lettering",
+    "sloganRough": 0.85,
+    "titleRough": 0.75,
+    "lineRough": 0.8
+  },
   "border": {
     "style": "double",
     "pen": "carbon",

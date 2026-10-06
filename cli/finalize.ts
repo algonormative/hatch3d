@@ -34,6 +34,8 @@ export interface FinalizeOptions {
 }
 export interface Stack {
   title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string };
+  /** Params every piece shares (e.g. slogan and scratch settings); a piece's own params win. */
+  params?: Record<string, unknown>;
   /** Print-run number; `run --bump` increments it. */
   edition?: number;
   /** Title drawn on each print when its sketch has title controls, e.g. "Breach Cathedral {version} {hash}". */
@@ -95,10 +97,11 @@ async function loadSketch(entry: string): Promise<{ page: Page; pens: Pen[]; con
 }
 
 /** Overrides may only name controls the sketch declares, so a typo can't silently do nothing. */
-function withOverrides(piece: Piece, controls: Control[], overrides: Record<string, unknown>): Record<string, unknown> {
+/** Layering: stack-wide params, then the piece's own params, then title stamping and explicit overrides. */
+function withOverrides(stack: Stack, piece: Piece, controls: Control[], overrides: Record<string, unknown>): Record<string, unknown> {
   const ids = new Set(controls.map(c => c.id));
-  for (const key of Object.keys(overrides)) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
-  return { ...piece.params, ...overrides };
+  for (const key of Object.keys({ ...stack.params, ...overrides })) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
+  return { ...stack.params, ...piece.params, ...overrides };
 }
 
 const execFileAsync = promisify(execFile);
@@ -120,7 +123,7 @@ async function renderSource(piece: Piece, request: object, dir: string): Promise
 export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
   const { page, pens, controls } = await loadSketch(piece.sketch);
   const auto = titleOverrides(stack, controls, buildVersion(stack.edition));
-  const request = { seed: piece.seed, params: withOverrides(piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
+  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
 }
 
@@ -266,7 +269,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
   const build = buildVersion(stack.edition);
-  const request = { seed: piece.seed, params: withOverrides(piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
+  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
   const source = readFileSync(sourcePath, 'utf8');
   const layers = readLayers(source);
