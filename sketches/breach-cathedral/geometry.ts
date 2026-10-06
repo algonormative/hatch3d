@@ -8,7 +8,7 @@ import { lineRough, scratchLetterRun, scratchRandom, scratchRun, type LineFamily
 import { n } from '../kit/params.ts';
 import { clipToRect, simplify } from '../kit/page.ts';
 import { restPattern } from '../kit/rhythm.ts';
-import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
+import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../kit/lettering.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */

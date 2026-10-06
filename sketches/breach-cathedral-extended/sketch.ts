@@ -1,7 +1,7 @@
 import { lineRoughControls } from '../phase-garden/scratch.ts';
 import type { Sketch } from '../../src/sketch/types.ts';
 import base from '../breach-cathedral/sketch.ts';
-import { LETTERING_PEN, sloganControls, titleControls } from '../breach-cathedral-tower/slogan.ts';
+import { LETTERING_PEN, sloganControls, titleControls } from '../kit/lettering.ts';
 
 /**
  * The original Breach Cathedral with opt-in full height, whole-structure fitting and spread slogans.

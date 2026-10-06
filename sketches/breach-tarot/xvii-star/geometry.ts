@@ -3,16 +3,15 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import {
-  helixStrands, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
-} from '../../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { clearBands, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { n } from '../../kit/params.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { atPage, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
-import { facetStrokes } from '../xvi-tower/geometry.ts';
 
 /**
  * XVII The Star: the Tower's debris, reread as a constellation. A night of dense engraved hatch
@@ -21,9 +20,6 @@ import { facetStrokes } from '../xvi-tower/geometry.ts';
  * the eight-pointed star, and two helix streams pour from it into still water. The water is the
  * card's flat mark: a band of broken ripple hatch in which everything above is reflected, row by row.
  */
-type Family = 'edge' | 'hatch' | 'membrane' | 'text';
-type Stroke = { ink: Ink; group: string; family: Family; points: THREE.Vector3[]; owner?: number };
-
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -186,8 +182,7 @@ export function drawStar(ctx: SketchContext): Part[] {
     const surfaces: SloganSurface[] = words.map((s, i) => ({ id: star.length + debris.length + i, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d }));
     const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: HORIZON_Y / MM_Y } };
-    let slogans = planSlogans(ctx, surfaces, env);
-    for (let k = 1; k < 8 && slogans.placed.length === 0 && sloganSettings(ctx).count > 0; k++) slogans = planSlogans(ctx, surfaces, env, `slogan-${k}`);
+    const slogans = planSloganAttempts(ctx, env, Array.from({ length: 8 }, (_, k) => ({ surfaces: () => surfaces, salt: k === 0 ? undefined : `slogan-${k}` })));
     const lettered = new Set(slogans.knockouts.keys());
     const sky = strokes.filter(st => !(st.owner !== undefined && lettered.has(st.owner) && st.family === 'hatch' && st.ink !== 'carbon'));
     const pen = sloganSettings(ctx).pen as Ink;

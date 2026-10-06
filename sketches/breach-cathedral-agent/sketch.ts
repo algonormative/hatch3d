@@ -1,6 +1,6 @@
 import type { Control, Sketch } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, TALL_ART, composePoster, posterControls } from '../phase-garden/poster.ts';
-import { sloganControls, titleControls, LETTERING_PEN } from '../breach-cathedral-tower/slogan.ts';
+import { sloganControls, titleControls, LETTERING_PEN } from '../kit/lettering.ts';
 import { drawAgent } from './geometry.ts';
 
 const lettering: Control[] = posterControls('BREACH CATHEDRAL / AGENT', '01A')

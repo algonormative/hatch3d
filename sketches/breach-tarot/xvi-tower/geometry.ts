@@ -3,11 +3,15 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import {
-  helixStrands, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, towerSlabs,
-  type Ink, type Slab, type Strand,
-} from '../../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { towerSlabs } from '../../breach-cathedral-tower/geometry.ts';
+import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { clearBands, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import { bandMarks, sideOf } from '../../kit/fills.ts';
+import type { Ink, Stroke } from '../../kit/types.ts';
+
+// The raking-light hatch lives in the sketch kit; re-exported for older importers.
+export { facetStrokes, faceDarkness, rakingLight } from '../../kit/slabs.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { n } from '../../kit/params.ts';
 import { densify, keepAlong } from '../../kit/page.ts';
@@ -21,9 +25,6 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * print. The tower itself is unsealed rather than destroyed: its crown lifts off like a lid and
  * the helix pours up out of the opened shaft.
  */
-type Family = 'edge' | 'hatch' | 'membrane' | 'text';
-type Stroke = { ink: Ink; group: string; family: Family; points: THREE.Vector3[]; owner?: number };
-
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -72,92 +73,6 @@ function tower(ctx: SketchContext): Slab[] {
     g.ry = (rng() - 0.5) * 1.6; g.rz = (rng() - 0.5) * 0.5; g.rx = (rng() - 0.5) * 0.3;
     g.tone = 0.9;
     out.push(g);
-  }
-  return out;
-}
-
-/** The raking light: low from the bolt's side and a little toward the eye, so faces split into values. */
-export function rakingLight(ctx: SketchContext): THREE.Vector3 {
-  // Elevation from a few degrees (grazing: front faces fall dark, flanks blaze) to high (tops lit).
-  const e = (4 + 56 * n(ctx, 'lightAngle', 0.3, 0, 1)) * Math.PI / 180;
-  const toward = 0.15 + 0.5 * n(ctx, 'lightAngle', 0.3, 0, 1);
-  return new THREE.Vector3(Math.cos(e), Math.sin(e) * 1.4, toward).normalize();
-}
-
-/** Face darkness under the raking light, 0 (paper) to 1, scaled by the slab's own tone. */
-export function faceDarkness(normal: THREE.Vector3, light: THREE.Vector3, tone: number): number {
-  const lit = Math.max(0, normal.dot(light));
-  return Math.max(0, Math.min(1, (0.12 + 0.88 * (1 - lit) ** 1.3) * Math.min(1.15, 0.55 + 0.5 * tone)));
-}
-
-const MIN_PITCH = 0.072; // world units: about 0.6 mm on the sheet at the tower's depth
-
-/** Clip the line o + s·dir to |x·U| ≤ a, |x·V| ≤ b in face coordinates (dir and o given as (u, v)). */
-function clipRect(ox: number, oy: number, dx: number, dy: number, a: number, b: number): [number, number] | null {
-  let lo = -Infinity, hi = Infinity;
-  for (const [o, d, h] of [[ox, dx, a], [oy, dy, b]]) {
-    if (Math.abs(d) < 1e-12) { if (Math.abs(o) > h) return null; continue; }
-    const t0 = (-h - o) / d, t1 = (h - o) / d;
-    lo = Math.max(lo, Math.min(t0, t1)); hi = Math.min(hi, Math.max(t0, t1));
-  }
-  return hi - lo > 1e-6 ? [lo, hi] : null;
-}
-
-/**
- * A slab drawn in the Tower card's own hatch: twelve outline edges; then on each face that sees the
- * eye, contour rings that follow its outline inward, as many as the face is dark; and inside them a
- * field of diagonal hatch, crossed by a second family on the darkest faces, for body.
- */
-export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean): Stroke[] {
-  const out: Stroke[] = [];
-  const m = slabMatrix(s);
-  const rot = new THREE.Matrix4().extractRotation(m);
-  const hx = s.w / 2, hy = s.h / 2, hz = s.d / 2;
-  const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyMatrix4(m);
-  const push = (ink: Ink, family: Family, ...pts: THREE.Vector3[]) => out.push({ ink, group: 'system', family, points: pts });
-  const e = 0.006;
-  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]];
-  push('carbon', 'edge', ...corners.map(([x, y]) => P(x * hx, y * hy, hz + e)));
-  push('carbon', 'edge', ...corners.map(([x, y]) => P(x * hx, y * hy, -hz - e)));
-  for (const [x, y] of corners.slice(0, 4)) push('carbon', 'edge', P(x * (hx + e), y * (hy + e), -hz), P(x * (hx + e), y * (hy + e), hz));
-  if (outlineOnly) return out;
-  const faces: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
-    [new THREE.Vector3(0, 0, hz), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(0, 0, -hz), new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, 0, hz), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(0, hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz)],
-    [new THREE.Vector3(0, -hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, hz)],
-  ];
-  for (const [c0, U0, V0] of faces) {
-    const normal = c0.clone().normalize().applyMatrix4(rot);
-    const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, e);
-    if (eye.clone().sub(centre).dot(normal) <= 0) continue;
-    const a = U0.length(), b = V0.length();
-    const U = U0.clone().normalize().applyMatrix4(rot), V = V0.clone().normalize().applyMatrix4(rot);
-    const at = (u: number, v: number) => centre.clone().addScaledVector(U, u).addScaledVector(V, v);
-    const d = faceDarkness(normal, light, s.tone);
-    // Contour rings: the outline repeated inward, spaced tighter the darker the face.
-    const ring = Math.max(MIN_PITCH, 0.075 + 0.11 * (1 - d));
-    const band = Math.min(a, b) * (0.12 + 0.6 * d);
-    let t = ring;
-    for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring) {
-      push('carbon', 'hatch', at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t)));
-    }
-    // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
-    const ia = a - t, ib = b - t;
-    if (ia < 0.05 || ib < 0.05 || d < 0.32) continue;
-    const families: [number, number, Ink][] = [[0.6, Math.max(MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5), 'ultramarine']];
-    if (d > 0.62) families.push([-0.95, Math.max(MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)), 'violet']);
-    for (const [angle, pitch, ink] of families) {
-      const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx;
-      const reach = Math.hypot(ia, ib);
-      for (let k = -reach + pitch / 2; k < reach; k += pitch) {
-        const span = clipRect(nx * k, ny * k, dx, dy, ia, ib);
-        if (!span) continue;
-        push(ink, 'hatch', at(nx * k + dx * span[0], ny * k + dy * span[0]), at(nx * k + dx * span[1], ny * k + dy * span[1]));
-      }
-    }
   }
   return out;
 }
@@ -236,19 +151,6 @@ export function boltPath(ctx: SketchContext, crown: Point, foot: Point): { main:
   return { main, branch };
 }
 
-/** Signed side of a page point relative to the bolt, and its distance from it. */
-function sideOf(bolt: Point[], p: Point): { side: number; dist: number } {
-  let best = Infinity, side = 1;
-  for (let i = 1; i < bolt.length; i++) {
-    const a = bolt[i - 1], b = bolt[i];
-    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
-    const d = Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
-    if (d < best) { best = d; side = Math.sign(dx * (p.y - a.y) - dy * (p.x - a.x)) || 1; }
-  }
-  return { side, dist: best };
-}
-
 /** Shear a page path across the bolt: the far side slips by `slip`; the band itself is left clear. */
 export function shear(path: Point[], bolt: Point[], slip: Point, half: number): Point[][] {
   const out: Point[][] = [];
@@ -264,33 +166,6 @@ export function shear(path: Point[], bolt: Point[], slip: Point, half: number): 
   flush();
   // Slipped pieces must not land inside the band either.
   return out.flatMap(r => keepAlong(r, q => sideOf(bolt, q).dist > half + 0.4, 0.3));
-}
-
-/** The flat band: two outline rules and a dense hatch across it, the card's one 2D mark. */
-function bandMarks(bolt: Point[], half: number): Point[][] {
-  const offset = (sign: number): Point[] => bolt.map((p, i) => {
-    const a = bolt[Math.max(0, i - 1)], b = bolt[Math.min(bolt.length - 1, i + 1)];
-    let nx = -(b.y - a.y), ny = b.x - a.x;
-    const l = Math.hypot(nx, ny) || 1;
-    nx /= l; ny /= l;
-    // Miter the corners so the band keeps its width round each turn.
-    let scale = 1;
-    if (i > 0 && i < bolt.length - 1) {
-      const u = { x: p.x - bolt[i - 1].x, y: p.y - bolt[i - 1].y }, ul = Math.hypot(u.x, u.y);
-      scale = 1 / Math.max(0.35, (-u.y / ul) * nx + (u.x / ul) * ny);
-    }
-    return { x: p.x + sign * nx * half * scale, y: p.y + sign * ny * half * scale };
-  });
-  const marks: Point[][] = [offset(1), offset(-1)];
-  // Hatch at 30° to the page, inside the band.
-  const pitch = 0.6, angle = Math.PI / 6, cx = Math.cos(angle), cy = Math.sin(angle);
-  const span = Math.hypot(CARD.x1 - CARD.x0, CARD.y1 - CARD.y0);
-  for (let o = -span; o < span; o += pitch) {
-    const ox = CARD.x0 - cy * o, oy = CARD.y0 + cx * o;
-    const line: Point[] = [{ x: ox - cx * span, y: oy - cy * span }, { x: ox + cx * span, y: oy + cy * span }];
-    for (const piece of clipWindow(line)) marks.push(...keepAlong(piece, p => sideOf(bolt, p).dist < half - 0.5, 0.3));
-  }
-  return marks;
 }
 
 export function drawTower(ctx: SketchContext): Part[] {
@@ -339,12 +214,11 @@ export function drawTower(ctx: SketchContext): Part[] {
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y },
     };
     // The spread phrase is placed whole or not at all; a few fixed reshuffles keep every seed lettered.
-    let slogans = planSlogans(ctx, faces(18, 9), env);
-    for (const [k, gaps] of [[18, 9], [12, 6], [8, 4], [8, 0]].entries()) {
-      for (let j = 0; j < 6 && slogans.placed.length === 0 && sloganSettings(ctx).count > 0; j++) {
-        slogans = planSlogans(ctx, faces(gaps[0], gaps[1]), env, `slogan-${k}-${j}`);
-      }
-    }
+    const tiers = [[18, 9], [12, 6], [8, 4], [8, 0]];
+    const slogans = planSloganAttempts(ctx, env, [
+      { surfaces: () => faces(18, 9) },
+      ...tiers.flatMap((gaps, k) => Array.from({ length: 6 }, (_, j) => ({ surfaces: () => faces(gaps[0], gaps[1]), salt: `slogan-${k}-${j}` }))),
+    ]);
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
@@ -375,7 +249,7 @@ export function drawTower(ctx: SketchContext): Part[] {
       },
     });
     const parts = buckets.toParts(['storm', 'system', 'helix', 'slogan', 'title'], INKS);
-    parts.push({ id: 'bolt-carbon', pen: 'carbon', paths: [...bandMarks(bolt, half), ...bandMarks(branch, half * 0.35)].flatMap(p => clipWindow(p)) });
+    parts.push({ id: 'bolt-carbon', pen: 'carbon', paths: [...bandMarks(bolt, half, CARD), ...bandMarks(branch, half * 0.35, CARD)].flatMap(p => clipWindow(p)) });
     // The shared horizon, drawn on this card as the ground line either side of the tower.
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: shear([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], bolt, slip, half) });
     parts.push(...cardFrame('XVI', 'THE TOWER'));

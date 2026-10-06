@@ -3,18 +3,18 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import {
-  helixStrands, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
-} from '../../breach-cathedral-tower/geometry.ts';
-import { planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
-import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
+import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { alongRay, helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { glyphMask, groundWord, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import { circlePath } from '../../kit/fills.ts';
+import type { Ink, Stroke } from '../../kit/types.ts';
+import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { n } from '../../kit/params.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
-import { atPage, horizonCamera, onGround as groundPoint, pageOf } from '../../kit/perspective.ts';
+import { atPage, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
-import { facetStrokes } from '../xvi-tower/geometry.ts';
 
 /**
  * XIX The Sun: the sun's bright, unitary power. One enormous disc, blown out to paper, stands over a
@@ -24,9 +24,6 @@ import { facetStrokes } from '../xvi-tower/geometry.ts';
  * long shadow comes toward the viewer across the paving, split by one shaft of light where the wall
  * is breached. The disc's rim, a few flat rings, is the card's flat mark.
  */
-type Family = 'edge' | 'hatch' | 'membrane' | 'text';
-type Stroke = { ink: Ink; group: string; family: Family; points: THREE.Vector3[]; owner?: number };
-
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -75,8 +72,7 @@ export function sun(ctx: SketchContext, view: THREE.PerspectiveCamera): Sun {
       const strand: Strand = { ...template[(k >> 1) % 2], x: 0, y: 0, z: 0, y0: 0, y1: reach * 0.95, radius: 2.4 * unit, depth: 1, width: 2 * unit,
         swell: 0, centre: 0, phase: rng() * Math.PI * 2, turns: 2.5 + rng() };
       // Strand space runs up +y; turn it onto the ray and set it at the rim.
-      const turn = new THREE.Matrix4().makeTranslation(centre.x + Math.cos(a) * radius * 1.1, centre.y + Math.sin(a) * radius * 1.1, centre.z)
-        .multiply(new THREE.Matrix4().makeRotationZ(a - Math.PI / 2));
+      const turn = alongRay(new THREE.Vector3(centre.x + Math.cos(a) * radius * 1.1, centre.y + Math.sin(a) * radius * 1.1, centre.z), a);
       waves.push({ strand, turn });
     }
   }
@@ -119,26 +115,6 @@ export function wall(ctx: SketchContext): Wall {
   return { slabs, z, top: 3.5, breach };
 }
 
-/** A page bitmap of glyph strokes dilated by `clear` millimetres: where no other mark may cross. */
-function glyphMask(paths: Point[][], clear: number, res = 6): (p: Point) => boolean {
-  if (!paths.length) return () => false;
-  const gw = Math.ceil(TABLOID_PAGE.width * res), gh = Math.ceil(TABLOID_PAGE.height * res);
-  const grid = new Uint8Array(gw * gh);
-  const r = Math.ceil(clear * res);
-  for (const path of paths) for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1], b = path[i];
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * res * 2));
-    for (let k = 0; k <= steps; k++) {
-      const cx = Math.round((a.x + (b.x - a.x) * k / steps) * res), cy = Math.round((a.y + (b.y - a.y) * k / steps) * res);
-      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-        const x = cx + dx, y = cy + dy;
-        if (dx * dx + dy * dy <= r * r && x >= 0 && y >= 0 && x < gw && y < gh) grid[y * gw + x] = 1;
-      }
-    }
-  }
-  return p => { const x = Math.round(p.x * res), y = Math.round(p.y * res); return x >= 0 && y >= 0 && x < gw && y < gh && grid[y * gw + x] === 1; };
-}
-
 export function drawSun(ctx: SketchContext): Part[] {
   const view = sunCamera(ctx);
   const s = sun(ctx, view);
@@ -171,7 +147,6 @@ export function drawSun(ctx: SketchContext): Part[] {
     const length = w.top / Math.tan(Math.asin(Math.max(0.05, toward.y)));
     const groundY = (z: number) => pageOf(view, new THREE.Vector3(0, 0, z)).y;
     const y0 = groundY(w.z + 0.8), y1 = Math.min(CARD.y1 - 0.5, groundY(Math.min(-5, w.z + length)));
-    const onGround = (p: Point) => groundPoint(view, p);
     if (place === 'carved') {
       const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
         art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y } };
@@ -183,10 +158,8 @@ export function drawSun(ctx: SketchContext): Part[] {
           && Math.sign(sl.x - (w.breach[0] + w.breach[1]) / 2) === side && Math.abs(sl.y - row) < 0.3);
         const surfaces: SloganSurface[] = candidates.map(({ sl, id }) => ({ id, matrix: slabMatrix(sl), w: sl.w, h: sl.h, d: sl.d }));
         const one = { ...ctx, params: { ...ctx.params, slogan: word, sloganSpread: false, sloganCount: 1 } };
-        for (let k = 0; k < 6; k++) {
-          const plan = planSlogans(one, surfaces, env, `carve-${i}-${k}`);
-          if (plan.placed.length) { textStrokes.push(...plan.strokes); used.add(plan.placed[0].id); break; }
-        }
+        const plan = planSloganAttempts(one, env, Array.from({ length: 6 }, (_, k) => ({ surfaces: () => surfaces, salt: `carve-${i}-${k}` })));
+        if (plan.placed.length) { textStrokes.push(...plan.strokes); used.add(plan.placed[0].id); }
       });
     } else {
       const cap = settings.size + 0.4;
@@ -202,14 +175,7 @@ export function drawSun(ctx: SketchContext): Part[] {
         const half = measureStrokeText(word, style) / 2 + 6;
         const x = Math.max(CARD.x0 + half, Math.min(CARD.x1 - half, s.page.x + side * (14 + 46 * wrng())));
         side = -side;
-        const a = onGround({ x, y: target });
-        const px = pageOf(view, a);
-        const sx = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(1, 0, 0))).x - px.x);
-        const sz = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(0, 0, 1))).y - px.y);
-        const width = measureStrokeText(word, style);
-        for (const path of strokeText(word, 0, 0, style)) {
-          textStrokes.push(path.map(g => new THREE.Vector3(a.x + (g.x - width / 2) / sx, 0.01, a.z + (g.y - cap / 2) / sz)));
-        }
+        textStrokes.push(...groundWord(view, word, { x, y: target }, style));
       });
     }
     // Project the lettering first: every other mark keeps a hairline clear of its strokes.
@@ -251,7 +217,7 @@ export function drawSun(ctx: SketchContext): Part[] {
     // The disc's rim: a few flat rings, broken only where a ray stands in front.
     for (let j = 0; j < 4; j++) {
       const r = disc - j * 0.8;
-      const ring = Array.from({ length: 241 }, (_, i) => ({ x: s.page.x + r * Math.cos(i / 240 * Math.PI * 2), y: s.page.y + r * Math.sin(i / 240 * Math.PI * 2) }));
+      const ring = circlePath(s.page, r, 240);
       for (const piece of clipWindow(ring)) buckets.add('disc-vermilion', piece);
     }
     // The ground: the wall's long shadow toward the viewer, split by the shaft of light from the breach.
