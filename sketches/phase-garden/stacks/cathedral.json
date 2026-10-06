@@ -1,0 +1,151 @@
+{
+  "title": "Breach Cathedral stack",
+  "out": ".sketch-output/finalize/cathedral",
+  "border": {
+    "style": "double",
+    "pen": "carbon",
+    "inset": 12,
+    "contentGap": 6
+  },
+  "defaults": {
+    "palette": "phase-garden",
+    "center": "vertical",
+    "mergeSameColor": true
+  },
+  "pieces": [
+    {
+      "name": "tower-211",
+      "title": "Breach Cathedral: Tower",
+      "sketch": "sketches/breach-cathedral-tower/sketch.ts",
+      "seed": 211,
+      "params": {
+        "posterMode": "abstract"
+      }
+    },
+    {
+      "name": "cathedral-c001",
+      "title": "Breach Cathedral c001 (pick #2)",
+      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "seed": 219,
+      "params": {
+        "posterMode": "abstract",
+        "mass": 0.71,
+        "rupture": 0.81,
+        "growth": 0.94,
+        "focusX": 0.34,
+        "focusY": 0.3,
+        "levels": 6,
+        "cantilever": 0.19,
+        "breach": 0.53,
+        "hatchDensity": 0.46,
+        "shellWidth": 3.6,
+        "shellTwist": 0.63,
+        "interruption": 0.85,
+        "worldX": 0.65,
+        "worldY": 0,
+        "worldZ": 1,
+        "occlusion": true
+      }
+    },
+    {
+      "name": "cathedral-c033",
+      "title": "Breach Cathedral c033 (pick #3)",
+      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "seed": 613,
+      "params": {
+        "posterMode": "abstract",
+        "mass": 0.9,
+        "rupture": 0.67,
+        "growth": 0.48,
+        "focusX": 0.63,
+        "focusY": 0.72,
+        "levels": 11,
+        "cantilever": 0.73,
+        "breach": 0.82,
+        "hatchDensity": 0.88,
+        "shellWidth": 2.5,
+        "shellTwist": 0.55,
+        "interruption": 0.5,
+        "worldX": 0.3,
+        "worldY": -0.7,
+        "worldZ": -0.2,
+        "occlusion": true
+      }
+    },
+    {
+      "name": "cathedral-c004",
+      "title": "Breach Cathedral c004 (pick #4)",
+      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "seed": 792,
+      "params": {
+        "posterMode": "abstract",
+        "mass": 0.33,
+        "rupture": 0.28,
+        "growth": 0.7,
+        "focusX": 0.58,
+        "focusY": 0.34,
+        "levels": 11,
+        "cantilever": 0.84,
+        "breach": 0.65,
+        "hatchDensity": 0.56,
+        "shellWidth": 2.6,
+        "shellTwist": 0.1,
+        "interruption": 0.95,
+        "worldX": 0.1,
+        "worldY": -0.55,
+        "worldZ": 0.4,
+        "occlusion": true
+      }
+    },
+    {
+      "name": "cathedral-c044",
+      "title": "Breach Cathedral c044 (pick #5)",
+      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "seed": 430,
+      "params": {
+        "posterMode": "abstract",
+        "mass": 0.76,
+        "rupture": 0.98,
+        "growth": 0.51,
+        "focusX": 0.61,
+        "focusY": 0.48,
+        "levels": 8,
+        "cantilever": 0.69,
+        "breach": 0.27,
+        "hatchDensity": 0.51,
+        "shellWidth": 3.5,
+        "shellTwist": 0.12,
+        "interruption": 0.76,
+        "worldX": -0.65,
+        "worldY": -0.4,
+        "worldZ": -0.55,
+        "occlusion": true
+      }
+    },
+    {
+      "name": "cathedral-c019",
+      "title": "Breach Cathedral c019 (pick #6)",
+      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "seed": 369,
+      "params": {
+        "posterMode": "abstract",
+        "mass": 0.3,
+        "rupture": 0.82,
+        "growth": 0.64,
+        "focusX": 0.49,
+        "focusY": 0.65,
+        "levels": 8,
+        "cantilever": 0.96,
+        "breach": 0.5,
+        "hatchDensity": 0.36,
+        "shellWidth": 1.7,
+        "shellTwist": 0.32,
+        "interruption": 0.03,
+        "worldX": -0.55,
+        "worldY": 0.1,
+        "worldZ": -0.85,
+        "occlusion": true
+      }
+    }
+  ]
+}

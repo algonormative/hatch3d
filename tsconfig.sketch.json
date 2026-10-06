@@ -22,6 +22,7 @@
   },
   "include": [
     "cli/sketch.ts",
+    "cli/finalize.ts",
     "cli/sketch/**/*.ts",
     "src/sketch/**/*.ts",
     "src/utils/clip.ts",
@@ -37,6 +38,7 @@
     "sketches/borrowed-orbits/**/*.ts",
     "sketches/breach-cathedral-tower/**/*.ts",
     "sketches/chamber-bloom-foam/**/*.ts",
-    "sketches/load-bearing-silence-span/**/*.ts"
+    "sketches/load-bearing-silence-span/**/*.ts",
+    "sketches/load-bearing-silence-nova/**/*.ts"
   ]
 }
