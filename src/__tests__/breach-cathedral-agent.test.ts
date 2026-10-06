@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
-import type { Part, SketchContext } from '../../src/sketch/types.ts';
+import type { Part } from '../../src/sketch/types.ts';
 import { drawAgent } from '../../sketches/breach-cathedral-agent/geometry.ts';
+import { sketchContext } from './helpers/sketch-context.ts';
 
 const entry = resolve('sketches/breach-cathedral-agent/sketch.ts');
 const PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
@@ -13,14 +14,6 @@ function length(parts: Part[], prefix = ''): number {
     for (let i = 1; i < path.length; i++) total += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
   }
   return total;
-}
-
-function context(seed: number, params: SketchContext['params'] = {}): SketchContext {
-  return { params, seed, assets: {}, random: (id: string) => {
-    let h = (seed * 2654435761) >>> 0;
-    for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
-    return () => { h = (Math.imul(h, 1664525) + 1013904223) >>> 0; return h / 2 ** 32; };
-  } };
 }
 
 describe('Breach Cathedral: Agent', () => {
@@ -46,21 +39,21 @@ describe('Breach Cathedral: Agent', () => {
   }, 30_000);
 
   it('lights the suit from the head: a longer reach of light removes pinstripes', () => {
-    const dim = length(drawAgent(context(1, { glow: 0 })), 'figure');
-    const bright = length(drawAgent(context(1, { glow: 1 })), 'figure');
+    const dim = length(drawAgent(sketchContext(1, { glow: 0 })), 'figure');
+    const bright = length(drawAgent(sketchContext(1, { glow: 1 })), 'figure');
     expect(bright).toBeLessThan(dim * 0.8);
   }, 30_000);
 
   it('hides lines behind the figure and throne, and keeps the ribbon cloth as an alternative', () => {
-    const shown = drawAgent(context(2));
-    expect(length(drawAgent(context(2, { occlusion: false })))).toBeGreaterThan(length(shown) * 1.3);
-    const ribbon = drawAgent(context(2, { cloth: 'ribbon' }));
+    const shown = drawAgent(sketchContext(2));
+    expect(length(drawAgent(sketchContext(2, { occlusion: false })))).toBeGreaterThan(length(shown) * 1.3);
+    const ribbon = drawAgent(sketchContext(2, { cloth: 'ribbon' }));
     expect(length(ribbon, 'figure')).not.toBeCloseTo(length(shown, 'figure'), 0);
     expect(ribbon.some(p => p.id === 'contour-vermilion')).toBe(true);
   }, 30_000);
 
   it('looks up and to the viewer\'s left: the beam leaves the face toward the upper-left of the sheet', () => {
-    const parts = drawAgent(context(1, { radiance: 0, beam: 1 }));
+    const parts = drawAgent(sketchContext(1, { radiance: 0, beam: 1 }));
     const beams = parts.filter(p => p.id.startsWith('rays-')).flatMap(p => p.paths);
     expect(beams.length).toBeGreaterThan(10);
     let dx = 0, dy = 0;
@@ -70,14 +63,14 @@ describe('Breach Cathedral: Agent', () => {
   }, 30_000);
 
   it('varies the pose: crossed legs move the trousers', () => {
-    const apart = length(drawAgent(context(3, { legs: 'apart' })), 'figure');
-    const crossed = length(drawAgent(context(3, { legs: 'crossed' })), 'figure');
+    const apart = length(drawAgent(sketchContext(3, { legs: 'apart' })), 'figure');
+    const crossed = length(drawAgent(sketchContext(3, { legs: 'crossed' })), 'figure');
     expect(Math.abs(crossed - apart) / apart).toBeGreaterThan(0.02);
   }, 30_000);
 
   it('censors the head with a flat hatched bar that knocks out what lies beneath it', () => {
-    const on = drawAgent(context(3));
-    const off = drawAgent(context(3, { censor: false }));
+    const on = drawAgent(sketchContext(3));
+    const off = drawAgent(sketchContext(3, { censor: false }));
     const bar = on.find(p => p.id === 'censor-carbon');
     expect(bar && bar.paths.length).toBeGreaterThan(40);
     expect(off.some(p => p.id === 'censor-carbon')).toBe(false);
