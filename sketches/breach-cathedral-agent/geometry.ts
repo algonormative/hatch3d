@@ -739,45 +739,40 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
 // ---------------------------------------------------------------- assembly
 
 /**
- * The face is the system: a small Breach Cathedral of slab tiers stacked inside the head cage,
- * aligned to the gaze and crowding toward the face opening. A few blocks drift out along the beam.
+ * The system pierces the agent: a few large slabs driven straight through the head along one
+ * seeded direction, standing well out of the cage on both sides, longer on the far side.
  */
-function faceBlocks(ctx: SketchContext, pose: Pose): Slab[] {
-  const amount = n(ctx, 'faceBlocks', 0.6, 0, 1);
+function piercingBlocks(ctx: SketchContext, pose: Pose): Slab[] {
+  const amount = n(ctx, 'pierce', 0.6, 0, 1);
   if (amount <= 0) return [];
-  const rng = ctx.random('agent-face');
+  const rng = ctx.random('agent-pierce');
   const { side, axis, face } = pose.gaze;
-  const frame = new THREE.Matrix4().makeBasis(side, axis, face);
+  // One direction for the whole volley: somewhere across the head, never along the crown.
+  const yaw = (rng() - 0.5) * Math.PI * 1.4, lift = (rng() - 0.5) * 0.9;
+  const dir = face.clone().multiplyScalar(Math.cos(yaw)).addScaledVector(side, Math.sin(yaw))
+    .multiplyScalar(Math.cos(lift)).addScaledVector(axis, Math.sin(lift)).normalize();
+  // A frame whose local z is the drive direction.
+  const across = new THREE.Vector3().crossVectors(axis, dir).normalize();
+  const up = new THREE.Vector3().crossVectors(dir, across).normalize();
+  const centre = pose.neck.clone().addScaledVector(axis, 1.25);
+  const count = Math.round(2 + 2.5 * amount);
   const out: Slab[] = [];
-  const place = (x: number, y: number, z: number, w: number, h: number, d: number, jitter: number) => {
-    const p = pose.neck.clone().addScaledVector(side, x).addScaledVector(axis, y).addScaledVector(face, z);
-    const turn = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler((rng() - 0.5) * jitter, (rng() - 0.5) * jitter, (rng() - 0.5) * jitter));
-    const e = new THREE.Euler().setFromRotationMatrix(frame.clone().multiply(turn), 'XYZ');
-    out.push({ ...solid(p.x, p.y, p.z, w, h, d, 200 + out.length, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 0.62 });
-  };
-  // Tiers from jaw to brow; each tier a cantilever or a split pair, pushed toward the face.
-  const tiers = Math.round(6 + 6 * amount);
-  for (let i = 0; i < tiers; i++) {
-    const f = (i + 0.5) / tiers;
-    const y = 0.15 + 2.2 * f;
-    // Fit inside the egg: widest just above the middle.
-    const half = 0.45 + 0.55 * Math.sin(Math.PI * Math.min(1, 0.08 + 0.9 * f)) ** 0.8;
-    const pieces = rng() < 0.4 ? 2 : 1;
-    for (let k = 0; k < pieces; k++) {
-      const w = half * (pieces === 2 ? 0.75 + 0.35 * rng() : 1.2 + 0.6 * rng());
-      const x = pieces === 2 ? (k ? 1 : -1) * (half * 0.55 + 0.05) : (rng() - 0.5) * half * 0.6;
-      // Pushed out through the face opening: the front tiers break the line of the ribbon.
-      place(x, y, 0.45 + 0.75 * rng() * half, w, 0.16 + 0.16 * rng(), 0.5 + 0.6 * rng(), 0.22);
-    }
-    // A vertical blade every few tiers ties the stack together, as in the Tower.
-    if (i % 3 === 1) place((rng() - 0.5) * half, y + 0.2, 0.3, 0.18, 0.7, 0.4, 0.1);
-  }
-  // Escaping along the gaze: smaller and more turned the further out they are.
-  const escapes = Math.round(6 + 16 * amount);
-  for (let i = 0; i < escapes; i++) {
-    const out_ = 1.4 + 3.2 * (i / escapes) ** 0.8 + 0.4 * rng();
-    const s = 1 - 0.55 * (i / escapes);
-    place((rng() - 0.5) * 0.9 * out_ * 0.3, 1.2 + (rng() - 0.3) * 0.8, out_, (0.3 + 0.55 * rng()) * s, (0.12 + 0.16 * rng()) * s, (0.25 + 0.4 * rng()) * s, 1.6);
+  for (let i = 0; i < count; i++) {
+    const f = count === 1 ? 0.5 : i / (count - 1);
+    // Spread through the skull, a little off-grid; each piece a heavy beam or a broad plate.
+    const offA = (f - 0.5) * 1.8 + (rng() - 0.5) * 0.3, offB = (rng() - 0.5) * 1.2;
+    const plate = rng() < 0.4;
+    const w = plate ? 1.5 + 0.9 * rng() : 0.75 + 0.45 * rng();
+    const h = plate ? 0.3 + 0.15 * rng() : 0.6 + 0.4 * rng();
+    const near = 3 + 2.6 * rng() * (0.6 + amount), far = 1.8 + 2 * rng();
+    const length = near + far;
+    const tilt = (rng() - 0.5) * 0.12;
+    const d = dir.clone().addScaledVector(up, tilt).normalize();
+    const mid = centre.clone().addScaledVector(across, offA).addScaledVector(up, offB).addScaledVector(d, (near - far) / 2);
+    const basis = new THREE.Matrix4().makeBasis(across, new THREE.Vector3().crossVectors(d, across).normalize(), d);
+    const roll = new THREE.Matrix4().makeRotationZ((rng() - 0.5) * 0.5);
+    const e = new THREE.Euler().setFromRotationMatrix(basis.multiply(roll), 'XYZ');
+    out.push({ ...solid(mid.x, mid.y, mid.z, w, h, length, 200 + i, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 1.05 });
   }
   return out;
 }
@@ -804,7 +799,7 @@ export function drawAgent(ctx: SketchContext): Part[] {
     dark: toneField(ctx, pose.head),
   };
   const system = architecture(ctx, pose.head);
-  const face = faceBlocks(ctx, pose);
+  const face = piercingBlocks(ctx, pose);
   const solids = [...system, ...pose.slabs, ...face];
   const faceFrom = system.length + pose.slabs.length;
   const beatRng = ctx.random('agent-rests');
