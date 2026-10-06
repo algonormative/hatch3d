@@ -85,8 +85,9 @@ export class Tube {
     if (out.dot(this.point(u, v).sub(this.centre(u))) < 0) out.negate();
     return out;
   }
-  mesh(): THREE.BufferGeometry {
-    return buildSurfaceMesh((u, v) => this.point(u, v), {}, 200, this.facets >= 3 ? this.facets * 6 : 56);
+  /** The closed surface for the depth pass; lower `uSegs`/`vSegs` for scenes with many figures. */
+  mesh(uSegs = 200, vSegs = this.facets >= 3 ? this.facets * 6 : 56): THREE.BufferGeometry {
+    return buildSurfaceMesh((u, v) => this.point(u, v), {}, uSegs, vSegs);
   }
 }
 

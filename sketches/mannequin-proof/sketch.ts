@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import type { Part, Point, Sketch, SketchContext } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../phase-garden/poster.ts';
-import { PartBuckets } from '../kit/strokes.ts';
+import { PartBuckets, projectStrokes } from '../kit/strokes.ts';
+import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
+import { buildBody, bodyMeshes, bodyStrokes } from '../kit/mannequin/body.ts';
+import { LOOK } from '../kit/mannequin/hatch.ts';
 import { clipToRect } from '../kit/page.ts';
 import { n } from '../kit/params.ts';
 import { POSES, poseSkeleton, type Pose } from '../kit/mannequin/skeleton.ts';
@@ -14,6 +17,7 @@ import type { Stroke } from '../kit/types.ts';
  */
 const ORDER: (keyof typeof POSES)[] = ['stand', 'walk', 'reach', 'dance', 'sit', 'kneel', 'hang'];
 const BOX = { x0: 24, x1: 255.4, y0: 30, y1: 401.8 };
+const INKS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
 
 function layout(name: keyof typeof POSES, i: number): { pose: Pose; position: THREE.Vector3 } {
   const row = i < 4 ? 0 : 1, col = row === 0 ? i : i - 4;
@@ -24,31 +28,56 @@ function layout(name: keyof typeof POSES, i: number): { pose: Pose; position: TH
 }
 
 function draw(ctx: SketchContext): Part[] {
+  const style = ctx.params.style === 'bare' || ctx.params.style === 'suit' ? ctx.params.style : 'stick';
   const turn = n(ctx, 'turn', 28, -60, 60) * Math.PI / 180, tilt = n(ctx, 'tilt', 8, -20, 30) * Math.PI / 180;
-  const view = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 400);
-  view.position.set(Math.sin(turn) * Math.cos(tilt), Math.sin(tilt), Math.cos(turn) * Math.cos(tilt)).multiplyScalar(150);
+  const facets = Math.round(n(ctx, 'facets', 0, 0, 12));
+  const skeletons = ORDER.map((name, i) => { const { pose, position } = layout(name, i); return poseSkeleton(pose, { position }); });
+  // An orthographic view fitted to every figure, matching the box's aspect.
+  const view = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 600);
+  view.position.set(Math.sin(turn) * Math.cos(tilt), Math.sin(tilt), Math.cos(turn) * Math.cos(tilt)).multiplyScalar(200);
   view.lookAt(0, 0, 0);
   view.updateMatrixWorld();
+  const pts = skeletons.flatMap(s => s.bones().flatMap(([, a, b]) => [a, b])).map(p => p.clone().applyMatrix4(view.matrixWorldInverse));
+  const pad = 4;
+  let x0 = Math.min(...pts.map(p => p.x)) - pad, x1 = Math.max(...pts.map(p => p.x)) + pad;
+  let y0 = Math.min(...pts.map(p => p.y)) - pad, y1 = Math.max(...pts.map(p => p.y)) + pad;
+  const bw = BOX.x1 - BOX.x0, bh = BOX.y1 - BOX.y0;
+  if ((x1 - x0) / (y1 - y0) > bw / bh) { const c = (y0 + y1) / 2, h = (x1 - x0) * bh / bw; y0 = c - h / 2; y1 = c + h / 2; }
+  else { const c = (x0 + x1) / 2, w = (y1 - y0) * bw / bh; x0 = c - w / 2; x1 = c + w / 2; }
+  Object.assign(view, { left: x0, right: x1, top: y1, bottom: y0 });
+  view.updateProjectionMatrix();
   const forward = new THREE.Vector3();
   view.getWorldDirection(forward);
-  const strokes: Stroke[] = [];
-  ORDER.forEach((name, i) => {
-    const { pose, position } = layout(name, i);
-    strokes.push(...stickStrokes(poseSkeleton(pose, { position }), { forward, joints: 'ring', group: name }));
-  });
-  // Fit every stroke into the box, preserving aspect.
-  const proj = strokes.map(s => s.points.map(p => { const q = p.clone().applyMatrix4(view.matrixWorldInverse); return { x: q.x, y: -q.y }; }));
-  const all = proj.flat();
-  const minX = Math.min(...all.map(p => p.x)), maxX = Math.max(...all.map(p => p.x));
-  const minY = Math.min(...all.map(p => p.y)), maxY = Math.max(...all.map(p => p.y));
-  const scale = Math.min((BOX.x1 - BOX.x0) / (maxX - minX), (BOX.y1 - BOX.y0) / (maxY - minY));
-  const ox = (BOX.x0 + BOX.x1) / 2 - (minX + maxX) / 2 * scale, oy = (BOX.y0 + BOX.y1) / 2 - (minY + maxY) / 2 * scale;
+  const W = Math.round(bw * 2), H = Math.round(bh * 2);
+  const mm = (p: { x: number; y: number }): Point => ({ x: BOX.x0 + p.x * bw / W, y: BOX.y0 + p.y * bh / H });
   const buckets = new PartBuckets();
-  proj.forEach((path, k) => {
-    const page: Point[] = path.map(p => ({ x: ox + p.x * scale, y: oy + p.y * scale }));
-    for (const piece of clipToRect(page, BOX)) buckets.add(`${strokes[k].group}-${strokes[k].ink}`, piece, true);
-  });
-  return buckets.toParts(ORDER, ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet']);
+  if (style === 'stick') {
+    const strokes: Stroke[] = skeletons.flatMap((s, i) => stickStrokes(s, { forward, joints: 'ring', group: ORDER[i] }));
+    for (const st of strokes) {
+      const page = st.points.map(p => { const q = p.clone().project(view); return mm({ x: (q.x * 0.5 + 0.5) * W, y: (-q.y * 0.5 + 0.5) * H }); });
+      for (const piece of clipToRect(page, BOX)) buckets.add(`${st.group}-${st.ink}`, piece, true);
+    }
+    return buckets.toParts(ORDER, INKS);
+  }
+  const bodies = skeletons.map(s => buildBody(s, { facets, jacket: style === 'suit' }));
+  const light = new THREE.Vector3(-0.5, 0.6, 0.65).normalize();
+  const sheetScale = bw / (x1 - x0);
+  const env = {
+    forward, density: n(ctx, 'density', 0.55, 0, 1),
+    screen: (p: THREE.Vector3) => { const q = p.clone().applyMatrix4(view.matrixWorldInverse); return { x: q.x * sheetScale, y: -q.y * sheetScale }; },
+    dark: (_p: THREE.Vector3, normal: THREE.Vector3) => Math.max(0, Math.min(1, 1.02 - 1.2 * Math.max(0, normal.dot(light)))),
+  };
+  const strokes = bodies.flatMap((b, i) => bodyStrokes(b, env, style, { ...LOOK, figure: ORDER[i], contour: ORDER[i] }));
+  const meshes = bodies.flatMap(b => bodyMeshes(b, 0.6));
+  try {
+    const depth = renderDepthBufferCPU(meshes, view, W, H);
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      begin: st => runs => { for (const run of runs) for (const piece of clipToRect(run.map(mm), BOX)) buckets.add(`${st.group}-${st.ink}`, piece); },
+    });
+  } finally {
+    for (const m of meshes) m.dispose();
+  }
+  return buckets.toParts(ORDER, INKS);
 }
 
 const sketch: Sketch = {
@@ -62,6 +91,9 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
+    { type: 'select', id: 'style', label: 'Renderer', default: 'stick', options: ['stick', 'bare', 'suit'], group: 'Figure' },
+    { type: 'slider', id: 'facets', label: 'Planes per limb (0 = smooth)', default: 0, min: 0, max: 12, step: 1, group: 'Figure' },
+    { type: 'slider', id: 'density', label: 'Line density', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Figure' },
     { type: 'slider', id: 'turn', label: 'Camera turn', default: 28, min: -60, max: 60, step: 1, units: '°', group: 'View' },
     { type: 'slider', id: 'tilt', label: 'Camera tilt', default: 8, min: -20, max: 30, step: 1, units: '°', group: 'View' },
   ],
