@@ -50,4 +50,16 @@ describe('Breach Tarot: XIII Death', () => {
     expect(len(unrenderHatch(at(80), u))).toBeCloseTo(100, 3);
     expect(len(unrenderHatch(at(10), u))).toBeLessThan(len(unrenderHatch(at(60), u)));
   });
+
+  it('offers three helix readings: bent with the world, whole in front, torn at the ends', async () => {
+    const render = (helixMode: string) => renderSketch({ entry, seed: 1, params: { helixMode } } as never);
+    const [world, apart, torn] = await Promise.all(['world', 'apart', 'torn'].map(render));
+    const helix = (r: typeof world) => r.parts.filter(p => p.id.startsWith('helix-')).flatMap(p => p.paths);
+    const disc = (r: typeof world) => len(r.parts.find(p => p.id === 'singularity-carbon')!.paths);
+    // Whole and in front: the most helix ink, and it covers part of the event horizon.
+    expect(len(helix(apart))).toBeGreaterThan(len(helix(world)));
+    expect(len(helix(apart))).toBeGreaterThan(len(helix(torn)));
+    expect(disc(apart)).toBeLessThan(disc(world));
+    expect(new Set([world.identity, apart.identity, torn.identity]).size).toBe(3);
+  }, 60_000);
 });
