@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import { CARD, HORIZON_Y } from '../../sketches/breach-tarot/card.ts';
-import { unrenderEdge } from '../../sketches/breach-tarot/xiii-death/geometry.ts';
+import { SINGULARITY, unrenderEdge, unrenderHatch } from '../../sketches/breach-tarot/xiii-death/geometry.ts';
 
 const entry = resolve('sketches/breach-tarot/xiii-death/sketch.ts');
 const PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
@@ -26,22 +26,25 @@ describe('Breach Tarot: XIII Death', () => {
     expect(first.parts.some(p => p.id.startsWith('slogan-'))).toBe(true);
   }, 30_000);
 
-  it('draws hatch only below the line: the system part above it is a fraction of the ink below', async () => {
+  it('converges on the singularity: the drawing thins toward the point and is empty at it', async () => {
     const result = await renderSketch({ entry, seed: 1 });
     const system = result.parts.filter(p => p.id.startsWith('system-')).flatMap(p => p.paths);
-    const above = system.flatMap(path => path.every(p => p.y < HORIZON_Y - 1) ? [path] : []);
-    const below = system.flatMap(path => path.every(p => p.y > HORIZON_Y + 1) ? [path] : []);
-    expect(len(above)).toBeLessThan(len(below) * 0.25);
+    const r = (p: { x: number; y: number }) => Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y);
+    const ink = (lo: number, hi: number) => len(system.flatMap(path => path.every(p => r(p) >= lo && r(p) < hi) ? [path] : []));
+    // Ink per unit area falls toward the point, and nothing of the system reaches the void.
+    const area = (lo: number, hi: number) => Math.PI * (hi * hi - lo * lo);
+    expect(ink(20, 40) / area(20, 40)).toBeLessThan(ink(90, 130) / area(90, 130));
+    expect(system.some(path => path.some(p => r(p) < 2))).toBe(false);
   }, 30_000);
 
-  it('undoes an edge with height: solid near the line, broken higher up, gone at the top', () => {
-    const u = { solid: 20, dashed: 60, dotted: 100 };
-    const at = (h: number) => [{ x: 30, y: HORIZON_Y - h }, { x: 130, y: HORIZON_Y - h }];
-    expect(len(unrenderEdge(at(5), u))).toBeCloseTo(100, 3);
-    const dashed = len(unrenderEdge(at(40), u));
-    expect(dashed).toBeGreaterThan(20);
-    expect(dashed).toBeLessThan(70);
-    expect(len(unrenderEdge(at(80), u))).toBeLessThan(dashed / 3);
-    expect(unrenderEdge(at(110), u)).toEqual([]);
+  it('undoes edges with closeness to the point and keeps hatch only at the periphery', () => {
+    const u = { void: 5, dots: 18, dashes: 38, edges: 72 };
+    const at = (d: number) => [{ x: SINGULARITY.x - 50, y: SINGULARITY.y - d }, { x: SINGULARITY.x + 50, y: SINGULARITY.y - d }];
+    expect(len(unrenderEdge(at(45), u))).toBeCloseTo(100, 3);
+    const near = len(unrenderEdge(at(10), u));
+    expect(near).toBeGreaterThan(5);
+    expect(near).toBeLessThan(80);
+    expect(len(unrenderHatch(at(80), u))).toBeCloseTo(100, 3);
+    expect(len(unrenderHatch(at(10), u))).toBeLessThan(len(unrenderHatch(at(60), u)));
   });
 });
