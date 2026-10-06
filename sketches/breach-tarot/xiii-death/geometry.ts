@@ -9,6 +9,7 @@ import {
 } from '../../breach-cathedral-tower/geometry.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
+import { densify, keepAlong } from '../page.ts';
 
 /**
  * XIII Death: a singularity on the horizon. The system, a long nave of cathedral slabs, recedes in
@@ -151,31 +152,6 @@ export function lens(ctx: SketchContext, u: Undoing): Lens {
   };
 }
 
-/** Split a page path into short steps and keep the ones a test allows, carrying arclength. */
-function keepAlong(path: Point[], keep: (p: Point, at: number) => boolean, step = 0.15): Point[][] {
-  const out: Point[][] = [];
-  let run: Point[] = [];
-  let s = 0;
-  const flush = () => { if (run.length > 1) out.push(run); run = []; };
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1], b = path[i];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    const steps = Math.max(1, Math.ceil(len / step));
-    for (let k = 0; k < steps; k++) {
-      const t0 = k / steps, t1 = (k + 1) / steps;
-      const p0 = { x: a.x + (b.x - a.x) * t0, y: a.y + (b.y - a.y) * t0 };
-      const p1 = { x: a.x + (b.x - a.x) * t1, y: a.y + (b.y - a.y) * t1 };
-      if (keep({ x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 }, s + len * (t0 + t1) / 2)) {
-        if (!run.length) run.push(p0);
-        run.push(p1);
-      } else flush();
-    }
-    s += len;
-  }
-  flush();
-  return out;
-}
-
 /**
  * Edges: solid out to the dashes ring, construction dashes, then dots, then nothing at the point.
  * The pull crowds lines inward, so inside the dashes ring each line also has its own `rank` in
@@ -203,17 +179,6 @@ export function unrenderEdge(path: Point[], u: Undoing, rank = 0): Point[][] {
 /** Hatch survives only beyond the edges ring: weight belongs to the periphery. */
 export function unrenderHatch(path: Point[], u: Undoing): Point[][] {
   return keepAlong(path, p => Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y) >= u.edges);
-}
-
-/** Resample so the lens can bend straight segments. */
-function densify(path: Point[], step = 0.8): Point[] {
-  const out: Point[] = [path[0]];
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1], b = path[i];
-    const k = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
-    for (let j = 1; j <= k; j++) out.push({ x: a.x + (b.x - a.x) * j / k, y: a.y + (b.y - a.y) * j / k });
-  }
-  return out;
 }
 
 export type HelixMode = 'world' | 'apart' | 'torn';
