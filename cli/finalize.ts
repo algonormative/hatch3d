@@ -385,7 +385,9 @@ async function serve(stackPath: string, port: number) {
   console.log(`previews ready: ${stack.pieces.length} pieces`);
   // Slogan controls are offered only when every piece declares them.
   const sloganControls = stack.pieces.every(p => pieceInfo.get(slug(p.name))!.controls.some(c => c.group === 'Slogan'))
-    ? pieceInfo.get(slug(stack.pieces[0].name))!.controls.filter(c => c.group === 'Slogan') : [];
+    ? pieceInfo.get(slug(stack.pieces[0].name))!.controls.filter(c => c.group === 'Slogan')
+      // The panel starts from the stack's own settings, so regenerating never silently reverts them.
+      .map(c => stack.params && c.id in stack.params ? { ...c, default: stack.params[c.id] } as Control : c) : [];
   let busy = false;
   const readJson = async (req: AsyncIterable<unknown>) => {
     let body = '';
