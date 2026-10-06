@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
 import { clipArt, densityPitch, simplify, slabGeometry, slabMatrix, slabStrokes, solid, type Ink, type Role, type Slab } from '../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
+import { clearBands, knockOut, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 /**
  * Breach Cathedral: Agent. The living force from Breach Cathedral has put on the system's suit:
@@ -739,51 +739,53 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
 // ---------------------------------------------------------------- assembly
 
 /**
- * The system pierces the agent: a few large slabs driven straight through the head along one
- * seeded direction, standing well out of the cage on both sides, longer on the far side.
+ * The censor: flat bars laid over the head on the sheet itself, no perspective, filled with
+ * hatching instead of ink. Whatever the bars cover is knocked out; light still leaks round them.
+ * Returns the bars as page-millimetre quads plus their hatch and outline paths.
  */
-function piercingBlocks(ctx: SketchContext, pose: Pose, forward: THREE.Vector3): Slab[] {
-  const amount = n(ctx, 'pierce', 0.6, 0, 1);
-  if (amount <= 0) return [];
-  const rng = ctx.random('agent-pierce');
-  const { side, axis } = pose.gaze;
-  // One direction for the whole volley: in through the side of the head, temple to temple,
-  // knocked off true by a seeded odd angle toward the face or the back, and up or down.
-  const sign = () => (rng() < 0.5 ? -1 : 1);
-  const odd = n(ctx, 'pierceAngle', 0.5, 0, 1);
-  const yaw = sign() * (0.14 + 0.48 * odd * (0.5 + rng())) , lift = sign() * (0.06 + 0.42 * odd * rng());
-  // Lateral as the eye reads it: across the head on the sheet, not along the view.
-  const across0 = side.clone().addScaledVector(forward, -side.dot(forward)).normalize();
-  const depth = forward.clone().addScaledVector(axis, -forward.dot(axis)).normalize();
-  const dir = across0.multiplyScalar(Math.cos(yaw)).addScaledVector(depth, Math.sin(yaw))
-    .multiplyScalar(Math.cos(lift)).addScaledVector(axis, Math.sin(lift)).normalize();
-  // A frame whose local z is the drive direction.
-  const across = new THREE.Vector3().crossVectors(axis, dir).normalize();
-  const up = new THREE.Vector3().crossVectors(dir, across).normalize();
-  const centre = pose.neck.clone().addScaledVector(axis, 1.25);
-  const count = Math.round(2 + 2.5 * amount);
-  const out: Slab[] = [];
-  for (let i = 0; i < count; i++) {
-    const f = count === 1 ? 0.5 : i / (count - 1);
-    // Spread through the skull, a little off-grid; each piece a heavy beam or a broad plate.
-    const offA = (f - 0.5) * 1.8 + (rng() - 0.5) * 0.3, offB = (rng() - 0.5) * 1.2;
-    const plate = rng() < 0.4;
-    const w = plate ? 1.5 + 0.9 * rng() : 0.75 + 0.45 * rng();
-    const h = plate ? 0.3 + 0.15 * rng() : 0.6 + 0.4 * rng();
-    const near = 3 + 2.6 * rng() * (0.6 + amount), far = 1.8 + 2 * rng();
-    const length = near + far;
-    const tilt = (rng() - 0.5) * 0.12;
-    const d = dir.clone().addScaledVector(up, tilt).normalize();
-    const mid = centre.clone().addScaledVector(across, offA).addScaledVector(up, offB).addScaledVector(d, (near - far) / 2);
-    // Length along local x, as the cathedral's slabs lie, so the long faces carry its hatch grammar.
-    const ly = up.clone().addScaledVector(d, -up.dot(d)).normalize();
-    const lz = new THREE.Vector3().crossVectors(d, ly);
-    const basis = new THREE.Matrix4().makeBasis(d, ly, lz);
-    const roll = new THREE.Matrix4().makeRotationX((rng() - 0.5) * 0.6);
-    const e = new THREE.Euler().setFromRotationMatrix(basis.multiply(roll), 'XYZ');
-    out.push({ ...solid(mid.x, mid.y, mid.z, length, h, w, 200 + i, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 1.05 });
+function censorBars(ctx: SketchContext, pose: Pose, screenMm: (p: THREE.Vector3) => Point): { quads: Point[][]; paths: Point[][] } {
+  const empty = { quads: [], paths: [] };
+  if (ctx.params.censor === false) return empty;
+  const rng = ctx.random('agent-censor');
+  const centre = screenMm(pose.neck.clone().addScaledVector(pose.gaze.axis, 1.35).addScaledVector(pose.gaze.face, 0.35));
+  const tilt = (rng() < 0.5 ? -1 : 1) * (0.04 + 0.3 * n(ctx, 'censorAngle', 0.4, 0, 1) * (0.4 + rng()));
+  const length = 64 + 22 * rng(), height = 12 + 5 * rng();
+  const bars: { cx: number; cy: number; l: number; h: number }[] = [{ cx: centre.x, cy: centre.y, l: length, h: height }];
+  if (rng() < 0.55) {
+    // A second, thinner strip, as if the first did not quite cover it.
+    const side = rng() < 0.5 ? -1 : 1, slide = (rng() - 0.5) * 0.4 * length;
+    const h2 = height * (0.35 + 0.2 * rng());
+    bars.push({ cx: centre.x + slide * Math.cos(tilt) - side * (height / 2 + h2 / 2 + 2.2) * Math.sin(tilt),
+      cy: centre.y + slide * Math.sin(tilt) + side * (height / 2 + h2 / 2 + 2.2) * Math.cos(tilt), l: length * (0.45 + 0.25 * rng()), h: h2 });
   }
-  return out;
+  const ux = Math.cos(tilt), uy = Math.sin(tilt);
+  const quads: Point[][] = [], paths: Point[][] = [];
+  for (const b of bars) {
+    const at = (s: number, t: number): Point => ({ x: b.cx + ux * s - uy * t, y: b.cy + uy * s + ux * t });
+    const q = [at(-b.l / 2, -b.h / 2), at(b.l / 2, -b.h / 2), at(b.l / 2, b.h / 2), at(-b.l / 2, b.h / 2)];
+    quads.push(q);
+    paths.push([...q, q[0]], [at(-b.l / 2 + 1.1, -b.h / 2 + 1.1), at(b.l / 2 - 1.1, -b.h / 2 + 1.1), at(b.l / 2 - 1.1, b.h / 2 - 1.1), at(-b.l / 2 + 1.1, b.h / 2 - 1.1), at(-b.l / 2 + 1.1, -b.h / 2 + 1.1)]);
+    // Two hatch families at ±60° to the bar, inside the inner rule: dense enough to read as a fill.
+    for (const [angle, pitch] of [[Math.PI / 3, 0.62], [-Math.PI / 3, 0.9]] as const) {
+      const dx = Math.cos(angle), dy = Math.sin(angle);
+      const reach = (b.l + b.h) / 2;
+      const inset = 1.6;
+      for (let k = -reach; k <= reach; k += pitch) {
+        // Line s = k + t·(dx/dy) in bar coordinates, clipped to the inner rectangle.
+        let t0 = -b.h / 2 + inset, t1 = b.h / 2 - inset;
+        const sAt = (t: number) => k + t * dx / dy;
+        const lo = -b.l / 2 + inset, hi = b.l / 2 - inset;
+        const s0 = sAt(t0), s1 = sAt(t1);
+        if (Math.max(s0, s1) < lo || Math.min(s0, s1) > hi) continue;
+        const clipT = (s: number) => (s - k) * dy / dx;
+        if (s0 < lo) t0 = clipT(lo); else if (s0 > hi) t0 = clipT(hi);
+        if (s1 < lo) t1 = clipT(lo); else if (s1 > hi) t1 = clipT(hi);
+        if (Math.abs(t1 - t0) < 0.4) continue;
+        paths.push([at(sAt(t0), t0), at(sAt(t1), t1)]);
+      }
+    }
+  }
+  return { quads, paths };
 }
 
 /** Seams and hems per garment piece, in tube coordinates. */
@@ -808,13 +810,11 @@ export function drawAgent(ctx: SketchContext): Part[] {
     dark: toneField(ctx, pose.head),
   };
   const system = architecture(ctx, pose.head);
-  const face = piercingBlocks(ctx, pose, forward);
-  const solids = [...system, ...pose.slabs, ...face];
-  const faceFrom = system.length + pose.slabs.length;
+  const solids = [...system, ...pose.slabs];
   const beatRng = ctx.random('agent-rests');
   const beats = Array.from({ length: 64 }, () => beatRng() < rawInterruption);
   const strokes: Stroke[] = solids.flatMap((s, owner) => {
-    const group: Group = owner >= faceFrom ? 'force' : owner < system.length && s.role !== 'stub' ? (s.z < -5 ? 'system' : 'throne') : 'figure';
+    const group: Group = owner < system.length && s.role !== 'stub' ? (s.z < -5 ? 'system' : 'throne') : 'figure';
     return slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, group, owner }));
   });
   const band = n(ctx, 'band', 1.25, 0.7, 2.2);
@@ -860,6 +860,8 @@ export function drawAgent(ctx: SketchContext): Part[] {
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
+    const censor = censorBars(ctx, pose, p => { const q = p.clone().project(view); return { x: (q.x * 0.5 + 0.5) * W * MM_X, y: (-q.y * 0.5 + 0.5) * H * MM_Y }; });
+    const censorPx = censor.quads.map(q => q.map(c => ({ x: c.x / MM_X, y: c.y / MM_Y })));
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
@@ -868,7 +870,8 @@ export function drawAgent(ctx: SketchContext): Part[] {
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
       for (const clipped of pieces) {
         const dense = densifyProjectedPolyline(clipped);
-        const visible = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        const shown = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        const visible = censorPx.length && !text ? shown.flatMap(r => knockOut(r, censorPx)) : shown;
         for (const run of visible) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
           for (const path of clipArt(mm)) {
@@ -884,10 +887,12 @@ export function drawAgent(ctx: SketchContext): Part[] {
       }
     }
     const parts: Part[] = [];
+    const bars = censor.paths.flatMap(clipArt);
     for (const group of GROUPS) for (const ink of INKS) {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
+    if (bars.length) parts.push({ id: 'censor-carbon', pen: 'carbon', paths: bars });
     return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();

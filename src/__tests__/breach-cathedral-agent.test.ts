@@ -74,4 +74,14 @@ describe('Breach Cathedral: Agent', () => {
     const crossed = length(drawAgent(context(3, { legs: 'crossed' })), 'figure');
     expect(Math.abs(crossed - apart) / apart).toBeGreaterThan(0.02);
   }, 30_000);
+
+  it('censors the head with a flat hatched bar that knocks out what lies beneath it', () => {
+    const on = drawAgent(context(3));
+    const off = drawAgent(context(3, { censor: false }));
+    const bar = on.find(p => p.id === 'censor-carbon');
+    expect(bar && bar.paths.length).toBeGreaterThan(40);
+    expect(off.some(p => p.id === 'censor-carbon')).toBe(false);
+    // The ribbon head loses ink under the bar.
+    expect(length(on, 'force')).toBeLessThan(length(off, 'force'));
+  }, 30_000);
 });
