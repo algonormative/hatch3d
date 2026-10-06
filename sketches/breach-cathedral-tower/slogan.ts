@@ -3,7 +3,7 @@ import type { Control, Point, SketchContext } from '../../src/sketch/types.ts';
 import type { ProjectedPoint } from '../../src/projection.ts';
 import type { PackedDepthBuffer } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
-import { measureStrokeText, strokeText } from '../../src/sketch/stroke-text.ts';
+import { measureStrokeText, strokeFaceSupports, strokeText } from '../../src/sketch/stroke-text.ts';
 
 /**
  * Slogans painted on slab front faces, shared by Breach Cathedral and its Tower fork.
@@ -14,6 +14,19 @@ export const SLOGAN_DEFAULT = 'this was made by a machine';
 /** Lettering gets its own finer pen and layer, so it can be plotted last or with a fineliner. */
 export const LETTERING_PEN = { id: 'lettering', color: '#22282c', width: 0.13 };
 const PENS = ['lettering', 'carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+export type LetterFace = 'cathedral' | 'sans' | 'script';
+const FACES: LetterFace[] = ['cathedral', 'sans', 'script'];
+const FACE_LABELS = { cathedral: 'Breach Cathedral', sans: 'Hershey sans', script: 'Hershey script' };
+export const TITLE_DEFAULT = 'Breach Cathedral v1';
+
+function letterFace(v: unknown): LetterFace {
+  return FACES.includes(v as LetterFace) ? v as LetterFace : 'cathedral';
+}
+
+/** Printable text for a face: characters it cannot draw become spaces rather than render errors. */
+function cleanText(raw: string, face: LetterFace): string {
+  return [...raw].map(c => strokeFaceSupports(c, face) ? c : ' ').join('').replace(/\s+/g, ' ').trim();
+}
 
 export function sloganControls(count: number): Control[] {
   const g = 'Slogan';
@@ -21,8 +34,7 @@ export function sloganControls(count: number): Control[] {
     { type: 'text', id: 'slogan', label: 'Slogan', default: SLOGAN_DEFAULT, maxLength: 64, group: g },
     { type: 'slider', id: 'sloganCount', label: 'Slogan count', default: count, min: 0, max: 3, step: 1, group: g },
     { type: 'toggle', id: 'sloganSpread', label: 'Spread words over the structure', default: true, group: g },
-    { type: 'select', id: 'sloganFace', label: 'Slogan face', default: 'sans', options: ['sans', 'script'],
-      optionLabels: { sans: 'Hershey sans', script: 'Hershey script' }, group: g },
+    { type: 'select', id: 'sloganFace', label: 'Slogan face', default: 'cathedral', options: FACES, optionLabels: FACE_LABELS, group: g },
     { type: 'slider', id: 'sloganSize', label: 'Slogan cap height', default: 2.2, min: 1.6, max: 3, step: 0.05, units: 'mm', group: g },
     { type: 'select', id: 'sloganPlacement', label: 'Slogan placement', default: 'face', options: ['face', 'edge'],
       optionLabels: { face: 'Painted face', edge: 'Top-edge caption' }, group: g },
@@ -30,8 +42,30 @@ export function sloganControls(count: number): Control[] {
   ];
 }
 
+/** The print's title line, set whole on one intact face; the finalizer fills in edition and hash. */
+export function titleControls(): Control[] {
+  const g = 'Title';
+  const on = { control: 'titleEnabled', equals: true } as const;
+  return [
+    { type: 'toggle', id: 'titleEnabled', label: 'Title on the structure', default: false, group: g },
+    { type: 'text', id: 'title', label: 'Title', default: TITLE_DEFAULT, maxLength: 64, group: g, showWhen: on },
+    { type: 'slider', id: 'titleSize', label: 'Title cap height', default: 3, min: 1.6, max: 4.5, step: 0.05, units: 'mm', group: g, showWhen: on },
+    { type: 'select', id: 'titleFace', label: 'Title face', default: 'cathedral', options: FACES, optionLabels: FACE_LABELS, group: g, showWhen: on },
+  ];
+}
+
+export interface TitleSettings { enabled: boolean; text: string; size: number; face: LetterFace }
+
+export function titleSettings(ctx: SketchContext): TitleSettings {
+  const p = ctx.params;
+  const face = letterFace(p.titleFace);
+  const text = cleanText(typeof p.title === 'string' ? p.title : TITLE_DEFAULT, face);
+  const size = typeof p.titleSize === 'number' && Number.isFinite(p.titleSize) ? Math.max(1.6, Math.min(4.5, p.titleSize)) : 3;
+  return { enabled: p.titleEnabled === true && text.length > 0, text, size, face };
+}
+
 export interface SloganSettings {
-  text: string; count: number; spread: boolean; face: 'sans' | 'script'; size: number;
+  text: string; count: number; spread: boolean; face: LetterFace; size: number;
   placement: 'face' | 'edge'; pen: string;
 }
 
@@ -39,14 +73,13 @@ export function sloganSettings(ctx: SketchContext): SloganSettings {
   const p = ctx.params;
   const num = (v: unknown, fallback: number, lo: number, hi: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-  // Only printable ASCII has glyphs; anything else becomes a space rather than a render error.
-  const raw = typeof p.slogan === 'string' ? p.slogan : SLOGAN_DEFAULT;
-  const text = raw.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
+  const face = letterFace(p.sloganFace);
+  const text = cleanText(typeof p.slogan === 'string' ? p.slogan : SLOGAN_DEFAULT, face);
   return {
     text,
     count: text ? Math.round(num(p.sloganCount, 0, 0, 3)) : 0,
     spread: p.sloganSpread !== false,
-    face: p.sloganFace === 'script' ? 'script' : 'sans',
+    face,
     size: num(p.sloganSize, 2.2, 1.6, 3),
     placement: p.sloganPlacement === 'edge' ? 'edge' : 'face',
     pen: typeof p.sloganPen === 'string' && PENS.includes(p.sloganPen) ? p.sloganPen : 'lettering',
@@ -71,6 +104,9 @@ export interface SloganPlan {
   /** Per surface id, convex knock-out quads in depth pixels: that slab's own hatch is cleared inside. */
   knockouts: Map<number, Point[][]>;
   placed: { id: number; text: string; sizeMm: number; visible: number; y: number }[];
+  /** The title line's strokes (always the fine lettering pen) and where it landed. */
+  titleStrokes: THREE.Vector3[][];
+  title?: { id: number; text: string; sizeMm: number; visible: number; y: number };
 }
 
 type Placement = {
@@ -78,12 +114,12 @@ type Placement = {
   visible: number; area: number; y: number;
 };
 
-const DESCENT = { sans: 0.36, script: 0.6 };
-const ASCENT = { sans: 0.2, script: 0.2 };
+const DESCENT = { cathedral: 0.4, sans: 0.36, script: 0.6 };
+const ASCENT = { cathedral: 0.07, sans: 0.2, script: 0.2 };
 const PAD_MM = 0.75, INSET_MM = 0.9, MIN_MM = 1.6;
 
-function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, face: 'sans' | 'script',
-  mode: 'face' | 'edge', align: number, offset: number): Placement | null {
+function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, face: LetterFace,
+  mode: 'face' | 'edge', align: number, offset: number, padMm = PAD_MM): Placement | null {
   const zf = s.d / 2 + 0.006;
   const px = (x: number, y: number, z = zf): ProjectedPoint => {
     const v = new THREE.Vector3(x, y, z).applyMatrix4(s.matrix).project(env.view);
@@ -93,10 +129,11 @@ function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, f
   const sy = dist(px(0, -s.h / 2), px(0, s.h / 2)) / s.h;
   const sx = dist(px(-s.w / 2, 0), px(s.w / 2, 0)) / s.w;
   if (!(sx > 0 && sy > 0)) return null;
-  const padX = PAD_MM / sx, padY = PAD_MM / sy, insetX = INSET_MM / sx, insetY = INSET_MM / sy;
+  const padX = padMm / sx, padY = padMm / sy, insetX = INSET_MM / sx, insetY = INSET_MM / sy;
   for (let size = sizeMm; size >= MIN_MM - 1e-9; size -= 0.2) {
     const cap = size / sy;
-    const width = measureStrokeText(text, { face, height: cap });
+    // The cathedral face leans forward: its tops overhang the measured advance by 0.1 cap.
+    const width = measureStrokeText(text, { face, height: cap }) + (face === 'cathedral' ? 0.1 * cap : 0);
     const bandW = width + 2 * padX;
     const bandH = cap * (1 + DESCENT[face] + ASCENT[face]) + 2 * padY;
     const roomX = s.w - 2 * insetX - bandW, roomY = s.h - 2 * insetY - bandH;
@@ -150,8 +187,9 @@ function wordGroups(text: string, rng: () => number): string[] {
 
 export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: SloganEnv, salt = 'slogan'): SloganPlan {
   const settings = sloganSettings(ctx);
-  const plan: SloganPlan = { strokes: [], knockouts: new Map(), placed: [] };
-  if (settings.count === 0 || surfaces.length === 0) return plan;
+  const title = titleSettings(ctx);
+  const plan: SloganPlan = { strokes: [], knockouts: new Map(), placed: [], titleStrokes: [] };
+  if ((settings.count === 0 && !title.enabled) || surfaces.length === 0) return plan;
   const rng = ctx.random(salt);
   const used = new Set<number>();
   const commit = (p: Placement) => {
@@ -174,7 +212,7 @@ export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: 
   };
   const sizes = [1, 0.74, 0.86];
   let echoes = settings.count;
-  if (settings.spread) {
+  if (settings.spread && settings.count > 0) {
     // One phrase scattered top to bottom so it reads in order once found.
     for (let attempt = 0; attempt < 4; attempt++) {
       let groups = wordGroups(settings.text, rng);
@@ -214,6 +252,28 @@ export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: 
     const far = (p: Placement) => plan.placed.every(q => Math.abs(q.y - p.y) > env.height * (settings.spread ? 0.05 : 0.14));
     const pick = best(settings.text, size, 0.9, far, false);
     if (pick) commit(pick);
+  }
+  if (title.enabled) {
+    // The title takes its own stream, so turning it on never moves a slogan word.
+    const trng = ctx.random(`${salt}-title`);
+    const span = Math.max(1, env.art.y1 - env.art.y0);
+    let choice: Placement | null = null, score = -Infinity;
+    for (const s of surfaces) {
+      if (used.has(s.id)) continue;
+      // A wider clear margin than slogan words: the title should never brush the hatch.
+      const p = place(env, s, title.text, title.size, title.face, 'face', 0.08 + 0.3 * trng(), 0, 1.2);
+      if (!p || p.visible < 0.92) continue;
+      // Prefer low, large, clear faces: the title reads like a foundation stone.
+      const low = Math.max(0, Math.min(1, (p.y - env.art.y0) / span));
+      const value = p.visible ** 3 * Math.sqrt(p.area) * (p.sizeMm / title.size) ** 2 * (0.3 + 0.7 * low) * (0.85 + 0.3 * trng());
+      if (value > score) { score = value; choice = p; }
+    }
+    if (choice) {
+      used.add(choice.surface.id);
+      plan.titleStrokes.push(...choice.strokes);
+      plan.knockouts.set(choice.surface.id, [...(plan.knockouts.get(choice.surface.id) ?? []), choice.band]);
+      plan.title = { id: choice.surface.id, text: choice.text, sizeMm: choice.sizeMm, visible: choice.visible, y: choice.y };
+    }
   }
   return plan;
 }

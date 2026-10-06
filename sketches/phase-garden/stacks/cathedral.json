@@ -1,6 +1,8 @@
 {
   "title": "Breach Cathedral stack",
   "out": ".sketch-output/finalize/cathedral",
+  "edition": 1,
+  "printTitle": "Breach Cathedral {version} {hash}",
   "border": {
     "style": "double",
     "pen": "carbon",

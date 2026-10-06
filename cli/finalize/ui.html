@@ -103,7 +103,7 @@ async function boot() {
   cur = S.pieces[0].slug; drawSloganForm(); drawChips(); drawList(); drawPalettes(); drawPiece();
   $('zoom').oninput = e => { $('sheets').style.setProperty('--zoom', e.target.value); $('zoomV').textContent = e.target.value + '×'; };
   $('compare').onchange = e => { compareWith = e.target.value === '' ? null : Number(e.target.value); drawChips(); drawSheets(); };
-  $('hdr').textContent = `${S.pieces.length} pieces · files only, nothing is sent to a plotter`;
+  const b = S.build; $('hdr').textContent = `${S.pieces.length} pieces · ${b.version} ${b.hash}${b.dirty ? '+ (uncommitted changes)' : ''}${S.printTitle ? ' · title on' : ''} · files only, nothing is sent to a plotter`;
 }
 /** Recolor by layer order: pen i (1-based layer number) takes palette ink i-1; the border takes its pen's ink. */
 function colored(slug, v = active) {

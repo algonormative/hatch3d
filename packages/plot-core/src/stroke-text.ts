@@ -6,7 +6,7 @@ import { HERSHEY_BASELINE, HERSHEY_CAP_TOP, HERSHEY_OFFSET, HERSHEY_SANS, HERSHE
  * `wire` and `matrix` are uppercase display faces; `sans` and `script` are thin
  * single-stroke Hershey faces with lowercase, covering printable ASCII 32–126.
  */
-export type StrokeFace = 'wire' | 'matrix' | 'sans' | 'script';
+export type StrokeFace = 'wire' | 'matrix' | 'sans' | 'script' | 'cathedral';
 type HersheyFace = 'sans' | 'script';
 const isHershey = (face: StrokeFace): face is HersheyFace => face === 'sans' || face === 'script';
 
@@ -86,6 +86,75 @@ function hersheyGlyph(char: string, face: HersheyFace): HersheyGlyph | undefined
   return glyph;
 }
 
+/**
+ * "Breach Cathedral": a monoline face drawn in the architecture's own line language —
+ * straight segments only, chamfered corners for bowls, condensed, with a slight forward lean
+ * applied at layout. Grid units: cap top y = 0, x-height y = 2.5, baseline y = 8, descender y = 11;
+ * one unit is 1/8 of the cap height. Advance = rightmost x + tracking (default 2.3 units). Bowls take a heavy
+ * chamfer at the top-left and bottom-right and stay square at the other two corners, like a bevelled
+ * slab seen from below.
+ */
+const CATHEDRAL: Record<string, string> = {
+  A:'0,8 0,2 1.5,0 2.5,0 4,2 4,8|0,4.5 4,4.5', B:'0,8 0,0 3,0 4,1 4,3 3,4 0,4|3,4 4,5 4,6.5 2.5,8 0,8',
+  C:'4,0 1.5,0 0,1.5 0,8 2.5,8 4,6.5', D:'0,8 0,0 2.5,0 4,1.5 4,6.5 2.5,8 0,8',
+  E:'4,0 0,0 0,8 4,8|0,4 3,4', F:'4,0 0,0 0,8|0,4 3,4', G:'4,0 1.5,0 0,1.5 0,8 2.5,8 4,6.5 4,4.5 2.2,4.5',
+  H:'0,0 0,8|4,0 4,8|0,4 4,4', I:'0,0 2,0|1,0 1,8|0,8 2,8', J:'4,0 4,6.5 2.5,8 0,8 0,6',
+  K:'0,0 0,8|4,0 0,5|1.6,3 4,8', L:'0,0 0,8 3.5,8', M:'0,8 0,0 2.5,4.5 5,0 5,8', N:'0,8 0,0 4,8 4,0',
+  O:'1.5,0 4,0 4,6.5 2.5,8 0,8 0,1.5 1.5,0', P:'0,8 0,0 3,0 4,1 4,3.5 3,4.5 0,4.5',
+  Q:'1.5,0 4,0 4,6.5 2.5,8 0,8 0,1.5 1.5,0|2.6,6.2 4.4,8.8', R:'0,8 0,0 3,0 4,1 4,3.5 3,4.5 0,4.5|3,4.5 4,8',
+  S:'4,0 1.5,0 0,1.5 0,4 4,4 4,6.5 2.5,8 0,8', T:'0,0 4,0|2,0 2,8', U:'0,0 0,8 2.5,8 4,6.5 4,0',
+  V:'0,0 2,8 4,0', W:'0,0 1,8 2.5,3 4,8 5,0', X:'0,0 4,8|4,0 0,8', Y:'0,0 2,4 4,0|2,4 2,8', Z:'0,0 4,0 0,8 4,8',
+  a:'0.5,3 3.5,3 3.5,8|3.5,5.5 1.2,5.5 0,6.7 0,8 3.5,8', b:'0,0 0,8 2.3,8 3.5,6.8 3.5,3 0,3',
+  c:'3.5,3 1.2,3 0,4.2 0,8 3.5,8', d:'3.5,0 3.5,8 0,8 0,4.2 1.2,3 3.5,3',
+  e:'0,5.5 3.5,5.5 3.5,3 1.2,3 0,4.2 0,8 3.5,8', f:'3,0 2.2,0 1,1.2 1,8|0,3 3,3',
+  g:'3.5,3 3.5,9.8 2.3,11 0.3,11|3.5,8 0,8 0,4.2 1.2,3 3.5,3', h:'0,0 0,8|0,4.2 1.2,3 3.5,3 3.5,8',
+  i:'0,3 0,8|0,0.8 0,1.8', j:'1.5,3 1.5,9.8 0.3,11 0,11|1.5,0.8 1.5,1.8', k:'0,0 0,8|3.5,3 0,6|1.4,4.8 3.5,8',
+  l:'0,0 0,7 1,8', m:'0,8 0,4.2 1.2,3 5.5,3 5.5,8|2.75,3 2.75,8',
+  n:'0,8 0,4.2 1.2,3 3.5,3 3.5,8', o:'1.2,3 3.5,3 3.5,6.8 2.3,8 0,8 0,4.2 1.2,3',
+  p:'0,3 0,11|0,3 3.5,3 3.5,6.8 2.3,8 0,8', q:'3.5,3 3.5,11|3.5,3 1.2,3 0,4.2 0,8 3.5,8',
+  r:'0,3 0,8|0,4.2 1.2,3 3,3', s:'3.5,3 1.2,3 0,4.2 0,5.5 3.5,5.5 3.5,6.8 2.3,8 0,8',
+  t:'1,0.5 1,8 3,8|0,3 3,3', u:'0,3 0,8 2.3,8 3.5,6.8|3.5,3 3.5,8', v:'0,3 1.75,8 3.5,3',
+  w:'0,3 1,8 2.5,4.5 4,8 5,3', x:'0,3 3.5,8|3.5,3 0,8', y:'0,3 0,8 2.3,8 3.5,6.8|3.5,3 3.5,9.8 2.3,11 0.3,11',
+  z:'0,3 3.5,3 0,8 3.5,8',
+  '0':'1.5,0 3.5,0 3.5,6.5 2,8 0,8 0,1.5 1.5,0|1.1,5.4 2.4,2.6', '1':'0.5,1.5 2,0 2,8|0.5,8 3.5,8',
+  '2':'0,1.5 1.5,0 4,0 4,3 0,7 0,8 4,8', '3':'0,0 4,0 4,3 3,4 1.5,4|3,4 4,5 4,6.5 2.5,8 0,8',
+  '4':'3,8 3,0 0,5.5 4,5.5', '5':'4,0 0,0 0,3.5 2.5,3.5 4,5 4,6.5 2.5,8 0,8',
+  '6':'4,0 1.5,0 0,1.5 0,8 2.5,8 4,6.5 4,4 0,4', '7':'0,0 4,0 4,1 1.5,8',
+  '8':'1.5,0 4,0 4,3 3,4 1,4 0,3 0,1.5 1.5,0|1,4 0,5 0,8 2.5,8 4,6.5 4,5 3,4',
+  '9':'4,4 0,4 0,1.5 1.5,0 4,0 4,6.5 2.5,8 0,8',
+  '.':'0,7 0,8', ',':'0.6,7 0.6,8 0,9.4', ':':'0,3 0,4|0,7 0,8', ';':'0.6,3 0.6,4|0.6,7 0.6,8 0,9.4',
+  "'":'0,0 0,2', '-':'0,5 2.5,5', '!':'0,0 0,5.5|0,7 0,8', '?':'0,1 1,0 3,0 4,1 4,2.5 2,4.5 2,5.5|2,7 2,8',
+  '/':'0,8 3,0', '(':'1.5,-0.5 0,1 0,7 1.5,8.5', ')':'0,-0.5 1.5,1 1.5,7 0,8.5', '+':'0,4.5 4,4.5|2,2.5 2,6.5',
+  '&':'4,8 0,3 0,1 1,0 2.5,0 3.5,1 3.5,2 0,5 0,8 2.5,8 4,6',
+};
+/** Every character the cathedral face draws (plus space). */
+export const CATHEDRAL_CHARSET = Object.keys(CATHEDRAL).join('');
+const CATHEDRAL_LEAN = 0.1; // forward lean: x shifts by 0.1 per unit of height above the baseline
+const cathedralGlyphs = new Map<string, { paths: Point[][]; right: number }>();
+
+/** One cathedral glyph in upright grid units (before the lean), or undefined when unsupported. */
+export function cathedralGlyph(char: string): { paths: Point[][]; right: number } | undefined {
+  const cached = cathedralGlyphs.get(char);
+  if (cached) return cached;
+  const source = CATHEDRAL[char];
+  if (source === undefined) return undefined;
+  // Lowercase is drawn on an x-height of 3 and opened up to 2.5 (69% of the cap) for small sizes;
+  // ascenders compress to match, descenders stay put.
+  const lower = char >= 'a' && char <= 'z';
+  const paths = source.split('|').map(stroke => stroke.split(' ').map(pair => {
+    const [x, y] = pair.split(',').map(Number);
+    return { x, y: !lower || y > 8 ? y : y >= 3 ? 8 - (8 - y) * 1.1 : y * 2.5 / 3 };
+  }));
+  const glyph = { paths, right: Math.max(...paths.flat().map(p => p.x)) };
+  cathedralGlyphs.set(char, glyph);
+  return glyph;
+}
+
+/** True when `face` can draw every character of `text`. */
+export function strokeFaceSupports(text: string, face: StrokeFace): boolean {
+  try { validated(text, face); return true; } catch { return false; }
+}
+
 const wireGlyphs = new Map<string, Point[][]>();
 const matrixGlyphs = new Map<string, Point[][]>();
 
@@ -115,8 +184,17 @@ function glyph(char: string, face: StrokeFace): Point[][] {
 
 function validated(text: string, face: StrokeFace): string[] {
   if (typeof text !== 'string') throw new TypeError('Text must be a string');
-  if (face !== 'wire' && face !== 'matrix' && !isHershey(face)) throw new RangeError(`Unknown stroke face: ${String(face)}`);
+  if (face !== 'wire' && face !== 'matrix' && face !== 'cathedral' && !isHershey(face)) throw new RangeError(`Unknown stroke face: ${String(face)}`);
   if ([...text].length > 256) throw new RangeError('Stroke text exceeds 256 characters');
+  if (face === 'cathedral') {
+    const chars = [...text];
+    for (let i = 0; i < chars.length; i++) {
+      if (chars[i] !== ' ' && !cathedralGlyph(chars[i])) {
+        throw new RangeError(`Unsupported stroke character U+${chars[i].codePointAt(0)!.toString(16).toUpperCase()} at position ${i + 1}`);
+      }
+    }
+    return chars;
+  }
   if (isHershey(face)) {
     // Case-preserving: the Hershey faces carry their own lowercase.
     const chars = [...text];
@@ -153,11 +231,29 @@ function hersheyLayout(chars: string[], face: HersheyFace, style: TextStyle): { 
   return { paths, width: cursor };
 }
 
+/** Cathedral layout: `height` is the cap height (8 grid units); tracking is in grid units. */
+function cathedralLayout(chars: string[], style: TextStyle): { paths: Point[][]; width: number } {
+  const tracking = style.tracking ?? 2.3;
+  if (!Number.isFinite(tracking) || tracking < 0 || tracking > 100) throw new RangeError('Text tracking must be finite and nonnegative');
+  const unit = style.height / 8;
+  const paths: Point[][] = [];
+  let cursor = 0;
+  chars.forEach((char, i) => {
+    const glyph = char === ' ' ? undefined : cathedralGlyph(char)!;
+    if (glyph) for (const path of glyph.paths) {
+      paths.push(path.map(p => ({ x: cursor + (p.x + (8 - p.y) * CATHEDRAL_LEAN) * unit, y: p.y * unit })));
+    }
+    cursor += ((glyph ? glyph.right : 1.4) + (i < chars.length - 1 ? tracking : 0)) * unit;
+  });
+  return { paths, width: cursor };
+}
+
 function layout(text: string, style: TextStyle): { paths: Point[][]; width: number } {
   const face = style.face ?? 'wire';
   const chars = validated(text, face);
   if (!Number.isFinite(style.height) || style.height <= 0 || style.height > 1000) throw new RangeError('Text height must be positive and finite');
   if (isHershey(face)) return hersheyLayout(chars, face, style);
+  if (face === 'cathedral') return cathedralLayout(chars, style);
   const tracking = style.tracking ?? (face === 'wire' ? 1.8 : 1.2);
   if (!Number.isFinite(tracking) || tracking < 0 || tracking > 100) throw new RangeError('Text tracking must be finite and nonnegative');
   const unit = style.height / (face === 'wire' ? 6 : 7);

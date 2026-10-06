@@ -8,7 +8,7 @@ import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
-type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean };
+type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean; title?: boolean };
 type Slab = { x: number; y: number; z: number; w: number; h: number; d: number; beat: number };
 
 const W = 594, H = 840; // two depth pixels per page millimeter
@@ -359,7 +359,9 @@ export function drawCathedral(ctx: SketchContext): Part[] {
     // Lettering is collected separately (text: true); its part takes the slogan pen, usually the fine 'lettering' pen.
     const sloganPen = sloganSettings(ctx).pen;
     for (const points of slogans.strokes) strokes.push({ ink: 'carbon', points, text: true });
+    for (const points of slogans.titleStrokes) strokes.push({ ink: 'carbon', points, text: true, title: true });
     const lettering: Point[][] = [];
+    const titling: Point[][] = [];
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<Ink, Point[][]>(INKS.map(ink => [ink, []]));
     const removeHidden = ctx.params.occlusion !== false;
@@ -376,7 +378,7 @@ export function drawCathedral(ctx: SketchContext): Part[] {
           for (const path of clipArt(mm, window)) {
             if (stroke.text) {
               // Glyph curves are millimetre-scale: keep every point.
-              if (path.length > 1) lettering.push(path);
+              if (path.length > 1) (stroke.title ? titling : lettering).push(path);
               continue;
             }
             const reduced = simplify(path);
@@ -393,6 +395,8 @@ export function drawCathedral(ctx: SketchContext): Part[] {
     }
     const parts: Part[] = INKS.map(ink => ({ id: `cathedral-${ink}`, pen: ink, paths: buckets.get(ink)! }));
     if (lettering.length) parts.push({ id: `slogan-${sloganPen}`, pen: sloganPen, paths: lettering });
+    // The title line always takes the fine lettering pen (declared by the entries that offer it).
+    if (titling.length) parts.push({ id: 'title-lettering', pen: 'lettering', paths: titling });
     return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();

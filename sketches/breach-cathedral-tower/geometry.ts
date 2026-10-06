@@ -7,7 +7,7 @@ import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/post
 import { clearBands, planSlogans, sloganSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
-export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan';
+export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan' | 'title';
 /** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
 type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
 export type Role = 'stack' | 'pier' | 'stub' | 'fallen' | 'debris';
@@ -22,7 +22,7 @@ export type Slab = {
 };
 
 export const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS: Group[] = ['tower', 'collapse', 'strand-a', 'strand-b', 'slogan'];
+const GROUPS: Group[] = ['tower', 'collapse', 'strand-a', 'strand-b', 'slogan', 'title'];
 // Depth pixels: two per page millimetre, aspect matched to the 11 × 17 sheet.
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -498,13 +498,14 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
     });
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
+    for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', points });
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
-      const text = stroke.group === 'slogan';
+      const text = stroke.group === 'slogan' || stroke.group === 'title';
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
       for (const clipped of pieces) {

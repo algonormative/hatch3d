@@ -1,7 +1,7 @@
 /**
  * Finalize a stack of sketch renders for the plotter: palette → balanced placement → vpype preparation.
  *
- *   node --import tsx cli/finalize.ts run <stack.json> [--only name,name] [--palette id] [--params '{"sloganCount":1}'] [--merge]
+ *   node --import tsx cli/finalize.ts run <stack.json> [--only name,name] [--palette id] [--params '{"sloganCount":1}'] [--merge] [--bump]
  *   node --import tsx cli/finalize.ts serve <stack.json> [--port 8796]
  *
  * The palette is applied through finishing (paper + pen colors), so the canonical render records it.
@@ -32,7 +32,32 @@ export interface FinalizeOptions {
   mergeSameColor: boolean;
   vpype: VpypeOptions;
 }
-export interface Stack { title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string } }
+export interface Stack {
+  title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string };
+  /** Print-run number; `run --bump` increments it. */
+  edition?: number;
+  /** Title drawn on each print when its sketch has title controls, e.g. "Breach Cathedral {version} {hash}". */
+  printTitle?: string;
+}
+
+export interface BuildVersion { version: string; hash: string; dirty: boolean }
+
+/** A v* tag on HEAD wins over the edition; '+' marks uncommitted tracked changes (the stack file itself excepted). */
+export function buildVersion(edition = 1): BuildVersion {
+  const git = (args: string[]) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  const tag = git(['describe', '--tags', '--exact-match', '--match', 'v*', 'HEAD']);
+  const head = git(['rev-parse', '--short', 'HEAD']);
+  if (head.status !== 0) fail('finalize needs a git checkout to stamp the build hash');
+  const status = git(['status', '--porcelain', '--untracked-files=no', '--', '.', ':!sketches/phase-garden/stacks']);
+  return { version: tag.status === 0 ? tag.stdout.trim() : `v${edition}`, hash: head.stdout.trim(), dirty: status.stdout.trim().length > 0 };
+}
+
+/** Title overrides for sketches that declare title controls; explicit overrides still win. */
+export function titleOverrides(stack: Stack, controls: Control[], build: BuildVersion): Record<string, unknown> {
+  if (!stack.printTitle || !controls.some(c => c.id === 'title') || !controls.some(c => c.id === 'titleEnabled')) return {};
+  const title = stack.printTitle.replace('{version}', build.version).replace('{hash}', build.hash + (build.dirty ? '+' : ''));
+  return { titleEnabled: true, title };
+}
 /**
  * A palette assigns inks by pen order (structure, body, interruption, event, joining, ...) plus a paper color.
  * A 'lettering' pen is not part of that order: it takes the structure ink (inks[0]).
@@ -94,7 +119,8 @@ async function renderSource(piece: Piece, request: object, dir: string): Promise
 /** Render only (no vpype), for previews: the page recolors layers itself. */
 export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
   const { page, pens, controls } = await loadSketch(piece.sketch);
-  const request = { seed: piece.seed, params: withOverrides(piece, controls, overrides), finishing: finishingFor(stack, page, pens, palette) };
+  const auto = titleOverrides(stack, controls, buildVersion(stack.edition));
+  const request = { seed: piece.seed, params: withOverrides(piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
 }
 
@@ -227,6 +253,7 @@ export function serverConfig(resultPath: string, sourceSvg: string, report: Piec
 
 export interface PieceReport {
   name: string; title: string; seed: number; palette: string; paper: string; offset: { dx: number; dy: number };
+  build: BuildVersion; printedTitle: string | null;
   margins: { top: number; bottom: number } | null; layers: LayerStats[]; pens: number; minutes: number;
   /** Same numbered layers, labels and passes as the canonical source, so plotter-server's pen-plan check can pass. */
   serverCompatible: boolean;
@@ -238,7 +265,8 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   const inked = pens.filter(p => p.id !== 'lettering').length;
   if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
-  const request = { seed: piece.seed, params: withOverrides(piece, controls, overrides), finishing: finishingFor(stack, page, pens, options.palette) };
+  const build = buildVersion(stack.edition);
+  const request = { seed: piece.seed, params: withOverrides(piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
   const source = readFileSync(sourcePath, 'utf8');
   const layers = readLayers(source);
@@ -290,6 +318,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   const after = art ? { y0: art.y0 + dy, y1: art.y1 + dy } : null;
   const report: PieceReport = {
     name: piece.name, title: piece.title ?? piece.name, seed: piece.seed, palette: options.palette.id, paper: options.palette.paper,
+    build, printedTitle: request.params.titleEnabled === true ? String(request.params.title) : null,
     offset: { dx, dy }, margins: after ? { top: +(after.y0 - area.y0).toFixed(2), bottom: +(area.y1 - after.y1).toFixed(2) } : null,
     layers: layerStats, pens: layerStats.length, minutes: Math.round(minutes), serverCompatible: moves.length === 0,
     files: { source: relative(ROOT, sourcePath), sourcePng: relative(ROOT, join(dir, 'source', 'render.png')), prepared: relative(ROOT, preparedPath), preparedPng: relative(ROOT, join(dir, 'plot-ready.png')) },
@@ -366,7 +395,7 @@ async function serve(stackPath: string, port: number) {
     try {
       if (req.method === 'GET' && url.pathname === '/') return send(200, ui, TYPES['.html']);
       if (req.method === 'GET' && url.pathname === '/api/stack') {
-        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack), borderPen: (stack.border as { pen?: string } | undefined)?.pen ?? null, sloganControls,
+        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack), build: buildVersion(stack.edition), printTitle: stack.printTitle ?? null, borderPen: (stack.border as { pen?: string } | undefined)?.pen ?? null, sloganControls,
           pieces: stack.pieces.map(p => ({ ...p, slug: slug(p.name), pens: pieceInfo.get(slug(p.name))!.pens })) }));
       }
       const preview = /^\/api\/preview\/([a-z0-9-]+)\.svg$/.exec(url.pathname);
@@ -406,15 +435,20 @@ async function serve(stackPath: string, port: number) {
 async function main(argv: string[]) {
   const [command, stackPath, ...rest] = argv;
   const flag = (name: string) => { const i = rest.indexOf(`--${name}`); return i >= 0 ? rest[i + 1] : undefined; };
-  if (!stackPath || (command !== 'run' && command !== 'serve')) fail('Usage: finalize.ts <run|serve> <stack.json> [--only a,b] [--palette id] [--params json] [--merge] [--port 8796]');
+  if (!stackPath || (command !== 'run' && command !== 'serve')) fail('Usage: finalize.ts <run|serve> <stack.json> [--only a,b] [--palette id] [--params json] [--merge] [--bump] [--port 8796]');
   if (command === 'serve') return serve(stackPath, Number(flag('port') ?? 8796));
   const stack = loadStack(stackPath);
+  if (rest.includes('--bump')) {
+    stack.edition = (stack.edition ?? 0) + 1;
+    const path = resolve(ROOT, stackPath);
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), edition: stack.edition }, null, 2) + '\n');
+  }
   const only = flag('only')?.split(',').map(slug);
   const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}), ...(rest.includes('--merge') ? { mergeSameColor: true } : {}) });
   const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
   for (const piece of stack.pieces.filter(p => !only || only.includes(slug(p.name)))) {
     const r = await finalizePiece(stack, piece, options, overrides);
-    console.log(JSON.stringify({ name: r.name, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared }));
+    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared }));
   }
 }
 

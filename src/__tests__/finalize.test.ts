@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { finalizePiece, parseStat, previewPiece, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
+import { buildVersion, finalizePiece, parseStat, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
 
 const page = { width: 279.4, height: 431.8, margin: 18 };
 const border = { style: 'double', pen: 'carbon', inset: 12, contentGap: 6 };
@@ -63,6 +63,28 @@ describe('finalize placement and pen plan', () => {
     const layers = svg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1);
     expect(layers.filter(l => /data-part-id="[^"]*slogan/.test(l)).map(l => /inkscape:label="([^"]*)"/.exec(l)![1])).toEqual([lettering.label]);
   }, 30_000);
+});
+
+describe('finalize print title', () => {
+  const controls = [{ id: 'title' }, { id: 'titleEnabled' }] as never;
+  const stack = { out: '', pieces: [], printTitle: 'Breach Cathedral {version} {hash}' } as Stack;
+
+  it('stamps version and short hash, marking uncommitted builds with +', () => {
+    expect(titleOverrides(stack, controls, { version: 'v3', hash: 'abc1234', dirty: false })).toEqual({ titleEnabled: true, title: 'Breach Cathedral v3 abc1234' });
+    expect(titleOverrides(stack, controls, { version: 'v3', hash: 'abc1234', dirty: true }).title).toBe('Breach Cathedral v3 abc1234+');
+  });
+
+  it('adds nothing when the sketch has no title controls or the stack has no title', () => {
+    expect(titleOverrides(stack, [{ id: 'title' }] as never, { version: 'v1', hash: 'x', dirty: false })).toEqual({});
+    expect(titleOverrides({ ...stack, printTitle: undefined }, controls, { version: 'v1', hash: 'x', dirty: false })).toEqual({});
+  });
+
+  it('reads the repository: a v* tag on HEAD or the edition, plus a 7+ character hash', () => {
+    const b = buildVersion(4);
+    expect(b.version).toMatch(/^v/);
+    expect(b.hash).toMatch(/^[0-9a-f]{7,}$/);
+    expect(typeof b.dirty).toBe('boolean');
+  });
 });
 
 const hasVpype = spawnSync('vpype', ['--version']).status === 0;

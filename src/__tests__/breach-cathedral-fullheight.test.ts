@@ -32,9 +32,11 @@ describe('Breach Cathedral full height', () => {
 
   it('leaves the edition untouched when the new toggles and slogans are off', async () => {
     const base = await renderSketch({ entry, seed: 17 });
-    const explicit = await renderSketch({ entry, seed: 17, params: { fullHeight: false, fitWhole: true, sloganCount: 0 } });
+    const explicit = await renderSketch({ entry, seed: 17, params: { fullHeight: false, fitWhole: true, sloganCount: 0, titleEnabled: false } });
     expect(explicit.parts).toEqual(base.parts);
-    expect(base.parts.some(p => p.id.startsWith('slogan-'))).toBe(false);
+    expect(base.parts.some(p => p.id.startsWith('slogan-') || p.id.startsWith('title-'))).toBe(false);
+    const titled = await renderSketch({ entry, seed: 17, params: { titleEnabled: true, fullHeight: true } });
+    expect(titled.parts.filter(p => p.id.startsWith('title-')).map(p => [p.id, p.pen])).toEqual([['title-lettering', 'lettering']]);
     const lettered = await renderSketch({ entry, seed: 17, params: { sloganCount: 1 } });
     expect(lettered.parts.some(p => p.id === 'slogan-lettering' && p.pen === 'lettering' && p.paths.length > 10)).toBe(true);
   });

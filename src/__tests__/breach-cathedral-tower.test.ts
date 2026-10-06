@@ -103,4 +103,30 @@ describe('Breach Cathedral: Tower', () => {
     expect(whole.slogans.placed.every(w => w.text === 'this was made by a machine')).toBe(true);
     expect(whole.parts.some(p => p.id === 'slogan-vermilion')).toBe(true);
   });
+
+  it('sets the opt-in title whole on one clear intact face, on the lettering layer, away from slogan words', () => {
+    for (const seed of [211, 17]) {
+      const params = { sloganCount: 1, titleEnabled: true };
+      const scene = towerScene(context(seed, params));
+      const title = scene.slogans.title!;
+      expect(title.text).toBe('Breach Cathedral v1');
+      expect(title.visible).toBeGreaterThanOrEqual(0.92);
+      expect(scene.slogans.placed.map(w => w.id)).not.toContain(title.id);
+      expect(towerSlabs(context(seed, params))[title.id].role).toBe('stack');
+      const parts = scene.parts.filter(p => p.id.startsWith('title-'));
+      expect(parts.map(p => [p.id, p.pen])).toEqual([['title-lettering', 'lettering']]);
+      // One face: the title strokes cluster within a single slab-sized band.
+      const pts = parts[0].paths.flat();
+      expect(Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y))).toBeLessThan(10);
+      // The title goes through the shared depth pass: never longer with hidden lines on than off.
+      const open = towerScene(context(seed, { ...params, occlusion: false }));
+      expect(length(scene.parts, 'title-')).toBeLessThanOrEqual(length(open.parts, 'title-') + 1e-6);
+      // Turning the title on leaves the slogan words where they were.
+      expect(scene.slogans.placed).toEqual(towerScene(context(seed, { sloganCount: 1 })).slogans.placed);
+    }
+    // A 30-character title with a hash still lands, shrinking if a face needs it.
+    const hashed = towerScene(context(211, { titleEnabled: true, title: 'Breach Cathedral v1 2f216f9+' }));
+    expect(hashed.slogans.title?.text).toBe('Breach Cathedral v1 2f216f9+');
+    expect(towerScene(context(211)).parts.some(p => p.id.startsWith('title-'))).toBe(false);
+  });
 });
