@@ -1,0 +1,26 @@
+{
+  "seed": 211,
+  "params": {
+    "posterMode": "abstract",
+    "structureReach": 1,
+    "structureDensity": 0.75,
+    "branchCount": 1,
+    "singularityPower": 0.75,
+    "lightGapAmount": 0.48,
+    "ribbonEdgeReach": 1,
+    "rayEdgeReach": 0.8,
+    "fogEnabled": true,
+    "fogCoverage": 0.68,
+    "fogDepth": 0.65,
+    "fogScale": 0.65,
+    "fogHatchPitch": 3
+  },
+  "finishing": {
+    "border": {
+      "style": "double",
+      "pen": "carbon",
+      "inset": 12,
+      "contentGap": 0
+    }
+  }
+}

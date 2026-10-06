@@ -1,0 +1,21 @@
+{
+  "seed": 311,
+  "params": {
+    "posterMode": "abstract",
+    "posterFace": "wire",
+    "posterTitle": "PHASE GARDEN",
+    "posterKicker": "LIVE ELECTRONIC SYSTEMS",
+    "posterSubtitle": "BORROWED ORBITS",
+    "posterFooter": "CONCERT STUDY / O1",
+    "orbitsEnabled": true,
+    "step": 300
+  },
+  "finishing": {
+    "border": {
+      "style": "double",
+      "pen": "carbon",
+      "inset": 12,
+      "contentGap": 0
+    }
+  }
+}

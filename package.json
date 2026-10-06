@@ -14,6 +14,11 @@
     "wasm:build": "cd src/wasm && wasm-pack build --target web --out-dir pkg",
     "wasm:dev": "cd src/wasm && wasm-pack build --target web --out-dir pkg --dev",
     "render": "tsx cli/render.ts",
+    "sketch": "tsx cli/sketch.ts",
+    "sketch:typecheck": "tsc --project tsconfig.sketch.json",
+    "plot-core:build": "npm run build --prefix packages/plot-core",
+    "plot-host:build": "npm run plot-core:build && npm run build --prefix packages/plot-host",
+    "plot-host:smoke": "npm run plot-host:build && npm run smoke --prefix packages/plot-host",
     "render:list": "tsx cli/render.ts --list",
     "render:info": "tsx cli/render.ts --info",
     "stats": "tsx cli/stats.ts",
@@ -26,7 +31,10 @@
     "pref:sync": "tsx cli/preference-sync.ts",
     "pref:collect": "tsx cli/preference-sync.ts --collect",
     "pref:learn": "tsx cli/preference-sync.ts --learn",
-    "pref:stats": "tsx cli/preference-sync.ts --stats"
+    "pref:stats": "tsx cli/preference-sync.ts --stats",
+    "plot-family:smoke": "npm run plot-host:build && node packages/plot-host/family-smoke.mjs",
+    "plot-checkpoint:smoke": "npm run plot-host:build && node --import tsx packages/plot-host/checkpoint-smoke.mjs",
+    "plot-experiment:smoke": "npm run plot-host:build && node packages/plot-host/experiment-smoke.mjs"
   },
   "dependencies": {
     "@endonny/inksight": "^0.2.0",
@@ -41,6 +49,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@hatch3d/plotprep-node": "file:packages/plot-host/vendor/hatch3d-plotprep-node-0.1.0.tgz",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.10.1",
@@ -48,6 +57,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "esbuild": "^0.27.3",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

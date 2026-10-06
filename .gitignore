@@ -27,3 +27,7 @@ src/wasm/target/
 
 # Preference learning data (local, not committed)
 data/preferences/
+
+# Generated executable-sketch artifacts (source sketches remain tracked)
+sketch-output/
+.sketch-output/

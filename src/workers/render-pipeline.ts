@@ -15,6 +15,7 @@ import {
   buildSurfaceMesh,
 } from "../projection";
 import { renderDepthBufferOffscreen, splitPolylineByDepth } from "../occlusion";
+import { clipProjectedPolyline, densifyProjectedPolyline, type DepthProvider } from "../sketch/depth-buffer";
 import { extractSilhouettePolylines } from "../silhouette";
 import { filterByProjectedDensity, filterByProjectedDensityIndices } from "../density";
 import { compositionRegistry } from "../compositions/registry";
@@ -226,6 +227,7 @@ function applyLayerTransform(
 function runLayeredPipeline(
   req: RenderRequest,
   comp: LayeredCompositionDefinition,
+  depthProvider?: DepthProvider,
 ): RenderResult {
   const t0 = performance.now();
 
@@ -264,7 +266,7 @@ function runLayeredPipeline(
       silhouetteEnabled: false,
     };
 
-    const innerResult = runPipeline(innerReq);
+    const innerResult = runPipeline(innerReq, depthProvider);
     const polys = innerResult.svgPaths
       .map(parseDString)
       .filter((p) => p.length >= 2);
@@ -326,14 +328,14 @@ function runLayeredPipeline(
   };
 }
 
-export function runPipeline(req: RenderRequest): RenderResult {
+export function runPipeline(req: RenderRequest, depthProvider?: DepthProvider): RenderResult {
   const t0 = performance.now();
   const comp = compositionRegistry.get(req.compositionKey)!;
   const wasmReady = isWasmReady();
 
   // ── Layered pipeline (multi-composition umbrella) ──
   if (isLayeredComposition(comp)) {
-    return runLayeredPipeline(req, comp);
+    return runLayeredPipeline(req, comp, depthProvider);
   }
 
   // ── 2D pipeline ──
@@ -536,6 +538,11 @@ export function runPipeline(req: RenderRequest): RenderResult {
   const depthMeshes: THREE.BufferGeometry[] = unifiedDepthMesh
     ? [unifiedDepthMesh]
     : meshGeometries;
+  const disposeDepthGeometries = () => {
+    for (const geometry of new Set([...meshGeometries, ...(unifiedDepthMesh ? [unifiedDepthMesh] : [])])) {
+      geometry.dispose();
+    }
+  };
   if (req.useOcclusion && depthMeshes.length > 0) {
     try {
       const { contentW, contentH, scale: fitScale } = req.exportLayout;
@@ -573,7 +580,7 @@ export function runPipeline(req: RenderRequest): RenderResult {
       extCamera.updateMatrixWorld();
       (extCamera as THREE.PerspectiveCamera | THREE.OrthographicCamera).updateProjectionMatrix();
 
-      const depthBuffer = renderDepthBufferOffscreen(
+      const depthBuffer = (depthProvider ?? renderDepthBufferOffscreen)(
         depthMeshes,
         extCamera,
         depthW,
@@ -591,6 +598,7 @@ export function runPipeline(req: RenderRequest): RenderResult {
           y: (p.y - offsetY) * (req.height / req.depthRes),
         }));
 
+      let sampledPoints = 0;
       for (let li = 0; li < layers.length; li++) {
         const layer = layers[li];
         const sf = SURFACES[layer.surface];
@@ -623,17 +631,27 @@ export function runPipeline(req: RenderRequest): RenderResult {
           const band = depthWidthEnabled
             ? depthWidthBand(polylines3D[sourceIndices[pi]], camPos, refDist)
             : 0;
-          const { visible, hidden } = splitPolylineByDepth(
-            projected[pi],
-            depthBuffer,
-            req.depthBias
-          );
-          for (const seg of visible) {
-            occludedPolylines.push(toContent(seg));
-            occludedBands.push(band);
-          }
-          if (hiddenGhost) {
-            for (const seg of hidden) hiddenPolylines2D.push(toContent(seg));
+          const runs = depthProvider
+            ? clipProjectedPolyline(projected[pi], depthW, depthH)
+            : [projected[pi]];
+          for (const run of runs) {
+            const samples = depthProvider ? densifyProjectedPolyline(run) : run;
+            if (depthProvider) {
+              sampledPoints += samples.length;
+              if (sampledPoints > 2_000_000) throw new RangeError("Depth sampling budget exceeded");
+            }
+            const { visible, hidden } = splitPolylineByDepth(
+              samples,
+              depthBuffer,
+              req.depthBias
+            );
+            for (const seg of visible) {
+              occludedPolylines.push(toContent(seg));
+              occludedBands.push(band);
+            }
+            if (hiddenGhost) {
+              for (const seg of hidden) hiddenPolylines2D.push(toContent(seg));
+            }
           }
         }
       }
@@ -646,12 +664,20 @@ export function runPipeline(req: RenderRequest): RenderResult {
         const projectedSil = projectPolylines(silhouette3D, extCamera, depthW, depthH);
         const occludedSil: { x: number; y: number }[][] = [];
         for (const pl of projectedSil) {
-          const { visible } = splitPolylineByDepth(
-            pl,
-            depthBuffer,
-            req.depthBias * SILHOUETTE_DEPTH_BIAS_MULT
-          );
-          for (const seg of visible) occludedSil.push(toContent(seg));
+          const runs = depthProvider ? clipProjectedPolyline(pl, depthW, depthH) : [pl];
+          for (const run of runs) {
+            const samples = depthProvider ? densifyProjectedPolyline(run) : run;
+            if (depthProvider) {
+              sampledPoints += samples.length;
+              if (sampledPoints > 2_000_000) throw new RangeError("Depth sampling budget exceeded");
+            }
+            const { visible } = splitPolylineByDepth(
+              samples,
+              depthBuffer,
+              req.depthBias * SILHOUETTE_DEPTH_BIAS_MULT
+            );
+            for (const seg of visible) occludedSil.push(toContent(seg));
+          }
         }
         silhouettePolylines2D = occludedSil;
       }
@@ -659,6 +685,10 @@ export function runPipeline(req: RenderRequest): RenderResult {
       allPolylines2D = occludedPolylines;
       polyBands = occludedBands;
     } catch (e) {
+      if (depthProvider) {
+        disposeDepthGeometries();
+        throw e;
+      }
       console.warn("Depth buffer occlusion failed:", (e as Error).message);
     }
   }
@@ -676,7 +706,7 @@ export function runPipeline(req: RenderRequest): RenderResult {
     if (depthWidthEnabled) polyBands = kept.map((i) => polyBands[i]);
   }
 
-  meshGeometries.forEach((g) => g.dispose());
+  disposeDepthGeometries();
 
   const totalLines = allPolylines2D.length;
   const totalVerts = allPolylines2D.reduce((s, p) => s + p.length, 0);

@@ -1,4 +1,5 @@
 import { useRef, useCallback } from "react";
+import { denormalizeXY, normalizeXY } from "../controls/geometry.js";
 
 export function XYPad({
   valueX,
@@ -20,21 +21,18 @@ export function XYPad({
   const padRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
-  const range = max - min;
-  const normX = (valueX - min) / range;
-  const normY = 1 - (valueY - min) / range; // invert Y so up = positive
+  const { x: normX, y: normY } = normalizeXY(valueX, valueY, min, max, min, max);
 
   const updateFromEvent = useCallback(
     (clientX: number, clientY: number) => {
       const el = padRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const nx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      const ny = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-      onChangeX(+(min + nx * range).toFixed(2));
-      onChangeY(+(max - ny * range).toFixed(2)); // invert Y
+      const next = denormalizeXY((clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height, min, max, min, max);
+      onChangeX(+next.x.toFixed(2));
+      onChangeY(+next.y.toFixed(2));
     },
-    [min, max, range, onChangeX, onChangeY],
+    [min, max, onChangeX, onChangeY],
   );
 
   const handlePointerDown = useCallback(

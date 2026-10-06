@@ -1,0 +1,299 @@
+{
+  "diagnostics": [],
+  "engine": {
+    "name": "plotprep",
+    "version": "0.1.0",
+    "vsvg_revision": "b02060a761e9f0d177293fd7a6f01dd2a28ddae7"
+  },
+  "geometry": {
+    "after_cleanup": {
+      "drawn_length_mm": 3.0,
+      "paths": 3,
+      "pen_up_mm": 47.071067811865476,
+      "segments": 3,
+      "vertices": 6
+    },
+    "normalized": {
+      "drawn_length_mm": 3.0,
+      "paths": 3,
+      "pen_up_mm": 47.071067811865476,
+      "segments": 3,
+      "vertices": 6
+    },
+    "original": {
+      "basis": "physical_source_strokes_before_clip_dash",
+      "drawn_length_mm": 3.0,
+      "paths": 3,
+      "segments": 3,
+      "vertices": 6
+    },
+    "output": {
+      "drawn_length_mm": 3.0,
+      "paths": 3,
+      "pen_up_mm": 26.071067811865476,
+      "segments": 3,
+      "vertices": 6
+    }
+  },
+  "operations": {
+    "cleanup": {
+      "enabled": false,
+      "merge_scope": null,
+      "merge_tolerance_mm": null,
+      "result": null,
+      "simplify_tolerance_mm": null
+    },
+    "normalization": {
+      "applied_clips": 0,
+      "arc_conversions": 0,
+      "curve_tolerance_mm": null,
+      "expanded_dashes": 0,
+      "flattened_drawables": 0,
+      "output_paths": 3,
+      "output_segments": 3,
+      "requested_curve_tolerance_mm": 0.05,
+      "shape_curve_conversions": 0,
+      "source_drawables": 3,
+      "source_drawn_length_mm": 3.0,
+      "source_paths": 3,
+      "source_segments": 3,
+      "source_vertices": 6
+    },
+    "sort": {
+      "allow_reverse": false,
+      "enabled": true,
+      "objective_after_mm": 26.071067811865476,
+      "objective_before_mm": 47.071067811865476,
+      "result": {
+        "after": {
+          "geometry": {
+            "drawn_length_mm": 3.0,
+            "paths": 3,
+            "pen_up_mm": 26.071067811865476,
+            "segments": 3,
+            "vertices": 6
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 5.0,
+            "paths": 5,
+            "pen_up_mm": 45.071067811865476,
+            "segments": 5,
+            "vertices": 10
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 2.0,
+                "paths": 2,
+                "pen_up_mm": 19.0,
+                "segments": 2,
+                "vertices": 4
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 4.0,
+                "paths": 4,
+                "pen_up_mm": 38.0,
+                "segments": 4,
+                "vertices": 8
+              },
+              "passes": 2
+            },
+            {
+              "geometry": {
+                "drawn_length_mm": 1.0,
+                "paths": 1,
+                "pen_up_mm": 7.0710678118654755,
+                "segments": 1,
+                "vertices": 2
+              },
+              "layer_number": 2,
+              "pass_weighted": {
+                "drawn_length_mm": 1.0,
+                "paths": 1,
+                "pen_up_mm": 7.0710678118654755,
+                "segments": 1,
+                "vertices": 2
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "allow_reverse": false,
+        "before": {
+          "geometry": {
+            "drawn_length_mm": 3.0,
+            "paths": 3,
+            "pen_up_mm": 47.071067811865476,
+            "segments": 3,
+            "vertices": 6
+          },
+          "length_accuracy_mm": 1e-6,
+          "origin_mm": [
+            0.0,
+            0.0
+          ],
+          "pass_weighted": {
+            "drawn_length_mm": 5.0,
+            "paths": 5,
+            "pen_up_mm": 87.07106781186548,
+            "segments": 5,
+            "vertices": 10
+          },
+          "pens": [
+            {
+              "geometry": {
+                "drawn_length_mm": 2.0,
+                "paths": 2,
+                "pen_up_mm": 40.0,
+                "segments": 2,
+                "vertices": 4
+              },
+              "layer_number": 1,
+              "pass_weighted": {
+                "drawn_length_mm": 4.0,
+                "paths": 4,
+                "pen_up_mm": 80.0,
+                "segments": 4,
+                "vertices": 8
+              },
+              "passes": 2
+            },
+            {
+              "geometry": {
+                "drawn_length_mm": 1.0,
+                "paths": 1,
+                "pen_up_mm": 7.0710678118654755,
+                "segments": 1,
+                "vertices": 2
+              },
+              "layer_number": 2,
+              "pass_weighted": {
+                "drawn_length_mm": 1.0,
+                "paths": 1,
+                "pen_up_mm": 7.0710678118654755,
+                "segments": 1,
+                "vertices": 2
+              },
+              "passes": 1
+            }
+          ],
+          "per_pen_restart": true
+        },
+        "candidate_checks": 4,
+        "changed_layers": [
+          1
+        ],
+        "fallback_layers": [],
+        "reversed_paths": 0
+      }
+    }
+  },
+  "page": {
+    "height_mm": 20.0,
+    "width_mm": 30.0
+  },
+  "parts": [
+    {
+      "layer_number": 1,
+      "part_id": "contour",
+      "path_count_after": 2,
+      "path_count_before": 2,
+      "source_element_id": null
+    }
+  ],
+  "pass_weighted": {
+    "after_cleanup": {
+      "drawn_length_mm": 5.0,
+      "paths": 5,
+      "pen_up_mm": 87.07106781186548,
+      "segments": 5,
+      "vertices": 10
+    },
+    "before": {
+      "drawn_length_mm": 5.0,
+      "paths": 5,
+      "pen_up_mm": 87.07106781186548,
+      "segments": 5,
+      "vertices": 10
+    },
+    "output": {
+      "drawn_length_mm": 5.0,
+      "paths": 5,
+      "pen_up_mm": 45.071067811865476,
+      "segments": 5,
+      "vertices": 10
+    }
+  },
+  "pens": [
+    {
+      "color": "#000000",
+      "id": null,
+      "label": "1 black",
+      "layer_number": 1,
+      "passes": 2,
+      "path_count_after": 2,
+      "path_count_before": 2,
+      "pen_id": "black",
+      "source_label": "1 black",
+      "stroke_width_mm": 0.3
+    },
+    {
+      "color": "#ff0000",
+      "id": null,
+      "label": "2 red",
+      "layer_number": 2,
+      "passes": 1,
+      "path_count_after": 1,
+      "path_count_before": 1,
+      "pen_id": "red",
+      "source_label": "2 red",
+      "stroke_width_mm": 0.4
+    }
+  ],
+  "prepared": {
+    "path": "prepared.svg",
+    "sha256": "33e5a96d7576d9e2ab4f581103d74ce96ff49cccd8830eda5f8048e3de119635"
+  },
+  "schema_version": 1,
+  "source": {
+    "path": "input.svg",
+    "sha256": "7ad569b8ca6c3ba131e949ad8875c65b6f50607502aed3b75c2790d1221dcc5e"
+  },
+  "travel": {
+    "after_cleanup_mm": 47.071067811865476,
+    "after_mm": 26.071067811865476,
+    "before_mm": 47.071067811865476,
+    "objective": "geometric_pen_up_mm",
+    "origin_mm": [
+      0.0,
+      0.0
+    ],
+    "pens": [
+      {
+        "after_cleanup_mm": 40.0,
+        "after_mm": 19.0,
+        "before_mm": 40.0,
+        "layer_number": 1,
+        "pass_weighted_after_mm": 38.0,
+        "pass_weighted_before_mm": 80.0
+      },
+      {
+        "after_cleanup_mm": 7.0710678118654755,
+        "after_mm": 7.0710678118654755,
+        "before_mm": 7.0710678118654755,
+        "layer_number": 2,
+        "pass_weighted_after_mm": 7.0710678118654755,
+        "pass_weighted_before_mm": 7.0710678118654755
+      }
+    ],
+    "per_pen_restart": true,
+    "return_home_leg": false
+  }
+}

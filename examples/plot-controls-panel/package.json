@@ -1,0 +1,8 @@
+{
+  "name": "plot-controls-panel-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hatch3d/plot-core": "0.1.0"
+  }
+}

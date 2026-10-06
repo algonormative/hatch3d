@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="30mm" height="20mm" viewBox="0 0 30 20">
+  <g inkscape:groupmode="layer" inkscape:label="1 ink" data-pen-id="ink" data-passes="1" fill="none" stroke="#000000" stroke-width="0.3">
+    <g data-part-id="trace"><path id="left" d="M1 10L10 10"/><path id="right" d="M11 10L20 10"/></g>
+  </g>
+</svg>

@@ -1,0 +1,37 @@
+{
+  "title": "Breach Cathedral: Agent",
+  "out": ".sketch-output/finalize/agent",
+  "edition": 1,
+  "printTitle": "Plenipotentiary {version} {hash}",
+  "params": {
+    "slogan": "This was made by a machine",
+    "sloganCount": 1,
+    "sloganSpread": true,
+    "sloganFace": "cathedral",
+    "sloganSize": 2.2,
+    "sloganPlacement": "face",
+    "sloganPen": "lettering"
+  },
+  "border": {
+    "style": "double",
+    "pen": "carbon",
+    "inset": 12,
+    "contentGap": 6
+  },
+  "defaults": {
+    "palette": "phase-garden",
+    "center": "vertical",
+    "mergeSameColor": false
+  },
+  "pieces": [
+    {
+      "name": "agent-3",
+      "title": "Plenipotentiary (Breach Cathedral: Agent, seed 3)",
+      "sketch": "sketches/breach-cathedral-agent/sketch.ts",
+      "seed": 3,
+      "params": {
+        "posterMode": "abstract"
+      }
+    }
+  ]
+}

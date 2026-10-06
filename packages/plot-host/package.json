@@ -1,0 +1,23 @@
+{
+  "name": "@hatch3d/plot-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": { "plot-sketch": "./dist/cli.js" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "node build.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@hatch3d/plot-core": "0.1.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.27.3",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.21.0"
+  }
+}

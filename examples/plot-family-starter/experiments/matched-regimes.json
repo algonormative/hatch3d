@@ -1,0 +1,10 @@
+{
+  "sources": [{ "id": "crossing", "entry": "../family/sketch.ts" }],
+  "regimes": [
+    { "id": "open", "params": { "spacing": 14, "drift": 3 } },
+    { "id": "balanced", "params": { "spacing": 10, "drift": 3 } },
+    { "id": "dense", "params": { "spacing": 6, "drift": 3 } }
+  ],
+  "seeds": [7],
+  "png": { "theme": "paper", "scale": 2 }
+}

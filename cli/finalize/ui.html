@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finalize</title>
+<style>
+:root { --bg:#ecebe6; --panel:#f7f6f2; --ink:#22282c; --muted:#6a6e6b; --rule:#d6d3ca; --accent:#c4442f; --mono:ui-monospace,Menlo,monospace; color-scheme:light }
+* { box-sizing:border-box } [hidden] { display:none !important }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif }
+header { display:flex; align-items:baseline; gap:16px; padding:14px 20px; border-bottom:1px solid var(--rule) }
+h1 { margin:0; font-size:20px; letter-spacing:-.01em } h2 { margin:0 0 8px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted) }
+.app { display:grid; grid-template-columns:200px minmax(0,1fr) 340px; min-height:calc(100vh - 54px) }
+.list { border-right:1px solid var(--rule); padding:12px; display:grid; gap:10px; align-content:start; overflow:auto; max-height:calc(100vh - 54px) }
+.piece { display:grid; gap:4px; padding:6px; border:2px solid transparent; border-radius:6px; background:var(--panel); cursor:pointer; text-align:left; font:inherit; color:inherit }
+.piece.on { border-color:var(--accent) } .piece svg { width:100%; height:auto; display:block }
+.piece small { color:var(--muted); font:11px var(--mono) }
+.piece label { display:flex; gap:6px; align-items:center; font-size:12px }
+.stage { padding:16px; display:grid; place-items:start center; overflow:auto; max-height:calc(100vh - 54px) }
+.stage { align-content:start; gap:12px }
+.toolbar { width:100%; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; font-size:12.5px; position:sticky; top:0; background:var(--bg); padding:4px 0 8px; z-index:2 }
+.chips { display:flex; flex-wrap:wrap; gap:6px } .chip { font:12px var(--mono); padding:5px 9px; border-radius:999px; border:1px solid var(--rule); background:var(--panel); cursor:pointer; color:inherit }
+.chip.on { background:var(--ink); color:#fff; border-color:var(--ink) } .chip.cmp { border-color:var(--accent); color:var(--accent) }
+.sheets { display:flex; gap:14px; align-items:start; width:max-content; max-width:none }
+.sheetbox { display:grid; gap:4px } .sheetbox small { font:11px var(--mono); color:var(--muted) }
+.sheet { width:calc(var(--zoom, 1) * min(56vw, 620px) / var(--cols, 1)); box-shadow:0 1px 0 var(--rule),0 10px 30px rgb(0 0 0/.12) }
+.sheet svg { width:100%; height:auto; display:block }
+.slogan { display:grid; gap:8px; font-size:13px } .slogan label { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center }
+.slogan input[type=text] { grid-column:1 / -1; font:inherit; padding:5px 6px } .slogan output { font:11px var(--mono); color:var(--muted); min-width:4ch; text-align:right }
+.side { border-left:1px solid var(--rule); padding:14px; display:grid; gap:18px; align-content:start; overflow:auto; max-height:calc(100vh - 54px); background:var(--panel) }
+.palettes { display:grid; gap:6px }
+.pal { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; align-items:center; padding:7px 8px; border:1px solid var(--rule); border-radius:6px; background:#fff; cursor:pointer; text-align:left; font:inherit; color:inherit }
+.pal.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) }
+.sw { display:flex; border-radius:3px; overflow:hidden; border:1px solid var(--rule) } .sw i { width:14px; height:18px }
+.pal b { font-size:13px } .pal span { grid-column:2; color:var(--muted); font-size:11.5px }
+.layers { display:grid; gap:6px }
+.layer { display:grid; grid-template-columns:28px 1fr auto; gap:8px; align-items:center; font-size:13px }
+.layer input[type=color] { width:28px; height:24px; padding:0; border:1px solid var(--rule); border-radius:4px; background:none }
+.layer .k { font:11px var(--mono); color:var(--muted) }
+.opts { display:grid; gap:8px; font-size:13px }
+.opts label { display:flex; justify-content:space-between; gap:10px; align-items:center }
+.opts input[type=number] { width:76px; font:inherit; padding:3px 5px }
+select { font:inherit }
+.actions { display:grid; gap:8px }
+button.go { font:600 14px inherit; padding:10px; border-radius:7px; border:1px solid var(--ink); background:var(--ink); color:#fff; cursor:pointer }
+button.go.alt { background:#fff; color:var(--ink) }
+button:disabled { opacity:.5; cursor:default }
+.status { font:12px var(--mono); color:var(--muted); min-height:1.4em }
+.results { display:grid; gap:12px }
+.result { border:1px solid var(--rule); border-radius:6px; background:#fff; padding:10px; display:grid; gap:6px }
+.result table { border-collapse:collapse; width:100%; font:11.5px var(--mono); font-variant-numeric:tabular-nums }
+.result td,.result th { padding:2px 4px; text-align:right; border-bottom:1px solid var(--rule) } .result td:first-child,.result th:first-child { text-align:left }
+.result a { color:var(--accent) } .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:-1px; border:1px solid var(--rule) }
+@media (max-width: 980px) { .app { grid-template-columns:1fr } .list { grid-auto-flow:column; grid-auto-columns:120px; max-height:none; border-right:0; border-bottom:1px solid var(--rule) } .side,.stage { max-height:none } }
+</style>
+</head>
+<body>
+<header><h1 id="title">Finalize</h1><span class="status" id="hdr"></span></header>
+<div class="app">
+  <nav class="list" id="list"></nav>
+  <main class="stage">
+    <div class="toolbar"><span>Variant</span><div class="chips" id="chips"></div>
+      <label>Compare with <select id="compare"><option value="">none</option></select></label>
+      <label>Zoom <input type="range" id="zoom" min="1" max="6" step="0.5" value="1"> <span id="zoomV">1×</span></label></div>
+    <div class="sheets" id="sheets"></div>
+  </main>
+  <aside class="side">
+    <section id="sloganBox" hidden><h2>Slogan</h2><div class="slogan" id="slogan"></div>
+      <div class="actions" style="margin-top:10px"><button class="go alt" id="regen">Regenerate checked pieces</button><div class="status" id="regenStatus"></div></div></section>
+    <section><h2>Palette</h2><div class="palettes" id="palettes"></div></section>
+    <section><h2>Inks for this piece</h2><div class="layers" id="layers"></div>
+      <div class="layer" style="margin-top:8px"><input type="color" id="paper"><span>Paper</span><span class="k" id="paperHex"></span></div></section>
+    <section class="opts"><h2>Placement and vpype</h2>
+      <label>Center artwork <select id="center"><option value="vertical">vertically</option><option value="both">both axes</option><option value="none">as drawn</option></select></label>
+      <label>Merge same-color pens <input type="checkbox" id="merge"></label>
+      <label>linemerge tolerance (mm) <input type="number" id="mergeTol" step="0.05" min="0"></label>
+      <label>linesimplify tolerance (mm) <input type="number" id="simpTol" step="0.01" min="0"></label>
+      <label>Drop paths shorter than (mm) <input type="number" id="minLen" step="0.1" min="0"></label>
+    </section>
+    <section class="actions">
+      <button class="go" id="one">Finalize this piece</button>
+      <button class="go alt" id="all">Finalize checked pieces</button>
+      <div class="status" id="status"></div>
+    </section>
+    <section class="results" id="results"></section>
+  </aside>
+</div>
+<script>
+let S = null, cur = null, palette = null, active = 0, compareWith = null; const variants = [], checked = new Set();
+const svgOf = (slug, v = active) => variants[v]?.svgs[slug] ?? variants[0].svgs[slug];
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function boot() {
+  S = await (await fetch('/api/stack')).json();
+  $('title').textContent = S.title; document.title = S.title;
+  palette = structuredClone(S.defaults.palette);
+  $('center').value = S.defaults.center; $('merge').checked = S.defaults.mergeSameColor;
+  $('mergeTol').value = S.defaults.vpype.mergeTolerance; $('simpTol').value = S.defaults.vpype.simplifyTolerance; $('minLen').value = S.defaults.vpype.minLength;
+  const base = { key: 'none', label: 'stack settings', params: {}, svgs: {} };
+  await Promise.all(S.pieces.map(async p => { base.svgs[p.slug] = await (await fetch(`/api/preview/${p.slug}.svg`)).text(); checked.add(p.slug); }));
+  variants.push(base);
+  cur = S.pieces[0].slug; drawSloganForm(); drawChips(); drawList(); drawPalettes(); drawPiece();
+  $('zoom').oninput = e => { $('sheets').style.setProperty('--zoom', e.target.value); $('zoomV').textContent = e.target.value + '×'; };
+  $('compare').onchange = e => { compareWith = e.target.value === '' ? null : Number(e.target.value); drawChips(); drawSheets(); };
+  const b = S.build; $('hdr').textContent = `${S.pieces.length} pieces · ${b.version} ${b.hash}${b.dirty ? '+ (uncommitted changes)' : ''}${S.printTitle ? ' · title on' : ''} · files only, nothing is sent to a plotter`;
+}
+/** Recolor by layer order: pen i (1-based layer number) takes palette ink i-1; the border takes its pen's ink. */
+function colored(slug, v = active) {
+  const piece = S.pieces.find(p => p.slug === slug);
+  const borderPen = piece.pens.findIndex(p => p.id === S.borderPen);
+  return svgOf(slug, v).replace(/(<g\b[^>]*inkscape:label="(\d+)-([^"]*)"[^>]*\bstroke=")([^"]*)(")/g, (m, a, n, name, _c, z) => {
+    const i = name === 'finishing-border' ? Math.max(0, borderPen) : name === 'lettering' ? 0 : Number(n) - 1;
+    return a + palette.inks[i % palette.inks.length] + z;
+  }).replace(/<svg\b([^>]*)>/, `<svg$1 style="background:${palette.paper}">`);
+}
+function drawList() {
+  $('list').replaceChildren(...S.pieces.map(p => {
+    const b = document.createElement('div'); b.className = 'piece' + (p.slug === cur ? ' on' : '');
+    b.innerHTML = `${colored(p.slug)}<small>${esc(p.title || p.name)} · s${p.seed}</small><label><input type="checkbox" ${checked.has(p.slug) ? 'checked' : ''}> include</label>`;
+    b.onclick = e => { if (e.target.tagName === 'INPUT') return; cur = p.slug; drawList(); drawPiece(); };
+    b.querySelector('input').onchange = e => { e.target.checked ? checked.add(p.slug) : checked.delete(p.slug); $('all').textContent = `Finalize checked pieces (${checked.size})`; };
+    return b;
+  }));
+  $('all').textContent = `Finalize checked pieces (${checked.size})`;
+}
+function drawPalettes() {
+  $('palettes').replaceChildren(...S.palettes.map(p => {
+    const b = document.createElement('button'); b.className = 'pal' + (p.id === palette.id ? ' on' : '');
+    b.innerHTML = `<span class="sw"><i style="background:${p.paper}"></i>${p.inks.slice(0, 5).map(c => `<i style="background:${c}"></i>`).join('')}</span><b>${esc(p.label)}</b><span>${esc(p.note || '')}</span>`;
+    b.onclick = () => { palette = structuredClone(p); drawPalettes(); drawPiece(); drawList(); };
+    return b;
+  }));
+}
+function drawSheets() {
+  const shown = compareWith === null ? [active] : [active, compareWith];
+  $('sheets').style.setProperty('--cols', shown.length);
+  $('sheets').innerHTML = shown.map(v => `<div class="sheetbox"><small>${esc(variants[v].label)}</small><div class="sheet">${colored(cur, v)}</div></div>`).join('');
+}
+function drawChips() {
+  $('chips').replaceChildren(...variants.map((v, i) => {
+    const b = document.createElement('button'); b.className = 'chip' + (i === active ? ' on' : '') + (i === compareWith ? ' cmp' : '');
+    b.textContent = v.label; b.onclick = () => { active = i; drawChips(); drawList(); drawSheets(); }; return b;
+  }));
+  $('compare').innerHTML = '<option value="">none</option>' + variants.map((v, i) => `<option value="${i}" ${i === compareWith ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+}
+function sloganParams() {
+  const out = {};
+  for (const c of S.sloganControls) {
+    const el = $('sl-' + c.id);
+    out[c.id] = c.type === 'toggle' ? el.checked : c.type === 'slider' ? Number(el.value) : el.value;
+  }
+  return out;
+}
+function sloganLabel(p) {
+  if (!p.sloganCount) return 'no slogan';
+  return [p.sloganSpread ? 'spread' : 'whole', p.sloganFace, p.sloganSize + 'mm', p.sloganPlacement, p.sloganCount > 1 ? '×' + p.sloganCount : '', p.sloganPen !== 'carbon' ? p.sloganPen : '',
+    p.slogan !== S.sloganControls.find(c => c.id === 'slogan')?.default ? `“${p.slogan}”` : ''].filter(Boolean).join(' · ');
+}
+function drawSloganForm() {
+  if (!S.sloganControls.length) return;
+  $('sloganBox').hidden = false;
+  $('slogan').innerHTML = S.sloganControls.map(c => {
+    const d = c.id === 'sloganCount' ? Math.max(1, c.default) : c.default;
+    if (c.type === 'text') return `<label>${esc(c.label)}<input type="text" id="sl-${c.id}" maxlength="${c.maxLength ?? 64}" value="${esc(d)}"></label>`;
+    if (c.type === 'toggle') return `<label>${esc(c.label)}<input type="checkbox" id="sl-${c.id}" ${d ? 'checked' : ''}></label>`;
+    if (c.type === 'select') return `<label>${esc(c.label)}<select id="sl-${c.id}">${c.options.map(o => `<option value="${esc(o)}" ${o === d ? 'selected' : ''}>${esc(c.optionLabels?.[o] ?? o)}</option>`).join('')}</select></label>`;
+    return `<label>${esc(c.label)}<span><input type="range" id="sl-${c.id}" min="${c.min}" max="${c.max}" step="${c.step}" value="${d}"> <output id="slo-${c.id}">${d}${c.units ?? ''}</output></span></label>`;
+  }).join('');
+  for (const c of S.sloganControls.filter(c => c.type === 'slider')) $('sl-' + c.id).oninput = e => { $('slo-' + c.id).textContent = e.target.value + (c.units ?? ''); };
+  $('regen').onclick = regenerate;
+}
+async function regenerate() {
+  const params = sloganParams();
+  const label = sloganLabel(params);
+  const slugs = [...checked];
+  if (!slugs.length) { $('regenStatus').textContent = 'Check at least one piece.'; return; }
+  $('regen').disabled = true; $('regenStatus').textContent = `Rendering ${slugs.length} piece${slugs.length > 1 ? 's' : ''}…`;
+  try {
+    const res = await fetch('/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pieces: slugs, params }) });
+    const out = await res.json(); if (!res.ok) throw new Error(out.error);
+    let i = variants.findIndex(v => v.key === out.key);
+    if (i < 0) { variants.push({ key: out.key, label, params, svgs: {} }); i = variants.length - 1; }
+    Object.assign(variants[i].svgs, out.svgs);
+    active = i; $('regenStatus').textContent = `Variant ready: ${label}. Zoom in to read it.`;
+    drawChips(); drawList(); drawSheets();
+  } catch (e) { $('regenStatus').textContent = 'Error: ' + e.message; }
+  finally { $('regen').disabled = false; }
+}
+function drawPiece() {
+  drawSheets();
+  const piece = S.pieces.find(p => p.slug === cur);
+  $('layers').replaceChildren(...piece.pens.map((pen, i) => {
+    const row = document.createElement('div'); row.className = 'layer';
+    const follows = pen.id === 'lettering';
+    const color = follows ? palette.inks[0] : palette.inks[i % palette.inks.length];
+    row.innerHTML = `<input type="color" value="${color}" ${follows ? 'disabled' : ''}><span>${i + 1} · ${esc(pen.id)} · ${pen.width} mm${follows ? ' (uses ink 1)' : ''}</span><span class="k">${color}</span>`;
+    row.querySelector('input').oninput = e => {
+      if (!palette.id.endsWith('*')) { palette.id += '*'; palette.label += ' (edited)'; }
+      palette.inks[i % palette.inks.length] = e.target.value; row.querySelector('.k').textContent = e.target.value;
+      drawPiece(); drawList(); drawPalettes();
+    };
+    return row;
+  }));
+  $('paper').value = palette.paper; $('paperHex').textContent = palette.paper;
+  $('paper').oninput = e => { palette.paper = e.target.value; $('paperHex').textContent = e.target.value; drawSheets(); drawList(); };
+}
+async function finalize(slugs) {
+  $('one').disabled = $('all').disabled = true; $('status').textContent = `Rendering and running vpype on ${slugs.length} piece${slugs.length > 1 ? 's' : ''}…`;
+  try {
+    const body = { pieces: slugs, params: variants[active].params, palette: { ...palette, id: palette.id.replace('*', '-edited') }, center: $('center').value, mergeSameColor: $('merge').checked,
+      vpype: { mergeTolerance: +$('mergeTol').value, simplifyTolerance: +$('simpTol').value, minLength: +$('minLen').value } };
+    const res = await fetch('/api/finalize', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json(); if (!res.ok) throw new Error(out.error);
+    $('status').textContent = `Done: ${out.reports.length} plot-ready file${out.reports.length > 1 ? 's' : ''} written.`;
+    $('results').replaceChildren(...out.reports.map(r => {
+      const d = document.createElement('div'); d.className = 'result';
+      d.innerHTML = `<b>${esc(r.title)} · seed ${r.seed}</b><small class="k" style="font:11px var(--mono)">${esc(variants[active].label)}</small>
+        <span class="k" style="font:11px var(--mono)">${r.pens} pen${r.pens > 1 ? 's' : ''} · about ${r.minutes} min · margins ${r.margins ? `${r.margins.top} / ${r.margins.bottom} mm` : 'n/a'} · moved ${r.offset.dy} mm</span>
+        <table><tr><th>Layer</th><th>Paths</th><th>Ink m</th><th>Travel m</th><th>Min</th></tr>${r.layers.map(l => `<tr><td><span class="dot" style="background:${l.color}"></span>${esc(l.label)}${l.passes > 1 ? ` ×${l.passes}` : ''}</td><td>${l.paths}</td><td>${(l.drawMm / 1000).toFixed(1)}</td><td>${(l.travelMm / 1000).toFixed(1)}</td><td>${l.minutes.toFixed(1)}</td></tr>`).join('')}</table>
+        <span><a href="/out/${r.url.split('/')[2]}/plot-ready.svg" target="_blank">plot-ready.svg</a> · <a href="/out/${r.url.split('/')[2]}/plot-ready.png" target="_blank">preview</a> · <a href="/out/${r.url.split('/')[2]}/report.json" target="_blank">report</a></span>
+        <span class="k" style="font:11px var(--mono);word-break:break-all">${esc(r.files.prepared)}</span>`;
+      return d;
+    }));
+  } catch (e) { $('status').textContent = 'Error: ' + e.message; }
+  finally { $('one').disabled = $('all').disabled = false; }
+}
+$('one').onclick = () => finalize([cur]);
+$('all').onclick = () => finalize([...checked]);
+boot().catch(e => { $('hdr').textContent = 'Failed to load: ' + e.message; });
+</script>
+</body>
+</html>

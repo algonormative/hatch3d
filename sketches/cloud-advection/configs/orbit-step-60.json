@@ -1,0 +1,45 @@
+{
+  "seed": 211,
+  "params": {
+    "posterMode": "abstract",
+    "cloudEnabled": true,
+    "step": 60,
+    "windX": -0.8,
+    "windY": 0.5,
+    "eddyX": 20,
+    "eddyY": 34,
+    "eddyCirculation": 30,
+    "eddyCore": 3,
+    "dispersion": 0.1,
+    "boundary": "inflow",
+    "sourceX": 43,
+    "sourceY": 26,
+    "sourceSize": 11,
+    "referenceDensity": 0.8,
+    "cloudHatchPitch": 2,
+    "cloudPen": "cyan",
+    "obscure": 0.8,
+    "coreRadius": 44,
+    "coreX": 0,
+    "coreY": 0,
+    "hatchPitch": 1.35,
+    "layout": "orbit",
+    "markStyle": "contours",
+    "sourceEnabled": false,
+    "frontAmplitude": 1.0,
+    "frontScale": 9,
+    "frontCoverage": 0.42,
+    "fillInterior": true,
+    "structureDensity": 0.6,
+    "frontSoftness": 0.12,
+    "contourMinSpacing": 0.55
+  },
+  "finishing": {
+    "border": {
+      "style": "double",
+      "pen": "carbon",
+      "inset": 12,
+      "contentGap": 0
+    }
+  }
+}

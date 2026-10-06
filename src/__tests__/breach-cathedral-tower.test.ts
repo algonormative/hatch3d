@@ -1,0 +1,155 @@
+import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
+import { renderSketch } from '../../cli/sketch/runner.ts';
+import type { Part, SketchContext } from '../../src/sketch/types.ts';
+import { drawTower, towerScene, towerSlabs } from '../../sketches/breach-cathedral-tower/geometry.ts';
+
+const entry = resolve('sketches/breach-cathedral-tower/sketch.ts');
+const PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+
+function length(parts: Part[], prefix = ''): number {
+  let total = 0;
+  for (const part of parts) if (part.id.startsWith(prefix)) for (const path of part.paths) {
+    for (let i = 1; i < path.length; i++) total += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+  }
+  return total;
+}
+
+/** A direct draw context with a seeded stream per part, for geometry-level audits. */
+function context(seed: number, params: SketchContext['params'] = {}): SketchContext {
+  return { params, seed, assets: {}, random: (id: string) => {
+    let h = (seed * 2654435761) >>> 0;
+    for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+    return () => { h = (Math.imul(h, 1664525) + 1013904223) >>> 0; return h / 2 ** 32; };
+  } };
+}
+
+describe('Breach Cathedral: Tower', () => {
+  it('replays, fills five pens with finite page-bounded paths, and stays inside the budget', async () => {
+    const first = await renderSketch({ entry, seed: 211 });
+    const replay = await renderSketch({ entry, seed: 211 });
+    const other = await renderSketch({ entry, seed: 17 });
+    expect(replay.identity).toBe(first.identity);
+    expect(replay.parts).toEqual(first.parts);
+    expect(other.identity).not.toBe(first.identity);
+    for (const result of [first, other]) {
+      expect(result.diagnostics).toEqual([]);
+      expect(result.stats.pathCount).toBeLessThanOrEqual(8000);
+      expect(result.stats.lengthMm).toBeLessThanOrEqual(90_000);
+      expect(result.stats.pathCount).toBeGreaterThan(2000);
+      for (const pen of PENS) {
+        const paths = result.parts.filter(p => p.pen === pen).flatMap(p => p.paths);
+        expect(paths.length).toBeGreaterThan(pen === 'acid' ? 10 : 60);
+      }
+      for (const part of result.parts) for (const path of part.paths) for (const p of path) {
+        expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+        expect(p.x).toBeGreaterThanOrEqual(0);
+        expect(p.x).toBeLessThanOrEqual(279.4);
+        expect(p.y).toBeGreaterThanOrEqual(0);
+        expect(p.y).toBeLessThanOrEqual(431.8);
+      }
+      // Full height: the art spans most of the sheet, unlike the short original envelope.
+      const ys = result.parts.filter(p => !p.id.startsWith('finishing')).flatMap(p => p.paths.flat().map(q => q.y));
+      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(330);
+    }
+  });
+
+  it('draws two membrane strands that slabs genuinely occlude, and that occlude slabs in turn', () => {
+    const ctx = context(211);
+    const full = drawTower(ctx);
+    const slabOnly = drawTower(ctx, { occluders: 'architecture' });
+    const open = drawTower(context(211, { occlusion: false }));
+    for (const strand of ['strand-a-', 'strand-b-']) {
+      expect(length(full, strand)).toBeGreaterThan(2000);
+      // Slab solids alone hide part of each strand.
+      expect(length(slabOnly, strand)).toBeLessThan(length(open, strand) * 0.97);
+    }
+    // Adding the membranes to the same depth pass hides further masonry.
+    expect(length(full, 'tower-')).toBeLessThan(length(slabOnly, 'tower-') * 0.97);
+    expect(full.filter(p => p.id.startsWith('strand-b-')).map(p => p.pen)).toContain('violet');
+  });
+
+  it('shears slabs out of the stack in the collapse band and leaves the default stack intact without it', () => {
+    const slabs = towerSlabs(context(211));
+    const fallen = slabs.filter(s => s.role === 'fallen');
+    expect(fallen.length).toBeGreaterThan(4);
+    for (const s of fallen) expect(Math.hypot(s.x - s.home.x, s.y - s.home.y) > 0.5 || Math.abs(s.rz) > 0.1).toBe(true);
+    expect(fallen.some(s => Math.abs(s.rz) > 0.3)).toBe(true);
+    expect(fallen.every(s => s.y < s.home.y)).toBe(true);
+    expect(slabs.filter(s => s.role === 'debris').length).toBeGreaterThan(8);
+    const calm = towerSlabs(context(211, { collapse: 0, debris: 0 }));
+    expect(calm.every(s => s.role === 'stack' || s.role === 'pier')).toBe(true);
+    expect(calm.every(s => s.rz === 0 && s.x === s.home.x && s.y === s.home.y)).toBe(true);
+  });
+
+  it('spreads the opt-in slogan over intact faces in reading order, through the same depth pass', () => {
+    const plain = towerScene(context(211));
+    expect(plain.parts.some(p => p.id.startsWith('slogan-'))).toBe(false);
+    for (const seed of [211, 17]) {
+      const scene = towerScene(context(seed, { sloganCount: 1 }));
+      const words = scene.slogans.placed;
+      expect(words.length).toBeGreaterThanOrEqual(3);
+      expect(words.map(w => w.text).join(' ')).toBe('this was made by a machine');
+      for (let i = 1; i < words.length; i++) expect(words[i].y).toBeGreaterThan(words[i - 1].y);
+      for (const w of words) expect(w.visible).toBeGreaterThanOrEqual(0.82);
+      const slabs = towerSlabs(context(seed, { sloganCount: 1 }));
+      expect(words.every(w => slabs[w.id].role === 'stack')).toBe(true);
+      expect(length(scene.parts, 'slogan-lettering')).toBeGreaterThan(20);
+      // The bands clear the chosen faces' own hatch.
+      expect(length(scene.parts, 'tower-')).toBeLessThan(length(towerScene(context(seed)).parts, 'tower-'));
+    }
+    const whole = towerScene(context(211, { sloganCount: 3, sloganSpread: false, sloganPen: 'vermilion' }));
+    expect(whole.slogans.placed.length).toBeGreaterThanOrEqual(2);
+    expect(whole.slogans.placed.every(w => w.text === 'this was made by a machine')).toBe(true);
+    expect(whole.parts.some(p => p.id === 'slogan-vermilion')).toBe(true);
+  });
+
+  it('sets the opt-in title whole on one clear intact face, on the lettering layer, away from slogan words', () => {
+    for (const seed of [211, 17]) {
+      const params = { sloganCount: 1, titleEnabled: true };
+      const scene = towerScene(context(seed, params));
+      const title = scene.slogans.title!;
+      expect(title.text).toBe('Breach Cathedral v1');
+      expect(title.visible).toBeGreaterThanOrEqual(0.92);
+      expect(scene.slogans.placed.map(w => w.id)).not.toContain(title.id);
+      expect(towerSlabs(context(seed, params))[title.id].role).toBe('stack');
+      const parts = scene.parts.filter(p => p.id.startsWith('title-'));
+      expect(parts.map(p => [p.id, p.pen])).toEqual([['title-lettering', 'lettering']]);
+      // One face: the title strokes cluster within a single slab-sized band.
+      const pts = parts[0].paths.flat();
+      expect(Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y))).toBeLessThan(10);
+      // The title goes through the shared depth pass: never longer with hidden lines on than off.
+      const open = towerScene(context(seed, { ...params, occlusion: false }));
+      expect(length(scene.parts, 'title-')).toBeLessThanOrEqual(length(open.parts, 'title-') + 1e-6);
+      // Turning the title on leaves the slogan words where they were.
+      expect(scene.slogans.placed).toEqual(towerScene(context(seed, { sloganCount: 1 })).slogans.placed);
+    }
+    // A 30-character title with a hash still lands, shrinking if a face needs it.
+    const hashed = towerScene(context(211, { titleEnabled: true, title: 'Breach Cathedral v1 2f216f9+' }));
+    expect(hashed.slogans.title?.text).toBe('Breach Cathedral v1 2f216f9+');
+    expect(towerScene(context(211)).parts.some(p => p.id.startsWith('title-'))).toBe(false);
+  });
+
+  it('keeps scratched lettering inside its knock-out bands and leaves rough 0 unchanged', () => {
+    const params = { sloganCount: 1, titleEnabled: true, title: 'Breach Cathedral v1 9ef0bdb' };
+    const clean = towerScene(context(211, params));
+    expect(towerScene(context(211, { ...params, sloganRough: 0, titleRough: 0 })).parts).toEqual(clean.parts);
+    const rough = towerScene(context(211, { ...params, sloganRough: 1, titleRough: 1 }));
+    expect(rough.slogans.title).toBeDefined();
+    const quads = [...rough.slogans.knockouts.values()].flat();
+    // Page millimetres back to depth pixels (559 × 864 over the 279.4 × 431.8 sheet).
+    const inside = (p: { x: number; y: number }) => quads.some(q => {
+      let sign = 0;
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i], b = q[(i + 1) % q.length];
+        const c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        if (Math.abs(c) < 0.05) continue;
+        if (sign === 0) sign = Math.sign(c); else if (Math.sign(c) !== sign) return false;
+      }
+      return true;
+    });
+    const marks = rough.parts.filter(p => p.id.startsWith('slogan-') || p.id.startsWith('title-')).flatMap(p => p.paths.flat());
+    expect(marks.length).toBeGreaterThan(100);
+    for (const m of marks) expect(inside({ x: m.x * 559 / 279.4, y: m.y * 864 / 431.8 })).toBe(true);
+  });
+});

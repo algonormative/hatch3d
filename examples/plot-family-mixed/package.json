@@ -1,0 +1,21 @@
+{
+  "name": "plot-family-mixed-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "inspect": "plot-sketch inspect family/sketch.ts",
+    "render": "plot-sketch render family/sketch.ts --config family/requests/default.json --out output/default",
+    "open": "plot-sketch open family/sketch.ts",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@hatch3d/plot-core": "0.1.0",
+    "@hatch3d/plot-host": "0.1.0",
+    "three": "^0.183.1",
+    "simplex-noise": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/three": "^0.183.1",
+    "typescript": "~5.9.3"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "seed": 211,
+  "params": {
+    "posterMode": "abstract",
+    "cloudEnabled": true,
+    "step": 0,
+    "windX": -0.8,
+    "windY": 0.5,
+    "eddyX": 20,
+    "eddyY": 34,
+    "eddyCirculation": 30,
+    "eddyCore": 3,
+    "dispersion": 0.1,
+    "boundary": "open",
+    "sourceX": 43,
+    "sourceY": 26,
+    "sourceSize": 11,
+    "referenceDensity": 0.8,
+    "cloudHatchPitch": 2,
+    "cloudPen": "cyan",
+    "obscure": 0.8,
+    "coreRadius": 34,
+    "coreX": 0,
+    "coreY": 0,
+    "hatchPitch": 1.35,
+    "layout": "span",
+    "markStyle": "contours",
+    "contourMinSpacing": 0
+  },
+  "finishing": {
+    "border": {
+      "style": "double",
+      "pen": "carbon",
+      "inset": 12,
+      "contentGap": 0
+    }
+  }
+}

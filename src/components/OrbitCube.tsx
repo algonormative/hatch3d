@@ -1,4 +1,5 @@
 import { useRef, useCallback } from "react";
+import { CUBE_AXIS_TIPS, CUBE_EDGES, CUBE_VERTICES, cubeAxisOpacity, cubeEdgeOpacity, projectCubePoint } from "../controls/geometry.js";
 
 export function OrbitCube({
   theta,
@@ -16,53 +17,10 @@ export function OrbitCube({
   const draggingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0, theta: 0, phi: 0 });
 
-  // 8 cube vertices at +/-1
-  const verts: [number, number, number][] = [
-    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-    [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
-  ];
-  // 12 edges
-  const edges: [number, number][] = [
-    [0, 1], [1, 2], [2, 3], [3, 0],
-    [4, 5], [5, 6], [6, 7], [7, 4],
-    [0, 4], [1, 5], [2, 6], [3, 7],
-  ];
-  // Axis tips and labels
-  const axisTips: { label: string; pos: [number, number, number] }[] = [
-    { label: "X", pos: [1.4, 0, 0] },
-    { label: "Y", pos: [0, 1.4, 0] },
-    { label: "Z", pos: [0, 0, 1.4] },
-  ];
-
-  // Rotate point: phi around X, then theta around Y
-  const rotatePoint = (x: number, y: number, z: number): [number, number, number] => {
-    // Rotate around X by phi
-    const cosP = Math.cos(phi);
-    const sinP = Math.sin(phi);
-    const y1 = y * cosP - z * sinP;
-    const z1 = y * sinP + z * cosP;
-    // Rotate around Y by theta
-    const cosT = Math.cos(theta);
-    const sinT = Math.sin(theta);
-    const x2 = x * cosT + z1 * sinT;
-    const z2 = -x * sinT + z1 * cosT;
-    return [x2, y1, z2];
-  };
-
-  const half = size / 2;
-  const scale = size * 0.28;
-
-  // Project vertices
-  const projected = verts.map(([x, y, z]) => {
-    const [rx, ry, rz] = rotatePoint(x, y, z);
-    return { x: half + rx * scale, y: half - ry * scale, z: rz };
-  });
-
-  // Project axis tips
-  const projectedAxes = axisTips.map(({ label, pos: [x, y, z] }) => {
-    const [rx, ry, rz] = rotatePoint(x, y, z);
-    return { label, x: half + rx * scale, y: half - ry * scale, z: rz };
-  });
+  const projected = CUBE_VERTICES.map(([x, y, z]) => projectCubePoint(x, y, z, theta, phi, size));
+  const projectedAxes = CUBE_AXIS_TIPS.map(({ label, pos: [x, y, z] }) => ({
+    label, ...projectCubePoint(x, y, z, theta, phi, size),
+  }));
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -117,9 +75,9 @@ export function OrbitCube({
         flexShrink: 0,
       }}
     >
-      {edges.map(([a, b], i) => {
+      {CUBE_EDGES.map(([a, b], i) => {
         const avgZ = (projected[a].z + projected[b].z) / 2;
-        const opacity = 0.25 + 0.75 * Math.max(0, Math.min(1, (avgZ + 1.5) / 3));
+        const opacity = cubeEdgeOpacity(avgZ);
         return (
           <line
             key={i}
@@ -144,7 +102,7 @@ export function OrbitCube({
           fontWeight={600}
           textAnchor="middle"
           dominantBaseline="central"
-          opacity={0.3 + 0.7 * Math.max(0, Math.min(1, (ax.z + 1.5) / 3))}
+          opacity={cubeAxisOpacity(ax.z)}
           style={{ pointerEvents: "none" }}
         >
           {ax.label}

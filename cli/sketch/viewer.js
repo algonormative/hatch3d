@@ -1,0 +1,697 @@
+import { inspectSvg, penPathCounts, reconcileControls, reconcileHiddenPens } from './viewer-state.js';
+import { mountControlPanel } from './controls.js';
+
+if (typeof document !== 'undefined') {
+  const $ = id => document.getElementById(id);
+  const emptyFinish = () => ({ pageMode: 'original', orientation: null, customWidth: null, customHeight: null,
+    margin: null, paper: null, borderStyle: '', borderPen: null, borderInset: 12, contentGap: 6, pens: {}, densityEnabled: false, maxDensity: 20, cellSize: 10 });
+  const state = { metadata: null, params: {}, seed: 0, finishing: emptyFinish(), invalidFinishing: new Map(), finishOptions: null, finishOptionsError: null,
+    result: null, hiddenPenIds: new Set(), stale: true, sequence: 0, pending: null, timer: null, imageUrl: null, pins: [], pin: null,
+    preparation: null, preparationPending: null, preparationSequence: 0, selectedArtifact: 'source' };
+
+  function selectedArtifact() {
+    return state.selectedArtifact === 'prepared' && state.preparation && !state.stale
+      ? { artifact: 'prepared', preparedKey: state.preparation.key } : {};
+  }
+
+  function updateArtifactSelection() {
+    const selection = selectedArtifact();
+    $('artifact-source').checked = selection.artifact !== 'prepared';
+    $('artifact-prepared').checked = selection.artifact === 'prepared';
+    $('artifact-prepared').disabled = state.stale || !state.preparation;
+    $('download').dataset.artifact = selection.artifact || 'source';
+    $('download').dataset.preparedKey = selection.preparedKey || '';
+  }
+
+  function clearPreparation(message = 'Prepare the current SVG to compare its derivative.') {
+    state.preparationSequence++;
+    state.preparationPending?.abort();
+    state.preparationPending = null;
+    state.preparation = null;
+    state.selectedArtifact = 'source';
+    $('preparation-panel').hidden = true;
+    $('preparation-art').removeAttribute('src');
+    $('comparison').classList.remove('has-preparation');
+    $('preparation-status').textContent = message;
+    updateArtifactSelection();
+  }
+
+  function status(message, stale = false) {
+    $('status').textContent = message;
+    $('status').classList.toggle('stale', stale);
+    $('current-label').textContent = stale ? (state.result ? 'Previous inputs · stale preview' : 'No current preview') : 'Current inputs';
+    $('pin').disabled = stale || !state.result;
+    $('download').disabled = stale || !state.result;
+    // Read-only handoff for optional local plugins; never expose a stale render identity.
+    $('download').dataset.identity = !stale && state.result ? state.result.identity : '';
+    $('download-png').disabled = stale || !state.result;
+    state.stale = stale;
+    $('preparation-run').disabled = stale || !state.result;
+    updateArtifactSelection();
+  }
+
+  function showError(message) {
+    $('error').textContent = message;
+    $('error').hidden = false;
+  }
+
+  function clearError() {
+    if (state.finishOptionsError) { showError(state.finishOptionsError); return; }
+    $('error').hidden = true;
+    $('error').textContent = '';
+  }
+
+  function markDirty(message = 'Rendering current settings…') {
+    clearTimeout(state.timer);
+    clearPreparation('Inputs changed. Prepare the new successful render.');
+    status(state.result ? `${message} Previous preview is from earlier settings.` : message, true);
+  }
+
+  async function api(path, options) {
+    const response = await fetch(path, options);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+    return payload;
+  }
+
+  function preparationOptions() {
+    const operations = { sort: $('preparation-sort').checked, allowReverse: $('preparation-reverse').checked };
+    for (const [id, key] of [['preparation-merge', 'mergeToleranceMm'], ['preparation-simplify', 'simplifyToleranceMm']]) {
+      const raw = $(id).value.trim();
+      if (!raw) continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0 || value > 10) throw new Error(`${key} must be between 0 and 10 mm.`);
+      operations[key] = value;
+      if (key === 'mergeToleranceMm') operations.mergeScope = 'named-parts';
+    }
+    return operations;
+  }
+
+  function showPreparation(preparation) {
+    state.preparation = preparation;
+    const panel = $('preparation-panel');
+    panel.hidden = false;
+    $('comparison').classList.add('has-preparation');
+    const query = new URLSearchParams({ identity: preparation.sourceIdentity, preparedKey: preparation.key });
+    $('preparation-art').src = `/api/preparation.svg?${query}`;
+    $('preparation-art').parentElement.style.setProperty('--page-ratio', preparation.report.page.width_mm / preparation.report.page.height_mm);
+    $('preparation-art').parentElement.style.setProperty('--paper', state.result.metadata.page.paper || '#ffffff');
+    const before = preparation.sourceReport.geometry.normalized;
+    const after = preparation.report.geometry.output;
+    const beforeTravel = before.pen_up_mm ?? preparation.sourceReport.travel.before_mm;
+    const afterTravel = after.pen_up_mm ?? preparation.report.travel.after_mm;
+    $('preparation-detail').textContent = `${before.paths.toLocaleString()} → ${after.paths.toLocaleString()} paths · ${Math.round(beforeTravel).toLocaleString()} → ${Math.round(afterTravel).toLocaleString()} mm pen-up travel · ${preparation.report.pens.length} pen layers`;
+    $('preparation-status').textContent = 'Prepared derivative ready. Compare both pages, then select the artifact to retain or export.';
+    updateArtifactSelection();
+  }
+
+  function finishNumber(value, label, minimum, maximum) {
+    const number = Number(value);
+    if (value === '' || !Number.isFinite(number) || number < minimum || number > maximum) {
+      throw new Error(`${label} must be between ${minimum} and ${maximum}.`);
+    }
+    return number;
+  }
+
+  function finishRequest() {
+    if (!state.metadata) return undefined;
+    if (state.invalidFinishing.size) throw new Error(state.invalidFinishing.values().next().value.message);
+    const finish = state.finishing;
+    const source = state.metadata.page;
+    const request = {};
+    if (finish.pageMode !== 'original' || finish.orientation !== null || finish.margin !== null || finish.paper !== null) {
+      let width = source.width;
+      let height = source.height;
+      if (finish.pageMode === 'custom') {
+        width = finishNumber(finish.customWidth, 'Custom width', 1, 2000);
+        height = finishNumber(finish.customHeight, 'Custom height', 1, 2000);
+      } else if (finish.pageMode !== 'original') {
+        const preset = state.finishOptions?.paperSizes?.[finish.pageMode];
+        if (!preset) throw new Error(`Unknown sheet preset: ${finish.pageMode}.`);
+        width = preset.w;
+        height = preset.h;
+      }
+      const orientation = finish.orientation || (source.width > source.height ? 'landscape' : 'portrait');
+      if (finish.pageMode !== 'custom' && orientation === 'portrait') [width, height] = [Math.min(width, height), Math.max(width, height)];
+      if (finish.pageMode !== 'custom' && orientation === 'landscape') [width, height] = [Math.max(width, height), Math.min(width, height)];
+      request.page = { ...source, width, height };
+      if (finish.margin !== null) request.page.margin = finishNumber(finish.margin, 'Margin', 0, 500);
+      if (finish.paper !== null) {
+        if (!finish.paper.trim()) throw new Error('Paper color cannot be empty.');
+        request.page.paper = finish.paper.trim();
+      }
+    }
+    if (finish.borderStyle) {
+      const sourcePens = state.metadata.pens.map(pen => pen.id);
+      const pen = finish.borderPen || sourcePens[0];
+      if (!sourcePens.includes(pen)) throw new Error(`Border pen “${pen}” is no longer in the sketch.`);
+      request.border = {
+        style: finish.borderStyle, pen,
+        inset: finishNumber(finish.borderInset, 'Border inset', 0, 500),
+        contentGap: finishNumber(finish.contentGap, 'Artwork gap inside border', 0, 500),
+      };
+    }
+    const penOverrides = {};
+    for (const [id, override] of Object.entries(finish.pens)) {
+      if (Object.keys(override).length) penOverrides[id] = override;
+    }
+    if (Object.keys(penOverrides).length) request.pens = penOverrides;
+    if (finish.densityEnabled) request.density = {
+      maxDensity: finishNumber(finish.maxDensity, 'Maximum lines per cell', 1, 100000),
+      cellSize: finishNumber(finish.cellSize, 'Cell size', 0.1, 500),
+    };
+    return Object.keys(request).length ? request : undefined;
+  }
+
+  function queueFinishingRender() {
+    try {
+      finishRequest();
+      clearError();
+      queueRender(false);
+    } catch (error) {
+      state.sequence++;
+      state.pending?.abort();
+      markDirty('Finishing settings need correction.');
+      showError(error.message || String(error));
+    }
+  }
+
+  function fillFinishChoices() {
+    const options = state.finishOptions;
+    if (!options) return;
+    const page = $('finish-page');
+    const selectedPage = state.finishing.pageMode;
+    page.replaceChildren(new Option('Original sketch', 'original'));
+    for (const [id, size] of Object.entries(options.paperSizes)) page.add(new Option(size.label, id));
+    page.add(new Option('Custom size', 'custom'));
+    page.value = selectedPage;
+    const border = $('finish-border');
+    border.replaceChildren(new Option('None', ''));
+    for (const [id, label] of Object.entries(options.borderStyles)) border.add(new Option(label, id));
+    border.value = state.finishing.borderStyle;
+    const scale = $('png-scale');
+    scale.replaceChildren(...options.pngScales.map(value => new Option(`${value}×`, String(value))));
+    scale.value = '6';
+  }
+
+  function renderFinishingControls() {
+    if (!state.metadata) return;
+    const finish = state.finishing;
+    const source = state.metadata;
+    const currentPage = $('finish-page').value;
+    if (currentPage !== finish.pageMode) $('finish-page').value = finish.pageMode;
+    $('finish-orientation').value = finish.orientation || (source.page.width > source.page.height ? 'landscape' : 'portrait');
+    $('finish-custom').hidden = finish.pageMode !== 'custom';
+    $('finish-width').value = finish.customWidth ?? source.page.width;
+    $('finish-height').value = finish.customHeight ?? source.page.height;
+    $('finish-margin').value = finish.margin ?? source.page.margin ?? '';
+    $('finish-margin').disabled = !!finish.borderStyle;
+    $('finish-paper').value = finish.paper ?? source.page.paper ?? '#ffffff';
+    $('finish-border').value = finish.borderStyle;
+    $('finish-border-spacing').hidden = !finish.borderStyle;
+    $('finish-border-inset').value = finish.borderInset;
+    $('finish-content-gap').value = finish.contentGap;
+    const borderPen = $('finish-border-pen');
+    borderPen.replaceChildren(...source.pens.map(pen => new Option(pen.id, pen.id)));
+    borderPen.value = finish.borderPen || source.pens[0]?.id || '';
+    borderPen.disabled = !finish.borderStyle;
+    $('finish-density-enabled').checked = finish.densityEnabled;
+    $('finish-density-fields').hidden = !finish.densityEnabled;
+    $('finish-density-max').value = finish.maxDensity;
+    $('finish-density-cell').value = finish.cellSize;
+    const host = $('finish-pens');
+    host.replaceChildren();
+    for (const pen of source.pens) {
+      const row = document.createElement('fieldset');
+      row.className = 'finish-pen';
+      const legend = document.createElement('legend');
+      legend.textContent = pen.id;
+      row.append(legend);
+      const fields = document.createElement('div');
+      fields.className = 'finish-pen-fields';
+      for (const [key, label, type, min, max, step] of [
+        ['color', 'Color', 'text', null, null, null],
+        ['width', 'Width mm', 'number', '0.01', '10', '0.01'],
+        ['passes', 'Passes', 'number', '1', '100', '1'],
+      ]) {
+        const wrapper = document.createElement('label');
+        wrapper.textContent = label;
+        const input = document.createElement('input');
+        input.type = type;
+        input.dataset.penId = pen.id;
+        input.dataset.penField = key;
+        input.setAttribute('aria-label', `${pen.id} ${label}`);
+        if (min) input.min = min;
+        if (max) input.max = max;
+        if (step) input.step = step;
+        const errorKey = `pen:${pen.id}:${key}`;
+        input.value = state.invalidFinishing.has(errorKey) ? state.invalidFinishing.get(errorKey).value :
+          finish.pens[pen.id]?.[key] ?? pen[key] ?? 1;
+        let lastInput = input.value;
+        const applyPenChange = () => {
+          if (input.value === lastInput) return;
+          lastInput = input.value;
+          const baseline = pen[key] ?? 1;
+          let value = input.value;
+          if (key !== 'color') {
+            try { value = finishNumber(value, `${pen.id} ${label}`, Number(min), Number(max)); }
+            catch (error) {
+              state.invalidFinishing.set(errorKey, { value: input.value, message: error.message });
+              queueFinishingRender();
+              return;
+            }
+            if (key === 'passes' && !Number.isInteger(value)) {
+              state.invalidFinishing.set(errorKey, { value: input.value, message: `${pen.id} passes must be a whole number.` });
+              queueFinishingRender();
+              return;
+            }
+          } else if (!value.trim()) {
+            state.invalidFinishing.set(errorKey, { value: input.value, message: `${pen.id} color cannot be empty.` });
+            queueFinishingRender();
+            return;
+          }
+          state.invalidFinishing.delete(errorKey);
+          const override = { ...(finish.pens[pen.id] || {}) };
+          if (value === baseline) delete override[key];
+          else override[key] = value;
+          if (Object.keys(override).length) finish.pens[pen.id] = override;
+          else delete finish.pens[pen.id];
+          queueFinishingRender();
+        };
+        input.addEventListener('input', applyPenChange);
+        input.addEventListener('change', applyPenChange);
+        wrapper.append(input);
+        fields.append(wrapper);
+      }
+      row.append(fields);
+      host.append(row);
+    }
+  }
+
+  let controlPanel = null;
+
+  function queueRender(expensive) {
+    state.sequence++;
+    markDirty(expensive ? 'Release to redraw.' : 'Redrawing…');
+    state.pending?.abort();
+    if (!expensive) scheduleRender(130);
+  }
+
+  function scheduleRender(delay) {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(render, delay);
+  }
+
+  function setPage(metadata) {
+    const frame = $('page-frame');
+    frame.style.setProperty('--page-ratio', metadata.page.width / metadata.page.height);
+    frame.style.setProperty('--paper', metadata.page.paper || '#ffffff');
+  }
+
+  function renderPaperAndInks() {
+    const result = state.result;
+    if (!result) return;
+    const { page, pens } = result.metadata;
+    $('paper-swatch').style.backgroundColor = page.paper || '#ffffff';
+    $('paper-size').textContent = `${page.width} × ${page.height} mm`;
+    const passes = pens.reduce((sum, pen) => sum + (pen.passes ?? 1), 0);
+    $('pen-count').textContent = `${pens.length} ${pens.length === 1 ? 'layer' : 'layers'} · ${passes} ${passes === 1 ? 'pass' : 'passes'}`;
+    const counts = penPathCounts(pens, result.parts);
+    const host = $('pen-layers');
+    host.replaceChildren();
+    for (const [index, pen] of pens.entries()) {
+      const row = document.createElement('label');
+      row.className = 'pen-layer';
+      row.classList.toggle('is-hidden', state.hiddenPenIds.has(pen.id));
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !state.hiddenPenIds.has(pen.id);
+      input.setAttribute('aria-label', `Show ${pen.id} pen layer`);
+      input.addEventListener('change', () => {
+        if (input.checked) state.hiddenPenIds.delete(pen.id);
+        else state.hiddenPenIds.add(pen.id);
+        row.classList.toggle('is-hidden', !input.checked);
+        showArt();
+      });
+      const swatch = document.createElement('span');
+      swatch.className = 'pen-swatch';
+      swatch.style.backgroundColor = pen.color;
+      swatch.setAttribute('aria-hidden', 'true');
+      const details = document.createElement('span');
+      details.className = 'pen-details';
+      const name = document.createElement('strong');
+      name.textContent = `${index + 1}. ${pen.id}`;
+      const spec = document.createElement('span');
+      spec.textContent = `${pen.width} mm${(pen.passes ?? 1) > 1 ? ` · ${pen.passes} passes` : ''} · ${counts.get(pen.id).toLocaleString()} plotted ${counts.get(pen.id) === 1 ? 'path' : 'paths'}`;
+      details.append(name, spec);
+      row.append(input, swatch, details);
+      host.append(row);
+    }
+  }
+
+  function referenceOverlay() {
+    const layer = $('reference-layer');
+    layer.replaceChildren();
+    const shownMetadata = state.result?.metadata || state.metadata;
+    const assets = Object.values(shownMetadata?.assets || {});
+    $('overlay').disabled = assets.length === 0;
+    layer.hidden = !$('overlay').checked || assets.length === 0;
+    if (layer.hidden) { updateInspectionNote(); return; }
+    for (const asset of assets) {
+      const img = document.createElement('img');
+      img.src = asset.dataUrl;
+      img.alt = '';
+      img.style.left = `${100 * asset.box.x / shownMetadata.page.width}%`;
+      img.style.top = `${100 * asset.box.y / shownMetadata.page.height}%`;
+      img.style.width = `${100 * asset.box.width / shownMetadata.page.width}%`;
+      img.style.height = `${100 * asset.box.height / shownMetadata.page.height}%`;
+      img.style.objectFit = asset.fit;
+      layer.append(img);
+    }
+    updateInspectionNote();
+  }
+
+  function updateInspectionNote() {
+    const active = [];
+    if ($('overlay').checked && !$('overlay').disabled) active.push('source image overlay');
+    if ($('part').value) active.push(`isolated part “${$('part').value}”`);
+    if (!$('part').value && state.result?.parts.some(part => part.diagnostic && part.paths.length && !state.hiddenPenIds.has(part.pen))) active.push('diagnostic geometry preview only, excluded from pin and export');
+    const penCount = state.result?.metadata.pens.length || 0;
+    if (state.hiddenPenIds.size && penCount) active.push(state.hiddenPenIds.size === penCount ?
+      'all pen layers hidden from this preview' : `${state.hiddenPenIds.size} of ${penCount} pen layers hidden from this preview`);
+    $('inspection-note').hidden = active.length === 0;
+    $('inspection-note').textContent = active.length ? `Inspection only: ${active.join(' and ')}. Pin and export keep every pen layer and drawing part.` : '';
+  }
+
+  function visibleSvg(result) {
+    return inspectSvg(result.svg, $('part').value, state.hiddenPenIds, result.parts, result.metadata.pens);
+  }
+
+  function showArt() {
+    if (!state.result) return;
+    const svg = visibleSvg(state.result);
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    $('art').src = url;
+    $('art').hidden = false;
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+    state.imageUrl = url;
+    updateInspectionNote();
+  }
+
+  function updateParts() {
+    const selector = $('part');
+    const selected = selector.value;
+    selector.replaceChildren(new Option('Full composition', ''));
+    for (const part of state.result.parts.filter(part => !part.diagnostic)) selector.add(new Option(part.id, part.id));
+    selector.value = state.result.parts.some(part => part.id === selected && !part.diagnostic) ? selected : '';
+  }
+
+  async function render() {
+    if (!state.metadata) return;
+    const sequence = ++state.sequence;
+    state.pending?.abort();
+    const controller = new AbortController();
+    state.pending = controller;
+    markDirty('Rendering current settings…');
+    try {
+      const finishing = finishRequest();
+      const payload = await api('/api/render', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ requestId: sequence, params: state.params, seed: state.seed, ...(finishing ? { finishing } : {}) }),
+      });
+      if (sequence !== state.sequence || payload.requestId !== sequence) return;
+      state.result = payload.result;
+      state.params = { ...payload.result.params };
+      controlPanel?.update({ params: state.params });
+      state.hiddenPenIds = reconcileHiddenPens(state.hiddenPenIds, state.result.metadata.pens);
+      updateParts();
+      renderPaperAndInks();
+      setPage(payload.result.metadata);
+      referenceOverlay();
+      showArt();
+      clearError();
+      const stats = payload.result.stats;
+      $('summary').textContent = `${stats.pathCount.toLocaleString()} paths · ${Math.round(stats.lengthMm).toLocaleString()} mm of line · ${Math.round(payload.result.durationMs)} ms drawing time`;
+      status('Current preview is ready. Full SVG is available to pin or export.');
+    } catch (error) {
+      if (sequence !== state.sequence || controller.signal.aborted) return;
+      showError(error.message || String(error));
+      status(state.result ? 'Render failed. Showing the previous inputs; pin and export are unavailable.' : 'Render failed; no preview available.', true);
+    } finally {
+      if (state.pending === controller) state.pending = null;
+    }
+  }
+
+  async function loadMetadata(sourceChanged = false) {
+    controlPanel?.cancel();
+    const sequence = ++state.sequence;
+    state.pending?.abort();
+    markDirty(sourceChanged ? 'Source changed. Checking controls…' : 'Loading sketch…');
+    try {
+      const next = await api('/api/metadata');
+      if (sequence !== state.sequence) return;
+      const previous = state.metadata;
+      const reconciliation = previous ? reconcileControls(previous.controls, state.params, next.controls) :
+        { params: Object.fromEntries(next.controls.map(control => [control.id, control.default])), incompatible: [] };
+      state.metadata = next;
+      state.params = reconciliation.params;
+      $('title').textContent = next.name;
+      document.title = `${next.name} · Sketch study`;
+      setPage(state.result?.metadata || next);
+      if (controlPanel) controlPanel.update({ controls: next.controls, navigators: next.navigators || [], macros: next.macros || [], params: state.params });
+      else controlPanel = mountControlPanel({
+        controlsHost: $('controls'), navigatorsHost: $('navigators'), controls: next.controls,
+        navigators: next.navigators || [], macros: next.macros || [], params: state.params,
+        idPrefix: 'control', resetFocus: $('reset'),
+        onChange(patch, { expensive }) {
+          Object.assign(state.params, patch);
+          $('incompatible').hidden = true;
+          queueRender(expensive);
+        },
+        onCommit() { scheduleRender(0); },
+        onError(message) { if (message) showError(message); },
+      });
+      renderFinishingControls();
+      referenceOverlay();
+      const notice = $('incompatible');
+      notice.hidden = reconciliation.incompatible.length === 0;
+      notice.textContent = reconciliation.incompatible.length ?
+        `Some values no longer fit the edited controls and were reset: ${reconciliation.incompatible.map(item => `${item.id} (${item.oldValue})`).join(', ')}.` : '';
+      clearError();
+      scheduleRender(0);
+    } catch (error) {
+      if (sequence !== state.sequence) return;
+      showError(`Could not load the edited sketch: ${error.message || error}`);
+      status(state.result ? 'Source could not load. Previous preview is stale.' : 'Sketch could not load.', true);
+    }
+  }
+
+  async function refreshPins() {
+    state.pins = await api('/api/pins');
+    const selector = $('pin-select');
+    const old = selector.value;
+    selector.replaceChildren(new Option('No comparison', ''));
+    for (const pin of state.pins) selector.add(new Option(`${pin.name}${pin.preparation ? ' · prepared' : ''} · ${new Date(pin.pinnedAt).toLocaleString()}`, pin.pinId));
+    selector.value = state.pins.some(pin => pin.pinId === old) ? old : '';
+  }
+
+  async function selectPin(id) {
+    const panel = $('pin-panel');
+    panel.hidden = !id;
+    $('comparison').classList.toggle('has-pin', Boolean(id));
+    if (!id) return;
+    const pin = state.pins.find(item => item.pinId === id);
+    if (!pin) return;
+    $('pin-art').parentElement.style.setProperty('--paper', pin.page.paper || '#ffffff');
+    $('pin-art').parentElement.style.setProperty('--page-ratio', pin.page.width / pin.page.height);
+    $('pin-art').src = `/api/pins/${encodeURIComponent(id)}/svg`;
+    $('pin-date').textContent = new Date(pin.pinnedAt).toLocaleString();
+    $('pin-detail').textContent = `${pin.page.width} × ${pin.page.height} mm${pin.finishing?.border ? ` · ${pin.finishing.border.style} border` : ''} · Seed ${pin.seed} · ${pin.preparation ? `prepared ${pin.stats.pathCount.toLocaleString()} paths from ${pin.canonicalStats.pathCount.toLocaleString()} source paths` : `${pin.stats.pathCount.toLocaleString()} paths`} · ${Object.keys(pin.params).length} saved controls`;
+  }
+
+  async function loadFinishingOptions() {
+    try {
+      state.finishOptions = await api('/api/finishing-options');
+      state.finishOptionsError = null;
+      $('preparation').hidden = !state.finishOptions.preparationEnabled;
+      fillFinishChoices();
+      renderFinishingControls();
+    } catch (error) {
+      state.finishOptionsError = `Could not load finishing choices: ${error.message || error}`;
+      showError(state.finishOptionsError);
+    }
+  }
+
+  function bindFinish(id, field, event = 'change', convert = value => value) {
+    $(id).addEventListener(event, () => {
+      state.finishing[field] = convert($(id).value);
+      renderFinishingControls();
+      queueFinishingRender();
+    });
+  }
+
+  $('finish-page').addEventListener('change', () => {
+    const finish = state.finishing;
+    finish.pageMode = $('finish-page').value;
+    if (finish.pageMode === 'original') finish.orientation = null;
+    if (finish.pageMode === 'custom') {
+      const width = Number(finish.customWidth ?? state.metadata?.page.width);
+      const height = Number(finish.customHeight ?? state.metadata?.page.height);
+      const orientation = finish.orientation || (state.metadata.page.width > state.metadata.page.height ? 'landscape' : 'portrait');
+      finish.customWidth = orientation === 'portrait' ? Math.min(width, height) : Math.max(width, height);
+      finish.customHeight = orientation === 'portrait' ? Math.max(width, height) : Math.min(width, height);
+    }
+    renderFinishingControls();
+    queueFinishingRender();
+  });
+  $('finish-orientation').addEventListener('change', () => {
+    state.finishing.orientation = $('finish-orientation').value;
+    if (state.finishing.pageMode === 'custom') {
+      const width = Number(state.finishing.customWidth ?? state.metadata?.page.width);
+      const height = Number(state.finishing.customHeight ?? state.metadata?.page.height);
+      if (Number.isFinite(width) && Number.isFinite(height)) {
+        state.finishing.customWidth = state.finishing.orientation === 'portrait' ? Math.min(width, height) : Math.max(width, height);
+        state.finishing.customHeight = state.finishing.orientation === 'portrait' ? Math.max(width, height) : Math.min(width, height);
+        renderFinishingControls();
+      }
+    }
+    queueFinishingRender();
+  });
+  for (const [id, field] of [['finish-width', 'customWidth'], ['finish-height', 'customHeight'],
+    ['finish-margin', 'margin'], ['finish-paper', 'paper'], ['finish-border-inset', 'borderInset'], ['finish-content-gap', 'contentGap'],
+    ['finish-density-max', 'maxDensity'], ['finish-density-cell', 'cellSize']]) {
+    const update = () => {
+      const authored = field === 'margin' ? state.metadata?.page.margin : field === 'paper' ? (state.metadata?.page.paper ?? '#ffffff') : undefined;
+      const value = (field === 'margin' || field === 'paper') && ($(id).value === '' || $(id).value === String(authored ?? '')) ?
+        null : $(id).value;
+      if (state.finishing[field] === value) return;
+      state.finishing[field] = value;
+      if (field === 'customWidth' || field === 'customHeight') {
+        const width = Number(state.finishing.customWidth ?? state.metadata?.page.width);
+        const height = Number(state.finishing.customHeight ?? state.metadata?.page.height);
+        if (width > 0 && height > 0 && width !== height) {
+          state.finishing.orientation = width > height ? 'landscape' : 'portrait';
+          $('finish-orientation').value = state.finishing.orientation;
+        }
+      }
+      queueFinishingRender();
+    };
+    $(id).addEventListener('input', update);
+    $(id).addEventListener('change', update);
+  }
+  bindFinish('finish-border', 'borderStyle');
+  bindFinish('finish-border-pen', 'borderPen');
+  $('finish-density-enabled').addEventListener('change', () => {
+    state.finishing.densityEnabled = $('finish-density-enabled').checked;
+    renderFinishingControls();
+    queueFinishingRender();
+  });
+  $('finish-reset').addEventListener('click', () => {
+    state.finishing = emptyFinish();
+    state.invalidFinishing.clear();
+    renderFinishingControls();
+    queueFinishingRender();
+  });
+
+  for (const id of ['preparation-sort', 'preparation-reverse', 'preparation-merge', 'preparation-simplify']) {
+    $(id).addEventListener('input', () => clearPreparation('Preparation settings changed. Run preparation again before selecting its derivative.'));
+    $(id).addEventListener('change', () => clearPreparation('Preparation settings changed. Run preparation again before selecting its derivative.'));
+  }
+  $('artifact-source').addEventListener('change', () => {
+    state.selectedArtifact = 'source';
+    updateArtifactSelection();
+  });
+  $('artifact-prepared').addEventListener('change', () => {
+    if (state.stale || !state.preparation) return;
+    state.selectedArtifact = 'prepared';
+    updateArtifactSelection();
+  });
+  $('preparation-run').addEventListener('click', async () => {
+    if (state.stale || !state.result) return;
+    let operations;
+    try { operations = preparationOptions(); }
+    catch (error) { showError(error.message || String(error)); return; }
+    clearPreparation('Preparing the current full SVG…');
+    const sequence = state.sequence;
+    const serial = state.preparationSequence;
+    const result = state.result;
+    const controller = new AbortController();
+    state.preparationPending = controller;
+    $('preparation-run').disabled = true;
+    try {
+      const payload = await api('/api/preparation', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ identity: result.identity, operations }) });
+      if (sequence !== state.sequence || serial !== state.preparationSequence || state.stale || result !== state.result ||
+          JSON.stringify(operations) !== JSON.stringify(preparationOptions())) return;
+      showPreparation(payload.preparation);
+      clearError();
+    } catch (error) {
+      if (sequence === state.sequence && serial === state.preparationSequence && !controller.signal.aborted) {
+        $('preparation-status').textContent = error.message || String(error);
+        showError(error.message || String(error));
+      }
+    } finally {
+      if (state.preparationPending === controller) state.preparationPending = null;
+      $('preparation-run').disabled = state.stale || !state.result;
+    }
+  });
+
+  $('overlay').addEventListener('change', referenceOverlay);
+  $('part').addEventListener('change', showArt);
+  $('pin-select').addEventListener('change', event => selectPin(event.target.value));
+  $('reset').addEventListener('click', () => controlPanel?.reset());
+  $('reseed').addEventListener('click', () => {
+    state.seed = Math.floor(Math.random() * 0x7fffffff);
+    $('seed').value = state.seed;
+    queueRender(false);
+  });
+  $('seed').addEventListener('change', () => {
+    const seed = Number($('seed').value);
+    if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0x7fffffff) {
+      $('seed').value = state.seed;
+      showError('Seed must be a whole number between 0 and 2147483647.');
+      return;
+    }
+    if (seed !== state.seed) { state.seed = seed; queueRender(false); }
+  });
+  $('download').addEventListener('click', () => {
+    if (state.stale || !state.result) return;
+    const anchor = document.createElement('a');
+    const selection = selectedArtifact();
+    anchor.href = `/api/export.svg?${new URLSearchParams({ identity: state.result.identity, ...selection })}`;
+    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}${selection.artifact === 'prepared' ? '-prepared' : ''}.svg`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  });
+  $('download-png').addEventListener('click', () => {
+    if (state.stale || !state.result) return;
+    const anchor = document.createElement('a');
+    const selection = selectedArtifact();
+    const query = new URLSearchParams({ identity: state.result.identity, theme: $('png-theme').value, scale: $('png-scale').value || '6', ...selection });
+    anchor.href = `/api/export.png?${query}`;
+    anchor.download = `${state.result.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'sketch'}${selection.artifact === 'prepared' ? '-prepared' : ''}.png`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  });
+  $('pin').addEventListener('click', async () => {
+    if (state.stale || !state.result) return;
+    const sequence = state.sequence;
+    const identity = state.result.identity;
+    $('pin').disabled = true;
+    try {
+      const saved = await api('/api/pins', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ identity, ...selectedArtifact() }) });
+      await refreshPins();
+      $('pin-select').value = saved.pinId;
+      selectPin(saved.pinId);
+      if (state.sequence === sequence && !state.stale && state.result?.identity === identity) status('Pinned this exact full SVG and settings.');
+    } catch (error) { showError(error.message || String(error)); }
+    finally { $('pin').disabled = state.stale; }
+  });
+  const events = new EventSource('/api/events');
+  events.addEventListener('source-change', () => loadMetadata(true));
+  loadFinishingOptions();
+  loadMetadata();
+  refreshPins().catch(error => showError(`Could not load pins: ${error.message || error}`));
+}
