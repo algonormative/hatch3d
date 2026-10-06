@@ -220,17 +220,21 @@ export type HelixMode = 'world' | 'apart' | 'torn';
 
 /** The helix as a vertical column in the nave: on the line through the point, or set off to one side. */
 function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMode): Strand[] {
+  // The column's page offset from the point: torn stands well off to one side, where the pull can
+  // reach its ends without swallowing its middle; apart grazes the disc's edge, so the event horizon
+  // still reads at first glance with the helix wrapped across one side of it.
+  const offset = mode === 'torn' ? -64 : mode === 'apart' ? 15 + 18 * n(ctx, 'core', 0.5, 0, 1) : 0;
   let x = 0;
-  if (mode === 'torn') {
-    // Off to one side, where the pull can reach its ends without swallowing its middle.
-    const ndc = new THREE.Vector3((SINGULARITY.x - 64) / TABLOID_PAGE.width * 2 - 1, -(SINGULARITY.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
+  if (offset !== 0) {
+    const ndc = new THREE.Vector3((SINGULARITY.x + offset) / TABLOID_PAGE.width * 2 - 1, -(SINGULARITY.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
     const dir = ndc.sub(view.position).normalize();
     x = view.position.x + dir.x * (36 / -dir.z);
   }
+  const slim = mode === 'apart' ? 0.78 : 1;
   return helixStrands({ ...ctx, params: { helixTurns: 2.4, ...ctx.params } }).map(s => ({
     ...s, x, y: 0, z: -30, y0: -0.2 + (s.id === 'b' ? 0.6 : 0), y1: 21 - (s.id === 'b' ? 1.4 : 0),
-    radius: n(ctx, 'helixRadius', 1.9, 1, 3.4) * (s.id === 'b' ? 0.94 : 1), depth: 1,
-    width: n(ctx, 'shellWidth', 0.7, 0.4, 1.8) * (s.id === 'b' ? 0.9 : 1), swell: 0,
+    radius: n(ctx, 'helixRadius', 1.9, 1, 3.4) * slim * (s.id === 'b' ? 0.94 : 1), depth: 1,
+    width: n(ctx, 'shellWidth', 0.7, 0.4, 1.8) * slim * (s.id === 'b' ? 0.9 : 1), swell: 0,
   }));
 }
 
