@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { finalizePiece, parseStat, previewPiece, placementOffset, readLayers, resolveOptions, restoreLayerMetadata, type Stack } from '../../cli/finalize.ts';
+import { finalizePiece, parseStat, previewPiece, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
 
 const page = { width: 279.4, height: 431.8, margin: 18 };
 const border = { style: 'double', pen: 'carbon', inset: 12, contentGap: 6 };
@@ -23,11 +23,21 @@ describe('finalize placement and pen plan', () => {
     expect(placementOffset(layers, page, { out: '', pieces: [], border } as Stack, 'none').dy).toBe(0);
   });
 
-  it('restores label, pen id and passes onto the matching vpype layer only', () => {
-    const prepared = '<g fill="none" inkscape:groupmode="layer" stroke="#111" id="layer1" inkscape:label="1"><g fill="none" inkscape:groupmode="layer" stroke="#222" id="layer2" inkscape:label="2">';
-    const out = restoreLayerMetadata(prepared, new Map([[1, { label: '1-carbon', penId: 'carbon', passes: 1 }], [2, { label: '2-ultramarine', penId: 'ultramarine', passes: 2 }]]));
-    expect(out).toContain('stroke="#111" id="layer1" inkscape:label="1-carbon" data-pen-id="carbon" data-passes="1"');
-    expect(out).toContain('stroke="#222" id="layer2" inkscape:label="2-ultramarine" data-pen-id="ultramarine" data-passes="2"');
+  it('re-emits vpype output in the sketch grammar with the source layer tags, in millimetres', () => {
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="279.4mm" height="431.8mm" viewBox="0 0 279.4 431.8">'
+      + '<g inkscape:groupmode="layer" inkscape:label="1-carbon" data-pen-id="carbon" data-passes="1" fill="none" stroke="#22282c" stroke-width="0.25"><g data-part-id="a"><path d="M0,0L1,1"/></g></g>'
+      + '<g inkscape:groupmode="layer" inkscape:label="2-ultramarine" data-pen-id="ultramarine" data-passes="2" fill="none" stroke="#3c49aa" stroke-width="0.25"></g></svg>';
+    const vpype = '<?xml version="1.0"?><svg viewBox="0 0 1056 1632"><metadata/><defs/>'
+      + '<g fill="none" inkscape:groupmode="layer" stroke="#111" style="display:inline" id="layer1" inkscape:label="1"><polyline points="0,0 96,96"/><line x1="0" y1="0" x2="96" y2="0"/></g>'
+      + '<g fill="none" inkscape:groupmode="layer" stroke="#222" style="display:inline" id="layer2" inkscape:label="2"><polygon points="0,0 96,0 96,96"/></g></svg>';
+    const out = toSketchGrammar(vpype, source, new Map([[1, { label: '1-carbon', passes: 1 }], [2, { label: '2-ultramarine', passes: 2 }]]));
+    expect(out).not.toMatch(/metadata|polyline|polygon|<line|style=|px/);
+    expect(out).toContain('<svg xmlns="http://www.w3.org/2000/svg" width="279.4mm" height="431.8mm" viewBox="0 0 279.4 431.8">');
+    expect(out).toContain('inkscape:label="1-carbon" data-pen-id="carbon" data-passes="1" fill="none" stroke="#22282c"');
+    expect(out).toContain('<path d="M0,0L25.4,25.4"/>');
+    expect(out).toContain('<path d="M0,0L25.4,0"/>');
+    expect(out).toContain('<path d="M0,0L25.4,0L25.4,25.4L0,0"/>');
+    expect(out).toContain('inkscape:label="2-ultramarine" data-pen-id="ultramarine" data-passes="2"');
   });
 
   it('reads vpype stat in px and reports millimetres per layer', () => {
@@ -60,11 +70,12 @@ describe.skipIf(!hasVpype)('finalize end to end (local vpype)', () => {
     expect(report.pens).toBe(2);
     expect(report.margins!.top).toBeCloseTo(report.margins!.bottom, 2);
     const source = readLayers(readFileSync(join(process.cwd(), report.files.source), 'utf8'));
-    const prepared = readFileSync(join(process.cwd(), report.files.prepared), 'utf8');
-    for (const g of prepared.matchAll(/<g\b[^>]*stroke="([^"]+)"[^>]*inkscape:label="([^"]+)"/g)) {
-      for (const name of g[2].replace(/^\d+-/, '').split('+')) {
+    const prepared = readLayers(readFileSync(join(process.cwd(), report.files.prepared), 'utf8'));
+    expect(prepared.length).toBeGreaterThan(0);
+    for (const layer of prepared) {
+      for (const name of layer.label.replace(/^\d+-/, '').split('+')) {
         const original = source.find(l => l.label.replace(/^\d+-/, '') === name)!;
-        expect(original.color.toLowerCase(), `${name} lands on its own ink`).toBe(g[1].toLowerCase());
+        expect(original.color.toLowerCase(), `${name} lands on its own ink`).toBe(layer.color.toLowerCase());
       }
     }
     // Ink length survives preparation (linemerge connectors add a little; nothing is dropped).

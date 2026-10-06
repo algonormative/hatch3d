@@ -10,7 +10,7 @@
   "defaults": {
     "palette": "phase-garden",
     "center": "vertical",
-    "mergeSameColor": true
+    "mergeSameColor": false
   },
   "pieces": [
     {

@@ -1,7 +1,7 @@
 /**
  * Finalize a stack of sketch renders for the plotter: palette → balanced placement → vpype preparation.
  *
- *   node --import tsx cli/finalize.ts run <stack.json> [--only name,name] [--palette id]
+ *   node --import tsx cli/finalize.ts run <stack.json> [--only name,name] [--palette id] [--params '{"sloganCount":1}'] [--merge]
  *   node --import tsx cli/finalize.ts serve <stack.json> [--port 8796]
  *
  * The palette is applied through finishing (paper + pen colors), so the canonical render records it.
@@ -161,19 +161,69 @@ export function parseStat(text: string): Omit<LayerStats, 'label' | 'color' | 'p
   return out;
 }
 
-/** vpype rewrites layer groups; put back the authoritative label, pen id and pass count by layer number. */
-export function restoreLayerMetadata(prepared: string, plan: Map<number, { label: string; penId?: string; passes: number }>): string {
-  return prepared.replace(/<g\b([^>]*)id="layer(\d+)"([^>]*)>/g, (whole, a: string, n: string, b: string) => {
-    const meta = plan.get(Number(n));
-    if (!meta) return whole;
-    const rest = (a + b).replace(/\s*inkscape:label="[^"]*"/, '');
-    return `<g${rest} id="layer${n}" inkscape:label="${meta.label}"${meta.penId ? ` data-pen-id="${meta.penId}"` : ''} data-passes="${meta.passes}">`;
-  });
+/**
+ * Re-emit vpype's geometry in the sketch SVG grammar that plotter-server accepts: the canonical root tag,
+ * one canonical layer tag per layer (label, pen id, passes, stroke, width), and plain <path d> in millimetres.
+ * vpype writes px units, <line>/<polyline>/<polygon>, metadata and style attributes, which the server rejects.
+ */
+export function toSketchGrammar(vpypeSvg: string, sourceSvg: string, plan: Map<number, { label: string; penId?: string; passes: number }>): string {
+  const root = /<svg\b[^>]*>/.exec(sourceSvg)?.[0] ?? fail('Source SVG has no root');
+  const sourceTags = new Map<number, string>();
+  for (const m of sourceSvg.matchAll(/<g\b[^>]*inkscape:groupmode="layer"[^>]*>/g)) {
+    const n = Number(/inkscape:label="(\d+)-/.exec(m[0])?.[1]);
+    if (Number.isFinite(n)) sourceTags.set(n, m[0]);
+  }
+  const mm = (v: string) => String(Math.round(Number(v) * MM_PER_PX * 1000) / 1000);
+  const pairs = (points: string) => points.trim().split(/\s+/).map(pair => pair.split(',').map(mm).join(','));
+  const layers: string[] = [];
+  for (const part of vpypeSvg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1)) {
+    const n = Number(/id="layer(\d+)"/.exec(part)?.[1]);
+    const meta = plan.get(n);
+    const tag = sourceTags.get(n);
+    if (!meta || !tag) fail(`Prepared layer ${n} has no source layer`);
+    const body = part.slice(0, part.indexOf('</g>'));
+    const paths: string[] = [];
+    for (const el of body.matchAll(/<(polyline|polygon|line|path)\b([^>]*)\/?>/g)) {
+      const attr = (name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(el[2])?.[1] ?? '';
+      let pts: string[];
+      if (el[1] === 'line') pts = [`${mm(attr('x1'))},${mm(attr('y1'))}`, `${mm(attr('x2'))},${mm(attr('y2'))}`];
+      else if (el[1] === 'path') fail('Unexpected <path> in vpype output; extend toSketchGrammar before using it');
+      else { pts = pairs(attr('points')); if (el[1] === 'polygon') pts.push(pts[0]); }
+      paths.push(`<path d="M${pts.join('L')}"/>`);
+    }
+    const open = tag.replace(/inkscape:label="[^"]*"/, `inkscape:label="${meta.label}"`).replace(/data-passes="[^"]*"/, `data-passes="${meta.passes}"`);
+    layers.push(`${open}\n${paths.join('\n')}\n</g>`);
+  }
+  return `${root}\n${layers.join('\n')}\n</svg>\n`;
+}
+
+/**
+ * plotter-server's sketch queue config (format hatch3d-sketch-v1), as the viewer's upload plugin writes it:
+ * page and pens must match the prepared SVG's units and layers, which the server checks on import.
+ */
+export function serverConfig(resultPath: string, sourceSvg: string, report: PieceReport): Record<string, unknown> {
+  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as { identity: string; metadata: { name: string; page: Page; pens: (Pen & { passes?: number })[] }; params: unknown; effectiveParams?: unknown; seed: number; finishing?: unknown };
+  const partsByPen = new Map<string, string[]>();
+  for (const layer of sourceSvg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1)) {
+    const pen = /data-pen-id="([^"]*)"/.exec(layer)?.[1];
+    if (pen) partsByPen.set(pen, [...layer.matchAll(/data-part-id="([^"]*)"/g)].map(m => m[1]));
+  }
+  return {
+    format: 'hatch3d-sketch-v1', identity: result.identity, composition: 'sketch', presetName: `${report.title} · seed ${report.seed}`,
+    page: result.metadata.page, pens: result.metadata.pens,
+    layers: result.metadata.pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
+    params: result.params, ...(result.effectiveParams ? { effectiveParams: result.effectiveParams } : {}), seed: result.seed,
+    ...(result.finishing ? { finishing: result.finishing } : {}),
+    stats: { pathCount: report.layers.reduce((t, l) => t + l.paths, 0), lengthMm: Math.round(report.layers.reduce((t, l) => t + l.drawMm, 0)) },
+    preparation: { schema_version: 1, tool: 'hatch3d finalize (python vpype)', source_sha256: report.sourceSha256, prepared_sha256: report.preparedSha256 },
+  };
 }
 
 export interface PieceReport {
   name: string; title: string; seed: number; palette: string; paper: string; offset: { dx: number; dy: number };
   margins: { top: number; bottom: number } | null; layers: LayerStats[]; pens: number; minutes: number;
+  /** Same numbered layers, labels and passes as the canonical source, so plotter-server's pen-plan check can pass. */
+  serverCompatible: boolean;
   files: { source: string; sourcePng: string; prepared: string; preparedPng: string }; sourceSha256: string; preparedSha256: string;
 }
 
@@ -219,7 +269,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
     'filter', '--min-length', `${v.minLength}mm`,
     'write', '--page-size', `${page.width}mmx${page.height}mm`, preparedPath];
   vpype(args);
-  const prepared = restoreLayerMetadata(readFileSync(preparedPath, 'utf8'), plan);
+  const prepared = toSketchGrammar(readFileSync(preparedPath, 'utf8'), source, plan);
   writeFileSync(preparedPath, prepared);
   const stats = parseStat(vpype(['read', preparedPath, 'stat']));
   const layerStats: LayerStats[] = stats.map(s => {
@@ -234,10 +284,11 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   const report: PieceReport = {
     name: piece.name, title: piece.title ?? piece.name, seed: piece.seed, palette: options.palette.id, paper: options.palette.paper,
     offset: { dx, dy }, margins: after ? { top: +(after.y0 - area.y0).toFixed(2), bottom: +(area.y1 - after.y1).toFixed(2) } : null,
-    layers: layerStats, pens: layerStats.length, minutes: Math.round(minutes),
+    layers: layerStats, pens: layerStats.length, minutes: Math.round(minutes), serverCompatible: moves.length === 0,
     files: { source: relative(ROOT, sourcePath), sourcePng: relative(ROOT, join(dir, 'source', 'render.png')), prepared: relative(ROOT, preparedPath), preparedPng: relative(ROOT, join(dir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
   };
+  if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report), null, 2));
   writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
   return report;
 }
@@ -348,14 +399,15 @@ async function serve(stackPath: string, port: number) {
 async function main(argv: string[]) {
   const [command, stackPath, ...rest] = argv;
   const flag = (name: string) => { const i = rest.indexOf(`--${name}`); return i >= 0 ? rest[i + 1] : undefined; };
-  if (!stackPath || (command !== 'run' && command !== 'serve')) fail('Usage: finalize.ts <run|serve> <stack.json> [--only a,b] [--palette id] [--port 8796]');
+  if (!stackPath || (command !== 'run' && command !== 'serve')) fail('Usage: finalize.ts <run|serve> <stack.json> [--only a,b] [--palette id] [--params json] [--merge] [--port 8796]');
   if (command === 'serve') return serve(stackPath, Number(flag('port') ?? 8796));
   const stack = loadStack(stackPath);
   const only = flag('only')?.split(',').map(slug);
-  const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}) });
+  const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}), ...(rest.includes('--merge') ? { mergeSameColor: true } : {}) });
+  const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
   for (const piece of stack.pieces.filter(p => !only || only.includes(slug(p.name)))) {
-    const r = await finalizePiece(stack, piece, options);
-    console.log(JSON.stringify({ name: r.name, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, prepared: r.files.prepared }));
+    const r = await finalizePiece(stack, piece, options, overrides);
+    console.log(JSON.stringify({ name: r.name, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared }));
   }
 }
 
