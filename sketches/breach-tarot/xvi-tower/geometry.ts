@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { splitPolylineByDepth } from '../../../src/occlusion.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import {
-  helixStrands, simplify, slabGeometry, slabMatrix, slabStrokes, solid, strandPoint, strandStrokes, towerSlabs,
+  helixStrands, simplify, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, towerSlabs,
   type Ink, type Slab, type Strand,
 } from '../../breach-cathedral-tower/geometry.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
@@ -82,15 +82,98 @@ function tower(ctx: SketchContext): Slab[] {
   return out;
 }
 
-/** The helix pours up out of the opened shaft and flares above the lifted crown. */
+/** The raking light: low from the bolt's side and a little toward the eye, so faces split into values. */
+export function rakingLight(ctx: SketchContext): THREE.Vector3 {
+  const angle = n(ctx, 'lightAngle', 0.5, 0, 1);
+  return new THREE.Vector3(0.95, 0.12 + 0.5 * angle, 0.45).normalize();
+}
+
+/** Face darkness under the raking light, 0 (paper) to 1, scaled by the slab's own tone. */
+export function faceDarkness(normal: THREE.Vector3, light: THREE.Vector3, tone: number): number {
+  const lit = Math.max(0, normal.dot(light));
+  return Math.max(0, Math.min(1, (0.12 + 0.88 * (1 - lit) ** 1.3) * Math.min(1.15, 0.55 + 0.5 * tone)));
+}
+
+const MIN_PITCH = 0.072; // world units: about 0.6 mm on the sheet at the tower's depth
+
+/** Clip the line o + s·dir to |x·U| ≤ a, |x·V| ≤ b in face coordinates (dir and o given as (u, v)). */
+function clipRect(ox: number, oy: number, dx: number, dy: number, a: number, b: number): [number, number] | null {
+  let lo = -Infinity, hi = Infinity;
+  for (const [o, d, h] of [[ox, dx, a], [oy, dy, b]]) {
+    if (Math.abs(d) < 1e-12) { if (Math.abs(o) > h) return null; continue; }
+    const t0 = (-h - o) / d, t1 = (h - o) / d;
+    lo = Math.max(lo, Math.min(t0, t1)); hi = Math.min(hi, Math.max(t0, t1));
+  }
+  return hi - lo > 1e-6 ? [lo, hi] : null;
+}
+
+/**
+ * A slab drawn in the Tower card's own hatch: twelve outline edges; then on each face that sees the
+ * eye, contour rings that follow its outline inward, as many as the face is dark; and inside them a
+ * field of diagonal hatch, crossed by a second family on the darkest faces, for body.
+ */
+export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean): Stroke[] {
+  const out: Stroke[] = [];
+  const m = slabMatrix(s);
+  const rot = new THREE.Matrix4().extractRotation(m);
+  const hx = s.w / 2, hy = s.h / 2, hz = s.d / 2;
+  const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z).applyMatrix4(m);
+  const push = (ink: Ink, family: Family, ...pts: THREE.Vector3[]) => out.push({ ink, group: 'system', family, points: pts });
+  const e = 0.006;
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]];
+  push('carbon', 'edge', ...corners.map(([x, y]) => P(x * hx, y * hy, hz + e)));
+  push('carbon', 'edge', ...corners.map(([x, y]) => P(x * hx, y * hy, -hz - e)));
+  for (const [x, y] of corners.slice(0, 4)) push('carbon', 'edge', P(x * (hx + e), y * (hy + e), -hz), P(x * (hx + e), y * (hy + e), hz));
+  if (outlineOnly) return out;
+  const faces: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
+    [new THREE.Vector3(0, 0, hz), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, hy, 0)],
+    [new THREE.Vector3(0, 0, -hz), new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, hy, 0)],
+    [new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz), new THREE.Vector3(0, hy, 0)],
+    [new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, 0, hz), new THREE.Vector3(0, hy, 0)],
+    [new THREE.Vector3(0, hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz)],
+    [new THREE.Vector3(0, -hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, hz)],
+  ];
+  for (const [c0, U0, V0] of faces) {
+    const normal = c0.clone().normalize().applyMatrix4(rot);
+    const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, e);
+    if (eye.clone().sub(centre).dot(normal) <= 0) continue;
+    const a = U0.length(), b = V0.length();
+    const U = U0.clone().normalize().applyMatrix4(rot), V = V0.clone().normalize().applyMatrix4(rot);
+    const at = (u: number, v: number) => centre.clone().addScaledVector(U, u).addScaledVector(V, v);
+    const d = faceDarkness(normal, light, s.tone);
+    // Contour rings: the outline repeated inward, spaced tighter the darker the face.
+    const ring = Math.max(MIN_PITCH, 0.075 + 0.11 * (1 - d));
+    const band = Math.min(a, b) * (0.12 + 0.6 * d);
+    let t = ring;
+    for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring) {
+      push('carbon', 'hatch', at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t)));
+    }
+    // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
+    const ia = a - t, ib = b - t;
+    if (ia < 0.05 || ib < 0.05 || d < 0.32) continue;
+    const families: [number, number, Ink][] = [[0.6, Math.max(MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5), 'ultramarine']];
+    if (d > 0.62) families.push([-0.95, Math.max(MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)), 'violet']);
+    for (const [angle, pitch, ink] of families) {
+      const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx;
+      const reach = Math.hypot(ia, ib);
+      for (let k = -reach + pitch / 2; k < reach; k += pitch) {
+        const span = clipRect(nx * k, ny * k, dx, dy, ia, ib);
+        if (!span) continue;
+        push(ink, 'hatch', at(nx * k + dx * span[0], ny * k + dy * span[0]), at(nx * k + dx * span[1], ny * k + dy * span[1]));
+      }
+    }
+  }
+  return out;
+}
+
+/** The helix as the tower's focus: wound up the open shaft, mid-height, swelling at its centre. */
 function pour(ctx: SketchContext): Strand[] {
   const rise = n(ctx, 'pour', 0.5, 0, 1);
-  // Left of the bolt, which strikes the crown's right side: the pour reads clear of the band.
-  return helixStrands({ ...ctx, params: { helixTurns: 1.15, shellTwist: 0.35, ...ctx.params } }).map(s => ({
-    ...s, x: -2.2, y: 0, z: 0.6,
-    y0: CROWN - 9 + (s.id === 'b' ? 0.8 : 0), y1: CROWN + 1.5 + 2.5 * rise - (s.id === 'b' ? 1.2 : 0),
-    radius: 1.45 * (s.id === 'b' ? 0.92 : 1), swell: 0.5 + 1.1 * rise, centre: CROWN + 1 + 2 * rise,
-    width: n(ctx, 'shellWidth', 1.3, 0.4, 1.8) * (s.id === 'b' ? 0.9 : 1),
+  return helixStrands({ ...ctx, params: { helixTurns: 1.8, shellTwist: 0.4, ...ctx.params } }).map(s => ({
+    ...s, x: 0, y: 0, z: 0,
+    y0: LIFT * 0.45 + (s.id === 'b' ? 0.7 : 0), y1: CROWN - 3.4 - (s.id === 'b' ? 0.9 : 0),
+    radius: 1.35 * (s.id === 'b' ? 0.93 : 1), swell: 0.5 + 0.9 * rise, centre: (LIFT * 0.45 + CROWN - 3.4) / 2,
+    width: n(ctx, 'shellWidth', 1.1, 0.4, 1.8) * (s.id === 'b' ? 0.9 : 1),
   }));
 }
 
@@ -220,12 +303,10 @@ export function drawTower(ctx: SketchContext): Part[] {
   const strands = pour(ctx);
   const density = n(ctx, 'hatchDensity', 0.6, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
-  const beatRng = ctx.random('tower-card-rests');
-  const beats = Array.from({ length: 64 }, () => beatRng() < interruption);
-  const strokes: Stroke[] = architecture.flatMap((s, owner) => slabStrokes(s, density, beats[(s.beat * 7) % 64])
-    // The paving is drawn in outline only: it leads to the horizon without weighing on it.
-    .filter((_, k) => s.role !== 'stub' || k < 6)
-    .map((stroke, k): Stroke => ({ ink: stroke.ink, group: 'system', family: k < 6 ? 'edge' : 'hatch', points: stroke.points, owner })));
+  const light = rakingLight(ctx);
+  // The paving is drawn in outline only: it leads to the horizon without weighing on it.
+  const strokes: Stroke[] = architecture.flatMap((s, owner) => facetStrokes(s, light, view.position, s.role === 'stub')
+    .map(stroke => ({ ...stroke, owner })));
   for (const s of strands) {
     for (const stroke of strandStrokes(s, density, interruption, ctx, view)) strokes.push({ ink: stroke.ink, group: 'helix', family: 'membrane', points: stroke.points });
   }
