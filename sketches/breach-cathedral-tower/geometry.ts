@@ -10,7 +10,7 @@ import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
 export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan' | 'title';
 /** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
-type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number; family?: LineFamily; cap?: number };
+export type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number; family?: LineFamily; cap?: number };
 export type Role = 'stack' | 'pier' | 'stub' | 'fallen' | 'debris';
 export type Slab = {
   x: number; y: number; z: number; w: number; h: number; d: number;
@@ -54,7 +54,7 @@ function camera(): THREE.OrthographicCamera {
   return view;
 }
 
-function densityPitch(density: number, sparse: number, neutral: number, dense: number): number {
+export function densityPitch(density: number, sparse: number, neutral: number, dense: number): number {
   return density < 0.55
     ? sparse + (neutral - sparse) * density / 0.55
     : neutral + (dense - neutral) * (density - 0.55) / 0.45;
@@ -71,7 +71,7 @@ export function collapseBand(ctx: SketchContext): Collapse {
   return { centre: BOT + (TOP - BOT) * frac, half: step * (0.9 + 2.5 * intensity), intensity };
 }
 
-function solid(x: number, y: number, z: number, w: number, h: number, d: number, beat: number, role: Role): Slab {
+export function solid(x: number, y: number, z: number, w: number, h: number, d: number, beat: number, role: Role): Slab {
   return { x, y, z, w, h, d, rx: 0, ry: 0, rz: 0, beat, role, home: { x, y, z }, tone: 1 };
 }
 
@@ -211,18 +211,18 @@ export function towerSlabs(ctx: SketchContext): Slab[] {
   });
 }
 
-function slabMatrix(s: Slab): THREE.Matrix4 {
+export function slabMatrix(s: Slab): THREE.Matrix4 {
   return new THREE.Matrix4().compose(new THREE.Vector3(s.x, s.y, s.z),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(s.rx, s.ry, s.rz, 'XYZ')), new THREE.Vector3(1, 1, 1));
 }
 
-function slabGeometry(s: Slab): THREE.BufferGeometry {
+export function slabGeometry(s: Slab): THREE.BufferGeometry {
   const mesh = new THREE.BoxGeometry(s.w, s.h, s.d);
   mesh.applyMatrix4(slabMatrix(s));
   return mesh;
 }
 
-function slabStrokes(s: Slab, globalDensity: number, interrupt: boolean): Stroke[] {
+export function slabStrokes(s: Slab, globalDensity: number, interrupt: boolean): Stroke[] {
   const out: Stroke[] = [];
   const group: Group = s.role === 'stack' || s.role === 'pier' ? 'tower' : 'collapse';
   const m = slabMatrix(s);
@@ -422,7 +422,7 @@ function strandStrokes(s: Strand, density: number, interruption: number, ctx: Sk
   return out;
 }
 
-function clipArt(points: Point[]): Point[][] {
+export function clipArt(points: Point[]): Point[][] {
   const runs: Point[][] = [];
   let run: Point[] = [];
   const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
@@ -446,7 +446,7 @@ function clipArt(points: Point[]): Point[][] {
   return runs;
 }
 
-function simplify(points: Point[]): Point[] {
+export function simplify(points: Point[]): Point[] {
   if (points.length < 3) return points;
   const out = [points[0]];
   for (let i = 1; i < points.length - 1; i++) {

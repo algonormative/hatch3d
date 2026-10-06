@@ -37,6 +37,7 @@
     "sketches/cloud-advection/**/*.ts",
     "sketches/borrowed-orbits/**/*.ts",
     "sketches/breach-cathedral-tower/**/*.ts",
+    "sketches/breach-cathedral-agent/**/*.ts",
     "sketches/breach-cathedral-extended/**/*.ts",
     "sketches/chamber-bloom-foam/**/*.ts",
     "sketches/chamber-bloom-plonk/**/*.ts",
