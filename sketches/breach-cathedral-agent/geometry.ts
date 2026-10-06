@@ -12,11 +12,11 @@ import { clearBands, knockOut, planSlogans, sloganSettings, type SloganSurface }
  * a seated figure wound from the helix membrane, enthroned on the slab architecture, its head the
  * twin helix unwinding. Value is lit from the head, so the force shows itself as light.
  */
-export type Group = 'system' | 'throne' | 'rays' | 'figure' | 'force' | 'contour' | 'slogan';
+export type Group = 'system' | 'throne' | 'rays' | 'figure' | 'force' | 'contour' | 'slogan' | 'title';
 type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
 
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
-const GROUPS: Group[] = ['system', 'throne', 'rays', 'figure', 'force', 'contour', 'slogan'];
+const GROUPS: Group[] = ['system', 'throne', 'rays', 'figure', 'force', 'contour', 'slogan', 'title'];
 // Depth pixels: two per page millimetre, as in the Tower.
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -857,6 +857,8 @@ export function drawAgent(ctx: SketchContext): Part[] {
     });
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
+    // The print title: one line on a low, clear slab face, always on the fine lettering pen.
+    for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', points });
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
@@ -865,7 +867,7 @@ export function drawAgent(ctx: SketchContext): Part[] {
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
-      const text = stroke.group === 'slogan';
+      const text = stroke.group === 'slogan' || stroke.group === 'title';
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
       for (const clipped of pieces) {

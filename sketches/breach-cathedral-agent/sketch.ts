@@ -1,6 +1,6 @@
 import type { Control, Sketch } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, TALL_ART, composePoster, posterControls } from '../phase-garden/poster.ts';
-import { sloganControls, LETTERING_PEN } from '../breach-cathedral-tower/slogan.ts';
+import { sloganControls, titleControls, LETTERING_PEN } from '../breach-cathedral-tower/slogan.ts';
 import { drawAgent } from './geometry.ts';
 
 const lettering: Control[] = posterControls('BREACH CATHEDRAL / AGENT', '01A')
@@ -46,6 +46,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'tilt', label: 'Camera tilt', default: -7, min: -16, max: 24, step: 1, units: '°', group: 'Camera' },
     { type: 'toggle', id: 'occlusion', label: 'Hidden lines', default: true, group: 'Camera' },
     ...sloganControls(0),
+    ...titleControls(),
   ],
   draw(ctx) {
     return composePoster(ctx, drawAgent(ctx), {
