@@ -7,7 +7,8 @@ import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import {
   helixStrands, simplify, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
 } from '../../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { keepAlong, meshCoverage } from '../page.ts';
 import { facetStrokes } from '../xvi-tower/geometry.ts';
@@ -132,6 +133,26 @@ export function wall(ctx: SketchContext): Wall {
   return { slabs, z, top: 3.5, breach };
 }
 
+/** A page bitmap of glyph strokes dilated by `clear` millimetres: where no other mark may cross. */
+function glyphMask(paths: Point[][], clear: number, res = 6): (p: Point) => boolean {
+  if (!paths.length) return () => false;
+  const gw = Math.ceil(TABLOID_PAGE.width * res), gh = Math.ceil(TABLOID_PAGE.height * res);
+  const grid = new Uint8Array(gw * gh);
+  const r = Math.ceil(clear * res);
+  for (const path of paths) for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * res * 2));
+    for (let k = 0; k <= steps; k++) {
+      const cx = Math.round((a.x + (b.x - a.x) * k / steps) * res), cy = Math.round((a.y + (b.y - a.y) * k / steps) * res);
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (dx * dx + dy * dy <= r * r && x >= 0 && y >= 0 && x < gw && y < gh) grid[y * gw + x] = 1;
+      }
+    }
+  }
+  return p => { const x = Math.round(p.x * res), y = Math.round(p.y * res); return x >= 0 && y >= 0 && x < gw && y < gh && grid[y * gw + x] === 1; };
+}
+
 export function drawSun(ctx: SketchContext): Part[] {
   const view = sunCamera(ctx);
   const s = sun(ctx, view);
@@ -153,18 +174,61 @@ export function drawSun(ctx: SketchContext): Part[] {
   }
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    // The phrase on the wall's faces; faces carrying a word drop their middle hatch.
-    const surfaces: SloganSurface[] = w.slabs.map((sl, id) => ({ id, matrix: slabMatrix(sl), w: sl.w, h: sl.h, d: sl.d }))
-      .filter(f => f.w > 1.8 && f.h > 0.6);
-    const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
-      art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y } };
-    let slogans = planSlogans(ctx, surfaces, env);
-    for (let k = 1; k < 8 && slogans.placed.length === 0 && sloganSettings(ctx).count > 0; k++) slogans = planSlogans(ctx, surfaces, env, `slogan-${k}`);
-    const lettered = new Set(slogans.knockouts.keys());
-    const drawn = strokes.filter(st => !(st.owner !== undefined && lettered.has(st.owner) && st.family === 'hatch' && st.ink !== 'carbon'));
-    const pen = sloganSettings(ctx).pen as Ink;
-    for (const points of slogans.strokes) drawn.push({ ink: pen, group: 'slogan', family: 'text', points });
-    const allBands = [...slogans.knockouts.values()].flat();
+    // The phrase. Carved: alternating left and right walls row by row, each word cut into the dark
+    // hatch with a hairline of clearance. Ground: painted in the shaft of light between the walls,
+    // stretched like a road marking so it reads at this low angle, far to near.
+    const settings = sloganSettings(ctx);
+    const place = ctx.params.phrasePlace === 'carved' ? 'carved' : 'ground';
+    const textStrokes: THREE.Vector3[][] = [];
+    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const toward = s.centre.clone().sub(view.position).normalize();
+    const length = w.top / Math.tan(Math.asin(Math.max(0.05, toward.y)));
+    const groundY = (z: number) => pageOf(view, new THREE.Vector3(0, 0, z)).y;
+    const y0 = groundY(w.z + 0.8), y1 = Math.min(CARD.y1 - 0.5, groundY(Math.min(-5, w.z + length)));
+    const onGround = (p: Point): THREE.Vector3 => {
+      const ndc = new THREE.Vector3(p.x / TABLOID_PAGE.width * 2 - 1, -(p.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
+      const dir = ndc.sub(view.position);
+      return view.position.clone().addScaledVector(dir, -view.position.y / dir.y);
+    };
+    if (place === 'carved') {
+      const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
+        art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y } };
+      const courses = [...new Set(w.slabs.filter(sl => sl.h > 0.6).map(sl => Math.round(sl.y * 10) / 10))].sort((a, b) => b - a);
+      const used = new Set<number>();
+      words.forEach((word, i) => {
+        const side = i % 2 === 0 ? -1 : 1, row = courses[Math.min(courses.length - 1, Math.floor(i / 2))];
+        const candidates = w.slabs.map((sl, id) => ({ sl, id })).filter(({ sl, id }) => !used.has(id) && sl.h > 0.6 && sl.w > 1.8
+          && Math.sign(sl.x - (w.breach[0] + w.breach[1]) / 2) === side && Math.abs(sl.y - row) < 0.3);
+        const surfaces: SloganSurface[] = candidates.map(({ sl, id }) => ({ id, matrix: slabMatrix(sl), w: sl.w, h: sl.h, d: sl.d }));
+        const one = { ...ctx, params: { ...ctx.params, slogan: word, sloganSpread: false, sloganCount: 1 } };
+        for (let k = 0; k < 6; k++) {
+          const plan = planSlogans(one, surfaces, env, `carve-${i}-${k}`);
+          if (plan.placed.length) { textStrokes.push(...plan.strokes); used.add(plan.placed[0].id); break; }
+        }
+      });
+    } else {
+      const cap = settings.size + 0.4;
+      const style = { face: settings.face, height: cap };
+      words.forEach((word, i) => {
+        const target = y0 + 8 + (CARD.y1 - 12 - (y0 + 8)) * (i / Math.max(1, words.length - 1)) ** 1.15;
+        const a = onGround({ x: s.page.x, y: target });
+        const px = pageOf(view, a);
+        const sx = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(1, 0, 0))).x - px.x);
+        const sz = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(0, 0, 1))).y - px.y);
+        const width = measureStrokeText(word, style);
+        for (const path of strokeText(word, 0, 0, style)) {
+          textStrokes.push(path.map(g => new THREE.Vector3(a.x + (g.x - width / 2) / sx, 0.01, a.z + (g.y - cap / 2) / sz)));
+        }
+      });
+    }
+    // Project the lettering first: every other mark keeps a hairline clear of its strokes.
+    const glyphPaths: Point[][] = [];
+    const lettering = projectPolylinesClipped(textStrokes, view, W, H);
+    for (const line of lettering.polylines) for (const c of clipProjectedPolyline(line, W, H)) {
+      glyphPaths.push(...clipWindow(densifyProjectedPolyline(c).map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }))));
+    }
+    const onGlyph = glyphMask(glyphPaths, place === 'carved' ? 0.55 : 0.8);
+    const drawn = strokes;
     const projection = projectPolylinesClipped(drawn.map(st => st.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const add = (key: string, path: Point[], exact = false) => {
@@ -178,11 +242,12 @@ export function drawSun(ctx: SketchContext): Part[] {
     };
     for (let i = 0; i < projection.polylines.length; i++) {
       const st = drawn[projection.sourceIndices[i]];
-      const text = st.family === 'text';
-      const bands = text || allBands.length === 0 ? undefined : allBands;
-      for (const clipped of clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c])) {
-        const runs = text ? [densifyProjectedPolyline(clipped)] : splitPolylineByDepth(densifyProjectedPolyline(clipped), depth, 0.0014).visible;
-        for (const run of runs) for (const inside of clipWindow(run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y })))) add(`${st.group}-${st.ink}`, inside, text);
+      for (const clipped of clipProjectedPolyline(projection.polylines[i], W, H)) {
+        for (const run of splitPolylineByDepth(densifyProjectedPolyline(clipped), depth, 0.0014).visible) {
+          for (const inside of clipWindow(run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y })))) {
+            for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) add(`${st.group}-${st.ink}`, piece);
+          }
+        }
       }
     }
     const disc = s.radius * TABLOID_PAGE.height / 2 / (SUN_DIST * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
@@ -207,10 +272,6 @@ export function drawSun(ctx: SketchContext): Part[] {
       for (const piece of clipWindow(ring)) add('disc-vermilion', piece);
     }
     // The ground: the wall's long shadow toward the viewer, split by the shaft of light from the breach.
-    const toward = s.centre.clone().sub(view.position).normalize();
-    const length = w.top / Math.tan(Math.asin(Math.max(0.05, toward.y)));
-    const groundY = (z: number) => pageOf(view, new THREE.Vector3(0, 0, z)).y;
-    const y0 = groundY(w.z + 0.8), y1 = Math.min(CARD.y1 - 0.5, groundY(Math.min(-5, w.z + length)));
     const left = pageOf(view, new THREE.Vector3(w.breach[0], 0, w.z)), right = pageOf(view, new THREE.Vector3(w.breach[1], 0, w.z));
     // The shaft widens as it comes toward us, along lines from the sun's foot through the breach edges.
     const shaft = (p: Point) => {
@@ -219,19 +280,66 @@ export function drawSun(ctx: SketchContext): Part[] {
       return p.x > l && p.x < r;
     };
     for (let y = y0, k = 0; y < y1; y += 0.75 + 0.02 * (y - y0), k++) {
-      for (const run of keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !shaft(p), 0.25)) add(k % 4 === 0 ? 'shadow-ultramarine' : 'shadow-carbon', run);
+      for (const run of keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !shaft(p) && !onGlyph(p), 0.25)) add(k % 4 === 0 ? 'shadow-ultramarine' : 'shadow-carbon', run);
     }
-    // Paving from the shadow's edge to the foot of the card: outlines only, running toward the sun's foot.
-    for (let c = -24; c <= 24; c++) {
-      const far = pageOf(view, new THREE.Vector3(c * 1.6, 0, w.z + length)), near = pageOf(view, new THREE.Vector3(c * 1.6, 0, -2.5));
-      for (const piece of clipWindow([far, near], { ...CARD, y0: y1 + 0.6 })) add('paving-carbon', piece);
+    // The ground: a cracked desert. Dried-mud plates (a seeded Voronoi on the ground plane), each drawn
+    // as its own slightly shrunken outline so every crack is a double line; perspective does the rest.
+    const crng = ctx.random('sun-cracks');
+    const cell = 1.6 + 1.6 * n(ctx, 'cracks', 0.5, 0, 1);
+    const sites: { x: number; z: number }[] = [];
+    const zFar = w.z + 1, zNear = -2.5;
+    const cols = Math.ceil(90 / cell), rows = Math.ceil((zNear - zFar) / cell);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      sites.push({ x: -45 + (c + 0.15 + 0.7 * crng()) * cell, z: zFar + (r + 0.15 + 0.7 * crng()) * cell });
     }
-    for (let z = w.z + length + 1.5, k = 0; z < -2.5 && k < 40; z += 1.2 + 0.15 * k, k++) {
-      const y = groundY(z);
-      for (const piece of clipWindow([{ x: CARD.x0, y }, { x: CARD.x1, y }], { ...CARD, y0: y1 + 0.6 })) add('paving-carbon', piece);
+    const inShadowRow = (p: Point) => p.y >= y0 && p.y < y1 && !shaft(p);
+    for (let i = 0; i < sites.length; i++) {
+      const a = sites[i];
+      let poly: { x: number; z: number }[] = [
+        { x: a.x - cell * 2, z: a.z - cell * 2 }, { x: a.x + cell * 2, z: a.z - cell * 2 },
+        { x: a.x + cell * 2, z: a.z + cell * 2 }, { x: a.x - cell * 2, z: a.z + cell * 2 },
+      ];
+      for (let j = 0; j < sites.length && poly.length > 2; j++) {
+        const b = sites[j];
+        if (j === i || Math.abs(b.x - a.x) > cell * 2.5 || Math.abs(b.z - a.z) > cell * 2.5) continue;
+        // Keep the half-plane nearer a than b.
+        const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2, nx = b.x - a.x, nz = b.z - a.z;
+        const side = (p: { x: number; z: number }) => (p.x - mx) * nx + (p.z - mz) * nz;
+        const out: typeof poly = [];
+        for (let k = 0; k < poly.length; k++) {
+          const p = poly[k], q = poly[(k + 1) % poly.length], sp = side(p), sq = side(q);
+          if (sp <= 0) out.push(p);
+          if ((sp < 0) !== (sq < 0)) { const t = sp / (sp - sq); out.push({ x: p.x + (q.x - p.x) * t, z: p.z + (q.z - p.z) * t }); }
+        }
+        poly = out;
+      }
+      if (poly.length < 3) continue;
+      // Shrink toward the site to open the crack, then wobble each edge a little.
+      const gap = 0.07 + 0.05 * crng();
+      const ring: THREE.Vector3[] = [];
+      for (let k = 0; k < poly.length; k++) {
+        const p = poly[k], q = poly[(k + 1) % poly.length];
+        const steps = Math.max(2, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / 0.25));
+        for (let t = 0; t < steps; t++) {
+          const f = t / steps;
+          let x = p.x + (q.x - p.x) * f, z = p.z + (q.z - p.z) * f;
+          const d = Math.hypot(x - a.x, z - a.z) || 1;
+          const wob = 0.04 * Math.sin(17 * x + 11 * z + i);
+          x -= (x - a.x) / d * (gap + wob); z -= (z - a.z) / d * (gap + wob);
+          ring.push(new THREE.Vector3(x, 0, z));
+        }
+      }
+      ring.push(ring[0].clone());
+      const page = ring.map(p => pageOf(view, p));
+      const ys = page.map(p => p.y);
+      if (Math.max(...ys) - Math.min(...ys) < 1.2 || Math.min(...ys) < HORIZON_Y) continue;
+      for (const piece of clipWindow(page)) {
+        for (const run of keepAlong(piece, p => !inShadowRow(p) && !onGlyph(p), 0.2)) add('ground-carbon', run);
+      }
     }
+    for (const path of glyphPaths) add('slogan-lettering', path, true);
     const parts: Part[] = [];
-    for (const group of ['radiance', 'disc', 'rays', 'waves', 'wall', 'shadow', 'paving', 'slogan']) for (const ink of INKS) {
+    for (const group of ['radiance', 'disc', 'rays', 'waves', 'wall', 'shadow', 'ground', 'slogan']) for (const ink of INKS) {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
