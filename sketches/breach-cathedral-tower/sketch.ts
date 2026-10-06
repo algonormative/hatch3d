@@ -1,7 +1,7 @@
 import type { Control, Sketch } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, TALL_ART, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { drawTower } from './geometry.ts';
-import { sloganControls } from './slogan.ts';
+import { sloganControls, LETTERING_PEN } from './slogan.ts';
 
 const lettering: Control[] = posterControls('BREACH CATHEDRAL / TOWER', '01T')
   .map(c => c.type === 'select' && c.id === 'posterMode' ? { ...c, default: 'abstract' } : c);
@@ -15,6 +15,7 @@ const sketch: Sketch = {
     { id: 'vermilion', color: '#d04b3c', width: 0.25 },
     { id: 'acid', color: '#a5a938', width: 0.25 },
     { id: 'violet', color: '#776090', width: 0.25 },
+    LETTERING_PEN,
   ],
   controls: [
     ...lettering,

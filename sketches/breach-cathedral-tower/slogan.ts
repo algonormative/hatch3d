@@ -11,7 +11,9 @@ import { measureStrokeText, strokeText } from '../../src/sketch/stroke-text.ts';
  * onto the face and the ordinary depth pass hides it behind anything in front.
  */
 export const SLOGAN_DEFAULT = 'this was made by a machine';
-const PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+/** Lettering gets its own finer pen and layer, so it can be plotted last or with a fineliner. */
+export const LETTERING_PEN = { id: 'lettering', color: '#22282c', width: 0.13 };
+const PENS = ['lettering', 'carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
 
 export function sloganControls(count: number): Control[] {
   const g = 'Slogan';
@@ -24,7 +26,7 @@ export function sloganControls(count: number): Control[] {
     { type: 'slider', id: 'sloganSize', label: 'Slogan cap height', default: 2.2, min: 1.6, max: 3, step: 0.05, units: 'mm', group: g },
     { type: 'select', id: 'sloganPlacement', label: 'Slogan placement', default: 'face', options: ['face', 'edge'],
       optionLabels: { face: 'Painted face', edge: 'Top-edge caption' }, group: g },
-    { type: 'select', id: 'sloganPen', label: 'Slogan pen', default: 'carbon', options: PENS, group: g },
+    { type: 'select', id: 'sloganPen', label: 'Slogan pen', default: 'lettering', options: PENS, group: g },
   ];
 }
 
@@ -47,7 +49,7 @@ export function sloganSettings(ctx: SketchContext): SloganSettings {
     face: p.sloganFace === 'script' ? 'script' : 'sans',
     size: num(p.sloganSize, 2.2, 1.6, 3),
     placement: p.sloganPlacement === 'edge' ? 'edge' : 'face',
-    pen: typeof p.sloganPen === 'string' && PENS.includes(p.sloganPen) ? p.sloganPen : 'carbon',
+    pen: typeof p.sloganPen === 'string' && PENS.includes(p.sloganPen) ? p.sloganPen : 'lettering',
   };
 }
 

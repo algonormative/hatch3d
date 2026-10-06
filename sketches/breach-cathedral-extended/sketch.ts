@@ -1,6 +1,6 @@
 import type { Sketch } from '../../src/sketch/types.ts';
 import base from '../breach-cathedral/sketch.ts';
-import { sloganControls } from '../breach-cathedral-tower/slogan.ts';
+import { LETTERING_PEN, sloganControls } from '../breach-cathedral-tower/slogan.ts';
 
 /**
  * The original Breach Cathedral with opt-in full height, whole-structure fitting and spread slogans.
@@ -9,6 +9,7 @@ import { sloganControls } from '../breach-cathedral-tower/slogan.ts';
 const sketch: Sketch = {
   ...base,
   name: 'Breach Cathedral (extended)',
+  pens: [...base.pens, LETTERING_PEN],
   controls: [
     ...base.controls,
     { type: 'toggle', id: 'fullHeight', label: 'Full height (no envelope cut)', default: false, group: 'Placement' },

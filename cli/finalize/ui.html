@@ -110,7 +110,7 @@ function colored(slug, v = active) {
   const piece = S.pieces.find(p => p.slug === slug);
   const borderPen = piece.pens.findIndex(p => p.id === S.borderPen);
   return svgOf(slug, v).replace(/(<g\b[^>]*inkscape:label="(\d+)-([^"]*)"[^>]*\bstroke=")([^"]*)(")/g, (m, a, n, name, _c, z) => {
-    const i = name === 'finishing-border' ? Math.max(0, borderPen) : Number(n) - 1;
+    const i = name === 'finishing-border' ? Math.max(0, borderPen) : name === 'lettering' ? 0 : Number(n) - 1;
     return a + palette.inks[i % palette.inks.length] + z;
   }).replace(/<svg\b([^>]*)>/, `<svg$1 style="background:${palette.paper}">`);
 }
@@ -192,12 +192,13 @@ function drawPiece() {
   const piece = S.pieces.find(p => p.slug === cur);
   $('layers').replaceChildren(...piece.pens.map((pen, i) => {
     const row = document.createElement('div'); row.className = 'layer';
-    const color = palette.inks[i % palette.inks.length];
-    row.innerHTML = `<input type="color" value="${color}"><span>${i + 1} · ${esc(pen.id)}</span><span class="k">${color}</span>`;
+    const follows = pen.id === 'lettering';
+    const color = follows ? palette.inks[0] : palette.inks[i % palette.inks.length];
+    row.innerHTML = `<input type="color" value="${color}" ${follows ? 'disabled' : ''}><span>${i + 1} · ${esc(pen.id)} · ${pen.width} mm${follows ? ' (uses ink 1)' : ''}</span><span class="k">${color}</span>`;
     row.querySelector('input').oninput = e => {
       if (!palette.id.endsWith('*')) { palette.id += '*'; palette.label += ' (edited)'; }
       palette.inks[i % palette.inks.length] = e.target.value; row.querySelector('.k').textContent = e.target.value;
-      drawSheets(); drawList(); drawPalettes();
+      drawPiece(); drawList(); drawPalettes();
     };
     return row;
   }));

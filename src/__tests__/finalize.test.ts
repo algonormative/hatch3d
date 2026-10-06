@@ -56,7 +56,12 @@ describe('finalize placement and pen plan', () => {
     const piece = { name: 't', sketch: 'sketches/breach-cathedral-tower/sketch.ts', seed: 211 };
     await expect(previewPiece(stack, piece, resolveOptions(stack).palette, { sloganSzie: 2 }, stack.out)).rejects.toThrow(/no control named sloganSzie/);
     const svg = await previewPiece(stack, piece, resolveOptions(stack).palette, { sloganCount: 1 }, stack.out);
-    expect(svg).toContain('slogan');
+    // Lettering plots on its own fine layer, inked like the structure, and nowhere else.
+    const lettering = readLayers(svg).find(l => l.label.endsWith('-lettering'))!;
+    expect(lettering.attrs['stroke-width']).toBe('0.13');
+    expect(lettering.color).toBe(resolveOptions(stack).palette.inks[0]);
+    const layers = svg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1);
+    expect(layers.filter(l => /data-part-id="[^"]*slogan/.test(l)).map(l => /inkscape:label="([^"]*)"/.exec(l)![1])).toEqual([lettering.label]);
   }, 30_000);
 });
 

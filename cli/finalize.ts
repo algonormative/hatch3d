@@ -33,7 +33,10 @@ export interface FinalizeOptions {
   vpype: VpypeOptions;
 }
 export interface Stack { title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string } }
-/** A palette assigns inks by pen order (structure, body, interruption, event, joining, ...) plus a paper color. */
+/**
+ * A palette assigns inks by pen order (structure, body, interruption, event, joining, ...) plus a paper color.
+ * A 'lettering' pen is not part of that order: it takes the structure ink (inks[0]).
+ */
 export interface Palette { id: string; label: string; paper: string; inks: string[]; note?: string }
 
 export const PALETTES: Palette[] = [
@@ -95,11 +98,14 @@ export async function previewPiece(stack: Stack, piece: Piece, palette: Palette,
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
 }
 
+export const inkFor = (penId: string, index: number, palette: Palette): string =>
+  penId === 'lettering' ? palette.inks[0] : palette.inks[index % palette.inks.length];
+
 function finishingFor(stack: Stack, page: Page, pens: Pen[], palette: Palette) {
   return {
     ...(stack.border ? { border: stack.border } : {}),
     page: { width: page.width, height: page.height, margin: page.margin ?? 18, paper: palette.paper },
-    pens: Object.fromEntries(pens.map((pen, i) => [pen.id, { color: palette.inks[i % palette.inks.length] }])),
+    pens: Object.fromEntries(pens.map((pen, i) => [pen.id, { color: inkFor(pen.id, i, palette) }])),
   };
 }
 
@@ -229,7 +235,8 @@ export interface PieceReport {
 
 export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
   const { page, pens, controls } = await loadSketch(piece.sketch);
-  if (options.palette.inks.length < pens.length) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${pens.length} pens`);
+  const inked = pens.filter(p => p.id !== 'lettering').length;
+  if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
   const request = { seed: piece.seed, params: withOverrides(piece, controls, overrides), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);

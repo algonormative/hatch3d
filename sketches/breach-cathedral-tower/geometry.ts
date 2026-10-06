@@ -4,9 +4,9 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
-import { clearBands, planSlogans, type SloganPlan, type SloganSurface } from './slogan.ts';
+import { clearBands, planSlogans, sloganSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
 
-export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
+export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
 export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan';
 /** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
 type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
@@ -496,7 +496,7 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
       view, depth, width: W, height: H, bias: 0.0014, mmPerPx: pageMmPerPx,
       art: { x0: ART.x0 / MM_X, x1: ART.x1 / MM_X, y0: ART.y0 / MM_Y, y1: ART.y1 / MM_Y },
     });
-    const pen = INKS.find(ink => ink === ctx.params.sloganPen) ?? 'carbon';
+    const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
@@ -528,7 +528,7 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
       }
     }
     const parts: Part[] = [];
-    for (const group of GROUPS) for (const ink of INKS) {
+    for (const group of GROUPS) for (const ink of [...INKS, 'lettering'] as Ink[]) {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }

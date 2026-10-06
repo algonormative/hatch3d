@@ -94,7 +94,7 @@ describe('Breach Cathedral: Tower', () => {
       for (const w of words) expect(w.visible).toBeGreaterThanOrEqual(0.82);
       const slabs = towerSlabs(context(seed, { sloganCount: 1 }));
       expect(words.every(w => slabs[w.id].role === 'stack')).toBe(true);
-      expect(length(scene.parts, 'slogan-carbon')).toBeGreaterThan(20);
+      expect(length(scene.parts, 'slogan-lettering')).toBeGreaterThan(20);
       // The bands clear the chosen faces' own hatch.
       expect(length(scene.parts, 'tower-')).toBeLessThan(length(towerScene(context(seed)).parts, 'tower-'));
     }

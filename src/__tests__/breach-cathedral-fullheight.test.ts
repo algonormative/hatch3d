@@ -36,6 +36,6 @@ describe('Breach Cathedral full height', () => {
     expect(explicit.parts).toEqual(base.parts);
     expect(base.parts.some(p => p.id.startsWith('slogan-'))).toBe(false);
     const lettered = await renderSketch({ entry, seed: 17, params: { sloganCount: 1 } });
-    expect(lettered.parts.some(p => p.id === 'slogan-carbon' && p.paths.length > 10)).toBe(true);
+    expect(lettered.parts.some(p => p.id === 'slogan-lettering' && p.pen === 'lettering' && p.paths.length > 10)).toBe(true);
   });
 });

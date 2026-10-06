@@ -4,7 +4,7 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
-import { clearBands, planSlogans, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
+import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
@@ -356,8 +356,9 @@ export function drawCathedral(ctx: SketchContext): Part[] {
       view, depth, width: W, height: H, bias: 0.0014, mmPerPx: pageMmPerPx,
       art: window === ART ? { x0: ART.x0 * 2, x1: ART.x1 * 2, y0: ART.y0 * 2, y1: ART.y1 * 2 } : { x0: 0, x1: W, y0: 0, y1: H },
     });
-    const sloganInk = INKS.find(ink => ink === ctx.params.sloganPen) ?? 'carbon';
-    for (const points of slogans.strokes) strokes.push({ ink: sloganInk, points, text: true });
+    // Lettering is collected separately (text: true); its part takes the slogan pen, usually the fine 'lettering' pen.
+    const sloganPen = sloganSettings(ctx).pen;
+    for (const points of slogans.strokes) strokes.push({ ink: 'carbon', points, text: true });
     const lettering: Point[][] = [];
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<Ink, Point[][]>(INKS.map(ink => [ink, []]));
@@ -391,7 +392,7 @@ export function drawCathedral(ctx: SketchContext): Part[] {
       }
     }
     const parts: Part[] = INKS.map(ink => ({ id: `cathedral-${ink}`, pen: ink, paths: buckets.get(ink)! }));
-    if (lettering.length) parts.push({ id: `slogan-${sloganInk}`, pen: sloganInk, paths: lettering });
+    if (lettering.length) parts.push({ id: `slogan-${sloganPen}`, pen: sloganPen, paths: lettering });
     return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();
