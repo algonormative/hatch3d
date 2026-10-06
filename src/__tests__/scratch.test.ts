@@ -6,7 +6,8 @@ import type { Part, SketchContext } from '../sketch/types.ts';
 import { renderDepthBufferCPU, densifyProjectedPolyline } from '../sketch/depth-buffer.ts';
 import { projectPolylinesClipped } from '../projection.ts';
 import { splitPolylineByDepth } from '../occlusion.ts';
-import { scratchRandom, scratchRun } from '../../sketches/phase-garden/scratch.ts';
+import { letterScratchMargin, letterScratchSize, scratchLetterRun, scratchRandom, scratchRun } from '../../sketches/phase-garden/scratch.ts';
+import { CATHEDRAL_CHARSET, strokeText } from '../sketch/stroke-text.ts';
 import { towerScene } from '../../sketches/breach-cathedral-tower/geometry.ts';
 
 function context(seed: number, params: SketchContext['params'] = {}): SketchContext {
@@ -56,19 +57,30 @@ describe('Line scratch', () => {
     const rough = towerScene(context(211, { lineRough: 1 }));
     expect(towerScene(context(211, { lineRough: 1 })).parts).toEqual(rough.parts);
     expect(rough.parts).not.toEqual(clean.parts);
-    // Every scratched mark lies within 2 mm (the longest overshoot plus a re-strike) of clean visible ink:
-    // nothing hidden by the depth pass reappears elsewhere.
-    const cells = new Set<string>();
-    for (const part of art(clean.parts)) for (const path of part.paths) for (let i = 1; i < path.length; i++) {
-      const a = path[i - 1], b = path[i], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.5));
-      for (let k = 0; k <= n; k++) cells.add(`${Math.floor((a.x + (b.x - a.x) * k / n) / 2)},${Math.floor((a.y + (b.y - a.y) * k / n) / 2)}`);
+    // Every scratched mark lies near clean visible ink: at most a dropped sub-0.5 mm visible fragment,
+    // plus the longest overshoot (1.8 mm), a re-strike offset (0.3 mm) and wobble. Nothing hidden by
+    // the depth pass reappears elsewhere.
+    const segments = art(clean.parts).flatMap(p => p.paths).flatMap(path => path.slice(1).map((b, i) => [path[i], b] as const));
+    const grid = new Map<string, (typeof segments)[number][]>();
+    for (const seg of segments) {
+      const [a, b] = seg;
+      for (let gx = Math.floor(Math.min(a.x, b.x) / 4); gx <= Math.floor(Math.max(a.x, b.x) / 4); gx++)
+        for (let gy = Math.floor(Math.min(a.y, b.y) / 4); gy <= Math.floor(Math.max(a.y, b.y) / 4); gy++) {
+          const key = `${gx},${gy}`; if (!grid.has(key)) grid.set(key, []); grid.get(key)!.push(seg);
+        }
     }
-    const near = (x: number, y: number) => {
-      const cx = Math.floor(x / 2), cy = Math.floor(y / 2);
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (cells.has(`${cx + dx},${cy + dy}`)) return true;
-      return false;
+    const distance = (p: { x: number; y: number }) => {
+      let best = Infinity;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const [a, b] of grid.get(`${Math.floor(p.x / 4) + dx},${Math.floor(p.y / 4) + dy}`) ?? []) {
+        const vx = b.x - a.x, vy = b.y - a.y, l = vx * vx + vy * vy;
+        const t = l ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / l)) : 0;
+        best = Math.min(best, Math.hypot(p.x - a.x - t * vx, p.y - a.y - t * vy));
+      }
+      return best;
     };
-    for (const part of art(rough.parts)) for (const path of part.paths) for (const p of path) expect(near(p.x, p.y)).toBe(true);
+    let worst = 0;
+    for (const part of art(rough.parts)) for (const path of part.paths) for (const p of path) worst = Math.max(worst, distance(p));
+    expect(worst).toBeLessThanOrEqual(2.8);
   });
 
   it('leaves the finishing border untouched and keeps the stack piece within the path budget', async () => {
@@ -86,4 +98,49 @@ describe('Line scratch', () => {
     expect(scratched.diagnostics).toEqual([]);
     expect(scratched.stats.pathCount).toBeLessThanOrEqual(8000);
   }, 60_000);
+
+  describe('ruled lettering', () => {
+    type P = { x: number; y: number; depth: number };
+    const MM = 0.02; // a fine flat "pixel" for audits without a depth buffer
+    const env = { bias: 0.0014, mmPerPx: MM };
+    const toPx = (path: { x: number; y: number }[]): P[] => path.map(p => ({ x: p.x / MM, y: p.y / MM, depth: 0.5 }));
+    const segDist = (p: { x: number; y: number }, a: P, b: P) => {
+      const dx = b.x - a.x, dy = b.y - a.y, l = dx * dx + dy * dy;
+      const t = l ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l)) : 0;
+      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+    };
+    const scratchGlyph = (char: string, cap: number, rough: number, seed: number) =>
+      strokeText(char, 0, 0, { face: 'cathedral', height: cap }).map((path, i) =>
+        ({ clean: toPx(path), marks: scratchLetterRun(toPx(path), rough, scratchRandom(seed, `glyph-${char}`, i), env, cap) }));
+
+    it('is the slab-edge routine itself, scaled to the cap height', () => {
+      for (let seed = 0; seed < 20; seed++) for (const cap of [2.2, 3]) {
+        const run = toPx(strokeText('B', 0, 0, { face: 'cathedral', height: cap })[0]);
+        expect(scratchLetterRun(run, 0.425, scratchRandom(seed, 'x', 0), env, cap))
+          .toEqual(scratchRun(run, 'edge', 0.425, scratchRandom(seed, 'x', 0), [true, true], env, letterScratchSize(cap)));
+      }
+    });
+
+    it('keeps at least 70% of every glyph inked and draws nothing beyond its own margin (no strays or tilts)', () => {
+      let worst = 1;
+      for (const rough of [0.375, 0.425, 1]) for (let seed = 0; seed < 8; seed++) for (const char of CATHEDRAL_CHARSET) {
+        const strokes = scratchGlyph(char, 2.2, rough, seed);
+        const marks = strokes.flatMap(s => s.marks).flatMap(m => m.slice(1).map((b, i) => [m[i], b] as const));
+        const margin = letterScratchMargin(2.2, rough) / MM + 1e-6;
+        const clean = strokes.flatMap(s => s.clean.slice(1).map((b, i) => [s.clean[i], b] as const));
+        let inked = 0, total = 0;
+        for (const [a, b] of clean) {
+          const len = Math.hypot(b.x - a.x, b.y - a.y), n = Math.max(1, Math.ceil(len / 2));
+          for (let k = 0; k < n; k++) {
+            const p = { x: a.x + (b.x - a.x) * (k + 0.5) / n, y: a.y + (b.y - a.y) * (k + 0.5) / n };
+            total += len / n;
+            if (marks.some(([m0, m1]) => segDist(p, m0, m1) < 0.06 / MM)) inked += len / n;
+          }
+        }
+        if (total > 0) worst = Math.min(worst, inked / total);
+        for (const [m0] of marks) expect(Math.min(...clean.map(([a, b]) => segDist(m0, a, b)))).toBeLessThanOrEqual(margin);
+      }
+      expect(worst).toBeGreaterThanOrEqual(0.7);
+    });
+  });
 });

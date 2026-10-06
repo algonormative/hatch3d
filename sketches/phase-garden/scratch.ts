@@ -18,7 +18,7 @@ export type LineFamily = 'edge' | 'hatch' | 'membrane';
 
 export function lineRoughControls(): Control[] {
   return [
-    { type: 'slider', id: 'lineRough', label: 'Line scratch', default: 0, min: 0, max: 1, step: 0.01, group: 'Scratch' },
+    { type: 'slider', id: 'lineRough', label: 'Line scratch', default: 0, min: 0, max: 1, step: 0.005, group: 'Scratch' },
   ];
 }
 
@@ -41,7 +41,8 @@ export function scratchRandom(seed: number, stream: string, index: number): () =
 }
 
 export interface ScratchEnv {
-  depth: PackedDepthBuffer;
+  /** Shared depth buffer; without one every mark counts as visible (for flat audits only). */
+  depth?: PackedDepthBuffer;
   bias: number;
   /** Final page millimetres per depth pixel. */
   mmPerPx: number;
@@ -80,23 +81,25 @@ function dense(points: ProjectedPoint[]): ProjectedPoint[] {
 
 /** The visible runs of an added mark under the shared depth buffer. */
 function visible(env: ScratchEnv, mark: ProjectedPoint[]): ProjectedPoint[][] {
-  return splitPolylineByDepth(dense(mark), env.depth, env.bias).visible;
+  return env.depth ? splitPolylineByDepth(dense(mark), env.depth, env.bias).visible : [dense(mark)];
 }
 
 /** The leading visible part of an extension that starts at a visible point. */
 function visiblePrefix(env: ScratchEnv, mark: ProjectedPoint[]): ProjectedPoint[] {
   const pts = dense(mark);
+  const depth = env.depth;
+  if (!depth) return pts;
   let n = 0;
-  while (n < pts.length && splitPolylineByDepth([pts[n], pts[n]], env.depth, env.bias).visible.length) n++;
+  while (n < pts.length && splitPolylineByDepth([pts[n], pts[n]], depth, env.bias).visible.length) n++;
   return pts.slice(0, n);
 }
 
 /** A smooth sideways wobble of amplitude `amp` pixels, wavelengths of a few millimetres. */
-function wobble(run: ProjectedPoint[], amp: number, rng: () => number, env: ScratchEnv): ProjectedPoint[] {
+function wobble(run: ProjectedPoint[], amp: number, rng: () => number, env: ScratchEnv, scale = 1): ProjectedPoint[] {
   if (amp <= 0 || run.length < 2) return run;
   const pts = dense(run);
   const s = arclengths(pts);
-  const l1 = (3 + 4 * rng()) / env.mmPerPx, l2 = (1.2 + 1.5 * rng()) / env.mmPerPx;
+  const l1 = (3 + 4 * rng()) * scale / env.mmPerPx, l2 = (1.2 + 1.5 * rng()) * scale / env.mmPerPx;
   const p1 = rng() * 6.28, p2 = rng() * 6.28;
   return pts.map((p, i) => {
     const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
@@ -121,13 +124,14 @@ function dashes(total: number, rng: () => number, mm: number, dashMm: [number, n
 }
 
 /** The visible overshoot past one end of a line (points after the end), possibly empty. */
-function overshoot(env: ScratchEnv, line: ProjectedPoint[], end: 0 | 1, r: number, rng: () => number): ProjectedPoint[] {
+function overshoot(env: ScratchEnv, line: ProjectedPoint[], end: 0 | 1, r: number, rng: () => number, scale = 1, cap = Infinity): ProjectedPoint[] {
   if (line.length < 2 || rng() > 0.3 + 0.55 * r) return [];
   const tip = end ? line[line.length - 1] : line[0];
   const back = end ? line[Math.max(0, line.length - 4)] : line[Math.min(line.length - 1, 3)];
   const len = Math.hypot(tip.x - back.x, tip.y - back.y);
   if (len < 1e-9) return [];
-  const o = (0.4 + 1.4 * rng()) * r / env.mmPerPx;
+  const o = Math.min(cap, (0.4 + 1.4 * rng()) * r * scale) / env.mmPerPx;
+  if (o <= 0) return [];
   const ext = { x: tip.x + (tip.x - back.x) / len * o, y: tip.y + (tip.y - back.y) / len * o,
     depth: tip.depth + (tip.depth - back.depth) / len * o };
   return visiblePrefix(env, [tip, ext]).slice(1);
@@ -153,8 +157,18 @@ function corners(run: ProjectedPoint[]): ProjectedPoint[][] {
  * Scratch one visible run. `natural` says whether each end is the stroke's own end (a real corner)
  * rather than an occlusion or clip cut; only natural ends overshoot.
  */
+/**
+ * Size of the hand for a family: `scale` multiplies every absolute distance (wobble, overshoot,
+ * break and re-strike); the minimums keep a mark at least a pen width wide so it still reads.
+ */
+export interface ScratchScale {
+  scale?: number; minStrikeMm?: number; minGapMm?: number; maxOvershootMm?: number;
+  /** Strokes shorter than this (dots, ticks) never overshoot. */
+  minOvershootRunMm?: number;
+}
+
 export function scratchRun(run: ProjectedPoint[], family: LineFamily, rough: number, rng: () => number,
-  natural: [boolean, boolean], env: ScratchEnv): ProjectedPoint[][] {
+  natural: [boolean, boolean], env: ScratchEnv, size: ScratchScale = {}): ProjectedPoint[][] {
   if (rough <= 0 || run.length < 2) return [run];
   const mm = env.mmPerPx;
   const r = rough;
@@ -181,24 +195,30 @@ export function scratchRun(run: ProjectedPoint[], family: LineFamily, rough: num
     const out = dashes(s.at(-1)!, rng, mm, [4, 14], [0.3, 0.8], 0.25 * r, 0.15).map(([a, b]) => cut(w, s, a, b));
     return out.filter(p => p.length > 1);
   }
-  // Edges: each straight leg between real corners is cut separately, so every corner can overshoot.
-  // At interior corners the pen runs past and comes back (a short retrace), so an outline
-  // stays one path; open ends overshoot only when they are the stroke's own ends.
+  // Edges (and lettering, which is ruled with this same hand at its own scale): each straight leg
+  // between real corners is cut separately, so every corner can overshoot. At interior corners the
+  // pen runs past and comes back (a short retrace), so an outline stays one path; open ends
+  // overshoot only when they are the stroke's own ends. Rare pen lifts break the line.
+  const k = size.scale ?? 1;
+  const reach = total * mm < (size.minOvershootRunMm ?? 0) ? 0 : size.maxOvershootMm;
   const legs = corners(run);
   let line: ProjectedPoint[] = [];
   legs.forEach(leg => {
-    const w = wobble(leg, 0.1 * r / mm, rng, env);
+    const w = wobble(leg, 0.1 * r * k / mm, rng, env, k);
     if (!line.length) { line = w; return; }
-    const spur = overshoot(env, line, 1, r, rng);
+    const spur = overshoot(env, line, 1, r, rng, k, reach);
     line = [...line, ...spur, ...[...spur].reverse(), ...w.slice(1)];
   });
   for (const end of [0, 1] as const) {
     if (!natural[end]) continue;
-    const spur = overshoot(env, line, end, r, rng);
+    const spur = overshoot(env, line, end, r, rng, k, reach);
     line = end ? [...line, ...spur] : [...[...spur].reverse(), ...line];
   }
-  const out = [line];
-  if (total * mm > 4 && rng() < 0.4 * r) {
+  const ls = arclengths(line);
+  const gap = Math.max(size.minGapMm ?? 0, 0.35 * k), gapHi = Math.max(size.minGapMm ?? 0, 0.7 * k);
+  const out = dashes(ls.at(-1)!, rng, mm, [6 * k, 20 * k], [gap, gapHi], 0.3 * r, 0.1)
+    .map(([a, b]) => cut(line, ls, a, b)).filter(p => p.length > 1);
+  if (total * mm > 4 * k && rng() < 0.4 * r) {
     const s = arclengths(line), L = s.at(-1)!;
     const a = L * 0.5 * rng(), b = Math.min(L, a + L * (0.35 + 0.45 * rng()));
     const piece = cut(line, s, a, b);
@@ -207,7 +227,8 @@ export function scratchRun(run: ProjectedPoint[], family: LineFamily, rough: num
       const len = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
       const nx = -(p1.y - p0.y) / len, ny = (p1.x - p0.x) / len;
       const side = rng() < 0.5 ? -1 : 1;
-      const o0 = side * (0.15 + 0.15 * rng()) / mm, o1 = side * (0.15 + 0.15 * rng()) / mm;
+      const off = () => Math.max(size.minStrikeMm ?? 0, (0.15 + 0.15 * rng()) * k) / mm;
+      const o0 = side * off(), o1 = side * off();
       const strike = piece.map((p, i) => {
         const t = i / (piece.length - 1), o = o0 + (o1 - o0) * t;
         return { x: p.x + nx * o, y: p.y + ny * o, depth: p.depth };
@@ -216,4 +237,31 @@ export function scratchRun(run: ProjectedPoint[], family: LineFamily, rough: num
     }
   }
   return out;
+}
+
+/**
+ * Lettering is ruled with the edge hand itself: `scratchRun(…, 'edge', …)` with every distance
+ * scaled to the cap height, so a 2.2 mm letter gets proportionally small overshoots and wobble.
+ * At an 8 mm cap the marks match slab edges one to one. Re-strikes and pen lifts are held to at
+ * least about a pen width so they still read with the fine lettering pen.
+ */
+export const LETTER_REFERENCE_MM = 8;
+
+export function letterScratchSize(capMm: number, penMm = 0.13): ScratchScale {
+  // Overshoots stop at 3.5% of the cap (0.28 grid unit) and dots never overshoot, so an i stem
+  // never reaches its dot.
+  return { scale: capMm / LETTER_REFERENCE_MM, minStrikeMm: 1.2 * penMm, minGapMm: 1.5 * penMm,
+    maxOvershootMm: 0.035 * capMm, minOvershootRunMm: 0.3 * capMm };
+}
+
+/** How far ruled lettering marks can sit from the clean glyph strokes, in millimetres. */
+export function letterScratchMargin(capMm: number, rough: number, penMm = 0.13): number {
+  if (rough <= 0) return 0;
+  const k = capMm / LETTER_REFERENCE_MM;
+  // Longest overshoot, plus wobble, plus the widest re-strike offset.
+  return Math.min(0.035 * capMm, 1.8 * rough * k) + 0.1 * rough * k + Math.max(1.2 * penMm, 0.3 * k);
+}
+
+export function scratchLetterRun(run: ProjectedPoint[], rough: number, rng: () => number, env: ScratchEnv, capMm: number): ProjectedPoint[][] {
+  return scratchRun(run, 'edge', rough, rng, [true, true], env, letterScratchSize(capMm));
 }

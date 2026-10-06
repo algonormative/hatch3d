@@ -4,6 +4,7 @@ import type { ProjectedPoint } from '../../src/projection.ts';
 import type { PackedDepthBuffer } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { measureStrokeText, roughMargin, strokeFaceSupports, strokeText } from '../../src/sketch/stroke-text.ts';
+import { letterScratchMargin } from '../phase-garden/scratch.ts';
 
 /**
  * Slogans painted on slab front faces, shared by Breach Cathedral and its Tower fork.
@@ -39,7 +40,9 @@ export function sloganControls(count: number): Control[] {
     { type: 'select', id: 'sloganPlacement', label: 'Slogan placement', default: 'face', options: ['face', 'edge'],
       optionLabels: { face: 'Painted face', edge: 'Top-edge caption' }, group: g },
     { type: 'select', id: 'sloganPen', label: 'Slogan pen', default: 'lettering', options: PENS, group: g },
-    { type: 'slider', id: 'sloganRough', label: 'Slogan scratch', default: 0, min: 0, max: 1, step: 0.01, group: g },
+    { type: 'slider', id: 'sloganRough', label: 'Slogan scratch', default: 0, min: 0, max: 1, step: 0.005, group: g },
+    { type: 'select', id: 'letterScratch', label: 'Lettering scratch style', default: 'ruled', options: ['ruled', 'punk'],
+      optionLabels: { ruled: 'Ruled like the slab edges', punk: 'Punk (own glyph scratch)' }, group: g },
   ];
 }
 
@@ -52,8 +55,14 @@ export function titleControls(): Control[] {
     { type: 'text', id: 'title', label: 'Title', default: TITLE_DEFAULT, maxLength: 64, group: g, showWhen: on },
     { type: 'slider', id: 'titleSize', label: 'Title cap height', default: 3, min: 1.6, max: 4.5, step: 0.05, units: 'mm', group: g, showWhen: on },
     { type: 'select', id: 'titleFace', label: 'Title face', default: 'cathedral', options: FACES, optionLabels: FACE_LABELS, group: g, showWhen: on },
-    { type: 'slider', id: 'titleRough', label: 'Title scratch', default: 0, min: 0, max: 1, step: 0.01, group: g, showWhen: on },
+    { type: 'slider', id: 'titleRough', label: 'Title scratch', default: 0, min: 0, max: 1, step: 0.005, group: g, showWhen: on },
   ];
+}
+
+/** 'ruled' (default): lettering is scratched by the slab-edge hand after projection; 'punk': the glyph-level scratch. */
+export type LetterScratch = 'ruled' | 'punk';
+export function letterScratch(ctx: SketchContext): LetterScratch {
+  return ctx.params.letterScratch === 'punk' ? 'punk' : 'ruled';
 }
 
 export interface TitleSettings { enabled: boolean; text: string; size: number; face: LetterFace; rough: number }
@@ -112,8 +121,11 @@ export interface SloganPlan {
   /** Per surface id, convex knock-out quads in depth pixels: that slab's own hatch is cleared inside. */
   knockouts: Map<number, Point[][]>;
   placed: { id: number; text: string; sizeMm: number; visible: number; y: number }[];
+  /** Cap height on the page (mm) of each slogan stroke, for scale-aware ruled scratching. */
+  strokeCaps: number[];
   /** The title line's strokes (always the fine lettering pen) and where it landed. */
   titleStrokes: THREE.Vector3[][];
+  titleCap: number;
   title?: { id: number; text: string; sizeMm: number; visible: number; y: number };
 }
 
@@ -127,7 +139,7 @@ const ASCENT = { cathedral: 0.07, sans: 0.2, script: 0.2 };
 const PAD_MM = 0.75, INSET_MM = 0.9, MIN_MM = 1.6;
 
 function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, face: LetterFace,
-  mode: 'face' | 'edge', align: number, offset: number, padMm = PAD_MM, rough = 0): Placement | null {
+  mode: 'face' | 'edge', align: number, offset: number, padMm = PAD_MM, rough = 0, style: LetterScratch = 'ruled'): Placement | null {
   const zf = s.d / 2 + 0.006;
   const px = (x: number, y: number, z = zf): ProjectedPoint => {
     const v = new THREE.Vector3(x, y, z).applyMatrix4(s.matrix).project(env.view);
@@ -141,7 +153,10 @@ function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, f
   for (let size = sizeMm; size >= MIN_MM - 1e-9; size -= 0.2) {
     const cap = size / sy;
     // Scratched marks wander past the clean glyph box; the band grows to keep them on clean concrete.
-    const padX = padMm / sx + roughMargin(cap, rough), padY = padMm / sy + roughMargin(cap, rough);
+    // Scratched marks wander past the clean glyphs; the band grows to keep them on clean concrete.
+    const ruled = style === 'ruled' ? letterScratchMargin(size, rough) : 0;
+    const padX = padMm / sx + (style === 'punk' ? roughMargin(cap, rough) : ruled / sx);
+    const padY = padMm / sy + (style === 'punk' ? roughMargin(cap, rough) : ruled / sy);
     // The cathedral face leans forward: its tops overhang the measured advance by 0.1 cap.
     const width = measureStrokeText(text, { face, height: cap }) + (face === 'cathedral' ? 0.1 * cap : 0);
     const bandW = width + 2 * padX;
@@ -157,7 +172,8 @@ function place(env: SloganEnv, s: SloganSurface, text: string, sizeMm: number, f
     const capTop = by1 - padY - cap * ASCENT[face];
     const x0 = (mode === 'edge' ? -s.w / 2 + insetX + roomX * align : bx0) + padX;
     const zt = s.d / 2 + 0.009;
-    const strokes = strokeText(text, 0, 0, { face, height: cap, rough, seed: s.id })
+    // Ruled lettering is drawn clean here and scratched after projection with the edge hand.
+    const strokes = strokeText(text, 0, 0, { face, height: cap, rough: style === 'punk' ? rough : 0, seed: s.id })
       .map(path => path.map(p => new THREE.Vector3(x0 + p.x, capTop - p.y, zt).applyMatrix4(s.matrix)));
     // Visibility: sample the band and ask the shared depth buffer.
     let seen = 0, total = 0;
@@ -197,14 +213,16 @@ function wordGroups(text: string, rng: () => number): string[] {
 
 export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: SloganEnv, salt = 'slogan'): SloganPlan {
   const settings = sloganSettings(ctx);
+  const style = letterScratch(ctx);
   const title = titleSettings(ctx);
-  const plan: SloganPlan = { strokes: [], knockouts: new Map(), placed: [], titleStrokes: [] };
+  const plan: SloganPlan = { strokes: [], strokeCaps: [], knockouts: new Map(), placed: [], titleStrokes: [], titleCap: 0 };
   if ((settings.count === 0 && !title.enabled) || surfaces.length === 0) return plan;
   const rng = ctx.random(salt);
   const used = new Set<number>();
   const commit = (p: Placement) => {
     used.add(p.surface.id);
     plan.strokes.push(...p.strokes);
+    plan.strokeCaps.push(...p.strokes.map(() => p.sizeMm));
     plan.knockouts.set(p.surface.id, [...(plan.knockouts.get(p.surface.id) ?? []), p.band]);
     plan.placed.push({ id: p.surface.id, text: p.text, sizeMm: p.sizeMm, visible: p.visible, y: p.y });
   };
@@ -213,7 +231,7 @@ export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: 
     for (const s of surfaces) {
       if (used.has(s.id)) continue;
       const mode = flip ? (settings.placement === 'face' ? 'edge' : 'face') : settings.placement;
-      const p = place(env, s, text, size, settings.face, mode, rng(), rng() - 0.5, PAD_MM, settings.rough);
+      const p = place(env, s, text, size, settings.face, mode, rng(), rng() - 0.5, PAD_MM, settings.rough, style);
       if (!p || p.visible < minVisible || !accept(p)) continue;
       const value = p.visible ** 3 * Math.sqrt(p.area) * (0.55 + 0.9 * rng());
       if (value > score) { score = value; choice = p; }
@@ -271,7 +289,7 @@ export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: 
     for (const s of surfaces) {
       if (used.has(s.id)) continue;
       // A wider clear margin than slogan words: the title should never brush the hatch.
-      const p = place(env, s, title.text, title.size, title.face, 'face', 0.08 + 0.3 * trng(), 0, 1.2 - 0.5 * title.rough, title.rough);
+      const p = place(env, s, title.text, title.size, title.face, 'face', 0.08 + 0.3 * trng(), 0, 1.2 - 0.5 * title.rough, title.rough, style);
       if (!p || p.visible < 0.92) continue;
       // Prefer low, large, clear faces: the title reads like a foundation stone.
       const low = Math.max(0, Math.min(1, (p.y - env.art.y0) / span));
@@ -281,6 +299,7 @@ export function planSlogans(ctx: SketchContext, surfaces: SloganSurface[], env: 
     if (choice) {
       used.add(choice.surface.id);
       plan.titleStrokes.push(...choice.strokes);
+      plan.titleCap = choice.sizeMm;
       plan.knockouts.set(choice.surface.id, [...(plan.knockouts.get(choice.surface.id) ?? []), choice.band]);
       plan.title = { id: choice.surface.id, text: choice.text, sizeMm: choice.sizeMm, visible: choice.visible, y: choice.y };
     }

@@ -4,12 +4,12 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
-import { lineRough, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
+import { lineRough, scratchLetterRun, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
+import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
-type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean; title?: boolean; family?: LineFamily };
+type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean; title?: boolean; family?: LineFamily; cap?: number };
 type Slab = { x: number; y: number; z: number; w: number; h: number; d: number; beat: number };
 
 const W = 594, H = 840; // two depth pixels per page millimeter
@@ -360,8 +360,11 @@ export function drawCathedral(ctx: SketchContext): Part[] {
     });
     // Lettering is collected separately (text: true); its part takes the slogan pen, usually the fine 'lettering' pen.
     const sloganPen = sloganSettings(ctx).pen;
-    for (const points of slogans.strokes) strokes.push({ ink: 'carbon', points, text: true });
-    for (const points of slogans.titleStrokes) strokes.push({ ink: 'carbon', points, text: true, title: true });
+    slogans.strokes.forEach((points, k) => strokes.push({ ink: 'carbon', points, text: true, cap: slogans.strokeCaps[k] }));
+    for (const points of slogans.titleStrokes) strokes.push({ ink: 'carbon', points, text: true, title: true, cap: slogans.titleCap });
+    // Ruled lettering: the slab-edge hand, scaled to each line's cap height.
+    const ruled = letterScratch(ctx) === 'ruled';
+    const letterLevel = { slogan: sloganSettings(ctx).rough, title: titleSettings(ctx).rough };
     const lettering: Point[][] = [];
     const titling: Point[][] = [];
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
@@ -373,6 +376,8 @@ export function drawCathedral(ctx: SketchContext): Part[] {
       const stroke = strokes[projection.sourceIndices[i]];
       const ink = stroke.ink;
       const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', projection.sourceIndices[i]) : undefined;
+      const letterRough = ruled && stroke.text ? letterLevel[stroke.title ? 'title' : 'slogan'] : 0;
+      const lrng = letterRough > 0 ? scratchRandom(ctx.seed, 'letter-scratch', projection.sourceIndices[i]) : undefined;
       const whole = projection.polylines[i];
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H);
@@ -382,7 +387,8 @@ export function drawCathedral(ctx: SketchContext): Part[] {
         // Scratching acts on what is already visible; its added marks are depth-tested again.
         const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
         const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
-          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv)) : seen;
+          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv))
+          : lrng ? seen.flatMap(run => scratchLetterRun(run, letterRough, lrng, scratchEnv, stroke.cap!)) : seen;
         for (const run of runs) {
           const mm = run.map(toMm);
           for (const path of clipArt(mm, window)) {

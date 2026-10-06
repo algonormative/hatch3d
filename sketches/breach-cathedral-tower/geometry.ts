@@ -4,13 +4,13 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
-import { lineRough, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
+import { lineRough, scratchLetterRun, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
+import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
 export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan' | 'title';
 /** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
-type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number; family?: LineFamily };
+type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number; family?: LineFamily; cap?: number };
 export type Role = 'stack' | 'pier' | 'stub' | 'fallen' | 'debris';
 export type Slab = {
   x: number; y: number; z: number; w: number; h: number; d: number;
@@ -499,8 +499,11 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
       art: { x0: ART.x0 / MM_X, x1: ART.x1 / MM_X, y0: ART.y0 / MM_Y, y1: ART.y1 / MM_Y },
     });
     const pen = sloganSettings(ctx).pen as Ink;
-    for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
-    for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', points });
+    slogans.strokes.forEach((points, k) => strokes.push({ ink: pen, group: 'slogan', points, cap: slogans.strokeCaps[k] }));
+    for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', points, cap: slogans.titleCap });
+    // Ruled lettering: the slab-edge hand, scaled to each line's cap height.
+    const ruled = letterScratch(ctx) === 'ruled';
+    const letterLevel = { slogan: sloganSettings(ctx).rough, title: titleSettings(ctx).rough };
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
@@ -510,6 +513,8 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
       const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', projection.sourceIndices[i]) : undefined;
+      const letterRough = ruled && (stroke.group === 'slogan' || stroke.group === 'title') ? letterLevel[stroke.group] : 0;
+      const lrng = letterRough > 0 ? scratchRandom(ctx.seed, 'letter-scratch', projection.sourceIndices[i]) : undefined;
       const whole = projection.polylines[i];
       const text = stroke.group === 'slogan' || stroke.group === 'title';
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
@@ -520,7 +525,8 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
         // Scratching acts on what is already visible; its added marks are depth-tested again.
         const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
         const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
-          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv)) : seen;
+          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv))
+          : lrng ? seen.flatMap(run => scratchLetterRun(run, letterRough, lrng, scratchEnv, stroke.cap!)) : seen;
         for (const run of runs) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
           for (const path of clipArt(mm)) {
