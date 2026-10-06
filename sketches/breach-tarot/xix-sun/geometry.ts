@@ -213,11 +213,12 @@ export function drawSun(ctx: SketchContext): Part[] {
       // distances, still reading top to bottom, clear of the wall's shadow.
       const wrng = ctx.random('sun-words');
       let side = wrng() < 0.5 ? -1 : 1;
-      const top = Math.max(y0 + 8, y1 + 5);
+      // The first word sits well into the desert, where the plates are large enough to read it.
+      const top = Math.max(y0 + 8, y1 + 5) + 16;
       words.forEach((word, i) => {
         const target = top + (CARD.y1 - 12 - top) * (i / Math.max(1, words.length - 1)) ** 1.1 + (wrng() - 0.5) * 4;
         const half = measureStrokeText(word, style) / 2 + 6;
-        const x = Math.max(CARD.x0 + half, Math.min(CARD.x1 - half, s.page.x + side * (18 + 80 * wrng())));
+        const x = Math.max(CARD.x0 + half, Math.min(CARD.x1 - half, s.page.x + side * (14 + 46 * wrng())));
         side = -side;
         const a = onGround({ x, y: target });
         const px = pageOf(view, a);
