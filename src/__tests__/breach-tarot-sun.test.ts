@@ -6,7 +6,7 @@ import { CARD } from '../../sketches/breach-tarot/card.ts';
 const entry = resolve('sketches/breach-tarot/xix-sun/sketch.ts');
 
 describe('Breach Tarot: XIX The Sun', () => {
-  it('replays, stays inside the card, and draws shadows, stems, the sun disc, the phrase and the frame', async () => {
+  it('replays, stays inside the card, and draws the disc, both kinds of ray, the wall shadow, the phrase and the frame', async () => {
     const first = await renderSketch({ entry, seed: 1 });
     const replay = await renderSketch({ entry, seed: 1 });
     expect(replay.identity).toBe(first.identity);
@@ -17,14 +17,19 @@ describe('Breach Tarot: XIX The Sun', () => {
       expect(p.y).toBeLessThanOrEqual(CARD.bottom + 0.01);
     }
     const ids = first.parts.map(p => p.id);
-    for (const id of ['shadow-carbon', 'sun-vermilion', 'card-frame']) expect(ids).toContain(id);
-    expect(ids.some(id => id.startsWith('stem-'))).toBe(true);
-    expect(ids).toContain('slogan-lettering');
+    for (const id of ['disc-vermilion', 'shadow-carbon', 'card-frame']) expect(ids).toContain(id);
+    expect(ids.some(id => id.startsWith('waves-'))).toBe(true);
+    expect(ids.some(id => id.startsWith('rays-'))).toBe(true);
+    expect(ids.some(id => id.startsWith('slogan-'))).toBe(true);
   }, 30_000);
 
-  it('is the lightest card: far less ink than the Star', async () => {
-    const sun = await renderSketch({ entry, seed: 1 });
-    const star = await renderSketch({ entry: resolve('sketches/breach-tarot/xvii-star/sketch.ts'), seed: 1 });
-    expect(sun.stats.lengthMm).toBeLessThan(star.stats.lengthMm * 0.5);
+  it('keeps the disc blown out: nothing is drawn inside the sun but its rim', async () => {
+    const result = await renderSketch({ entry, seed: 1 });
+    const rim = result.parts.find(p => p.id === 'disc-vermilion')!.paths.flat();
+    const cx = rim.reduce((t, p) => t + p.x, 0) / rim.length, cy = rim.reduce((t, p) => t + p.y, 0) / rim.length;
+    const r = Math.min(...rim.map(p => Math.hypot(p.x - cx, p.y - cy)));
+    const inside = result.parts.filter(p => p.id !== 'disc-vermilion').flatMap(p => p.paths.flat()).filter(p => Math.hypot(p.x - cx, p.y - cy) < r - 0.5);
+    expect(r).toBeGreaterThan(20);
+    expect(inside).toEqual([]);
   }, 30_000);
 });

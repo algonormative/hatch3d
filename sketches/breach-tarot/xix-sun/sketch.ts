@@ -15,17 +15,15 @@ const sketch: Sketch = {
     LETTERING_PEN,
   ],
   controls: [
-    { type: 'slider', id: 'sunX', label: 'Sun across', default: 0.3, min: 0, max: 1, step: 0.01, group: 'Sun' },
-    { type: 'slider', id: 'sunHeight', label: 'Sun height in the sky', default: 0.8, min: 0, max: 1, step: 0.01, group: 'Sun' },
-    { type: 'slider', id: 'elevation', label: 'Light elevation (shadow length)', default: 0.4, min: 0, max: 1, step: 0.01, group: 'Sun' },
-    { type: 'slider', id: 'sunSize', label: 'Sun size', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
-    { type: 'slider', id: 'shade', label: 'Shadow depth', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
-    { type: 'slider', id: 'breach', label: 'Breach in the wall', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Garden' },
-    { type: 'slider', id: 'flowers', label: 'Sunflowers', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Garden' },
-    { type: 'slider', id: 'distance', label: 'Wall distance', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Garden' },
-    { type: 'slider', id: 'fov', label: 'Field of view', default: 54, min: 40, max: 80, step: 1, units: '°', group: 'Garden' },
+    { type: 'slider', id: 'size', label: 'Sun size', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
+    { type: 'slider', id: 'height', label: 'Sun height', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
+    { type: 'slider', id: 'rays', label: 'Ray count', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
+    { type: 'slider', id: 'radiance', label: 'Fine rays', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Sun' },
+    { type: 'slider', id: 'breach', label: 'Breach in the wall', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Wall' },
+    { type: 'slider', id: 'distance', label: 'Wall distance', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Wall' },
+    { type: 'slider', id: 'fov', label: 'Field of view', default: 54, min: 40, max: 80, step: 1, units: '°', group: 'Wall' },
     ...sloganControls(1).map((c): Control => c.type === 'text' && c.id === 'slogan' ? { ...c, default: 'there is nothing left to hide' }
-      : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.6 } : c),
+      : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.4 } : c),
   ],
   draw(ctx) {
     return drawSun(ctx);
