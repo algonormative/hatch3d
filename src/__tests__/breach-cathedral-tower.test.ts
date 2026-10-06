@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import type { Part, SketchContext } from '../../src/sketch/types.ts';
-import { drawTower, towerSlabs } from '../../sketches/breach-cathedral-tower/geometry.ts';
+import { drawTower, towerScene, towerSlabs } from '../../sketches/breach-cathedral-tower/geometry.ts';
 
 const entry = resolve('sketches/breach-cathedral-tower/sketch.ts');
 const PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
@@ -80,5 +80,27 @@ describe('Breach Cathedral: Tower', () => {
     const calm = towerSlabs(context(211, { collapse: 0, debris: 0 }));
     expect(calm.every(s => s.role === 'stack' || s.role === 'pier')).toBe(true);
     expect(calm.every(s => s.rz === 0 && s.x === s.home.x && s.y === s.home.y)).toBe(true);
+  });
+
+  it('spreads the opt-in slogan over intact faces in reading order, through the same depth pass', () => {
+    const plain = towerScene(context(211));
+    expect(plain.parts.some(p => p.id.startsWith('slogan-'))).toBe(false);
+    for (const seed of [211, 17]) {
+      const scene = towerScene(context(seed, { sloganCount: 1 }));
+      const words = scene.slogans.placed;
+      expect(words.length).toBeGreaterThanOrEqual(3);
+      expect(words.map(w => w.text).join(' ')).toBe('this was made by a machine');
+      for (let i = 1; i < words.length; i++) expect(words[i].y).toBeGreaterThan(words[i - 1].y);
+      for (const w of words) expect(w.visible).toBeGreaterThanOrEqual(0.82);
+      const slabs = towerSlabs(context(seed, { sloganCount: 1 }));
+      expect(words.every(w => slabs[w.id].role === 'stack')).toBe(true);
+      expect(length(scene.parts, 'slogan-carbon')).toBeGreaterThan(20);
+      // The bands clear the chosen faces' own hatch.
+      expect(length(scene.parts, 'tower-')).toBeLessThan(length(towerScene(context(seed)).parts, 'tower-'));
+    }
+    const whole = towerScene(context(211, { sloganCount: 3, sloganSpread: false, sloganPen: 'vermilion' }));
+    expect(whole.slogans.placed.length).toBeGreaterThanOrEqual(2);
+    expect(whole.slogans.placed.every(w => w.text === 'this was made by a machine')).toBe(true);
+    expect(whole.parts.some(p => p.id === 'slogan-vermilion')).toBe(true);
   });
 });

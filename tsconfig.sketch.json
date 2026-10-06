@@ -37,7 +37,9 @@
     "sketches/cloud-advection/**/*.ts",
     "sketches/borrowed-orbits/**/*.ts",
     "sketches/breach-cathedral-tower/**/*.ts",
+    "sketches/breach-cathedral-extended/**/*.ts",
     "sketches/chamber-bloom-foam/**/*.ts",
+    "sketches/chamber-bloom-plonk/**/*.ts",
     "sketches/load-bearing-silence-span/**/*.ts",
     "sketches/load-bearing-silence-nova/**/*.ts"
   ]

@@ -3,9 +3,12 @@ import type { Part, Point, SketchContext } from '../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
+import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
+import { clearBands, planSlogans, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
-type Stroke = { ink: Ink; points: THREE.Vector3[] };
+/** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
+type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean };
 type Slab = { x: number; y: number; z: number; w: number; h: number; d: number; beat: number };
 
 const W = 594, H = 840; // two depth pixels per page millimeter
@@ -30,6 +33,53 @@ function camera(): THREE.OrthographicCamera {
 }
 
 function line(ink: Ink, ...points: THREE.Vector3[]): Stroke { return { ink, points }; }
+
+type Window = { x0: number; x1: number; y0: number; y1: number };
+/** Depth viewport plus its mapping from depth pixels back to authored millimetres. */
+type Frame = { view: THREE.OrthographicCamera; width: number; height: number; window: Window; toMm: (p: Point) => Point; fit: number };
+
+/**
+ * Opt-in full height (`fullHeight`): widen the clip window and depth viewport from the authored
+ * envelope to the whole poster content area, so the structure is not cut at y 76 / 357.
+ * `fitWhole` additionally zooms out uniformly, centred on the unclipped strokes, when they still
+ * overrun that area. Off, this is exactly the original camera and window.
+ */
+function frame(ctx: SketchContext, strokes: Stroke[]): Frame {
+  if (ctx.params.fullHeight !== true) return { view: camera(), width: W, height: H, window: ART, toMm: p => ({ x: p.x / 2, y: p.y / 2 }), fit: 1 };
+  const transform = posterArtTransform(ctx, TABLOID_PAGE);
+  const a = transform.inverse({ x: transform.target.x, y: transform.target.y });
+  const b = transform.inverse({ x: transform.target.x + transform.target.width, y: transform.target.y + transform.target.height });
+  const window: Window = { x0: a.x, x1: b.x, y0: a.y, y1: b.y };
+  const winW = window.x1 - window.x0, winH = window.y1 - window.y0;
+  let region = window, fit = 1;
+  if (ctx.params.fitWhole === true) {
+    const base = camera();
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const stroke of strokes) for (const point of stroke.points) {
+      const v = point.clone().project(base);
+      const x = (v.x * 0.5 + 0.5) * 297, y = (-v.y * 0.5 + 0.5) * 420;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    fit = Math.max(1, (x1 - x0) / winW, (y1 - y0) / winH);
+    const contained = x0 >= window.x0 && x1 <= window.x1 && y0 >= window.y0 && y1 <= window.y1;
+    // Zoom out when too big; recentre (at scale 1) when merely offset past an edge.
+    if (fit > 1 || !contained) {
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      region = { x0: cx - winW * fit / 2, x1: cx + winW * fit / 2, y0: cy - winH * fit / 2, y1: cy + winH * fit / 2 };
+    }
+  }
+  const halfWidth = 7.6, halfHeight = halfWidth * 420 / 297;
+  const u = (x: number) => (x / 297 * 2 - 1) * halfWidth, v = (y: number) => (1 - y / 420 * 2) * halfHeight;
+  const view = new THREE.OrthographicCamera(u(region.x0), u(region.x1), v(region.y0), v(region.y1), 0.1, 80);
+  view.up.set(0, 1, 0);
+  view.position.set(3.2, -5.8, 19.5);
+  view.lookAt(0, 0, 0);
+  view.updateProjectionMatrix();
+  view.updateMatrixWorld();
+  const width = Math.round(winW * 2), height = Math.round(winH * 2);
+  return { view, width, height, window, fit,
+    toMm: p => ({ x: window.x0 + p.x * winW / width, y: window.y0 + p.y * winH / height }) };
+}
 
 export function slabs(ctx: SketchContext): Slab[] {
   const rng = ctx.random('cathedral-topology');
@@ -243,7 +293,7 @@ function shellStrokes(s: Shell, density: number, interruption: number, ctx: Sket
   return out;
 }
 
-function clipArt(points: Point[]): Point[][] {
+function clipArt(points: Point[], ART: Window): Point[][] {
   const runs: Point[][] = [];
   let run: Point[] = [];
   const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
@@ -288,24 +338,46 @@ export function drawCathedral(ctx: SketchContext): Part[] {
   const interruption = rawInterruption <= 0.32 ? rawInterruption : 0.32 + (rawInterruption - 0.32) * 1.6;
   const rng = ctx.random('slab-interruptions');
   const beats = Array.from({ length: 64 }, () => rng() < interruption);
-  const strokes: Stroke[] = architecture.flatMap(s => slabStrokes(s, density, beats[(s.beat * 7) % 64]));
+  const strokes: Stroke[] = architecture.flatMap((s, owner) =>
+    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, owner })));
   strokes.push(...shellStrokes(organism, density, interruption, ctx));
   const geometries = architecture.map(slabGeometry);
   geometries.push(buildSurfaceMesh((u, v) => shellPoint(organism, u, 2 * v - 1), {}, 150, 14));
   try {
-    const view = camera();
+    const { view, width: W, height: H, window, toMm } = frame(ctx, strokes);
     const depth = renderDepthBufferCPU(geometries, view, W, H);
+    // Opt-in slogans (sloganCount defaults to 0 here, leaving the edition untouched).
+    const surfaces: SloganSurface[] = [];
+    architecture.forEach((s, id) => {
+      if (s.w > 1.2 && s.h > 0.3) surfaces.push({ id, matrix: new THREE.Matrix4().makeTranslation(s.x, s.y, s.z), w: s.w, h: s.h, d: s.d });
+    });
+    const pageMmPerPx = (window === ART ? 0.5 : (window.y1 - window.y0) / H) * posterArtTransform(ctx, TABLOID_PAGE).scale;
+    const slogans = planSlogans(ctx, surfaces, {
+      view, depth, width: W, height: H, bias: 0.0014, mmPerPx: pageMmPerPx,
+      art: window === ART ? { x0: ART.x0 * 2, x1: ART.x1 * 2, y0: ART.y0 * 2, y1: ART.y1 * 2 } : { x0: 0, x1: W, y0: 0, y1: H },
+    });
+    const sloganInk = INKS.find(ink => ink === ctx.params.sloganPen) ?? 'carbon';
+    for (const points of slogans.strokes) strokes.push({ ink: sloganInk, points, text: true });
+    const lettering: Point[][] = [];
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<Ink, Point[][]>(INKS.map(ink => [ink, []]));
     const removeHidden = ctx.params.occlusion !== false;
     for (let i = 0; i < projection.polylines.length; i++) {
-      const ink = strokes[projection.sourceIndices[i]].ink;
-      for (const clipped of clipProjectedPolyline(projection.polylines[i], W, H)) {
+      const stroke = strokes[projection.sourceIndices[i]];
+      const ink = stroke.ink;
+      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+      const pieces = clipProjectedPolyline(projection.polylines[i], W, H);
+      for (const clipped of bands ? pieces.flatMap(c => clearBands(c, bands, pageMmPerPx)) : pieces) {
         const dense = densifyProjectedPolyline(clipped);
         const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
         for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x / 2, y: p.y / 2 }));
-          for (const path of clipArt(mm)) {
+          const mm = run.map(toMm);
+          for (const path of clipArt(mm, window)) {
+            if (stroke.text) {
+              // Glyph curves are millimetre-scale: keep every point.
+              if (path.length > 1) lettering.push(path);
+              continue;
+            }
             const reduced = simplify(path);
             let length = 0;
             for (let j = 1; j < reduced.length; j++) {
@@ -318,7 +390,9 @@ export function drawCathedral(ctx: SketchContext): Part[] {
         }
       }
     }
-    return INKS.map(ink => ({ id: `cathedral-${ink}`, pen: ink, paths: buckets.get(ink)! }));
+    const parts: Part[] = INKS.map(ink => ({ id: `cathedral-${ink}`, pen: ink, paths: buckets.get(ink)! }));
+    if (lettering.length) parts.push({ id: `slogan-${sloganInk}`, pen: sloganInk, paths: lettering });
+    return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();
   }

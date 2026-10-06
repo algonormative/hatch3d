@@ -25,7 +25,7 @@
     {
       "name": "cathedral-c001",
       "title": "Breach Cathedral c001 (pick #2)",
-      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "sketch": "sketches/breach-cathedral-extended/sketch.ts",
       "seed": 219,
       "params": {
         "posterMode": "abstract",
@@ -44,13 +44,15 @@
         "worldX": 0.65,
         "worldY": 0,
         "worldZ": 1,
-        "occlusion": true
+        "occlusion": true,
+        "fullHeight": true,
+        "fitWhole": true
       }
     },
     {
       "name": "cathedral-c033",
       "title": "Breach Cathedral c033 (pick #3)",
-      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "sketch": "sketches/breach-cathedral-extended/sketch.ts",
       "seed": 613,
       "params": {
         "posterMode": "abstract",
@@ -69,13 +71,15 @@
         "worldX": 0.3,
         "worldY": -0.7,
         "worldZ": -0.2,
-        "occlusion": true
+        "occlusion": true,
+        "fullHeight": true,
+        "fitWhole": true
       }
     },
     {
       "name": "cathedral-c004",
       "title": "Breach Cathedral c004 (pick #4)",
-      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "sketch": "sketches/breach-cathedral-extended/sketch.ts",
       "seed": 792,
       "params": {
         "posterMode": "abstract",
@@ -94,13 +98,15 @@
         "worldX": 0.1,
         "worldY": -0.55,
         "worldZ": 0.4,
-        "occlusion": true
+        "occlusion": true,
+        "fullHeight": true,
+        "fitWhole": true
       }
     },
     {
       "name": "cathedral-c044",
       "title": "Breach Cathedral c044 (pick #5)",
-      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "sketch": "sketches/breach-cathedral-extended/sketch.ts",
       "seed": 430,
       "params": {
         "posterMode": "abstract",
@@ -119,13 +125,15 @@
         "worldX": -0.65,
         "worldY": -0.4,
         "worldZ": -0.55,
-        "occlusion": true
+        "occlusion": true,
+        "fullHeight": true,
+        "fitWhole": true
       }
     },
     {
       "name": "cathedral-c019",
       "title": "Breach Cathedral c019 (pick #6)",
-      "sketch": "sketches/breach-cathedral/sketch.ts",
+      "sketch": "sketches/breach-cathedral-extended/sketch.ts",
       "seed": 369,
       "params": {
         "posterMode": "abstract",
@@ -144,7 +152,9 @@
         "worldX": -0.55,
         "worldY": 0.1,
         "worldZ": -0.85,
-        "occlusion": true
+        "occlusion": true,
+        "fullHeight": true,
+        "fitWhole": true
       }
     }
   ]

@@ -3,11 +3,13 @@ import type { Part, Point, SketchContext } from '../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
-import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
+import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
+import { clearBands, planSlogans, type SloganPlan, type SloganSurface } from './slogan.ts';
 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
-export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b';
-type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[] };
+export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan';
+/** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
+type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
 export type Role = 'stack' | 'pier' | 'stub' | 'fallen' | 'debris';
 export type Slab = {
   x: number; y: number; z: number; w: number; h: number; d: number;
@@ -20,7 +22,7 @@ export type Slab = {
 };
 
 export const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS: Group[] = ['tower', 'collapse', 'strand-a', 'strand-b'];
+const GROUPS: Group[] = ['tower', 'collapse', 'strand-a', 'strand-b', 'slogan'];
 // Depth pixels: two per page millimetre, aspect matched to the 11 × 17 sheet.
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -462,6 +464,11 @@ export interface TowerOptions {
 }
 
 export function drawTower(ctx: SketchContext, options: TowerOptions = {}): Part[] {
+  return towerScene(ctx, options).parts;
+}
+
+/** The plotted parts plus the slogan plan that produced any lettering. */
+export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { parts: Part[]; slogans: SloganPlan } {
   const architecture = towerSlabs(ctx);
   const strands = helixStrands(ctx);
   const density = n(ctx, 'hatchDensity', 0.55, 0, 1);
@@ -470,7 +477,8 @@ export function drawTower(ctx: SketchContext, options: TowerOptions = {}): Part[
   const rng = ctx.random('slab-interruptions');
   const beats = Array.from({ length: 64 }, () => rng() < interruption);
   const view = camera();
-  const strokes: Stroke[] = architecture.flatMap(s => slabStrokes(s, density, beats[(s.beat * 7) % 64]));
+  const strokes: Stroke[] = architecture.flatMap((s, owner) =>
+    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, owner })));
   for (const s of strands) strokes.push(...strandStrokes(s, density, interruption, ctx, view));
   const geometries = architecture.map(slabGeometry);
   if (options.occluders !== 'architecture') {
@@ -478,24 +486,40 @@ export function drawTower(ctx: SketchContext, options: TowerOptions = {}): Part[
   }
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
+    // Slogans: only intact stack faces, never the collapse; chosen against this same depth pass.
+    const surfaces: SloganSurface[] = [];
+    architecture.forEach((s, id) => {
+      if (s.role === 'stack' && s.w > 1.2 && s.h > 0.3) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
+    });
+    const pageMmPerPx = MM_Y * posterArtTransform(ctx, TABLOID_PAGE, TALL_ART).scale;
+    const slogans = planSlogans(ctx, surfaces, {
+      view, depth, width: W, height: H, bias: 0.0014, mmPerPx: pageMmPerPx,
+      art: { x0: ART.x0 / MM_X, x1: ART.x1 / MM_X, y0: ART.y0 / MM_Y, y1: ART.y1 / MM_Y },
+    });
+    const pen = INKS.find(ink => ink === ctx.params.sloganPen) ?? 'carbon';
+    for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', points });
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
-      for (const clipped of clipProjectedPolyline(projection.polylines[i], W, H)) {
+      const text = stroke.group === 'slogan';
+      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
+      for (const clipped of pieces) {
         const dense = densifyProjectedPolyline(clipped);
         const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
         for (const run of runs) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
           for (const path of clipArt(mm)) {
-            const reduced = simplify(path);
+            // Glyph curves are millimetre-scale: keep every point.
+            const reduced = text ? path : simplify(path);
             let length = 0;
             for (let j = 1; j < reduced.length; j++) {
               length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
             }
-            if (reduced.length > 1 && length > 0.5) {
+            if (reduced.length > 1 && length > (text ? 0.05 : 0.5)) {
               if (!buckets.has(key)) buckets.set(key, []);
               buckets.get(key)!.push(reduced);
             }
@@ -508,7 +532,7 @@ export function drawTower(ctx: SketchContext, options: TowerOptions = {}): Part[
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
-    return parts;
+    return { parts, slogans };
   } finally {
     for (const geometry of geometries) geometry.dispose();
   }

@@ -1,7 +1,14 @@
 import type { Point } from './types.js';
+import { HERSHEY_BASELINE, HERSHEY_CAP_TOP, HERSHEY_OFFSET, HERSHEY_SANS, HERSHEY_SCRIPT } from './hershey-data.js';
 
-/** Pure plotted geometry: no SVG text element or external font dependency. */
-export type StrokeFace = 'wire' | 'matrix';
+/**
+ * Pure plotted geometry: no SVG text element or external font dependency.
+ * `wire` and `matrix` are uppercase display faces; `sans` and `script` are thin
+ * single-stroke Hershey faces with lowercase, covering printable ASCII 32–126.
+ */
+export type StrokeFace = 'wire' | 'matrix' | 'sans' | 'script';
+type HersheyFace = 'sans' | 'script';
+const isHershey = (face: StrokeFace): face is HersheyFace => face === 'sans' || face === 'script';
 
 // The original Phase Garden 4 × 6 open-stroke alphabet, kept byte-for-byte in shape.
 const WIRE: Record<string, string> = {
@@ -54,6 +61,31 @@ const MATRIX: Record<string, string> = {
   '(':'00010/00100/01000/01000/01000/00100/00010', ')':'01000/00100/00010/00010/00010/00100/01000',
 };
 
+type HersheyGlyph = { left: number; right: number; paths: Point[][] };
+const hersheyGlyphs: Record<HersheyFace, Map<string, HersheyGlyph>> = { sans: new Map(), script: new Map() };
+
+function hersheyGlyph(char: string, face: HersheyFace): HersheyGlyph | undefined {
+  const code = char.codePointAt(0)!;
+  if (char.length !== 1 || code < 32 || code > 126) return undefined;
+  const cache = hersheyGlyphs[face];
+  const cached = cache.get(char);
+  if (cached) return cached;
+  const row = (face === 'sans' ? HERSHEY_SANS : HERSHEY_SCRIPT)[code - 32];
+  const value = (i: number) => row.charCodeAt(i) - HERSHEY_OFFSET;
+  const left = value(0);
+  const paths = row.length > 2 ? row.slice(2).split(' ').map(stroke => {
+    const points: Point[] = [];
+    // Glyph-local units: x from the left bearing, y from the cap top downward.
+    for (let i = 0; i < stroke.length; i += 2) {
+      points.push({ x: stroke.charCodeAt(i) - HERSHEY_OFFSET - left, y: stroke.charCodeAt(i + 1) - HERSHEY_OFFSET - HERSHEY_CAP_TOP });
+    }
+    return points;
+  }) : [];
+  const glyph = { left, right: value(1), paths };
+  cache.set(char, glyph);
+  return glyph;
+}
+
 const wireGlyphs = new Map<string, Point[][]>();
 const matrixGlyphs = new Map<string, Point[][]>();
 
@@ -83,8 +115,18 @@ function glyph(char: string, face: StrokeFace): Point[][] {
 
 function validated(text: string, face: StrokeFace): string[] {
   if (typeof text !== 'string') throw new TypeError('Text must be a string');
-  if (face !== 'wire' && face !== 'matrix') throw new RangeError(`Unknown stroke face: ${String(face)}`);
+  if (face !== 'wire' && face !== 'matrix' && !isHershey(face)) throw new RangeError(`Unknown stroke face: ${String(face)}`);
   if ([...text].length > 256) throw new RangeError('Stroke text exceeds 256 characters');
+  if (isHershey(face)) {
+    // Case-preserving: the Hershey faces carry their own lowercase.
+    const chars = [...text];
+    for (let i = 0; i < chars.length; i++) {
+      if (!hersheyGlyph(chars[i], face)) {
+        throw new RangeError(`Unsupported stroke character U+${chars[i].codePointAt(0)!.toString(16).toUpperCase()} at position ${i + 1}`);
+      }
+    }
+    return chars;
+  }
   const chars = [...text.toUpperCase()];
   for (let i = 0; i < chars.length; i++) {
     if (chars[i] !== ' ' && !(face === 'wire' ? WIRE : MATRIX)[chars[i]]) {
@@ -96,10 +138,26 @@ function validated(text: string, face: StrokeFace): string[] {
 
 export interface TextStyle { face?: StrokeFace; height: number; tracking?: number }
 
+/** Hershey layout: `height` is the cap height; tracking is extra space in cap-height units of 1/21. */
+function hersheyLayout(chars: string[], face: HersheyFace, style: TextStyle): { paths: Point[][]; width: number } {
+  const tracking = style.tracking ?? 0;
+  if (!Number.isFinite(tracking) || tracking < 0 || tracking > 100) throw new RangeError('Text tracking must be finite and nonnegative');
+  const unit = style.height / (HERSHEY_BASELINE - HERSHEY_CAP_TOP);
+  const paths: Point[][] = [];
+  let cursor = 0;
+  chars.forEach((char, i) => {
+    const glyph = hersheyGlyph(char, face)!;
+    for (const path of glyph.paths) paths.push(path.map(p => ({ x: cursor + p.x * unit, y: p.y * unit })));
+    cursor += (glyph.right - glyph.left + (i < chars.length - 1 ? tracking : 0)) * unit;
+  });
+  return { paths, width: cursor };
+}
+
 function layout(text: string, style: TextStyle): { paths: Point[][]; width: number } {
   const face = style.face ?? 'wire';
   const chars = validated(text, face);
   if (!Number.isFinite(style.height) || style.height <= 0 || style.height > 1000) throw new RangeError('Text height must be positive and finite');
+  if (isHershey(face)) return hersheyLayout(chars, face, style);
   const tracking = style.tracking ?? (face === 'wire' ? 1.8 : 1.2);
   if (!Number.isFinite(tracking) || tracking < 0 || tracking > 100) throw new RangeError('Text tracking must be finite and nonnegative');
   const unit = style.height / (face === 'wire' ? 6 : 7);
