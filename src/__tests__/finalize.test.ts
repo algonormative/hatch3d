@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { finalizePiece, parseStat, placementOffset, readLayers, resolveOptions, restoreLayerMetadata, type Stack } from '../../cli/finalize.ts';
+import { finalizePiece, parseStat, previewPiece, placementOffset, readLayers, resolveOptions, restoreLayerMetadata, type Stack } from '../../cli/finalize.ts';
 
 const page = { width: 279.4, height: 431.8, margin: 18 };
 const border = { style: 'double', pen: 'carbon', inset: 12, contentGap: 6 };
@@ -40,6 +40,14 @@ describe('finalize placement and pen plan', () => {
     const short = resolveOptions(stack, { palette: { id: 'short', label: 'Short', paper: '#ffffff', inks: ['#000000', '#111111'] } });
     await expect(finalizePiece(stack, { name: 't', sketch: 'sketches/breach-cathedral-tower/sketch.ts', seed: 211 }, short)).rejects.toThrow(/2 inks for 5 pens/);
   });
+
+  it('rejects overrides that name no control, so a misspelled slogan setting cannot silently do nothing', async () => {
+    const stack: Stack = { out: mkdtempSync(join(tmpdir(), 'finalize-')), border, pieces: [] };
+    const piece = { name: 't', sketch: 'sketches/breach-cathedral-tower/sketch.ts', seed: 211 };
+    await expect(previewPiece(stack, piece, resolveOptions(stack).palette, { sloganSzie: 2 }, stack.out)).rejects.toThrow(/no control named sloganSzie/);
+    const svg = await previewPiece(stack, piece, resolveOptions(stack).palette, { sloganCount: 1 }, stack.out);
+    expect(svg).toContain('slogan');
+  }, 30_000);
 });
 
 const hasVpype = spawnSync('vpype', ['--version']).status === 0;

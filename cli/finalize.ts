@@ -10,14 +10,15 @@
  * pen ids and pass counts are restored onto the prepared SVG because vpype drops data-* attributes.
  * Nothing here talks to a plotter: the output is files only.
  */
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
-import type { Page, Pen } from '../src/sketch/types.ts';
+import type { Control, Page, Pen } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -58,11 +59,40 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 
 function fail(message: string): never { throw new Error(message); }
 
-async function loadSketch(entry: string): Promise<{ page: Page; pens: Pen[] }> {
+async function loadSketch(entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
   const sketch = mod.default;
   if (!sketch?.page || !Array.isArray(sketch.pens)) fail(`${entry} does not export a sketch with page and pens`);
-  return { page: sketch.page, pens: sketch.pens };
+  return { page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [] };
+}
+
+/** Overrides may only name controls the sketch declares, so a typo can't silently do nothing. */
+function withOverrides(piece: Piece, controls: Control[], overrides: Record<string, unknown>): Record<string, unknown> {
+  const ids = new Set(controls.map(c => c.id));
+  for (const key of Object.keys(overrides)) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
+  return { ...piece.params, ...overrides };
+}
+
+const execFileAsync = promisify(execFile);
+async function renderSource(piece: Piece, request: object, dir: string): Promise<string> {
+  mkdirSync(join(dir, 'source'), { recursive: true });
+  const requestPath = join(dir, 'request.json');
+  writeFileSync(requestPath, JSON.stringify(request, null, 2));
+  try {
+    await execFileAsync(process.execPath, ['--import', 'tsx', join(ROOT, 'cli/sketch.ts'), 'render', resolve(ROOT, piece.sketch), '--config', requestPath, '--out', join(dir, 'source')],
+      { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 });
+  } catch (error) {
+    const e = error as { stdout?: string; stderr?: string; message: string };
+    fail(`render failed for ${piece.name}: ${((e.stdout ?? '') + (e.stderr ?? '') || e.message).trim().slice(-400)}`);
+  }
+  return join(dir, 'source', 'render.svg');
+}
+
+/** Render only (no vpype), for previews: the page recolors layers itself. */
+export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
+  const { page, pens, controls } = await loadSketch(piece.sketch);
+  const request = { seed: piece.seed, params: withOverrides(piece, controls, overrides), finishing: finishingFor(stack, page, pens, palette) };
+  return readFileSync(await renderSource(piece, request, dir), 'utf8');
 }
 
 function finishingFor(stack: Stack, page: Page, pens: Pen[], palette: Palette) {
@@ -147,18 +177,12 @@ export interface PieceReport {
   files: { source: string; sourcePng: string; prepared: string; preparedPng: string }; sourceSha256: string; preparedSha256: string;
 }
 
-export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions): Promise<PieceReport> {
-  const { page, pens } = await loadSketch(piece.sketch);
+export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
+  const { page, pens, controls } = await loadSketch(piece.sketch);
   if (options.palette.inks.length < pens.length) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${pens.length} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
-  mkdirSync(join(dir, 'source'), { recursive: true });
-  const request = { seed: piece.seed, params: piece.params ?? {}, finishing: finishingFor(stack, page, pens, options.palette) };
-  const requestPath = join(dir, 'request.json');
-  writeFileSync(requestPath, JSON.stringify(request, null, 2));
-  const render = spawnSync(process.execPath, ['--import', 'tsx', join(ROOT, 'cli/sketch.ts'), 'render', resolve(ROOT, piece.sketch), '--config', requestPath, '--out', join(dir, 'source')],
-    { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 });
-  if (render.status !== 0) fail(`render failed for ${piece.name}: ${(render.stdout + render.stderr).trim().slice(-400)}`);
-  const sourcePath = join(dir, 'source', 'render.svg');
+  const request = { seed: piece.seed, params: withOverrides(piece, controls, overrides), finishing: finishingFor(stack, page, pens, options.palette) };
+  const sourcePath = await renderSource(piece, request, dir);
   const source = readFileSync(sourcePath, 'utf8');
   const layers = readLayers(source);
   const finalPage: Page = { ...page, paper: options.palette.paper };
@@ -214,7 +238,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
     files: { source: relative(ROOT, sourcePath), sourcePng: relative(ROOT, join(dir, 'source', 'render.png')), prepared: relative(ROOT, preparedPath), preparedPng: relative(ROOT, join(dir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
   };
-  writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, vpypeArgs: args.map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
   return report;
 }
 
@@ -249,47 +273,68 @@ async function serve(stackPath: string, port: number) {
   const stack = loadStack(stackPath);
   const outRoot = resolve(ROOT, stack.out);
   const ui = readFileSync(join(ROOT, 'cli/finalize/ui.html'), 'utf8');
-  // One canonical preview render per piece, in the default palette; the page recolors layers live.
-  const previews = new Map<string, { svg: string; pens: Pen[] }>();
-  for (const piece of stack.pieces) {
-    const { pens } = await loadSketch(piece.sketch);
-    const report = await finalizePiece({ ...stack, out: join(stack.out, '_preview') }, piece, { ...resolveOptions(stack), center: 'none', mergeSameColor: false });
-    previews.set(slug(piece.name), { svg: readFileSync(resolve(ROOT, report.files.source), 'utf8'), pens });
-    console.log(`preview ready: ${piece.name}`);
+  // Preview renders in the default palette; the page recolors layers live. Variants are keyed by their overrides.
+  const basePalette = resolveOptions(stack).palette;
+  const pieceInfo = new Map<string, { pens: Pen[]; controls: Control[] }>();
+  for (const piece of stack.pieces) pieceInfo.set(slug(piece.name), await loadSketch(piece.sketch));
+  const variants = new Map<string, Map<string, string>>();
+  const variantKey = (overrides: Record<string, unknown>) => sha256(JSON.stringify(Object.keys(overrides).sort().map(k => [k, overrides[k]]))).slice(0, 12);
+  async function renderVariant(overrides: Record<string, unknown>, slugs: string[]): Promise<{ key: string; svgs: Record<string, string> }> {
+    const key = variantKey(overrides);
+    const cache = variants.get(key) ?? new Map<string, string>();
+    variants.set(key, cache);
+    const todo = stack.pieces.filter(p => slugs.includes(slug(p.name)) && !cache.has(slug(p.name)));
+    for (let i = 0; i < todo.length; i += 3) {
+      await Promise.all(todo.slice(i, i + 3).map(async piece => {
+        cache.set(slug(piece.name), await previewPiece(stack, piece, basePalette, overrides, resolve(ROOT, stack.out, '_preview', key, slug(piece.name))));
+      }));
+    }
+    return { key, svgs: Object.fromEntries(slugs.filter(s => cache.has(s)).map(s => [s, cache.get(s)!])) };
   }
+  await renderVariant({}, stack.pieces.map(p => slug(p.name)));
+  console.log(`previews ready: ${stack.pieces.length} pieces`);
+  // Slogan controls are offered only when every piece declares them.
+  const sloganControls = stack.pieces.every(p => pieceInfo.get(slug(p.name))!.controls.some(c => c.group === 'Slogan'))
+    ? pieceInfo.get(slug(stack.pieces[0].name))!.controls.filter(c => c.group === 'Slogan') : [];
   let busy = false;
+  const readJson = async (req: AsyncIterable<unknown>) => {
+    let body = '';
+    for await (const chunk of req) { body += chunk; if (body.length > 1 << 20) fail('Request too large'); }
+    return JSON.parse(body);
+  };
   createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const send = (code: number, body: string | Buffer, type = 'application/json') => { res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' }); res.end(body); };
     try {
       if (req.method === 'GET' && url.pathname === '/') return send(200, ui, TYPES['.html']);
       if (req.method === 'GET' && url.pathname === '/api/stack') {
-        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack), borderPen: (stack.border as { pen?: string } | undefined)?.pen ?? null,
-          pieces: stack.pieces.map(p => ({ ...p, slug: slug(p.name), pens: previews.get(slug(p.name))!.pens })) }));
+        return send(200, JSON.stringify({ title: stack.title ?? 'Finalize', palettes: PALETTES, defaults: resolveOptions(stack), borderPen: (stack.border as { pen?: string } | undefined)?.pen ?? null, sloganControls,
+          pieces: stack.pieces.map(p => ({ ...p, slug: slug(p.name), pens: pieceInfo.get(slug(p.name))!.pens })) }));
       }
       const preview = /^\/api\/preview\/([a-z0-9-]+)\.svg$/.exec(url.pathname);
-      if (req.method === 'GET' && preview && previews.has(preview[1])) return send(200, previews.get(preview[1])!.svg, TYPES['.svg']);
+      const base = variants.get(variantKey({}));
+      if (req.method === 'GET' && preview && base?.has(preview[1])) return send(200, base.get(preview[1])!, TYPES['.svg']);
       if (req.method === 'GET' && url.pathname.startsWith('/out/')) {
         const file = resolve(outRoot, decodeURIComponent(url.pathname.slice(5)));
         if (!file.startsWith(outRoot + '/') || !existsSync(file)) return send(404, '{"error":"not found"}');
         return send(200, readFileSync(file), TYPES[extname(file)] ?? 'application/octet-stream');
       }
-      if (req.method === 'POST' && url.pathname === '/api/finalize') {
-        if (busy) return send(409, JSON.stringify({ error: 'A finalize run is already in progress' }));
+      if (req.method === 'POST' && (url.pathname === '/api/finalize' || url.pathname === '/api/preview')) {
+        if (busy) return send(409, JSON.stringify({ error: 'Another run is already in progress' }));
         // Local-only tool: refuse cross-site form posts.
         if (!String(req.headers['content-type']).startsWith('application/json') || (req.headers.origin && !/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(req.headers.origin))) {
           return send(403, JSON.stringify({ error: 'JSON from this page only' }));
         }
         busy = true;
         try {
-          let body = '';
-          for await (const chunk of req) { body += chunk; if (body.length > 1 << 20) return send(413, '{"error":"too large"}'); }
-          const input = JSON.parse(body) as { pieces: string[]; palette: Palette; center: FinalizeOptions['center']; mergeSameColor: boolean; vpype: Partial<VpypeOptions> };
+          const input = await readJson(req) as { pieces: string[]; params?: Record<string, unknown>; palette: Palette; center: FinalizeOptions['center']; mergeSameColor: boolean; vpype: Partial<VpypeOptions> };
+          const overrides = input.params && typeof input.params === 'object' ? input.params : {};
+          if (url.pathname === '/api/preview') return send(200, JSON.stringify(await renderVariant(overrides, input.pieces ?? [])));
           const options = resolveOptions(stack, { palette: input.palette, center: input.center, mergeSameColor: input.mergeSameColor, vpype: input.vpype as VpypeOptions });
           const chosen = stack.pieces.filter(p => input.pieces.includes(slug(p.name)));
           if (!chosen.length) return send(400, '{"error":"no pieces selected"}');
           const reports = [];
-          for (const piece of chosen) reports.push(await finalizePiece(stack, piece, options));
+          for (const piece of chosen) reports.push(await finalizePiece(stack, piece, options, overrides));
           return send(200, JSON.stringify({ reports: reports.map(r => ({ ...r, url: `/out/${slug(r.name)}/` })) }));
         } finally { busy = false; }
       }
