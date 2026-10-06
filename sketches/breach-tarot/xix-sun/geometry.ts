@@ -209,9 +209,17 @@ export function drawSun(ctx: SketchContext): Part[] {
     } else {
       const cap = settings.size + 0.4;
       const style = { face: settings.face, height: cap };
+      // Staggered over the whole desert, as the other cards scatter theirs: alternating sides at seeded
+      // distances, still reading top to bottom, clear of the wall's shadow.
+      const wrng = ctx.random('sun-words');
+      let side = wrng() < 0.5 ? -1 : 1;
+      const top = Math.max(y0 + 8, y1 + 5);
       words.forEach((word, i) => {
-        const target = y0 + 8 + (CARD.y1 - 12 - (y0 + 8)) * (i / Math.max(1, words.length - 1)) ** 1.15;
-        const a = onGround({ x: s.page.x, y: target });
+        const target = top + (CARD.y1 - 12 - top) * (i / Math.max(1, words.length - 1)) ** 1.1 + (wrng() - 0.5) * 4;
+        const half = measureStrokeText(word, style) / 2 + 6;
+        const x = Math.max(CARD.x0 + half, Math.min(CARD.x1 - half, s.page.x + side * (18 + 80 * wrng())));
+        side = -side;
+        const a = onGround({ x, y: target });
         const px = pageOf(view, a);
         const sx = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(1, 0, 0))).x - px.x);
         const sz = Math.abs(pageOf(view, a.clone().add(new THREE.Vector3(0, 0, 1))).y - px.y);
