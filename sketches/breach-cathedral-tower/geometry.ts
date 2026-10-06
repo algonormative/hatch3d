@@ -44,7 +44,7 @@ function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: nu
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-function camera(): THREE.OrthographicCamera {
+export function camera(): THREE.OrthographicCamera {
   const view = new THREE.OrthographicCamera(-HALF_W, HALF_W, HALF_H, -HALF_H, 0.1, 80);
   view.up.set(0, 1, 0);
   view.position.set(3.2, -5.8, 19.5);
@@ -339,7 +339,7 @@ function trace(ink: Ink, group: Group, count: number, fn: (t: number) => THREE.V
 
 const BARS = 16;
 
-function strandStrokes(s: Strand, density: number, interruption: number, ctx: SketchContext, view: THREE.Camera): Stroke[] {
+export function strandStrokes(s: Strand, density: number, interruption: number, ctx: SketchContext, view: THREE.Camera): Stroke[] {
   const out: Stroke[] = [];
   const group: Group = s.id === 'a' ? 'strand-a' : 'strand-b';
   const rng = ctx.random(`lamellar-${s.id}`);
