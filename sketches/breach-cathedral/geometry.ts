@@ -4,11 +4,12 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
+import { lineRough, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
-type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean; title?: boolean };
+type Stroke = { ink: Ink; points: THREE.Vector3[]; owner?: number; text?: boolean; title?: boolean; family?: LineFamily };
 type Slab = { x: number; y: number; z: number; w: number; h: number; d: number; beat: number };
 
 const W = 594, H = 840; // two depth pixels per page millimeter
@@ -338,9 +339,10 @@ export function drawCathedral(ctx: SketchContext): Part[] {
   const interruption = rawInterruption <= 0.32 ? rawInterruption : 0.32 + (rawInterruption - 0.32) * 1.6;
   const rng = ctx.random('slab-interruptions');
   const beats = Array.from({ length: 64 }, () => rng() < interruption);
+  // The first three strokes of every slab are its outline edges; the rest are hatch courses.
   const strokes: Stroke[] = architecture.flatMap((s, owner) =>
-    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, owner })));
-  strokes.push(...shellStrokes(organism, density, interruption, ctx));
+    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map((stroke, k): Stroke => ({ ...stroke, owner, family: k < 3 ? 'edge' : 'hatch' })));
+  strokes.push(...shellStrokes(organism, density, interruption, ctx).map((stroke): Stroke => ({ ...stroke, family: 'membrane' })));
   const geometries = architecture.map(slabGeometry);
   geometries.push(buildSurfaceMesh((u, v) => shellPoint(organism, u, 2 * v - 1), {}, 150, 14));
   try {
@@ -365,14 +367,22 @@ export function drawCathedral(ctx: SketchContext): Part[] {
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<Ink, Point[][]>(INKS.map(ink => [ink, []]));
     const removeHidden = ctx.params.occlusion !== false;
+    const scratch = lineRough(ctx);
+    const scratchEnv = { depth, bias: 0.0014, mmPerPx: pageMmPerPx };
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const ink = stroke.ink;
+      const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', projection.sourceIndices[i]) : undefined;
+      const whole = projection.polylines[i];
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H);
       for (const clipped of bands ? pieces.flatMap(c => clearBands(c, bands, pageMmPerPx)) : pieces) {
         const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        const seen = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        // Scratching acts on what is already visible; its added marks are depth-tested again.
+        const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
+        const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
+          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv)) : seen;
         for (const run of runs) {
           const mm = run.map(toMm);
           for (const path of clipArt(mm, window)) {

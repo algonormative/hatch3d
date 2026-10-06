@@ -4,12 +4,13 @@ import { buildSurfaceMesh, projectPolylinesClipped } from '../../src/projection.
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
+import { lineRough, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
 import { clearBands, planSlogans, sloganSettings, type SloganPlan, type SloganSurface } from './slogan.ts';
 
 export type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet' | 'lettering';
 export type Group = 'tower' | 'collapse' | 'strand-a' | 'strand-b' | 'slogan' | 'title';
 /** `owner` is the index of the solid a stroke belongs to, so slogan bands clear only its own hatch. */
-type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
+type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number; family?: LineFamily };
 export type Role = 'stack' | 'pier' | 'stub' | 'fallen' | 'debris';
 export type Slab = {
   x: number; y: number; z: number; w: number; h: number; d: number;
@@ -477,9 +478,10 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
   const rng = ctx.random('slab-interruptions');
   const beats = Array.from({ length: 64 }, () => rng() < interruption);
   const view = camera();
+  // The first six strokes of every solid are its outline edges (front, back, four depth edges).
   const strokes: Stroke[] = architecture.flatMap((s, owner) =>
-    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, owner })));
-  for (const s of strands) strokes.push(...strandStrokes(s, density, interruption, ctx, view));
+    slabStrokes(s, density, beats[(s.beat * 7) % 64]).map((stroke, k): Stroke => ({ ...stroke, owner, family: k < 6 ? 'edge' : 'hatch' })));
+  for (const s of strands) strokes.push(...strandStrokes(s, density, interruption, ctx, view).map((stroke): Stroke => ({ ...stroke, family: 'membrane' })));
   const geometries = architecture.map(slabGeometry);
   if (options.occluders !== 'architecture') {
     for (const s of strands) geometries.push(buildSurfaceMesh((u, v) => strandPoint(s, u, 2 * v - 1), {}, 480, 12));
@@ -502,15 +504,23 @@ export function towerScene(ctx: SketchContext, options: TowerOptions = {}): { pa
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const removeHidden = ctx.params.occlusion !== false;
+    const scratch = lineRough(ctx);
+    const scratchEnv = { depth, bias: 0.0014, mmPerPx: pageMmPerPx };
     for (let i = 0; i < projection.polylines.length; i++) {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
+      const srng = scratch > 0 && stroke.family ? scratchRandom(ctx.seed, 'line-scratch', projection.sourceIndices[i]) : undefined;
+      const whole = projection.polylines[i];
       const text = stroke.group === 'slogan' || stroke.group === 'title';
       const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, pageMmPerPx) : [c]);
       for (const clipped of pieces) {
         const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        const seen = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        // Scratching acts on what is already visible; its added marks are depth-tested again.
+        const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
+        const runs = srng ? seen.flatMap(run => scratchRun(run, stroke.family!, scratch, srng,
+          [near(run[0], whole[0]), near(run.at(-1)!, whole.at(-1)!)], scratchEnv)) : seen;
         for (const run of runs) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
           for (const path of clipArt(mm)) {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { CATHEDRAL_CHARSET, cathedralGlyph, measureStrokeText, strokeText, strokeTextOnPath, type StrokeFace } from '../sketch/stroke-text.ts';
+import { CATHEDRAL_CHARSET, cathedralGlyph, measureStrokeText, roughGlyphKeep, roughMargin, strokeText, strokeTextOnPath, type StrokeFace } from '../sketch/stroke-text.ts';
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -88,5 +88,46 @@ describe('Breach Cathedral face', () => {
       }
     }
     expect(closest).toBeGreaterThanOrEqual(0.25 - 1e-6);
+  });
+});
+
+describe('Rough (scratched) lettering', () => {
+  const phrase = 'Breach Cathedral v1 9ef0bdb this was made by a machine';
+  const style = (rough: number, seed: number | string = 3) => ({ face: 'cathedral' as const, height: 2.2, rough, seed });
+
+  it('is deterministic per text and seed, and rough 0 is the clean output exactly', () => {
+    expect(strokeText(phrase, 1, 2, style(0.85))).toEqual(strokeText(phrase, 1, 2, style(0.85)));
+    expect(strokeText(phrase, 1, 2, style(0.85, 4))).not.toEqual(strokeText(phrase, 1, 2, style(0.85)));
+    expect(strokeText(phrase, 1, 2, style(0))).toEqual(strokeText(phrase, 1, 2, { face: 'cathedral', height: 2.2 }));
+    expect(measureStrokeText(phrase, style(1))).toBe(measureStrokeText(phrase, style(0)));
+    expect(() => strokeText(phrase, 0, 0, style(1.5))).toThrow(RangeError);
+  });
+
+  it('breaks strokes into more pieces with real gaps', () => {
+    const clean = strokeText(phrase, 0, 0, style(0));
+    const rough = strokeText(phrase, 0, 0, style(0.85));
+    expect(rough.length).toBeGreaterThan(clean.length * 1.3);
+    // A gap: some piece starts more than 0.1 mm away from where every other piece ends.
+    const ends = rough.map(p => p.at(-1)!);
+    const gaps = rough.filter(p => ends.every(e => Math.hypot(e.x - p[0].x, e.y - p[0].y) > 0.1)).length;
+    expect(gaps).toBeGreaterThan(10);
+  });
+
+  it('keeps every mark inside the clean text box grown by roughMargin', () => {
+    for (const r of [0.35, 0.65, 0.85, 1]) for (let seed = 0; seed < 12; seed++) {
+      const clean = strokeText(phrase, 0, 0, style(0)).flat();
+      const m = roughMargin(2.2, r) + 1e-9;
+      const box = { x0: Math.min(...clean.map(p => p.x)) - m, x1: Math.max(...clean.map(p => p.x)) + m,
+        y0: Math.min(0, ...clean.map(p => p.y)) - m, y1: Math.max(2.2, ...clean.map(p => p.y)) + m };
+      for (const p of strokeText(phrase, 0, 0, style(r, seed)).flat()) {
+        expect(p.x >= box.x0 && p.x <= box.x1 && p.y >= box.y0 && p.y <= box.y1).toBe(true);
+      }
+    }
+  });
+
+  it('keeps at least 60% of every glyph inked, for every character and many seeds', () => {
+    let min = 1;
+    for (let seed = 0; seed < 30; seed++) for (const k of roughGlyphKeep(CATHEDRAL_CHARSET, style(1, seed))) min = Math.min(min, k);
+    expect(min).toBeGreaterThanOrEqual(0.6);
   });
 });

@@ -1,3 +1,4 @@
+import { lineRoughControls } from '../phase-garden/scratch.ts';
 import type { Sketch } from '../../src/sketch/types.ts';
 import base from '../breach-cathedral/sketch.ts';
 import { LETTERING_PEN, sloganControls, titleControls } from '../breach-cathedral-tower/slogan.ts';
@@ -14,6 +15,7 @@ const sketch: Sketch = {
     ...base.controls,
     { type: 'toggle', id: 'fullHeight', label: 'Full height (no envelope cut)', default: false, group: 'Placement' },
     { type: 'toggle', id: 'fitWhole', label: 'Fit whole structure', default: false, group: 'Placement', showWhen: { control: 'fullHeight', equals: true } },
+    ...lineRoughControls(),
     ...sloganControls(0),
     ...titleControls(),
   ],

@@ -214,7 +214,150 @@ function validated(text: string, face: StrokeFace): string[] {
   return chars;
 }
 
-export interface TextStyle { face?: StrokeFace; height: number; tracking?: number }
+export interface TextStyle {
+  face?: StrokeFace; height: number; tracking?: number;
+  /** 0 (clean, the default) to 1: scratched, broken, re-struck lettering. 0 is byte-identical to no roughness. */
+  rough?: number;
+  /** Mixed with the text to seed the roughness, e.g. a placement id, so repeats of a word differ. */
+  seed?: number | string;
+}
+
+/** How far rough marks may stray outside the clean text box, as a multiple of the cap height. */
+export function roughMargin(height: number, rough = 0): number {
+  return rough > 0 ? height * 0.22 * roughAmount(rough) : 0;
+}
+
+/** The control's 0–1 mapped to effect strength: linear to 0.65, then steeper, so 1 is about 1.35× wilder. */
+function roughAmount(rough: number): number {
+  const r = Math.max(0, Math.min(1, rough));
+  return r <= 0.65 ? r : 0.65 + (r - 0.65) * 2;
+}
+
+function roughRandom(text: string, seed: number | string | undefined): () => number {
+  let h = 2166136261;
+  for (const c of `${String(seed ?? '')}\u0000${text}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return () => {
+    h = (h + 0x6d2b79f5) >>> 0;
+    let t = h;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function polylineLength(path: Point[]): number {
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+  return total;
+}
+
+/** The sub-polyline between arclengths a and b. */
+function slice(path: Point[], a: number, b: number): Point[] {
+  const out: Point[] = [];
+  let walked = 0;
+  for (let i = 1; i < path.length; i++) {
+    const p = path[i - 1], q = path[i];
+    const len = Math.hypot(q.x - p.x, q.y - p.y);
+    const s0 = walked, s1 = walked + len;
+    walked = s1;
+    if (len < 1e-12 || s1 < a || s0 > b) continue;
+    const at = (s: number) => ({ x: p.x + (q.x - p.x) * (s - s0) / len, y: p.y + (q.y - p.y) * (s - s0) / len });
+    if (!out.length) out.push(at(Math.max(a, s0)));
+    out.push(at(Math.min(b, s1)));
+  }
+  return out;
+}
+
+/**
+ * Scratch the clean glyph strokes, deterministically: per-glyph wobble and tilt, jittered corners,
+ * overshooting ends, a few real breaks (never more than 28% of a stroke), angled re-strikes and
+ * stray slashes. Every mark is held within `roughMargin` of the clean text box.
+ */
+function roughen(paths: Point[][], glyphOf: number[], height: number, rough: number, rng: () => number, keep: number[] = []): Point[][] {
+  const r = roughAmount(rough);
+  const h = height;
+  const all = paths.flat();
+  const margin = roughMargin(h, rough);
+  const box = {
+    x0: Math.min(...all.map(p => p.x)) - margin, x1: Math.max(...all.map(p => p.x)) + margin,
+    y0: Math.min(0, ...all.map(p => p.y)) - margin, y1: Math.max(h, ...all.map(p => p.y)) + margin,
+  };
+  const hold = (p: Point): Point => ({ x: Math.min(box.x1, Math.max(box.x0, p.x)), y: Math.min(box.y1, Math.max(box.y0, p.y)) });
+  const glyphs = new Map<number, Point[][]>();
+  paths.forEach((path, i) => { const g = glyphOf[i]; if (!glyphs.has(g)) glyphs.set(g, []); glyphs.get(g)!.push(path); });
+  const out: Point[][] = [];
+  const emit = (path: Point[]) => { if (path.length > 1) out.push(path.map(hold)); };
+  keep.length = 0;
+  for (const [, strokes] of [...glyphs.entries()].sort((a, b) => a[0] - b[0])) {
+    let cut = 0, drawn = 0;
+    const pts = strokes.flat();
+    const x0 = Math.min(...pts.map(p => p.x)), x1 = Math.max(...pts.map(p => p.x));
+    const pivot = { x: (x0 + x1) / 2, y: h };
+    const wobble = (rng() - 0.5) * 0.14 * h * r;
+    const tilt = (rng() - 0.5) * 0.2 * r;
+    const cos = Math.cos(tilt), sin = Math.sin(tilt);
+    const move = (p: Point, amount: number): Point => {
+      const dx = p.x - pivot.x, dy = p.y - pivot.y;
+      return { x: pivot.x + dx * cos - dy * sin + (rng() - 0.5) * amount, y: pivot.y + dx * sin + dy * cos + wobble + (rng() - 0.5) * amount };
+    };
+    for (const stroke of strokes) {
+      // Short marks (dots, ticks) jitter less, so an i keeps its dot.
+      const short = Math.min(1, polylineLength(stroke) / (0.5 * h));
+      let line = stroke.map(p => move(p, 0.08 * h * r * short));
+      // Overshoot: hand-cut lines that did not stop at the corner.
+      for (const end of [0, 1]) {
+        // Dots and ticks never overshoot: an i must not grow into an l.
+        if (line.length < 2 || rng() > 0.4 + 0.5 * r || short < 0.6) continue;
+        const a = end ? line[line.length - 2] : line[1], b = end ? line[line.length - 1] : line[0];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        if (len < 1e-9) continue;
+        const o = h * (0.05 + 0.17 * rng()) * r;
+        const tip = { x: b.x + (b.x - a.x) / len * o, y: b.y + (b.y - a.y) / len * o };
+        line = end ? [...line, tip] : [tip, ...line];
+      }
+      const total = polylineLength(line);
+      // Breaks: uneven dashes with visible gaps, capped at 28% of the stroke.
+      const pieces: [number, number][] = [];
+      let at = 0, gaps = 0;
+      while (at < total) {
+        const end = Math.min(total, at + h * (0.3 + 1.3 * rng()));
+        const gap = h * (0.07 + 0.13 * rng()) * Math.sqrt(Math.min(1, r));
+        const last = pieces.at(-1);
+        if (last && last[1] === at) last[1] = end; else pieces.push([at, end]);
+        if (end < total && rng() < 0.2 + 0.4 * r && gaps + gap <= 0.28 * total && total - end > gap + 0.05 * h) {
+          gaps += gap; at = end + gap;
+        } else at = end;
+      }
+      for (const [a, b] of pieces) emit(slice(line, a, b));
+      drawn += total; cut += gaps;
+      // Re-strike: a partial second cut at a slight angle to the first.
+      if (total > h * 0.3 && rng() < 0.5 * r) {
+        const a = total * rng() * 0.5, b = Math.min(total, a + total * (0.3 + 0.45 * rng()));
+        const piece = slice(line, a, b);
+        if (piece.length > 1) {
+          const p0 = piece[0], p1 = piece[piece.length - 1];
+          const len = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
+          const nx = -(p1.y - p0.y) / len, ny = (p1.x - p0.x) / len;
+          const o0 = (rng() - 0.5) * 0.12 * h, o1 = (rng() - 0.5) * 0.16 * h;
+          emit(piece.map((p, i) => { const t = piece.length > 1 ? i / (piece.length - 1) : 0; const o = o0 + (o1 - o0) * t; return { x: p.x + nx * o, y: p.y + ny * o }; }));
+        }
+      }
+    }
+    keep.push(drawn > 0 ? 1 - cut / drawn : 1);
+    // Stray slashes: steep cuts beside the letter or through its foot, never accent-like marks on top.
+    // Narrow glyphs (a single 'a', 'i', '1') only get strays beside them, clear of their strokes.
+    if (rng() < 0.4 * r) {
+      const beside = x1 - x0 < 0.45 * h || rng() < 0.6;
+      const off = 0.12 * h + 0.08 * h * Math.min(1, r);
+      const c = beside
+        ? { x: rng() < 0.5 ? x0 - off : x1 + off, y: h * (0.35 + 0.5 * rng()) }
+        : { x: x0 + (x1 - x0) * rng(), y: h * (0.8 + 0.2 * rng()) };
+      const ang = -1.25 + 0.4 * rng(), len = h * (0.2 + 0.22 * rng());
+      emit([{ x: c.x - Math.cos(ang) * len / 2, y: c.y - Math.sin(ang) * len / 2 }, { x: c.x + Math.cos(ang) * len / 2, y: c.y + Math.sin(ang) * len / 2 }]);
+    }
+  }
+  return out;
+}
 
 /** Hershey layout: `height` is the cap height; tracking is extra space in cap-height units of 1/21. */
 function hersheyLayout(chars: string[], face: HersheyFace, style: TextStyle): { paths: Point[][]; width: number } {
@@ -249,6 +392,33 @@ function cathedralLayout(chars: string[], style: TextStyle): { paths: Point[][];
 }
 
 function layout(text: string, style: TextStyle): { paths: Point[][]; width: number } {
+  const rough = style.rough ?? 0;
+  if (!Number.isFinite(rough) || rough < 0 || rough > 1) throw new RangeError('Text roughness must be between 0 and 1');
+  if (rough === 0) return cleanLayout(text, style);
+  const clean = cleanLayout(text, style);
+  // Which glyph drew each path: path counts of successive prefixes.
+  const chars = [...text];
+  const glyphOf: number[] = [];
+  let drawn = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const upTo = i === chars.length - 1 ? clean.paths.length : cleanLayout(chars.slice(0, i + 1).join(''), style).paths.length;
+    while (drawn < upTo) { glyphOf.push(i); drawn++; }
+  }
+  return { paths: roughen(clean.paths, glyphOf, style.height, rough, roughRandom(text, style.seed), lastKeep), width: clean.width };
+}
+
+const lastKeep: number[] = [];
+
+/**
+ * Legibility audit for rough text: per drawn glyph, the fraction of its (scratched) stroke length that
+ * is still inked after the breaks. Re-strikes and strays are not counted.
+ */
+export function roughGlyphKeep(text: string, style: TextStyle): number[] {
+  layout(text, style);
+  return (style.rough ?? 0) > 0 ? [...lastKeep] : [];
+}
+
+function cleanLayout(text: string, style: TextStyle): { paths: Point[][]; width: number } {
   const face = style.face ?? 'wire';
   const chars = validated(text, face);
   if (!Number.isFinite(style.height) || style.height <= 0 || style.height > 1000) throw new RangeError('Text height must be positive and finite');

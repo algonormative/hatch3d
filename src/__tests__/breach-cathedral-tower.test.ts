@@ -129,4 +129,27 @@ describe('Breach Cathedral: Tower', () => {
     expect(hashed.slogans.title?.text).toBe('Breach Cathedral v1 2f216f9+');
     expect(towerScene(context(211)).parts.some(p => p.id.startsWith('title-'))).toBe(false);
   });
+
+  it('keeps scratched lettering inside its knock-out bands and leaves rough 0 unchanged', () => {
+    const params = { sloganCount: 1, titleEnabled: true, title: 'Breach Cathedral v1 9ef0bdb' };
+    const clean = towerScene(context(211, params));
+    expect(towerScene(context(211, { ...params, sloganRough: 0, titleRough: 0 })).parts).toEqual(clean.parts);
+    const rough = towerScene(context(211, { ...params, sloganRough: 1, titleRough: 1 }));
+    expect(rough.slogans.title).toBeDefined();
+    const quads = [...rough.slogans.knockouts.values()].flat();
+    // Page millimetres back to depth pixels (559 × 864 over the 279.4 × 431.8 sheet).
+    const inside = (p: { x: number; y: number }) => quads.some(q => {
+      let sign = 0;
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i], b = q[(i + 1) % q.length];
+        const c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        if (Math.abs(c) < 0.05) continue;
+        if (sign === 0) sign = Math.sign(c); else if (Math.sign(c) !== sign) return false;
+      }
+      return true;
+    });
+    const marks = rough.parts.filter(p => p.id.startsWith('slogan-') || p.id.startsWith('title-')).flatMap(p => p.paths.flat());
+    expect(marks.length).toBeGreaterThan(100);
+    for (const m of marks) expect(inside({ x: m.x * 559 / 279.4, y: m.y * 864 / 431.8 })).toBe(true);
+  });
 });

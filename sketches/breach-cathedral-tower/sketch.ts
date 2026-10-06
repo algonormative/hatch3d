@@ -1,3 +1,4 @@
+import { lineRoughControls } from '../phase-garden/scratch.ts';
 import type { Control, Sketch } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE, TALL_ART, composePoster, posterControls } from '../phase-garden/poster.ts';
 import { drawTower } from './geometry.ts';
@@ -42,6 +43,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'worldY', label: 'World Y', default: 0, min: -1.5, max: 1.5, step: 0.05, group: 'Placement' },
     { type: 'slider', id: 'worldZ', label: 'World depth', default: 0, min: -2, max: 2, step: 0.05, group: 'Placement' },
     { type: 'toggle', id: 'occlusion', label: 'Hidden lines', default: true, group: 'Placement' },
+    ...lineRoughControls(),
     ...sloganControls(0),
     ...titleControls(),
   ],
