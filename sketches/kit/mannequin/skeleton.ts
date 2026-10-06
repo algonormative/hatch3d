@@ -199,8 +199,9 @@ export const POSES: Record<'stand' | 'walk' | 'sit' | 'kneel' | 'hang' | 'reach'
     support: { kind: 'hang', from: 'ankle_r' },
     joints: {
       hip_l: { flex: -10, abduct: 6 }, knee_l: { flex: 100 },
-      shoulder_l: { flex: -40, abduct: 12 }, elbow_l: { flex: 100, twist: 40 },
-      shoulder_r: { flex: -40, abduct: 12 }, elbow_r: { flex: 100, twist: 40 },
+      // Found by search: both hands meet at the small of the back.
+      shoulder_l: { flex: -40, abduct: 30, twist: -90 }, elbow_l: { flex: 90, twist: 45 },
+      shoulder_r: { flex: -40, abduct: 30, twist: -90 }, elbow_r: { flex: 90, twist: 45 },
       neck: { flex: -10 },
     },
   },

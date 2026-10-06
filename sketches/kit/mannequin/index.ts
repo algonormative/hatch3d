@@ -4,3 +4,5 @@ export * from './suit.ts';
 export * from './skeleton.ts';
 export * from './stick.ts';
 export * from './body.ts';
+export * from './drape.ts';
+export * from './pieces.ts';

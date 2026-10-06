@@ -5,6 +5,9 @@ import { PartBuckets, projectStrokes } from '../kit/strokes.ts';
 import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { buildBody, bodyMeshes, bodyStrokes } from '../kit/mannequin/body.ts';
 import { LOOK } from '../kit/mannequin/hatch.ts';
+import { drape, drapeMesh, drapeStrokes } from '../kit/mannequin/drape.ts';
+import { emptyPieces, mergePieces, outfit, piecesMeshes, piecesStrokes, prop, type PropKind } from '../kit/mannequin/pieces.ts';
+import type { Side } from '../kit/mannequin/skeleton.ts';
 import { clipToRect } from '../kit/page.ts';
 import { n } from '../kit/params.ts';
 import { POSES, poseSkeleton, type Pose } from '../kit/mannequin/skeleton.ts';
@@ -18,6 +21,11 @@ import type { Stroke } from '../kit/types.ts';
 const ORDER: (keyof typeof POSES)[] = ['stand', 'walk', 'reach', 'dance', 'sit', 'kneel', 'hang'];
 const BOX = { x0: 24, x1: 255.4, y0: 30, y1: 401.8 };
 const INKS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+/** Props per pose on the proof sheet, after the arcana they are for. */
+const PROPS: Partial<Record<keyof typeof POSES, [Side, PropKind][]>> = {
+  stand: [['r', 'lantern']], walk: [['r', 'staff']], reach: [['r', 'wand']], dance: [['l', 'wand'], ['r', 'wand']],
+  sit: [['l', 'scales'], ['r', 'sword']], kneel: [['r', 'cup']],
+};
 
 function layout(name: keyof typeof POSES, i: number): { pose: Pose; position: THREE.Vector3 } {
   const row = i < 4 ? 0 : 1, col = row === 0 ? i : i - 4;
@@ -28,7 +36,9 @@ function layout(name: keyof typeof POSES, i: number): { pose: Pose; position: TH
 }
 
 function draw(ctx: SketchContext): Part[] {
-  const style = ctx.params.style === 'bare' || ctx.params.style === 'suit' ? ctx.params.style : 'stick';
+  const STYLES = ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit'] as const;
+  const style = STYLES.find(x => x === ctx.params.style) ?? 'stick';
+  const withProps = ctx.params.props !== false;
   const turn = n(ctx, 'turn', 28, -60, 60) * Math.PI / 180, tilt = n(ctx, 'tilt', 8, -20, 30) * Math.PI / 180;
   const facets = Math.round(n(ctx, 'facets', 0, 0, 12));
   const skeletons = ORDER.map((name, i) => { const { pose, position } = layout(name, i); return poseSkeleton(pose, { position }); });
@@ -51,7 +61,7 @@ function draw(ctx: SketchContext): Part[] {
   const W = Math.round(bw * 2), H = Math.round(bh * 2);
   const mm = (p: { x: number; y: number }): Point => ({ x: BOX.x0 + p.x * bw / W, y: BOX.y0 + p.y * bh / H });
   const buckets = new PartBuckets();
-  if (style === 'stick') {
+  if (style === 'stick' && !withProps) {
     const strokes: Stroke[] = skeletons.flatMap((s, i) => stickStrokes(s, { forward, joints: 'ring', group: ORDER[i] }));
     for (const st of strokes) {
       const page = st.points.map(p => { const q = p.clone().project(view); return mm({ x: (q.x * 0.5 + 0.5) * W, y: (-q.y * 0.5 + 0.5) * H }); });
@@ -60,6 +70,14 @@ function draw(ctx: SketchContext): Part[] {
     return buckets.toParts(ORDER, INKS);
   }
   const bodies = skeletons.map(s => buildBody(s, { facets, jacket: style === 'suit' }));
+  const rng = ctx.random('proof-drape');
+  const drapes = style === 'robe' || style === 'cloak'
+    ? bodies.map((b, i) => drape(b, { rng, attach: ORDER[i] === 'hang' ? 'waist' : 'shoulders', length: ORDER[i] === 'hang' ? 0.42 : 1, open: style === 'cloak' ? 1.1 : 0 }))
+    : [];
+  const pieces = skeletons.map((s, i) => mergePieces(
+    style === 'outfit' ? outfit(s) : emptyPieces(),
+    ...(withProps ? (PROPS[ORDER[i]] ?? []).map(([side, kind]) => prop(s, side, kind)) : []),
+  ));
   const light = new THREE.Vector3(-0.5, 0.6, 0.65).normalize();
   const sheetScale = bw / (x1 - x0);
   const env = {
@@ -67,8 +85,20 @@ function draw(ctx: SketchContext): Part[] {
     screen: (p: THREE.Vector3) => { const q = p.clone().applyMatrix4(view.matrixWorldInverse); return { x: q.x * sheetScale, y: -q.y * sheetScale }; },
     dark: (_p: THREE.Vector3, normal: THREE.Vector3) => Math.max(0, Math.min(1, 1.02 - 1.2 * Math.max(0, normal.dot(light)))),
   };
-  const strokes = bodies.flatMap((b, i) => bodyStrokes(b, env, style, { ...LOOK, figure: ORDER[i], contour: ORDER[i] }));
-  const meshes = bodies.flatMap(b => bodyMeshes(b, 0.6));
+  const look = (i: number) => ({ ...LOOK, figure: ORDER[i], contour: ORDER[i] });
+  const pieceEnv = { ...env, eye: view.position.clone(), light: light.clone() };
+  const strokes = [
+    ...(style === 'outfit' || style === 'stick'
+      ? skeletons.flatMap((s, i) => stickStrokes(s, { forward, joints: 'ring', group: ORDER[i] }))
+      : bodies.flatMap((b, i) => bodyStrokes(b, env, style === 'suit' ? 'suit' : 'bare', look(i)))),
+    ...drapes.flatMap((d, i) => drapeStrokes(d, env, look(i))),
+    ...pieces.flatMap((p, i) => piecesStrokes(p, pieceEnv, look(i))),
+  ];
+  const meshes = [
+    ...(style === 'outfit' || style === 'stick' ? [] : bodies.flatMap(b => bodyMeshes(b, 0.6))),
+    ...drapes.map(drapeMesh),
+    ...pieces.flatMap(p => piecesMeshes(p)),
+  ];
   try {
     const depth = renderDepthBufferCPU(meshes, view, W, H);
     projectStrokes(strokes, { view, depth, width: W, height: H }, {
@@ -91,7 +121,8 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
-    { type: 'select', id: 'style', label: 'Renderer', default: 'stick', options: ['stick', 'bare', 'suit'], group: 'Figure' },
+    { type: 'select', id: 'style', label: 'Renderer', default: 'stick', options: ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit'], group: 'Figure' },
+    { type: 'toggle', id: 'props', label: 'Held props', default: true, group: 'Figure' },
     { type: 'slider', id: 'facets', label: 'Planes per limb (0 = smooth)', default: 0, min: 0, max: 12, step: 1, group: 'Figure' },
     { type: 'slider', id: 'density', label: 'Line density', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Figure' },
     { type: 'slider', id: 'turn', label: 'Camera turn', default: 28, min: -60, max: 60, step: 1, units: '°', group: 'View' },
