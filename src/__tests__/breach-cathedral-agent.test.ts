@@ -58,4 +58,20 @@ describe('Breach Cathedral: Agent', () => {
     expect(length(ribbon, 'figure')).not.toBeCloseTo(length(shown, 'figure'), 0);
     expect(ribbon.some(p => p.id === 'contour-vermilion')).toBe(true);
   }, 30_000);
+
+  it('looks up and to the viewer\'s left: the beam leaves the face toward the upper-left of the sheet', () => {
+    const parts = drawAgent(context(1, { radiance: 0, beam: 1 }));
+    const beams = parts.filter(p => p.id.startsWith('rays-')).flatMap(p => p.paths);
+    expect(beams.length).toBeGreaterThan(10);
+    let dx = 0, dy = 0;
+    for (const path of beams) { dx += path.at(-1)!.x - path[0].x; dy += path.at(-1)!.y - path[0].y; }
+    expect(dx).toBeLessThan(0);
+    expect(dy).toBeLessThan(0);
+  }, 30_000);
+
+  it('varies the pose: crossed legs move the trousers', () => {
+    const apart = length(drawAgent(context(3, { legs: 'apart' })), 'figure');
+    const crossed = length(drawAgent(context(3, { legs: 'crossed' })), 'figure');
+    expect(Math.abs(crossed - apart) / apart).toBeGreaterThan(0.02);
+  }, 30_000);
 });

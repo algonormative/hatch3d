@@ -35,10 +35,11 @@ const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 function camera(ctx: SketchContext): THREE.OrthographicCamera {
-  const turn = n(ctx, 'turn', -20, -40, 40) * Math.PI / 180;
-  const tilt = n(ctx, 'tilt', 9, -12, 24) * Math.PI / 180;
+  // From the right and below: the agent turns to the viewer's upper left and towers over the eye.
+  const turn = n(ctx, 'turn', 26, -40, 40) * Math.PI / 180;
+  const tilt = n(ctx, 'tilt', -7, -16, 24) * Math.PI / 180;
   const view = new THREE.OrthographicCamera(-HALF_W, HALF_W, HALF_H, -HALF_H, 0.1, 80);
-  const target = V(0, 0.4, 0.6);
+  const target = V(0, 0.2, 0.6);
   view.up.set(0, 1, 0);
   view.position.copy(target).add(V(Math.sin(turn) * Math.cos(tilt), Math.sin(tilt), Math.cos(turn) * Math.cos(tilt)).multiplyScalar(24));
   view.lookAt(target);
@@ -51,13 +52,17 @@ function camera(ctx: SketchContext): THREE.OrthographicCamera {
 
 type Key = [u: number, rx: number, ry: number];
 
-/** A limb or trunk: a spine curve with elliptical sections, sampled into a lookup table. */
+/**
+ * A limb or trunk: a spine curve with sections sampled into a lookup table. Sections are ellipses,
+ * or, with `facets`, polygons inscribed in them, so the body is cut into planes like the slabs.
+ */
 class Tube {
   readonly length: number;
   readonly circ: number;
   private readonly table: { c: THREE.Vector3; n: THREE.Vector3; b: THREE.Vector3; rx: number; ry: number }[];
   constructor(readonly id: string, spine: THREE.Vector3[], keys: Key[], ref: THREE.Vector3,
-    readonly hand: 1 | -1, readonly caps: [number, number] = [0, 0], readonly mask?: (u: number, v: number) => boolean) {
+    readonly hand: 1 | -1, readonly caps: [number, number] = [0, 0], readonly mask?: (u: number, v: number) => boolean,
+    readonly facets = 0) {
     const curve = new THREE.CatmullRomCurve3(spine, false, 'centripetal');
     this.length = curve.getLength();
     const M = 480;
@@ -90,7 +95,14 @@ class Tube {
     const rx = a.rx + (b.rx - a.rx) * f + lift, ry = a.ry + (b.ry - a.ry) * f + lift;
     const c = a.c.clone().lerp(b.c, f);
     const nn = a.n.clone().lerp(b.n, f), bb = a.b.clone().lerp(b.b, f);
-    return c.addScaledVector(nn, rx * Math.cos(TAU * v)).addScaledVector(bb, ry * Math.sin(TAU * v));
+    const angle = TAU * v;
+    let k = 1;
+    if (this.facets >= 3) {
+      const seg = TAU / this.facets;
+      const local = ((angle % seg) + seg) % seg - seg / 2;
+      k = Math.cos(seg / 2) / Math.cos(local);
+    }
+    return c.addScaledVector(nn, rx * k * Math.cos(angle)).addScaledVector(bb, ry * k * Math.sin(angle));
   }
   centre(u: number): THREE.Vector3 {
     const x = clamp(u, 0, 1) * (this.table.length - 1);
@@ -99,8 +111,14 @@ class Tube {
   }
   normal(u: number, v: number): THREE.Vector3 {
     const e = 1e-3;
+    // Keep the v difference inside one facet so a plane gets its own normal, not an edge average.
+    let v0 = v - e, v1 = v + e;
+    if (this.facets >= 3) {
+      const k = Math.floor(v * this.facets);
+      v0 = Math.max(v0, k / this.facets + 1e-5); v1 = Math.min(v1, (k + 1) / this.facets - 1e-5);
+    }
     const pu = this.point(Math.min(1, u + e), v).sub(this.point(Math.max(0, u - e), v));
-    const pv = this.point(u, v + e).sub(this.point(u, v - e));
+    const pv = this.point(u, v1).sub(this.point(u, v0));
     const out = new THREE.Vector3().crossVectors(pu, pv);
     if (out.lengthSq() < 1e-14) return this.point(u, v).sub(this.centre(u)).normalize();
     out.normalize();
@@ -108,7 +126,7 @@ class Tube {
     return out;
   }
   mesh(): THREE.BufferGeometry {
-    return buildSurfaceMesh((u, v) => this.point(u, v), {}, 200, 56);
+    return buildSurfaceMesh((u, v) => this.point(u, v), {}, 200, this.facets >= 3 ? this.facets * 6 : 56);
   }
 }
 
@@ -118,65 +136,103 @@ function opening(u: number): number { return u < BUTTON || u > COLLAR + 0.04 ? 0
 function lapel(u: number): number { return u < BUTTON - 0.02 || u > COLLAR ? 0 : 0.034 + 0.026 * clamp((u - BUTTON) / (COLLAR - BUTTON), 0, 1); }
 const front = (v: number) => Math.abs(((v - 0.25) % 1 + 1.5) % 1 - 0.5);
 
-export type Pose = { tubes: Tube[]; slabs: Slab[]; head: THREE.Vector3; trunk: Tube; neck: THREE.Vector3 };
+/** Where the head looks: `face` is the gaze, `axis` the crown, both world unit vectors. */
+export type Gaze = { face: THREE.Vector3; axis: THREE.Vector3; side: THREE.Vector3 };
+export type Legs = 'apart' | 'together' | 'crossed';
+export type Pose = { tubes: Tube[]; slabs: Slab[]; head: THREE.Vector3; trunk: Tube; neck: THREE.Vector3; gaze: Gaze; legs: Legs };
 
 /** The seated agent: trunk, limbs, block hands and shoes, all in world units (page ≈ 26 tall). */
 function figure(ctx: SketchContext): Pose {
   const rng = ctx.random('agent-pose');
+  const facets = Math.round(n(ctx, 'facets', 9, 0, 16));
+  const cut = facets >= 3 ? facets : 0;
   const spread = n(ctx, 'stance', 0.5, 0, 1);
-  const lean = (rng() - 0.5) * 0.5;
-  const kx = 1.55 + 0.9 * spread;
-  const trunk = new Tube('trunk', [V(0, -2.7, -0.55), V(0, -0.8, -0.72), V(0.05 * lean, 2.2, -0.82), V(0.1 * lean, 4.3, -0.86), V(0.12 * lean, 5.4, -0.82), V(0.14 * lean, 6.15, -0.76)],
-    [[0, 2.15, 1.45], [0.2, 1.95, 1.32], [0.5, 2.45, 1.46], [0.74, 2.95, 1.3], [0.82, 2.5, 1.12], [0.885, 1.15, 0.92], [0.92, 0.72, 0.7], [1, 0.66, 0.64]],
+  const legRoll = rng();
+  const picked = typeof ctx.params.legs === 'string' && ['apart', 'together', 'crossed'].includes(ctx.params.legs) ? ctx.params.legs as Legs | 'seed' : 'seed';
+  const legs: Legs = picked !== 'seed' ? picked : legRoll < 0.4 ? 'apart' : legRoll < 0.65 ? 'together' : 'crossed';
+  const crossing: 1 | -1 = rng() < 0.5 ? 1 : -1;
+  // The gaze: up and toward the figure's right, which this camera puts at the viewer's upper left.
+  const yaw = (n(ctx, 'gazeTurn', 48, 0, 80) + (rng() - 0.5) * 20) * Math.PI / 180;
+  const pitch = (n(ctx, 'gazeLift', 24, 0, 60) + (rng() - 0.5) * 14) * Math.PI / 180;
+  const level = V(-Math.sin(yaw), 0, Math.cos(yaw));
+  const face = level.clone().multiplyScalar(Math.cos(pitch)).add(V(0, Math.sin(pitch), 0)).normalize();
+  const axis = V(0, Math.cos(pitch), 0).addScaledVector(level, -Math.sin(pitch)).normalize();
+  const gaze: Gaze = { face, axis, side: new THREE.Vector3().crossVectors(axis, face).normalize() };
+  // A slight recline and a turn of the shoulders toward the gaze.
+  const twist = -0.35 * Math.sin(yaw);
+  const sh = (y: number) => y > 0 ? twist * y / 6 : 0;
+  const spineAt = (y: number, z: number) => V(sh(y) * 0.6, y, z - 0.06 * Math.max(0, y));
+  const kx = legs === 'together' ? 1.35 : 1.55 + 0.9 * spread;
+  const trunk = new Tube('trunk', [spineAt(-2.7, -0.55), spineAt(-0.8, -0.72), spineAt(2.2, -0.82), spineAt(4.3, -0.86), spineAt(5.4, -0.82), spineAt(6.15, -0.76)],
+    [[0, 2.2, 1.5], [0.2, 2.0, 1.36], [0.5, 2.65, 1.52], [0.74, 3.25, 1.36], [0.82, 2.7, 1.16], [0.885, 1.2, 0.95], [0.92, 0.74, 0.72], [1, 0.68, 0.66]],
     V(0, 0, 1), 1, [1.1, 0],
     (u, v) => {
       if (u > 0.9) return false; // the collar and neck belong to the shirt
       const o = front(v);
       return !(u >= BUTTON - 0.02 && u <= COLLAR + 0.04 && o < opening(u) + lapel(u));
-    });
+    }, cut);
   const tubes: Tube[] = [trunk];
-  for (const side of [-1, 1] as const) {
-    const hip = V(side * 1.5, -2.65, -0.25), knee = V(side * kx, -2.05 + 0.25 * rng(), 5.05);
-    const ankle = V(side * (kx + 0.05), -8.95, 4.6 + 0.4 * rng());
-    tubes.push(new Tube(`thigh${side}`, [hip, hip.clone().lerp(knee, 0.5).add(V(0, 0.18, 0)), knee],
-      [[0, 1.5, 1.4], [0.45, 1.36, 1.24], [1, 1.02, 0.98]], V(0, 1, 0), side === 1 ? 1 : -1, [0, 1.0]));
-    tubes.push(new Tube(`shin${side}`, [knee.clone().add(V(0, 0.1, -0.15)), knee.clone().lerp(ankle, 0.45).add(V(0, 0, 0.25)), ankle],
-      [[0, 1.0, 0.98], [0.3, 0.92, 0.95], [1, 0.62, 0.66]], V(0, 0, 1), side === 1 ? -1 : 1, [0.95, 0]));
-    const shoulder = V(side * 2.72, 3.95, -0.86), elbow = V(side * 4.08, 0.35, -0.95);
-    const wrist = V(side * 4.42, -0.12, 3.05);
-    tubes.push(new Tube(`upper${side}`, [shoulder, shoulder.clone().lerp(elbow, 0.5).add(V(side * 0.12, 0, 0)), elbow],
-      [[0, 1.0, 0.95], [0.5, 0.9, 0.86], [1, 0.8, 0.78]], V(0, 0, 1), side === 1 ? 1 : -1, [0.9, 0.78]));
-    tubes.push(new Tube(`fore${side}`, [elbow.clone().add(V(0, -0.1, 0.05)), elbow.clone().lerp(wrist, 0.5).add(V(0, 0.08, 0)), wrist],
-      [[0, 0.78, 0.76], [0.6, 0.7, 0.66], [1, 0.6, 0.55]], V(0, 1, 0), side === 1 ? -1 : 1, [0.76, 0]));
-  }
   const slabs: Slab[] = [];
   const block = (x: number, y: number, z: number, w: number, h: number, d: number, rx = 0, ry = 0, rz = 0, role: Role = 'stub') =>
     slabs.push({ ...solid(x, y, z, w, h, d, 40 + slabs.length, role), rx, ry, rz });
-  // Block hands: a palm on each armrest and four knuckled fingers over its front end.
+  /** A shoe: a thin sole slab under a blunt upper, turned about x so it can dangle. */
+  const shoe = (x: number, y: number, z: number, ry: number, tip = 0) => {
+    const c = Math.cos(tip), s = Math.sin(tip);
+    block(x, y, z, 1.34, 0.72, 2.5, tip, ry, 0);
+    block(x, y - 0.46 * c, z - 0.46 * s + 0.08, 1.44, 0.2, 2.72, tip, ry, 0);
+  };
   for (const side of [-1, 1] as const) {
-    const wx = side * 4.44;
-    block(wx, -0.33, 3.55, 1.18, 0.46, 1.1, 0.08, 0, 0);
+    const hip = V(side * 1.55, -2.65, -0.25);
+    let knee = V(side * kx, -2.05 + 0.25 * rng(), 5.05);
+    let ankle = V(side * (kx + 0.05), -8.95, 4.6 + 0.4 * rng());
+    let planted = true;
+    if (legs === 'crossed' && side === crossing) {
+      // The crossing thigh rests over the other knee; its shin hangs outside it, the shoe off the floor.
+      knee = V(-side * 0.7, -0.7, 5.25);
+      ankle = V(-side * 2.75, -7.0, 6.0);
+      planted = false;
+    }
+    tubes.push(new Tube(`thigh${side}`, [hip, hip.clone().lerp(knee, 0.5).add(V(0, 0.18, 0)), knee],
+      [[0, 1.55, 1.42], [0.45, 1.4, 1.26], [1, 1.04, 1.0]], V(0, 1, 0), side === 1 ? 1 : -1, [0, 1.02], undefined, cut));
+    tubes.push(new Tube(`shin${side}`, [knee.clone().add(V(0, 0.1, -0.15)), knee.clone().lerp(ankle, 0.45).add(V(0, 0, 0.25)), ankle],
+      [[0, 1.02, 1.0], [0.3, 0.94, 0.96], [1, 0.62, 0.66]], V(0, 0, 1), side === 1 ? -1 : 1, [0.97, 0], undefined, cut));
+    if (planted) shoe(ankle.x, -9.6, ankle.z + 0.45, side * 0.08);
+    else shoe(ankle.x, ankle.y - 0.55, ankle.z + 0.55, side * 0.15, 0.55);
+    const shoulder = V(side * 2.95 + sh(4) * 0.6, 3.95, -0.92), elbow = V(side * 4.12, 0.35, -0.98);
+    const wrist = V(side * 4.42, -0.12, 3.05);
+    tubes.push(new Tube(`upper${side}`, [shoulder, shoulder.clone().lerp(elbow, 0.5).add(V(side * 0.14, 0, 0)), elbow],
+      [[0, 1.08, 1.0], [0.5, 0.94, 0.9], [1, 0.82, 0.8]], V(0, 0, 1), side === 1 ? 1 : -1, [0.95, 0.8], undefined, cut));
+    tubes.push(new Tube(`fore${side}`, [elbow.clone().add(V(0, -0.1, 0.05)), elbow.clone().lerp(wrist, 0.5).add(V(0, 0.08, 0)), wrist],
+      [[0, 0.8, 0.78], [0.6, 0.72, 0.68], [1, 0.62, 0.57]], V(0, 1, 0), side === 1 ? -1 : 1, [0.78, 0], undefined, cut));
+    // Hands: a broad palm and four three-knuckled fingers. Resting fingers drape over the
+    // armrest end; a clutching hand wraps them back under it.
+    const clutch = rng() < 0.45;
+    const wx = side * 4.46;
+    block(wx, -0.3, 3.62, 1.42, 0.5, 1.3, 0.06, 0, 0);
+    block(wx + side * 0.04, -0.12, 3.45, 1.2, 0.18, 0.9, 0.06, 0, 0);
     for (let f = 0; f < 4; f++) {
-      const x = wx + side * (-0.42 + 0.28 * f);
-      const curl = 0.15 * rng();
-      const joints = [V(x, -0.32, 4.02), V(x, -0.38, 4.5 + 0.06 * (f % 2)), V(x, -0.86 - 0.08 * (f === 1 || f === 2 ? 1 : 0), 4.66), V(x, -1.3 - curl, 4.42)];
+      const x = wx + side * (-0.53 + 0.355 * f);
+      const reach = f === 0 || f === 3 ? 0.9 : 1;
+      const droop = 0.12 * rng();
+      const joints = clutch
+        ? [V(x, -0.28, 4.18), V(x, -0.3, 4.62 - 0.1 * (1 - reach)), V(x, -0.95, 4.82), V(x, -1.5 - droop, 4.38)]
+        : [V(x, -0.28, 4.18), V(x, -0.36, 4.68 + 0.06 * (f % 2)), V(x, -0.95 - 0.08 * (f === 1 || f === 2 ? 1 : 0), 4.82), V(x, -1.5 - droop, 4.7)];
+      const width = f === 3 ? 0.27 : 0.31;
       for (let j = 0; j < 3; j++) {
         const a = joints[j], b = joints[j + 1], d = b.clone().sub(a);
         const c = a.clone().lerp(b, 0.5);
-        // Local y along the segment, which lies in the y–z plane.
-        block(c.x, c.y, c.z, 0.25, d.length() + 0.05, 0.27, Math.atan2(d.z, d.y), 0, 0);
+        // Local y along the segment, which lies in the y–z plane; each knuckle a touch narrower.
+        block(c.x, c.y, c.z, width * (1 - 0.08 * j), d.length() + 0.06, 0.33 * (1 - 0.08 * j), Math.atan2(d.z, d.y), 0, 0);
       }
     }
     // Thumb along the inner face of the armrest.
-    const tx = side * 3.92;
-    block(tx, -0.62, 3.75, 0.2, 0.62, 0.22, -0.9, 0, 0);
-    block(tx, -0.9, 4.15, 0.2, 0.5, 0.2, -1.9, 0, 0);
-    // Shoes: blunt blocks under each shin.
-    block(side * (kx + 0.05), -9.72, 5.05, 1.32, 0.95, 2.55, 0, side * 0.08, 0);
+    const tx = side * 3.82;
+    block(tx, -0.6, 3.8, 0.27, 0.72, 0.3, -0.9, 0, 0);
+    block(tx, -0.95, 4.28, 0.25, 0.58, 0.27, clutch ? -2.2 : -1.9, 0, 0);
   }
   const neck = trunk.centre(0.96);
-  const head = V(neck.x, neck.y + 2.1, neck.z + 0.05);
-  return { tubes, slabs, head, trunk, neck };
+  const head = neck.clone().addScaledVector(axis, 1.15).addScaledVector(face, 0.35);
+  return { tubes, slabs, head, trunk, neck, gaze, legs };
 }
 
 // ---------------------------------------------------------------- light and screen
@@ -316,20 +372,25 @@ function ribbonTube(t: Tube, env: Env, opts: { band: number; gap: number; rests:
   return out;
 }
 
+type Tailoring = { seams: number[]; hems: number[]; creases?: number[]; stop?: number; cuffs?: number[] };
+
 /**
- * Tailored cloth: pinstripes run along each garment piece (constant v), seams and hems in vermilion.
- * Value comes from stripe density alone: fine stripes join the primaries only where the tone is dark.
+ * Tailored cloth: pinstripes run along each garment piece (constant v), seams and hems in vermilion,
+ * pressed creases and facet edges in carbon. Value comes from line density alone: fine stripes join
+ * the primaries only where the tone is dark, rings cross them in the deepest shadow, and the domed
+ * ends (knees, shoulders, elbows) are hatched with rings instead of converging stripes.
  */
-function pinstripeTube(t: Tube, env: Env, opts: { seams: number[]; hems: number[] }): Stroke[] {
+function pinstripeTube(t: Tube, env: Env, opts: Tailoring): Stroke[] {
   const out: Stroke[] = [];
-  const primary = Math.max(8, Math.round(t.circ / densityPitch(env.density, 0.62, 0.42, 0.32)));
+  const primary = Math.max(8, Math.round(t.circ / densityPitch(env.density, 0.56, 0.38, 0.29)));
   const N = primary * 4;
-  const samples = Math.max(80, Math.round(t.length / 0.08));
-  // Stripes stop where a limb rounds into its end cap, so knees read as cloth, not star bursts.
-  const lo = 0.35 * t.caps[0] / t.length, hi = 1 - 0.35 * t.caps[1] / t.length;
-  const visible = (u: number, v: number) => u >= lo && u <= hi && (!t.mask || t.mask(u, ((v % 1) + 1) % 1));
+  const samples = Math.max(80, Math.round(t.length / 0.07));
+  const lo = 0.35 * t.caps[0] / t.length, hi = Math.min(opts.stop ?? 1, 1 - 0.35 * t.caps[1] / t.length);
+  const cloth = (u: number, v: number) => !t.mask || t.mask(u, ((v % 1) + 1) % 1);
+  const visible = (u: number, v: number) => u >= lo && u <= hi && cloth(u, v);
+  const offset = t.facets >= 3 ? 0.5 / N : 0;
   for (let j = 0; j < N; j++) {
-    const v = j / N;
+    const v = j / N + offset;
     const tier = tierOf(j);
     const pts: THREE.Vector3[] = [], keep: boolean[] = [];
     for (let i = 0; i <= samples; i++) {
@@ -342,17 +403,42 @@ function pinstripeTube(t: Tube, env: Env, opts: { seams: number[]; hems: number[
     }
     runs(pts, keep, j % 16 === 0 ? 'violet' : 'ultramarine', 'figure', out);
   }
-  const seam = (pts: THREE.Vector3[], keep: boolean[]) => runs(pts, keep, 'vermilion', 'contour', out);
-  for (const v of opts.seams) {
+  // Rings: the only hatch on the domed ends, and a cross-hatch over the stripes in the deepest shadow.
+  const R = Math.max(8, Math.round(t.length / 0.34)) * 4;
+  const around = Math.max(120, Math.round(t.circ / 0.06));
+  for (let i = 0; i < R; i++) {
+    const u = (i + 0.5) / R;
+    if (u > (opts.stop ?? 1)) continue;
+    const tier = tierOf(i);
+    const capped = u < lo || u > hi;
+    const threshold = capped ? TIER[tier] : tier === 0 ? 0.74 : tier === 1 ? 0.84 : 2;
     const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= samples; i++) { const u = i / samples; pts.push(t.point(u, v, 0.01)); keep.push(visible(u, v)); }
-    seam(pts, keep);
+    for (let q = 0; q <= around; q++) {
+      const v = q / around;
+      const p = t.point(u, v);
+      pts.push(p);
+      if (!cloth(u, v)) { keep.push(false); continue; }
+      const s = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + 1 / R, v)));
+      keep.push(i % s === 0 && env.dark(p, t.normal(u, v)) > threshold);
+    }
+    runs(pts, keep, i % 8 === 0 ? 'violet' : 'ultramarine', 'figure', out);
   }
-  for (const u of opts.hems) {
+  const along = (v: number, ink: Ink, group: Group, lift: number, show: (u: number) => boolean) => {
     const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= 120; i++) { const v = i / 120; pts.push(t.point(u, v, 0.012)); keep.push(visible(u, v)); }
-    seam(pts, keep);
-  }
+    for (let i = 0; i <= samples; i++) { const u = i / samples; pts.push(t.point(u, v, lift)); keep.push(show(u) && cloth(u, v)); }
+    runs(pts, keep, ink, group, out);
+  };
+  const ring = (u: number, ink: Ink, lift: number, show = true) => {
+    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
+    for (let i = 0; i <= around; i++) { const v = i / around; pts.push(t.point(u, v, lift)); keep.push(show && cloth(u, v)); }
+    runs(pts, keep, ink, 'contour', out);
+  };
+  // The planes of a faceted body: crisp carbon edges, end to end.
+  if (t.facets >= 3) for (let k = 0; k < t.facets; k++) along(k / t.facets, 'carbon', 'figure', 0.004, u => u <= (opts.stop ?? 1));
+  for (const v of opts.seams) along(v + offset, 'vermilion', 'contour', 0.01, u => u >= lo && u <= hi);
+  for (const v of opts.creases ?? []) along(v + offset, 'carbon', 'figure', 0.012, u => u >= lo && u <= hi);
+  for (const u of opts.hems) ring(u, 'vermilion', 0.012);
+  for (const u of opts.cuffs ?? []) ring(u, 'carbon', 0.03);
   return out;
 }
 
@@ -374,7 +460,8 @@ function silhouettes(t: Tube, env: Env): Stroke[] {
       prev = cur;
     }
     const next: Track[] = [];
-    for (const r of roots) {
+    for (let r of roots) {
+      if (t.facets >= 3) r = Math.round(r * t.facets) / t.facets; // a faceted outline turns at a plane edge
       const p = t.point(u, r, 0.012);
       const match = tracks.find(tr => tr.last === i - 1 && Math.min(Math.abs(tr.v - r), 1 - Math.abs(tr.v - r)) < 0.08);
       if (match) { match.pts.push(p); match.v = r; match.last = i; next.push(match); tracks = tracks.filter(tr => tr !== match); }
@@ -439,40 +526,48 @@ function suitFront(trunk: Tube, env: Env): Stroke[] {
 
 // ---------------------------------------------------------------- the force
 
-export type ForceStrand = { theta0: number; hand: 1 | -1; turns: number; width: number; phase: number; lift: number };
+/** `from` is where along the strand it starts: the second strand joins only at the crown, to unwind. */
+export type ForceStrand = { theta0: number; hand: 1 | -1; turns: number; width: number; phase: number; lift: number; from: number };
 
 /** The head: two ribbons wound into a skull, then unwinding upward and flaring into the architecture. */
 export function forceStrands(ctx: SketchContext): ForceStrand[] {
   const rng = ctx.random('agent-force');
   const hand: 1 | -1 = rng() < 0.5 ? 1 : -1;
-  const turns = n(ctx, 'headTurns', 3, 1, 5) + (rng() - 0.5) * 0.4;
+  const turns = n(ctx, 'headTurns', 4.2, 1, 6) + (rng() - 0.5) * 0.4;
   const theta0 = rng() * TAU;
-  const width = n(ctx, 'headWidth', 0.7, 0.4, 1.4);
+  const width = n(ctx, 'headWidth', 0.5, 0.25, 1.4);
   return [
-    { theta0, hand, turns, width, phase: rng() * TAU, lift: 1 },
-    { theta0: theta0 + Math.PI * (0.85 + 0.3 * rng()), hand, turns, width: width * (0.85 + 0.2 * rng()), phase: rng() * TAU, lift: 0.82 + 0.2 * rng() },
+    { theta0, hand, turns, width, phase: rng() * TAU, lift: 1, from: 0 },
+    { theta0: theta0 + Math.PI * (0.85 + 0.3 * rng()), hand, turns, width: width * (0.85 + 0.2 * rng()), phase: rng() * TAU, lift: 0.82 + 0.2 * rng(), from: 0.5 },
   ];
 }
 
-function forcePoint(s: ForceStrand, neck: THREE.Vector3, rise: number, t: number, v: number): THREE.Vector3 {
-  // Head 0..0.6 of t; the flare above it climbs `rise` units into the architecture.
+function forcePoint(s: ForceStrand, neck: THREE.Vector3, gaze: Gaze, rise: number, along: number, v: number): THREE.Vector3 {
+  const t = s.from + (1 - s.from) * along;
+  // Head 0..0.6 of t; the flare above it climbs `rise` units and pours out along the gaze.
+  // Built in a head frame (x = side, y = crown, z = face), then turned onto the gaze.
   const headTop = 2.9;
-  const y = t < 0.6 ? headTop * t / 0.6 : headTop + (t - 0.6) / 0.4 * rise * s.lift;
+  const above = t < 0.6 ? 0 : (t - 0.6) / 0.4;
+  const y = t < 0.6 ? headTop * t / 0.6 : headTop + above * rise * s.lift;
   const hy = clamp(y / headTop, 0, 1);
   // An egg: narrow at the neck, widest just above the middle, closing in under the crown.
   const skull = 0.5 + 0.85 * Math.sin(Math.PI * Math.min(1, 0.04 + 0.92 * hy)) ** 0.75 - 0.15 * hy;
-  const flare = t < 0.6 ? 0 : ((t - 0.6) / 0.4) ** 1.6 * 2.8;
-  const r = skull * (t < 0.6 ? 1 : 1 - 0.2 * (t - 0.6) / 0.4) + flare + 0.05 * Math.sin(7 * TAU * t + s.phase);
-  const th = s.theta0 + s.hand * TAU * s.turns * t * (t < 0.6 ? 1 : 1 - 0.25 * (t - 0.6));
+  const flare = above ** 1.6 * 2.8;
+  const r = skull * (1 - 0.2 * above) + flare + 0.05 * Math.sin(7 * TAU * t + s.phase);
+  const th = s.theta0 + s.hand * TAU * s.turns * t * (1 - 0.25 * above);
   const radial = V(Math.cos(th), 0, Math.sin(th) * 0.9);
-  const taper = t < 0.6 ? 0.3 + 0.7 * Math.sin(Math.PI * Math.min(1, t / 0.6 * 0.9 + 0.1)) ** 0.5 : 1 - 0.75 * ((t - 0.6) / 0.4);
-  const width = s.width * taper;
+  const taper = s.from > 0 && t < 0.6 ? smooth(s.from, 0.6, t) : t < 0.6 ? 0.3 + 0.7 * Math.sin(Math.PI * Math.min(1, t / 0.6 * 0.9 + 0.1)) ** 0.5 : 1 - 0.75 * above;
+  // The face: where the ribbons pass in front of it they narrow, leaving an opening that looks out.
+  const facing = Math.sin(th);
+  const opening = t < 0.6 ? smooth(0.1, 0.75, facing) * Math.sin(Math.PI * clamp((hy - 0.12) / 0.8, 0, 1)) ** 0.6 : 0;
+  const width = s.width * taper * (1 - 0.85 * opening);
   const tangent = V(-Math.sin(th) * r * s.hand * TAU * s.turns, 1, Math.cos(th) * 0.9 * r * s.hand * TAU * s.turns).normalize();
   const across = new THREE.Vector3().crossVectors(radial, tangent).normalize();
   if (across.y < 0) across.negate();
-  const roll = (t < 0.6 ? 0.18 : 0.5) * Math.sin(TAU * 1.4 * t + s.phase);
+  const roll = (t < 0.6 ? 0 : 0.5) * Math.sin(TAU * 1.4 * t + s.phase);
   const dir = across.multiplyScalar(Math.cos(roll)).addScaledVector(radial, Math.sin(roll));
-  return neck.clone().add(V(0, y - 0.5, 0)).addScaledVector(radial, r).addScaledVector(dir, v * width);
+  const local = V(0, y - 0.5, 1.6 * above ** 1.3 * rise * s.lift * 0.45).addScaledVector(radial, r).addScaledVector(dir, v * width);
+  return neck.clone().addScaledVector(gaze.side, local.x).addScaledVector(gaze.axis, local.y).addScaledVector(gaze.face, local.z);
 }
 
 function ribbonStrokes(fn: (t: number, v: number) => THREE.Vector3, env: Env, rng: () => number, interruption: number, source: THREE.Vector3): Stroke[] {
@@ -512,26 +607,43 @@ function ribbonStrokes(fn: (t: number, v: number) => THREE.Vector3, env: Env, rn
   return out;
 }
 
-/** Light leaving the head: broken radial strokes on a plane behind the throne. */
+/** Light leaving the head: radial strokes on a plane behind the throne, dashed in a fixed 64-step rhythm. */
 function rays(ctx: SketchContext, head: THREE.Vector3): Stroke[] {
   const amount = n(ctx, 'radiance', 0.5, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('agent-rays');
-  const count = Math.round(40 + 140 * amount);
-  const z = -4.3;
+  const pattern = Array.from({ length: 64 }, (_, k) => (k % 8 !== 7) && rng() < 0.7);
+  const count = 8 * Math.round(6 + 12 * amount);
+  const z = -4.3, growth = 1.13;
   const out: Stroke[] = [];
   for (let i = 0; i < count; i++) {
-    const a = TAU * (i + 0.3 * (rng() - 0.5)) / count;
-    if (rng() < 0.28 * (Math.floor(i / 8) % 2 ? 1 : 0.4)) continue;
-    let r = 2.6 + 1.6 * rng();
-    const end = 9 + 16 * rng() * (0.5 + amount);
-    while (r < end) {
-      const dash = (0.35 + 0.1 * r) * (0.4 + rng());
-      const r1 = Math.min(end, r + dash);
-      out.push({ ink: i % 9 === 0 ? 'vermilion' : 'acid', group: 'rays',
+    const a = TAU * (i + 0.5) / count;
+    const long = i % 8 === 0;
+    const end = long ? 30 : 8 + 14 * amount;
+    for (let k = 0, r = 2.5; r < end; k++, r *= growth) {
+      if (!pattern[(k * 3 + i * 5) % 64]) continue;
+      const r1 = r * (1 + (growth - 1) * 0.68);
+      out.push({ ink: long ? 'vermilion' : 'acid', group: 'rays',
         points: [V(head.x + Math.cos(a) * r, head.y + Math.sin(a) * r, z), V(head.x + Math.cos(a) * r1, head.y + Math.sin(a) * r1, z)] });
-      r = r1 + (0.2 + 0.07 * r) * (0.3 + 1.4 * rng());
     }
+  }
+  return out;
+}
+
+/** The gaze made visible: a cone of straight lines leaving the face toward the upper left. */
+function beam(ctx: SketchContext, head: THREE.Vector3, gaze: Gaze): Stroke[] {
+  const amount = n(ctx, 'beam', 0.5, 0, 1);
+  if (amount <= 0) return [];
+  const lines = Math.round(12 + 36 * amount);
+  const spread = 0.12 + 0.2 * amount;
+  const up = new THREE.Vector3().crossVectors(gaze.face, gaze.side).normalize();
+  const out: Stroke[] = [];
+  for (let i = 0; i < lines; i++) {
+    // A sunflower disc of directions: even, deterministic, no clumps.
+    const rho = Math.sqrt((i + 0.5) / lines) * spread, phi = i * 2.399963;
+    const d = gaze.face.clone().addScaledVector(gaze.side, rho * Math.cos(phi)).addScaledVector(up, rho * Math.sin(phi)).normalize();
+    const start = head.clone().addScaledVector(d, 1.7);
+    out.push({ ink: i % 6 === 0 ? 'vermilion' : 'acid', group: 'rays', points: [start, start.clone().addScaledVector(d, 34)] });
   }
   return out;
 }
@@ -549,7 +661,7 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
     return s;
   };
   // Throne: floor plinth, seat, armrests, legs, back posts and rails.
-  add(0, -10.65, 2.4, 11.2 + rng(), 0.8, 7.4, 'pier');
+  add(0, -10.55, 2.6, 9.8 + 0.6 * rng(), 0.62, 6.4, 'pier');
   add(0, -4.55, 0.55, 8.6, 0.85, 6.2, 'pier');
   for (const side of [-1, 1]) {
     add(side * 4.56, -1.28, 0.9, 1.0, 0.76, 6.75, 'pier');
@@ -578,13 +690,17 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
   // Cathedral behind: cantilevered slabs from both walls, the original slab grammar, pushed back from the head.
   const levels = Math.round(n(ctx, 'levels', 12, 8, 16));
   const z0 = -7.6;
+  // Walls are laid out where the camera sees them: world x from a wanted screen x at this depth.
+  const turn = n(ctx, 'turn', 26, -40, 40) * Math.PI / 180;
+  const wx = (sx: number, z: number) => (sx + z * Math.sin(turn)) / Math.cos(turn);
   for (let i = 0; i < levels; i++) {
     const y = -11.2 + (23.6 * (i + 0.5)) / levels + (rng() - 0.5) * 0.5;
     for (const side of [-1, 1]) {
       if (rng() < 0.22) continue;
       const w = 2.6 + 3.6 * rng();
-      const x = side * (8.7 - w / 2 + 0.6 * rng());
-      const s = add(x, y, z0 + (rng() - 0.5) * 1.2, w, 0.55 + 0.6 * rng(), 1.1 + 0.6 * rng());
+      const z = z0 + (rng() - 0.5) * 1.2;
+      const x = wx(side * (8.7 - w / 2 + 0.6 * rng()), z);
+      const s = add(x, y, z, w, 0.55 + 0.6 * rng(), 1.1 + 0.6 * rng());
       const away = V(s.x - head.x, s.y - head.y, 0);
       const d = away.length();
       const push = breach * 3.2 * Math.exp(-((d / 6.5) ** 2));
@@ -598,7 +714,7 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
   }
   for (const side of [-1, 1]) for (let k = 0; k < 3; k++) {
     if (rng() < 0.3) continue;
-    add(side * (7.4 + 0.4 * rng()), -8 + 7.6 * k + rng(), z0 - 1.1, 0.7, 4.4 + 2 * rng(), 0.9, 'pier');
+    add(wx(side * (7.4 + 0.4 * rng()), z0 - 1.1), -8 + 7.6 * k + rng(), z0 - 1.1, 0.7, 4.4 + 2 * rng(), 0.9, 'pier');
   }
   // Fragments rising off the breach around the head.
   const drng = ctx.random('agent-debris');
@@ -623,12 +739,12 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
 // ---------------------------------------------------------------- assembly
 
 /** Seams and hems per garment piece, in tube coordinates. */
-const HEMS: Record<string, { seams: number[]; hems: number[] }> = {
+const HEMS: Record<string, Tailoring> = {
   trunk: { seams: [0, 0.5, 0.75], hems: [0.07] },
-  thigh: { seams: [0, 0.5], hems: [] },
-  shin: { seams: [0, 0.5], hems: [0.955] },
+  thigh: { seams: [0, 0.5], hems: [], creases: [0.25] },
+  shin: { seams: [0, 0.5], hems: [0.955], creases: [0.25] },
   upper: { seams: [0.5], hems: [] },
-  fore: { seams: [0.5], hems: [0.9] },
+  fore: { seams: [0.5], hems: [0.88], stop: 0.88, cuffs: [0.955] },
 };
 
 export function drawAgent(ctx: SketchContext): Part[] {
@@ -667,12 +783,12 @@ export function drawAgent(ctx: SketchContext): Part[] {
   strokes.push(...suitFront(pose.trunk, env));
   const strands = forceStrands(ctx);
   // The unwinding stops short of the art edge, so the force never reads as cropped.
-  const room = 10.4 - (pose.neck.y - 0.5 + 2.9);
+  const room = (10.4 - pose.neck.y) / Math.max(0.5, pose.gaze.axis.y) - 2.4;
   const rise = Math.max(0.6, (0.35 + 0.65 * n(ctx, 'rise', 0.5, 0, 1)) * room);
-  const forceFns = strands.map(s => (t: number, v: number) => forcePoint(s, pose.neck, rise, t, v));
+  const forceFns = strands.map(s => (t: number, v: number) => forcePoint(s, pose.neck, pose.gaze, rise, t, v));
   const forceRng = ctx.random('agent-force-ribs');
   for (const fn of forceFns) strokes.push(...ribbonStrokes(fn, env, forceRng, rawInterruption, pose.head));
-  strokes.push(...rays(ctx, pose.head));
+  strokes.push(...rays(ctx, pose.head), ...beam(ctx, pose.head, pose.gaze));
 
   const geometries = solids.map(slabGeometry);
   for (const t of pose.tubes) geometries.push(t.mesh());
