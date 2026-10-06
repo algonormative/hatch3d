@@ -144,7 +144,7 @@ export type Pose = { tubes: Tube[]; slabs: Slab[]; head: THREE.Vector3; trunk: T
 /** The seated agent: trunk, limbs, block hands and shoes, all in world units (page ≈ 26 tall). */
 function figure(ctx: SketchContext): Pose {
   const rng = ctx.random('agent-pose');
-  const facets = Math.round(n(ctx, 'facets', 9, 0, 16));
+  const facets = Math.round(n(ctx, 'facets', 6, 0, 16));
   const cut = facets >= 3 ? facets : 0;
   const spread = n(ctx, 'stance', 0.5, 0, 1);
   const legRoll = rng();
@@ -738,6 +738,50 @@ function architecture(ctx: SketchContext, head: THREE.Vector3): Slab[] {
 
 // ---------------------------------------------------------------- assembly
 
+/**
+ * The face is the system: a small Breach Cathedral of slab tiers stacked inside the head cage,
+ * aligned to the gaze and crowding toward the face opening. A few blocks drift out along the beam.
+ */
+function faceBlocks(ctx: SketchContext, pose: Pose): Slab[] {
+  const amount = n(ctx, 'faceBlocks', 0.6, 0, 1);
+  if (amount <= 0) return [];
+  const rng = ctx.random('agent-face');
+  const { side, axis, face } = pose.gaze;
+  const frame = new THREE.Matrix4().makeBasis(side, axis, face);
+  const out: Slab[] = [];
+  const place = (x: number, y: number, z: number, w: number, h: number, d: number, jitter: number) => {
+    const p = pose.neck.clone().addScaledVector(side, x).addScaledVector(axis, y).addScaledVector(face, z);
+    const turn = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler((rng() - 0.5) * jitter, (rng() - 0.5) * jitter, (rng() - 0.5) * jitter));
+    const e = new THREE.Euler().setFromRotationMatrix(frame.clone().multiply(turn), 'XYZ');
+    out.push({ ...solid(p.x, p.y, p.z, w, h, d, 200 + out.length, 'stack'), rx: e.x, ry: e.y, rz: e.z, tone: 0.62 });
+  };
+  // Tiers from jaw to brow; each tier a cantilever or a split pair, pushed toward the face.
+  const tiers = Math.round(6 + 6 * amount);
+  for (let i = 0; i < tiers; i++) {
+    const f = (i + 0.5) / tiers;
+    const y = 0.15 + 2.2 * f;
+    // Fit inside the egg: widest just above the middle.
+    const half = 0.45 + 0.55 * Math.sin(Math.PI * Math.min(1, 0.08 + 0.9 * f)) ** 0.8;
+    const pieces = rng() < 0.4 ? 2 : 1;
+    for (let k = 0; k < pieces; k++) {
+      const w = half * (pieces === 2 ? 0.75 + 0.35 * rng() : 1.2 + 0.6 * rng());
+      const x = pieces === 2 ? (k ? 1 : -1) * (half * 0.55 + 0.05) : (rng() - 0.5) * half * 0.6;
+      // Pushed out through the face opening: the front tiers break the line of the ribbon.
+      place(x, y, 0.45 + 0.75 * rng() * half, w, 0.16 + 0.16 * rng(), 0.5 + 0.6 * rng(), 0.22);
+    }
+    // A vertical blade every few tiers ties the stack together, as in the Tower.
+    if (i % 3 === 1) place((rng() - 0.5) * half, y + 0.2, 0.3, 0.18, 0.7, 0.4, 0.1);
+  }
+  // Escaping along the gaze: smaller and more turned the further out they are.
+  const escapes = Math.round(6 + 16 * amount);
+  for (let i = 0; i < escapes; i++) {
+    const out_ = 1.4 + 3.2 * (i / escapes) ** 0.8 + 0.4 * rng();
+    const s = 1 - 0.55 * (i / escapes);
+    place((rng() - 0.5) * 0.9 * out_ * 0.3, 1.2 + (rng() - 0.3) * 0.8, out_, (0.3 + 0.55 * rng()) * s, (0.12 + 0.16 * rng()) * s, (0.25 + 0.4 * rng()) * s, 1.6);
+  }
+  return out;
+}
+
 /** Seams and hems per garment piece, in tube coordinates. */
 const HEMS: Record<string, Tailoring> = {
   trunk: { seams: [0, 0.5, 0.75], hems: [0.07] },
@@ -760,11 +804,13 @@ export function drawAgent(ctx: SketchContext): Part[] {
     dark: toneField(ctx, pose.head),
   };
   const system = architecture(ctx, pose.head);
-  const solids = [...system, ...pose.slabs];
+  const face = faceBlocks(ctx, pose);
+  const solids = [...system, ...pose.slabs, ...face];
+  const faceFrom = system.length + pose.slabs.length;
   const beatRng = ctx.random('agent-rests');
   const beats = Array.from({ length: 64 }, () => beatRng() < rawInterruption);
   const strokes: Stroke[] = solids.flatMap((s, owner) => {
-    const group: Group = owner < system.length && s.role !== 'stub' ? (s.z < -5 ? 'system' : 'throne') : 'figure';
+    const group: Group = owner >= faceFrom ? 'force' : owner < system.length && s.role !== 'stub' ? (s.z < -5 ? 'system' : 'throne') : 'figure';
     return slabStrokes(s, density, beats[(s.beat * 7) % 64]).map(stroke => ({ ...stroke, group, owner }));
   });
   const band = n(ctx, 'band', 1.25, 0.7, 2.2);
