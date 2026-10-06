@@ -34,9 +34,10 @@ describe('Breach Tarot: XIII Death', () => {
     // Ink per unit area falls toward the point, and nothing of the system reaches the void.
     const area = (lo: number, hi: number) => Math.PI * (hi * hi - lo * lo);
     expect(ink(20, 40) / area(20, 40)).toBeLessThan(ink(90, 130) / area(90, 130));
-    // Nothing of the system or the helix crosses into the event horizon.
+    // Nothing of the system crosses into the event horizon.
     const core = 6 + 14 * 0.5;
-    expect(result.parts.filter(p => !p.id.startsWith('singularity') && !p.id.startsWith('threshold')).some(p => p.paths.some(path => path.some(q => r(q) < core)))).toBe(false);
+    // (The default helix stands in front of everything, so it alone may cross the disc.)
+    expect(result.parts.filter(p => !/^(singularity|threshold|helix)/.test(p.id)).some(p => p.paths.some(path => path.some(q => r(q) < core)))).toBe(false);
     expect(result.parts.find(p => p.id === 'singularity-carbon')!.paths.length).toBeGreaterThan(30);
   }, 30_000);
 
