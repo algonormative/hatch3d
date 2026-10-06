@@ -9,6 +9,8 @@ import { hatchedBar, type Bar } from '../kit/fills.ts';
 import type { Ink } from '../kit/types.ts';
 import { clamp, n, smooth } from '../kit/params.ts';
 import { barPattern, restPattern } from '../kit/rhythm.ts';
+import { HEMS, BUTTON, COLLAR, Tube, TIER, front, lapel, opening, perpendicular, pinstripeTube, ribbonTube, runs, silhouettes, stride, suitFront, tierOf, toneField,
+  type ClothStroke, type ToneEnv, type ViewEnv } from '../kit/mannequin/index.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../kit/strokes.ts';
 import { clearBands, knockOut, planSlogans, sloganSettings, type SloganSurface } from '../kit/lettering.ts';
 
@@ -18,7 +20,7 @@ import { clearBands, knockOut, planSlogans, sloganSettings, type SloganSurface }
  * twin helix unwinding. Value is lit from the head, so the force shows itself as light.
  */
 export type Group = 'system' | 'throne' | 'rays' | 'figure' | 'force' | 'contour' | 'slogan' | 'title';
-type Stroke = { ink: Ink; group: Group; points: THREE.Vector3[]; owner?: number };
+type Stroke = ClothStroke;
 
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const GROUPS: Group[] = ['system', 'throne', 'rays', 'figure', 'force', 'contour', 'slogan', 'title'];
@@ -31,7 +33,6 @@ const clipArt = (points: Point[]): Point[][] => clipToRect(points, ART);
 const HALF_H = 13.0;
 const HALF_W = HALF_H * TABLOID_PAGE.width / TABLOID_PAGE.height;
 const MM_PER_UNIT = TABLOID_PAGE.height / (2 * HALF_H);
-const MIN_MM = 0.55;
 const TAU = Math.PI * 2;
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -51,92 +52,6 @@ function camera(ctx: SketchContext): THREE.OrthographicCamera {
 }
 
 // ---------------------------------------------------------------- the figure
-
-type Key = [u: number, rx: number, ry: number];
-
-/**
- * A limb or trunk: a spine curve with sections sampled into a lookup table. Sections are ellipses,
- * or, with `facets`, polygons inscribed in them, so the body is cut into planes like the slabs.
- */
-class Tube {
-  readonly length: number;
-  readonly circ: number;
-  private readonly table: { c: THREE.Vector3; n: THREE.Vector3; b: THREE.Vector3; rx: number; ry: number }[];
-  constructor(readonly id: string, spine: THREE.Vector3[], keys: Key[], ref: THREE.Vector3,
-    readonly hand: 1 | -1, readonly caps: [number, number] = [0, 0], readonly mask?: (u: number, v: number) => boolean,
-    readonly facets = 0) {
-    const curve = new THREE.CatmullRomCurve3(spine, false, 'centripetal');
-    this.length = curve.getLength();
-    const M = 480;
-    this.table = [];
-    let circ = 0;
-    for (let i = 0; i <= M; i++) {
-      const u = i / M;
-      const c = curve.getPointAt(u), t = curve.getTangentAt(u);
-      const nn = new THREE.Vector3().crossVectors(t, ref).normalize();
-      const b = new THREE.Vector3().crossVectors(nn, t).normalize();
-      let k = 0;
-      while (k < keys.length - 2 && keys[k + 1][0] < u) k++;
-      const [u0, rx0, ry0] = keys[k], [u1, rx1, ry1] = keys[k + 1];
-      const f = smooth(u0, u1, u);
-      // Round caps: a dome of the end radius over the last stretch of spine.
-      const s = u * this.length, e = this.length - s;
-      let cap = 1;
-      if (caps[0] > 0 && s < caps[0]) cap = Math.sqrt(Math.max(0, 1 - ((caps[0] - s) / caps[0]) ** 2));
-      if (caps[1] > 0 && e < caps[1]) cap = Math.min(cap, Math.sqrt(Math.max(0, 1 - ((caps[1] - e) / caps[1]) ** 2)));
-      const rx = (rx0 + (rx1 - rx0) * f) * cap, ry = (ry0 + (ry1 - ry0) * f) * cap;
-      circ = Math.max(circ, Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry))));
-      this.table.push({ c, n: nn, b, rx, ry });
-    }
-    this.circ = circ;
-  }
-  point(u: number, v: number, lift = 0): THREE.Vector3 {
-    const x = clamp(u, 0, 1) * (this.table.length - 1);
-    const i = Math.min(this.table.length - 2, Math.floor(x)), f = x - i;
-    const a = this.table[i], b = this.table[i + 1];
-    const rx = a.rx + (b.rx - a.rx) * f + lift, ry = a.ry + (b.ry - a.ry) * f + lift;
-    const c = a.c.clone().lerp(b.c, f);
-    const nn = a.n.clone().lerp(b.n, f), bb = a.b.clone().lerp(b.b, f);
-    const angle = TAU * v;
-    let k = 1;
-    if (this.facets >= 3) {
-      const seg = TAU / this.facets;
-      const local = ((angle % seg) + seg) % seg - seg / 2;
-      k = Math.cos(seg / 2) / Math.cos(local);
-    }
-    return c.addScaledVector(nn, rx * k * Math.cos(angle)).addScaledVector(bb, ry * k * Math.sin(angle));
-  }
-  centre(u: number): THREE.Vector3 {
-    const x = clamp(u, 0, 1) * (this.table.length - 1);
-    const i = Math.min(this.table.length - 2, Math.floor(x));
-    return this.table[i].c.clone().lerp(this.table[i + 1].c, x - i);
-  }
-  normal(u: number, v: number): THREE.Vector3 {
-    const e = 1e-3;
-    // Keep the v difference inside one facet so a plane gets its own normal, not an edge average.
-    let v0 = v - e, v1 = v + e;
-    if (this.facets >= 3) {
-      const k = Math.floor(v * this.facets);
-      v0 = Math.max(v0, k / this.facets + 1e-5); v1 = Math.min(v1, (k + 1) / this.facets - 1e-5);
-    }
-    const pu = this.point(Math.min(1, u + e), v).sub(this.point(Math.max(0, u - e), v));
-    const pv = this.point(u, v1).sub(this.point(u, v0));
-    const out = new THREE.Vector3().crossVectors(pu, pv);
-    if (out.lengthSq() < 1e-14) return this.point(u, v).sub(this.centre(u)).normalize();
-    out.normalize();
-    if (out.dot(this.point(u, v).sub(this.centre(u))) < 0) out.negate();
-    return out;
-  }
-  mesh(): THREE.BufferGeometry {
-    return buildSurfaceMesh((u, v) => this.point(u, v), {}, 200, this.facets >= 3 ? this.facets * 6 : 56);
-  }
-}
-
-/** Suit front on the trunk, in trunk coordinates (u up the spine, v round it, 0.25 = front). */
-const BUTTON = 0.4, COLLAR = 0.83;
-function opening(u: number): number { return u < BUTTON || u > COLLAR + 0.04 ? 0 : 0.085 * clamp((u - BUTTON) / (COLLAR - BUTTON), 0, 1); }
-function lapel(u: number): number { return u < BUTTON - 0.02 || u > COLLAR ? 0 : 0.034 + 0.026 * clamp((u - BUTTON) / (COLLAR - BUTTON), 0, 1); }
-const front = (v: number) => Math.abs(((v - 0.25) % 1 + 1.5) % 1 - 0.5);
 
 /** Where the head looks: `face` is the gaze, `axis` the crown, both world unit vectors. */
 export type Gaze = { face: THREE.Vector3; axis: THREE.Vector3; side: THREE.Vector3 };
@@ -239,291 +154,8 @@ function figure(ctx: SketchContext): Pose {
 
 // ---------------------------------------------------------------- light and screen
 
-interface Env {
+interface Env extends ToneEnv, ViewEnv {
   view: THREE.Camera;
-  forward: THREE.Vector3;
-  screen: (p: THREE.Vector3) => { x: number; y: number };
-  dark: (p: THREE.Vector3, normal: THREE.Vector3) => number;
-  density: number;
-}
-
-/** Seeded smooth value noise for the impressionist breakup of the tone field. */
-function valueNoise(rng: () => number): (p: THREE.Vector3) => number {
-  const table = Array.from({ length: 512 }, () => rng());
-  const h = (i: number, j: number, k: number) => table[(((i * 73856093) ^ (j * 19349663) ^ (k * 83492791)) >>> 0) % 512];
-  return (p: THREE.Vector3) => {
-    const x0 = Math.floor(p.x), y0 = Math.floor(p.y), z0 = Math.floor(p.z);
-    const fx = p.x - x0, fy = p.y - y0, fz = p.z - z0;
-    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), sz = fz * fz * (3 - 2 * fz);
-    let out = 0;
-    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let c = 0; c < 2; c++) {
-      out += h(x0 + a, y0 + b, z0 + c) * (a ? sx : 1 - sx) * (b ? sy : 1 - sy) * (c ? sz : 1 - sz);
-    }
-    return out;
-  };
-}
-
-/** Tone field: the head is the light. Close to it the suit blows out to paper; the base stays heavy. */
-function toneField(ctx: SketchContext, head: THREE.Vector3): (p: THREE.Vector3, normal: THREE.Vector3) => number {
-  const base = 0.58 + 0.42 * n(ctx, 'value', 0.5, 0, 1);
-  const reach = 3 + 5 * n(ctx, 'glow', 0.5, 0, 1);
-  const impression = 0.75 * n(ctx, 'impression', 0.5, 0, 1);
-  const noise = valueNoise(ctx.random('agent-impression'));
-  const key = V(0.45, 0.55, 0.7).normalize();
-  return (p, normal) => {
-    const to = head.clone().sub(p);
-    const d = to.length();
-    const facing = Math.max(0, normal.dot(to) / d);
-    // An aura first, a lamp second: distance from the head sets the value, facing only modulates it.
-    const glow = 1.1 * (0.55 + 0.45 * facing) / (1 + (d / reach) ** 2.2);
-    const patch = noise(p.clone().multiplyScalar(0.42)) - 0.5;
-    return clamp(base - 1.5 * glow - 0.22 * Math.max(0, normal.dot(key)) + impression * patch, 0, 1);
-  };
-}
-
-/** Smallest power-of-two stride that keeps neighbouring lines at least MIN_MM apart on the sheet. */
-function stride(spacing: number): number {
-  let k = 1;
-  while (spacing * k < MIN_MM && k < 64) k *= 2;
-  return k;
-}
-const TIER = [0.1, 0.42, 0.66];
-const tierOf = (j: number) => (j % 4 === 0 ? 0 : j % 2 === 0 ? 1 : 2);
-
-/** Collect contiguous runs of samples that pass `keep` into strokes. */
-function runs(points: THREE.Vector3[], keep: boolean[], ink: Ink, group: Group, out: Stroke[]) {
-  let run: THREE.Vector3[] = [];
-  for (let i = 0; i < points.length; i++) {
-    if (keep[i]) run.push(points[i]);
-    else { if (run.length > 1) out.push({ ink, group, points: run }); run = []; }
-  }
-  if (run.length > 1) out.push({ ink, group, points: run });
-}
-
-function perpendicular(env: Env, a: THREE.Vector3, along: THREE.Vector3, beside: THREE.Vector3): number {
-  const p = env.screen(a), t = env.screen(along), q = env.screen(beside);
-  const tx = t.x - p.x, ty = t.y - p.y, tl = Math.hypot(tx, ty) || 1e-9;
-  return Math.abs(((q.x - p.x) * ty - (q.y - p.y) * tx) / tl);
-}
-
-/**
- * A tube wound in one continuous ribbon: band coordinate b = u·L/W + hand·v. Laminations follow the
- * ribbon (constant b), ribs cross it (constant v), and a paper gap separates the turns.
- * Fine lines appear only where the tone is dark enough; rests (the 64-step interruptions) open some turns.
- */
-function ribbonTube(t: Tube, env: Env, opts: { band: number; gap: number; rests: (k: number) => boolean }): Stroke[] {
-  const out: Stroke[] = [];
-  const Wb = opts.band, L = t.length, gap = opts.gap;
-  const lamPrimary = Math.max(3, Math.round(densityPitch(env.density, 3, 5, 7)));
-  const N = lamPrimary * 4;
-  const perTurn = Math.max(96, Math.round(t.circ / 0.09));
-  const bAt = (u: number, v: number) => u * L / Wb + t.hand * v;
-  const turns = L / Wb;
-  const visible = (u: number, v: number) => !t.mask || t.mask(u, ((v % 1) + 1) % 1);
-  // Laminations and the two ribbon edges.
-  for (let j = -1; j <= N; j++) {
-    const edge = j === -1 || j === N;
-    const f = j === -1 ? 0 : j === N ? 1 - gap : (j + 0.5) / N * (1 - gap);
-    const samples = Math.ceil((turns + 2) * perTurn);
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= samples; i++) {
-      const tau = -1 + (turns + 2) * i / samples; // unwrapped angle, in turns
-      const u = (f + tau) * Wb / L;
-      const v = t.hand * -tau;
-      if (u < 0 || u > 1) { pts.push(V(0, 0, 0)); keep.push(false); continue; }
-      const p = t.point(u, v);
-      pts.push(p);
-      if (!visible(u, v)) { keep.push(false); continue; }
-      const k = Math.floor(bAt(u, ((v % 1) + 1) % 1));
-      const dark = env.dark(p, t.normal(u, v));
-      if (edge) { keep.push(dark > 0.05); continue; }
-      const du = (1 - gap) / N * Wb / L;
-      const s = stride(perpendicular(env, p, t.point(u + Wb / L / perTurn, v - t.hand / perTurn), t.point(u + du, v)));
-      const tier = opts.rests(k) ? Math.max(tierOf(j), 1) : tierOf(j);
-      keep.push(j % s === 0 && dark > TIER[tier] + (tier === 0 && opts.rests(k) ? 0.2 : 0));
-    }
-    runs(pts, keep, edge ? 'vermilion' : 'ultramarine', edge ? 'contour' : 'figure', out);
-  }
-  // Ribs across each turn of the ribbon.
-  const ribPrimary = Math.max(8, Math.round(t.circ / densityPitch(env.density, 0.62, 0.4, 0.3)));
-  const R = ribPrimary * 2;
-  const kMin = Math.floor(bAt(0, 1)) - 1, kMax = Math.ceil(bAt(1, 0)) + 1;
-  for (let k = kMin; k <= kMax; k++) {
-    for (let i = 0; i < R; i++) {
-      const v = i / R;
-      const b0 = k + 0.02, b1 = k + 1 - gap - 0.02;
-      const u0 = (b0 - t.hand * v) * Wb / L, u1 = (b1 - t.hand * v) * Wb / L;
-      if (u1 < 0 || u0 > 1) continue;
-      const mid = clamp((u0 + u1) / 2, 0, 1);
-      const p = t.point(mid, v);
-      if (!visible(mid, v)) continue;
-      const dark = env.dark(p, t.normal(mid, v));
-      const s = stride(perpendicular(env, p, t.point(mid + 0.01, v), t.point(mid, v + 1 / R)));
-      const tier = i % 2 === 0 ? (i % 4 === 0 ? 0 : 1) : 2;
-      if (i % s !== 0 || dark < TIER[tier] + 0.08 || (opts.rests(k) && tier > 0)) continue;
-      const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-      for (let q = 0; q <= 6; q++) {
-        const u = u0 + (u1 - u0) * q / 6;
-        const ok = u >= 0 && u <= 1 && visible(u, v);
-        pts.push(ok ? t.point(u, v) : V(0, 0, 0));
-        keep.push(ok);
-      }
-      runs(pts, keep, i % 8 === 0 ? 'violet' : 'ultramarine', 'figure', out);
-    }
-  }
-  return out;
-}
-
-type Tailoring = { seams: number[]; hems: number[]; creases?: number[]; stop?: number; cuffs?: number[] };
-
-/**
- * Tailored cloth: pinstripes run along each garment piece (constant v), seams and hems in vermilion,
- * pressed creases and facet edges in carbon. Value comes from line density alone: fine stripes join
- * the primaries only where the tone is dark, rings cross them in the deepest shadow, and the domed
- * ends (knees, shoulders, elbows) are hatched with rings instead of converging stripes.
- */
-function pinstripeTube(t: Tube, env: Env, opts: Tailoring): Stroke[] {
-  const out: Stroke[] = [];
-  const primary = Math.max(8, Math.round(t.circ / densityPitch(env.density, 0.56, 0.38, 0.29)));
-  const N = primary * 4;
-  const samples = Math.max(80, Math.round(t.length / 0.07));
-  const lo = 0.35 * t.caps[0] / t.length, hi = Math.min(opts.stop ?? 1, 1 - 0.35 * t.caps[1] / t.length);
-  const cloth = (u: number, v: number) => !t.mask || t.mask(u, ((v % 1) + 1) % 1);
-  const visible = (u: number, v: number) => u >= lo && u <= hi && cloth(u, v);
-  const offset = t.facets >= 3 ? 0.5 / N : 0;
-  for (let j = 0; j < N; j++) {
-    const v = j / N + offset;
-    const tier = tierOf(j);
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= samples; i++) {
-      const u = i / samples;
-      const p = t.point(u, v);
-      pts.push(p);
-      if (!visible(u, v)) { keep.push(false); continue; }
-      const s = stride(perpendicular(env, p, t.point(u + 1 / samples, v), t.point(u, v + 1 / N)));
-      keep.push(j % s === 0 && env.dark(p, t.normal(u, v)) > TIER[tier]);
-    }
-    runs(pts, keep, j % 16 === 0 ? 'violet' : 'ultramarine', 'figure', out);
-  }
-  // Rings: the only hatch on the domed ends, and a cross-hatch over the stripes in the deepest shadow.
-  const R = Math.max(8, Math.round(t.length / 0.34)) * 4;
-  const around = Math.max(120, Math.round(t.circ / 0.06));
-  for (let i = 0; i < R; i++) {
-    const u = (i + 0.5) / R;
-    if (u > (opts.stop ?? 1)) continue;
-    const tier = tierOf(i);
-    const capped = u < lo || u > hi;
-    const threshold = capped ? TIER[tier] : tier === 0 ? 0.74 : tier === 1 ? 0.84 : 2;
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let q = 0; q <= around; q++) {
-      const v = q / around;
-      const p = t.point(u, v);
-      pts.push(p);
-      if (!cloth(u, v)) { keep.push(false); continue; }
-      const s = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + 1 / R, v)));
-      keep.push(i % s === 0 && env.dark(p, t.normal(u, v)) > threshold);
-    }
-    runs(pts, keep, i % 8 === 0 ? 'violet' : 'ultramarine', 'figure', out);
-  }
-  const along = (v: number, ink: Ink, group: Group, lift: number, show: (u: number) => boolean) => {
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= samples; i++) { const u = i / samples; pts.push(t.point(u, v, lift)); keep.push(show(u) && cloth(u, v)); }
-    runs(pts, keep, ink, group, out);
-  };
-  const ring = (u: number, ink: Ink, lift: number, show = true) => {
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let i = 0; i <= around; i++) { const v = i / around; pts.push(t.point(u, v, lift)); keep.push(show && cloth(u, v)); }
-    runs(pts, keep, ink, 'contour', out);
-  };
-  // The planes of a faceted body: crisp carbon edges, end to end.
-  if (t.facets >= 3) for (let k = 0; k < t.facets; k++) along(k / t.facets, 'carbon', 'figure', 0.004, u => u <= (opts.stop ?? 1));
-  for (const v of opts.seams) along(v + offset, 'vermilion', 'contour', 0.01, u => u >= lo && u <= hi);
-  for (const v of opts.creases ?? []) along(v + offset, 'carbon', 'figure', 0.012, u => u >= lo && u <= hi);
-  for (const u of opts.hems) ring(u, 'vermilion', 0.012);
-  for (const u of opts.cuffs ?? []) ring(u, 'carbon', 0.03);
-  return out;
-}
-
-/** Silhouette curves: where the surface turns edge-on to the camera. */
-function silhouettes(t: Tube, env: Env): Stroke[] {
-  const out: Stroke[] = [];
-  const NU = 220, NV = 96;
-  type Track = { v: number; pts: THREE.Vector3[]; last: number };
-  let tracks: Track[] = [];
-  const close = (tr: Track) => { if (tr.pts.length > 1) out.push({ ink: 'vermilion', group: 'contour', points: tr.pts }); };
-  for (let i = 0; i <= NU; i++) {
-    const u = i / NU;
-    const g = (v: number) => t.normal(u, v).dot(env.forward);
-    const roots: number[] = [];
-    let prev = g(0);
-    for (let j = 1; j <= NV; j++) {
-      const v = j / NV, cur = g(v);
-      if (Math.sign(cur) !== Math.sign(prev)) roots.push((j - 1 + prev / (prev - cur)) / NV);
-      prev = cur;
-    }
-    const next: Track[] = [];
-    for (let r of roots) {
-      if (t.facets >= 3) r = Math.round(r * t.facets) / t.facets; // a faceted outline turns at a plane edge
-      const p = t.point(u, r, 0.012);
-      const match = tracks.find(tr => tr.last === i - 1 && Math.min(Math.abs(tr.v - r), 1 - Math.abs(tr.v - r)) < 0.08);
-      if (match) { match.pts.push(p); match.v = r; match.last = i; next.push(match); tracks = tracks.filter(tr => tr !== match); }
-      else next.push({ v: r, pts: [p], last: i });
-    }
-    for (const tr of tracks) close(tr);
-    tracks = next;
-  }
-  for (const tr of tracks) close(tr);
-  return out;
-}
-
-/** Lapels, tie and collar laid over the trunk; the shirt in the opening stays paper. */
-function suitFront(trunk: Tube, env: Env): Stroke[] {
-  const out: Stroke[] = [];
-  const steps = 90;
-  const lift = 0.05;
-  const line = (ink: Ink, group: Group, fn: (s: number) => [number, number], count = steps, liftBy = lift) => {
-    const pts: THREE.Vector3[] = [];
-    for (let i = 0; i <= count; i++) { const [u, v] = fn(i / count); pts.push(trunk.point(u, v, liftBy)); }
-    out.push({ ink, group, points: pts });
-  };
-  const u0 = BUTTON - 0.02, u1 = COLLAR;
-  for (const side of [-1, 1]) {
-    const edgeIn = (s: number): [number, number] => { const u = u0 + (u1 - u0) * s; return [u, 0.25 + side * opening(u)]; };
-    const edgeOut = (s: number): [number, number] => { const u = u0 + (u1 - u0) * s; return [u, 0.25 + side * (opening(u) + lapel(u))]; };
-    line('vermilion', 'contour', edgeIn);
-    line('vermilion', 'contour', edgeOut);
-    // Lapel cloth: laminations parallel to the roll line, thicker toward the dark lower lapel.
-    const count = Math.round(densityPitch(env.density, 6, 10, 13));
-    for (let k = 1; k < count; k++) {
-      const f = k / count;
-      const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-      for (let i = 0; i <= steps; i++) {
-        const u = u0 + (u1 - u0) * i / steps;
-        const v = 0.25 + side * (opening(u) + f * lapel(u));
-        const p = trunk.point(u, v, lift);
-        pts.push(p);
-        keep.push(env.dark(p, trunk.normal(u, v)) > TIER[tierOf(k)] - 0.05);
-      }
-      runs(pts, keep, k % 4 === 0 ? 'violet' : 'ultramarine', 'figure', out);
-    }
-    // Notch and collar points.
-    line('vermilion', 'contour', s => [u1 + 0.065 * s, 0.25 + side * (opening(u1) + lapel(u1) * (1 - 0.6 * s))], 12);
-    line('vermilion', 'contour', s => [0.895 - 0.075 * s, 0.25 + side * (0.02 + 0.05 * s)], 12, 0.03);
-    line('vermilion', 'contour', s => [0.82 + 0.075 * s, 0.25 + side * (0.07 + 0.045 * s)], 12, 0.03);
-  }
-  // The tie: a knot under the collar, a blade with diagonal stripes, ending at the button.
-  const tieTop = 0.875, tieEnd = BUTTON + 0.005;
-  const half = (u: number) => u > 0.85 ? 0.011 : 0.012 + 0.012 * (0.85 - u) / (0.85 - tieEnd);
-  line('vermilion', 'contour', s => { const u = tieTop - (tieTop - tieEnd) * s; return [u, 0.25 - half(u)]; }, 60, 0.07);
-  line('vermilion', 'contour', s => { const u = tieTop - (tieTop - tieEnd) * s; return [u, 0.25 + half(u)]; }, 60, 0.07);
-  line('vermilion', 'contour', s => [0.85, 0.25 + (2 * s - 1) * half(0.85)], 6, 0.07);
-  const stripes = Math.round(densityPitch(env.density, 22, 34, 44));
-  for (let k = 0; k < stripes; k++) {
-    const c = tieEnd + (0.85 - tieEnd) * (k + 0.5) / stripes;
-    if (k % 6 === 5) continue;
-    line(k % 6 === 2 ? 'acid' : 'carbon', 'figure', s => [c + 0.012 * (s - 0.5), 0.25 + (2 * s - 1) * half(c) * 0.9], 4, 0.07);
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------- the force
@@ -770,15 +402,6 @@ function censorBars(ctx: SketchContext, pose: Pose, screenMm: (p: THREE.Vector3)
   return { quads, paths };
 }
 
-/** Seams and hems per garment piece, in tube coordinates. */
-const HEMS: Record<string, Tailoring> = {
-  trunk: { seams: [0, 0.5, 0.75], hems: [0.07] },
-  thigh: { seams: [0, 0.5], hems: [], creases: [0.25] },
-  shin: { seams: [0, 0.5], hems: [0.955], creases: [0.25] },
-  upper: { seams: [0.5], hems: [] },
-  fore: { seams: [0.5], hems: [0.88], stop: 0.88, cuffs: [0.955] },
-};
-
 export function drawAgent(ctx: SketchContext): Part[] {
   const view = camera(ctx);
   const forward = new THREE.Vector3();
@@ -789,7 +412,7 @@ export function drawAgent(ctx: SketchContext): Part[] {
   const env: Env = {
     view, forward, density,
     screen: p => { const q = p.clone().project(view); return { x: q.x * HALF_W * MM_PER_UNIT, y: q.y * HALF_H * MM_PER_UNIT }; },
-    dark: toneField(ctx, pose.head),
+    dark: toneField(ctx, pose.head, { noiseKey: 'agent-impression' }),
   };
   const system = architecture(ctx, pose.head);
   const solids = [...system, ...pose.slabs];
