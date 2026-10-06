@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import {
-  helixStrands, simplify, slabGeometry, slabMatrix, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
-} from '../../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { clearBands, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { keepAlong, meshCoverage } from '../page.ts';
-import { facetStrokes } from '../xvi-tower/geometry.ts';
+import { n } from '../../kit/params.ts';
+import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { atPage, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
 /**
  * XVII The Star: the Tower's debris, reread as a constellation. A night of dense engraved hatch
@@ -19,33 +20,16 @@ import { facetStrokes } from '../xvi-tower/geometry.ts';
  * the eight-pointed star, and two helix streams pour from it into still water. The water is the
  * card's flat mark: a band of broken ripple hatch in which everything above is reflected, row by row.
  */
-type Family = 'edge' | 'hatch' | 'membrane' | 'text';
-type Stroke = { ink: Ink; group: string; family: Family; points: THREE.Vector3[]; owner?: number };
-
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.4;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-
 export function starCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  const view = new THREE.PerspectiveCamera(n(ctx, 'fov', 54, 40, 80), W / H, 0.5, 600);
-  view.position.set(0, EYE, 0);
-  view.lookAt(0, EYE, -100);
-  view.setViewOffset(W, H, 0, -(HORIZON_Y - TABLOID_PAGE.height / 2) / MM_Y, W, H);
-  view.updateProjectionMatrix();
-  view.updateMatrixWorld();
-  return view;
-}
-
-/** The world point at page position p, `dist` units from the eye along its ray. */
-function atPage(view: THREE.Camera, p: Point, dist: number): THREE.Vector3 {
-  const ndc = new THREE.Vector3(p.x / TABLOID_PAGE.width * 2 - 1, -(p.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
-  return view.position.clone().addScaledVector(ndc.sub(view.position).normalize(), dist);
+  return horizonCamera({
+    fov: n(ctx, 'fov', 54, 40, 80), eye: [0, EYE, 0], target: [0, EYE, -100], far: 600,
+    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+  });
 }
 
 export interface Sky { star: Slab[]; debris: Slab[]; words: Slab[]; centre: THREE.Vector3 }
@@ -198,41 +182,32 @@ export function drawStar(ctx: SketchContext): Part[] {
     const surfaces: SloganSurface[] = words.map((s, i) => ({ id: star.length + debris.length + i, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d }));
     const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: HORIZON_Y / MM_Y } };
-    let slogans = planSlogans(ctx, surfaces, env);
-    for (let k = 1; k < 8 && slogans.placed.length === 0 && sloganSettings(ctx).count > 0; k++) slogans = planSlogans(ctx, surfaces, env, `slogan-${k}`);
+    const slogans = planSloganAttempts(ctx, env, Array.from({ length: 8 }, (_, k) => ({ surfaces: () => surfaces, salt: k === 0 ? undefined : `slogan-${k}` })));
     const lettered = new Set(slogans.knockouts.keys());
     const sky = strokes.filter(st => !(st.owner !== undefined && lettered.has(st.owner) && st.family === 'hatch' && st.ink !== 'carbon'));
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) sky.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) sky.push({ ink: 'lettering', group: 'title', family: 'text', points });
     const all = sky;
-    const projection = projectPolylinesClipped(all.map(s => s.points), view, W, H);
-    const buckets = new Map<string, Point[][]>();
-    const add = (key: string, path: Point[], text: boolean) => {
-      const reduced = text ? path : simplify(path);
-      let length = 0;
-      for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-      if (reduced.length > 1 && length > (text ? 0.05 : 0.4)) {
-        if (!buckets.has(key)) buckets.set(key, []);
-        buckets.get(key)!.push(reduced);
-      }
-    };
+    const buckets = new PartBuckets(0.4);
+    const add = (key: string, path: Point[], text: boolean) => buckets.add(key, path, text);
     const removeHidden = ctx.params.occlusion !== false;
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = all[projection.sourceIndices[i]];
-      const text = stroke.family === 'text';
-      const key = `${stroke.group}-${stroke.ink}`;
-      const bands = stroke.owner === undefined || stroke.group === 'water' ? undefined : slogans.knockouts.get(stroke.owner);
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden && !text ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
-          for (const inside of clipWindow(mm, { ...CARD, y1: HORIZON_Y - 0.5 })) add(key, inside, text);
-        }
-      }
-    }
+    projectStrokes(all, { view, depth, width: W, height: H }, {
+      hidden: stroke => removeHidden && stroke.family !== 'text',
+      pieces: (c, stroke) => {
+        const bands = stroke.owner === undefined || stroke.group === 'water' ? undefined : slogans.knockouts.get(stroke.owner);
+        return bands ? clearBands(c, bands, MM_Y) : [c];
+      },
+      begin: stroke => {
+        const text = stroke.family === 'text';
+        const key = `${stroke.group}-${stroke.ink}`;
+        return runs => {
+          for (const run of runs) {
+            for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y), { ...CARD, y1: HORIZON_Y - 0.5 })) add(key, inside, text);
+          }
+        };
+      },
+    });
     // The night, knocked out with a paper halo round every shining thing and every word.
     const halo = 1.6 + 1.6 * n(ctx, 'halo', 0.5, 0, 1);
     const shine = meshCoverage(geometries, view, TABLOID_PAGE, halo);
@@ -248,8 +223,8 @@ export function drawStar(ctx: SketchContext): Part[] {
     for (const p of nightA) add('night-carbon', p, false);
     for (const p of nightB) add('night-ultramarine', p, false);
     // The constellation: faint dashed lines from each fragment to its nearest neighbour, stopping at the halos.
-    const pageOf = (s: Slab) => { const c = new THREE.Vector3(s.x, s.y, s.z).project(view); return { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height }; };
-    const nodes = [...debris, ...words].map(pageOf).filter(p => p.y < HORIZON_Y - 4);
+    const slabPage = (s: Slab) => pageOf(view, new THREE.Vector3(s.x, s.y, s.z));
+    const nodes = [...debris, ...words].map(slabPage).filter(p => p.y < HORIZON_Y - 4);
     const drawnPairs = new Set<string>();
     nodes.forEach((p, i) => {
       let best = -1, dist = Infinity;
@@ -261,17 +236,13 @@ export function drawStar(ctx: SketchContext): Part[] {
       for (const piece of keepAlong([p, q], (x, at) => !shine(x) && at % 2.2 < 1.1, 0.2)) add('constellation-acid', piece, false);
     });
     // The water: dark rows parted by the star's glitter path, and the streams refracted below the surface.
-    const starX = pageOf(star[star.length - 1]).x;
-    const streamX = strands.map(st => pageOf(solid(st.x, 0, st.z, 0, 0, 0, 0, 'stub')).x);
+    const starX = slabPage(star[star.length - 1]).x;
+    const streamX = strands.map(st => slabPage(solid(st.x, 0, st.z, 0, 0, 0, 0, 'stub')).x);
     const sea = glitter(ctx, starX, streamX);
     sea.rows.forEach((p, i) => add(i % 5 === 2 ? 'water-carbon' : 'water-ultramarine', p, false));
     for (const p of sea.sparkle) add('glitter-acid', p, false);
     for (const p of sea.refraction) add('glitter-vermilion', p, false);
-    const parts: Part[] = [];
-    for (const group of ['night', 'constellation', 'star', 'pieces', 'helix', 'water', 'glitter', 'slogan', 'title']) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+    const parts = buckets.toParts(['night', 'constellation', 'star', 'pieces', 'helix', 'water', 'glitter', 'slogan', 'title'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: [[{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }]] });
     parts.push(...cardFrame('XVII', 'THE STAR'));
     return parts;

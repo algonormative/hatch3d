@@ -1,6 +1,7 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeText } from '../../src/sketch/stroke-text.ts';
 import { TALL_ART } from '../phase-garden/poster.ts';
+import { clipToRect, type Rect } from '../kit/page.ts';
 
 /**
  * The Breach Tarot card: one card per 11 × 17 sheet. A numeral band at the top and a name band
@@ -33,27 +34,5 @@ export function cardFrame(numeral: string, name: string, pen = 'carbon'): Part[]
   return [{ id: 'card-frame', pen, paths }];
 }
 
-/** Liang–Barsky clip of a page polyline to the art window. */
-export function clipWindow(points: Point[], box = CARD): Point[][] {
-  const runs: Point[][] = [];
-  let run: Point[] = [];
-  const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    let enter = 0, exit = 1;
-    for (const [p, q] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
-      if (p === 0) { if (q < 0) { enter = 1; exit = 0; break; } }
-      else { const t = q / p; if (p < 0) enter = Math.max(enter, t); else exit = Math.min(exit, t); }
-    }
-    if (enter > exit) { flush(); continue; }
-    const at = (t: number): Point => ({ x: a.x + dx * t, y: a.y + dy * t });
-    const start = at(enter), end = at(exit);
-    if (run.length && (Math.hypot(run[run.length - 1].x - start.x, run[run.length - 1].y - start.y) > 0.001 || enter > 0)) flush();
-    if (!run.length) run.push(start);
-    run.push(end);
-    if (exit < 1) flush();
-  }
-  flush();
-  return runs;
-}
+/** A page polyline clipped to the art window (or another box). */
+export const clipWindow = (points: Point[], box: Rect = CARD): Point[][] => clipToRect(points, box);

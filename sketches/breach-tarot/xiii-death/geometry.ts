@@ -1,15 +1,19 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { splitPolylineByDepth } from '../../../src/occlusion.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import {
-  helixStrands, simplify, slabGeometry, slabMatrix, slabStrokes, solid, strandPoint, strandStrokes, type Ink, type Slab, type Strand,
-} from '../../breach-cathedral-tower/geometry.ts';
-import { clearBands, planSlogans, sloganSettings, type SloganSurface } from '../../breach-cathedral-tower/slogan.ts';
+import { slabGeometry, slabMatrix, slabStrokes, solid, type Slab } from '../../kit/slabs.ts';
+import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { clearBands, onWordBox, planSlogans, rigidWords, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import { hatchedDisc, circlePath } from '../../kit/fills.ts';
+import type { Family, Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { densify, keepAlong } from '../page.ts';
+import { clamp, n, smooth } from '../../kit/params.ts';
+import { densify, keepAlong } from '../../kit/page.ts';
+import { horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { restPattern } from '../../kit/rhythm.ts';
+import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
 /**
  * XIII Death: a singularity on the horizon. The system, a long nave of cathedral slabs, recedes in
@@ -18,9 +22,6 @@ import { densify, keepAlong } from '../page.ts';
  * bare edges, dashes, dots, and a void at the point. The helix rises straight through the point,
  * unbent and fully drawn: the one thing that passes through unchanged.
  */
-type Family = 'edge' | 'hatch' | 'membrane' | 'text';
-type Stroke = { ink: Ink; group: string; family: Family; points: THREE.Vector3[]; owner?: number };
-
 const W = 559, H = 864;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -28,22 +29,13 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 export const SINGULARITY: Point = { x: TABLOID_PAGE.width / 2, y: HORIZON_Y };
 const EYE = 4.2;
 
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
 /** One-point perspective down the nave, shifted so the vanishing point sits on the horizon. */
 export function deathCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  const view = new THREE.PerspectiveCamera(n(ctx, 'fov', 64, 40, 90), W / H, 0.5, 600);
-  view.position.set(0, EYE, 6);
-  view.lookAt(0, EYE, -100);
-  view.setViewOffset(W, H, 0, -(HORIZON_Y - TABLOID_PAGE.height / 2) / MM_Y, W, H);
-  view.updateProjectionMatrix();
-  view.updateMatrixWorld();
-  return view;
+  return horizonCamera({
+    fov: n(ctx, 'fov', 64, 40, 90), eye: [0, EYE, 6], target: [0, EYE, -100], far: 600,
+    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+  });
 }
 
 /** The nave: paired piers with inward cantilevers in the Breach Cathedral grammar, lintels, paving. */
@@ -204,54 +196,6 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMo
   }));
 }
 
-/** Words stay legible: each is moved as one piece, shifted and turned by the lens at its centre. */
-type WordBox = { cx: number; cy: number; cos: number; sin: number; hx: number; hy: number };
-
-function rigidWords(items: { key: string; path: Point[] }[], move: (p: Point) => Point): { words: { key: string; path: Point[] }[]; boxes: WordBox[] } {
-  const boxes = items.map(it => {
-    const xs = it.path.map(p => p.x), ys = it.path.map(p => p.y);
-    return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
-  });
-  // Union glyph strokes whose boxes nearly touch: one cluster per word.
-  const parent = items.map((_, i) => i);
-  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
-    const a = boxes[i], b = boxes[j];
-    // Word spaces are about a cap height wide: bridge them, so a slab's words move together.
-    if (a.x0 - 3.6 <= b.x1 && b.x0 - 3.6 <= a.x1 && a.y0 - 1.2 <= b.y1 && b.y0 - 1.2 <= a.y1) parent[find(i)] = find(j);
-  }
-  const groups = new Map<number, number[]>();
-  items.forEach((_, i) => { const r = find(i); groups.set(r, [...(groups.get(r) ?? []), i]); });
-  const out: { key: string; path: Point[] }[] = [];
-  const placed: WordBox[] = [];
-  for (const members of groups.values()) {
-    const pts = members.flatMap(i => items[i].path);
-    const c = { x: pts.reduce((t, p) => t + p.x, 0) / pts.length, y: pts.reduce((t, p) => t + p.y, 0) / pts.length };
-    const m = move(c), e = move({ x: c.x + 1, y: c.y });
-    // The turn is capped: a word may lean into the swirl but never past readable.
-    const turn = Math.max(-0.45, Math.min(0.45, Math.atan2(e.y - m.y, e.x - m.x)));
-    const cos = Math.cos(turn), sin = Math.sin(turn);
-    const moved = members.map(i => ({ key: items[i].key, path: items[i].path.map(p => {
-      const dx = p.x - c.x, dy = p.y - c.y;
-      return { x: m.x + dx * cos - dy * sin, y: m.y + dx * sin + dy * cos };
-    }) }));
-    // The lens pushes outward; never let it push a word off the card.
-    const all = moved.flatMap(w => w.path);
-    const x0 = Math.min(...all.map(p => p.x)), x1 = Math.max(...all.map(p => p.x));
-    const y0 = Math.min(...all.map(p => p.y)), y1 = Math.max(...all.map(p => p.y));
-    const nx = x0 < CARD.x0 + 3 ? CARD.x0 + 3 - x0 : x1 > CARD.x1 - 3 ? CARD.x1 - 3 - x1 : 0;
-    const ny = y0 < CARD.y0 + 3 ? CARD.y0 + 3 - y0 : y1 > CARD.y1 - 3 ? CARD.y1 - 3 - y1 : 0;
-    for (const w of moved) out.push({ key: w.key, path: w.path.map(p => ({ x: p.x + nx, y: p.y + ny })) });
-    // The word's own clear box, in its turned frame, so lensed hatch can be kept off its letters.
-    const local = pts.map(p => ({ x: p.x - c.x, y: p.y - c.y }));
-    const lx0 = Math.min(...local.map(p => p.x)), lx1 = Math.max(...local.map(p => p.x));
-    const ly0 = Math.min(...local.map(p => p.y)), ly1 = Math.max(...local.map(p => p.y));
-    const ox = (lx0 + lx1) / 2, oy = (ly0 + ly1) / 2;
-    placed.push({ cx: m.x + nx + ox * cos - oy * sin, cy: m.y + ny + ox * sin + oy * cos, cos, sin, hx: (lx1 - lx0) / 2 + 1, hy: (ly1 - ly0) / 2 + 0.8 });
-  }
-  return { words: out, boxes: placed };
-}
-
 /** A coarse page bitmap of the helix's silhouette, so a separate helix can stand in front of all. */
 function coverage(geometries: THREE.BufferGeometry[], view: THREE.Camera): (p: Point) => boolean {
   const res = 4, gw = Math.ceil(TABLOID_PAGE.width * res), gh = Math.ceil(TABLOID_PAGE.height * res);
@@ -289,7 +233,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
   const density = n(ctx, 'hatchDensity', 0.62, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
   const beatRng = ctx.random('death-rests');
-  const beats = Array.from({ length: 64 }, () => beatRng() < interruption);
+  const beats = restPattern(beatRng, interruption);
   // The first six strokes of every solid are its outline edges; the rest is hatch.
   const strokes: Stroke[] = architecture.flatMap((s, owner) => slabStrokes(s, density, beats[(s.beat * 7) % 64])
     .map((stroke, k): Stroke => ({ ink: stroke.ink, group: 'system', family: k < 6 ? 'edge' : 'hatch', points: stroke.points, owner })));
@@ -315,8 +259,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
     // The phrase lives where the drawing still holds: on near faces, well out from the point.
     const surfaces: SloganSurface[] = [];
     architecture.forEach((s, id) => {
-      const c = new THREE.Vector3(s.x, s.y, s.z + s.d / 2).project(view);
-      const p = { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height };
+      const p = pageOf(view, new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
       const inside = p.x > CARD.x0 + 10 && p.x < CARD.x1 - 10 && p.y > CARD.y0 + 8 && p.y < CARD.y1 - 8;
       if (s.role === 'stack' && inside && radius(p) > u.edges + 12) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
     });
@@ -327,21 +270,20 @@ export function drawDeath(ctx: SketchContext): Part[] {
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
-    const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const drawn: { key: string; path: Point[]; family: Family }[] = [];
     const words: { key: string; path: Point[] }[] = [];
     const removeHidden = ctx.params.occlusion !== false;
-    for (let i = 0; i < projection.polylines.length; i++) {
-      const stroke = strokes[projection.sourceIndices[i]];
-      const key = `${stroke.group}-${stroke.ink}`;
-      const rank = rankOf(projection.sourceIndices[i]);
-      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
-      const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c]);
-      for (const clipped of pieces) {
-        const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
-        for (const run of runs) {
-          const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
+    projectStrokes(strokes, { view, depth, width: W, height: H }, {
+      hidden: () => removeHidden,
+      pieces: (c, stroke) => {
+        const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+        return bands ? clearBands(c, bands, MM_Y) : [c];
+      },
+      begin: (stroke, index) => {
+        const key = `${stroke.group}-${stroke.ink}`;
+        const rank = rankOf(index);
+        return runs => { for (const run of runs) {
+          const mm = scalePoints(run, MM_X, MM_Y);
           if (stroke.family === 'text') { words.push({ key, path: mm }); continue; }
           const lensed = stroke.family !== 'membrane' || mode === 'world';
           if (stroke.family === 'membrane' && mode === 'torn') {
@@ -369,70 +311,42 @@ export function drawDeath(ctx: SketchContext): Part[] {
           // The faint secondary image: a few outline edges near the line of sight, broken and sparse.
           if ((stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world')) && rank < 0.16) {
             const ghost = densify(mm).filter(p => radius(p) < 70).map(p => bend.secondary(p));
-            let run: Point[] = [];
+            let ghostRun: Point[] = [];
             const flush = () => {
-              for (const path of keepAlong(run, (_, at) => at % 2.4 < 1.3)) drawn.push({ key, path, family: 'edge' });
-              run = [];
+              for (const path of keepAlong(ghostRun, (_, at) => at % 2.4 < 1.3)) drawn.push({ key, path, family: 'edge' });
+              ghostRun = [];
             };
-            for (const p of ghost) { if (p) run.push(p); else flush(); }
+            for (const p of ghost) { if (p) ghostRun.push(p); else flush(); }
             flush();
           }
-        }
-      }
-    }
-    const lettering = rigidWords(words, bend.primary);
-    for (const w of lettering.words) for (const path of clipWindow(w.path)) drawn.push({ key: w.key, path, family: 'text' });
-    const onWord = (p: Point) => lettering.boxes.some(b => {
-      const dx = p.x - b.cx, dy = p.y - b.cy;
-      return Math.abs(dx * b.cos + dy * b.sin) < b.hx && Math.abs(-dx * b.sin + dy * b.cos) < b.hy;
+        } };
+      },
     });
+    const lettering = rigidWords(words, bend.primary, { x0: CARD.x0 + 3, x1: CARD.x1 - 3, y0: CARD.y0 + 3, y1: CARD.y1 - 3 });
+    for (const w of lettering.words) for (const path of clipWindow(w.path)) drawn.push({ key: w.key, path, family: 'text' });
+    const onWord = (p: Point) => onWordBox(lettering.boxes, p);
     // A separate helix stands in front of everything, the singularity's own marks included.
     const front = mode === 'apart' ? coverage(helixMeshes, view) : null;
-    const buckets = new Map<string, Point[][]>();
+    const buckets = new PartBuckets();
     const add = (key: string, path: Point[], family: Family | 'flat') => {
       const clear = (p: Point) => (!front || family === 'membrane' || !front(p)) && (family === 'text' || family === 'flat' || !onWord(p));
       const kept = front || lettering.boxes.length ? keepAlong(path, clear, 0.25) : [path];
-      for (const piece of kept) {
-        const reduced = family === 'text' || family === 'flat' ? piece : simplify(piece);
-        let length = 0;
-        for (let j = 1; j < reduced.length; j++) length += Math.hypot(reduced[j].x - reduced[j - 1].x, reduced[j].y - reduced[j - 1].y);
-        const floor = family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5;
-        if (reduced.length > 1 && length > floor) {
-          if (!buckets.has(key)) buckets.set(key, []);
-          buckets.get(key)!.push(reduced);
-        }
-      }
+      const floor = family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5;
+      for (const piece of kept) buckets.add(key, piece, family === 'text' || family === 'flat', floor);
     };
     for (const d of drawn) add(d.key, d.path, d.family);
     // The flat marks: the horizon rule, unbent, broken at the point; the event horizon, a disc hatched
     // solid in two crossing families; and one thin ring at the Einstein radius, the halo's edge.
     const gap = u.void + 2;
-    const circle = (r: number) => Array.from({ length: 145 }, (_, i) => ({
-      x: SINGULARITY.x + r * Math.cos(i / 144 * Math.PI * 2), y: SINGULARITY.y + r * Math.sin(i / 144 * Math.PI * 2),
-    }));
-    const disc: Point[][] = [circle(u.core), circle(u.core - 0.6)];
-    for (const [angle, pitch] of [[Math.PI / 4, 0.55], [-Math.PI / 4, 0.8]] as const) {
-      const cx = Math.cos(angle), cy = Math.sin(angle), nx = -cy, ny = cx;
-      const r = u.core - 0.9;
-      for (let o = -r + pitch / 2; o < r; o += pitch) {
-        const h = Math.sqrt(r * r - o * o);
-        if (h < 0.3) continue;
-        const mx = SINGULARITY.x + nx * o, my = SINGULARITY.y + ny * o;
-        disc.push([{ x: mx - cx * h, y: my - cy * h }, { x: mx + cx * h, y: my + cy * h }]);
-      }
-    }
-    for (const path of [...disc, circle(bend.einstein)]) add('singularity-carbon', path, 'flat');
+    const disc = hatchedDisc(SINGULARITY, u.core, [[Math.PI / 4, 0.55], [-Math.PI / 4, 0.8]]);
+    for (const path of [...disc, circlePath(SINGULARITY, bend.einstein)]) add('singularity-carbon', path, 'flat');
     for (const path of [
       [{ x: CARD.x0, y: HORIZON_Y }, { x: SINGULARITY.x - gap, y: HORIZON_Y }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }],
       [{ x: CARD.x0, y: HORIZON_Y + 0.9 }, { x: SINGULARITY.x - gap, y: HORIZON_Y + 0.9 }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y + 0.9 }, { x: CARD.x1, y: HORIZON_Y + 0.9 }],
     ]) add('threshold-carbon', path, 'flat');
-    const parts: Part[] = [];
-    for (const group of ['system', 'helix', 'slogan', 'title']) for (const ink of INKS) {
-      const paths = buckets.get(`${group}-${ink}`);
-      if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
-    }
+    const parts = buckets.toParts(['system', 'helix', 'slogan', 'title'], INKS);
     for (const id of ['singularity-carbon', 'threshold-carbon']) parts.push({ id, pen: 'carbon', paths: buckets.get(id) ?? [] });
     parts.push(...cardFrame('XIII', 'DEATH'));
     return parts;

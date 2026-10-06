@@ -2,21 +2,14 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
-import type { Part, SketchContext } from '../sketch/types.ts';
+import type { Part } from '../sketch/types.ts';
 import { renderDepthBufferCPU, densifyProjectedPolyline } from '../sketch/depth-buffer.ts';
 import { projectPolylinesClipped } from '../projection.ts';
 import { splitPolylineByDepth } from '../occlusion.ts';
 import { letterScratchMargin, letterScratchSize, scratchLetterRun, scratchRandom, scratchRun } from '../../sketches/phase-garden/scratch.ts';
 import { CATHEDRAL_CHARSET, strokeText } from '../sketch/stroke-text.ts';
 import { towerScene } from '../../sketches/breach-cathedral-tower/geometry.ts';
-
-function context(seed: number, params: SketchContext['params'] = {}): SketchContext {
-  return { params, seed, assets: {}, random: (id: string) => {
-    let h = (seed * 2654435761) >>> 0;
-    for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
-    return () => { h = (Math.imul(h, 1664525) + 1013904223) >>> 0; return h / 2 ** 32; };
-  } };
-}
+import { sketchContext } from './helpers/sketch-context.ts';
 
 const art = (parts: Part[]) => parts.filter(p => !p.id.startsWith('slogan-') && !p.id.startsWith('title-'));
 
@@ -52,10 +45,10 @@ describe('Line scratch', () => {
   });
 
   it('is deterministic, leaves lineRough 0 byte-identical, and adds only marks near visible lines', () => {
-    const clean = towerScene(context(211));
-    expect(towerScene(context(211, { lineRough: 0 })).parts).toEqual(clean.parts);
-    const rough = towerScene(context(211, { lineRough: 1 }));
-    expect(towerScene(context(211, { lineRough: 1 })).parts).toEqual(rough.parts);
+    const clean = towerScene(sketchContext(211));
+    expect(towerScene(sketchContext(211, { lineRough: 0 })).parts).toEqual(clean.parts);
+    const rough = towerScene(sketchContext(211, { lineRough: 1 }));
+    expect(towerScene(sketchContext(211, { lineRough: 1 })).parts).toEqual(rough.parts);
     expect(rough.parts).not.toEqual(clean.parts);
     // Every scratched mark lies near clean visible ink: at most a dropped sub-0.5 mm visible fragment,
     // plus the longest overshoot (1.8 mm), a re-strike offset (0.3 mm) and wobble. Nothing hidden by

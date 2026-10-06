@@ -1,6 +1,6 @@
 import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { sloganControls, LETTERING_PEN } from '../../breach-cathedral-tower/slogan.ts';
+import { sloganControls, LETTERING_PEN } from '../../kit/lettering.ts';
 import { drawSun } from './geometry.ts';
 
 const sketch: Sketch = {

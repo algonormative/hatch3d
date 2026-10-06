@@ -1,7 +1,58 @@
 import * as THREE from 'three';
 import type { Point } from '../../src/sketch/types.ts';
 
-/** Page-space path helpers shared by the Breach Tarot cards. */
+/** Page-space path helpers shared by the Breach sketches. */
+
+export interface Rect { x0: number; x1: number; y0: number; y1: number }
+
+/**
+ * Liang–Barsky clip of a polyline to a rectangle: the runs inside it, each of two or more points.
+ * (Not plot-core's Cohen–Sutherland `clipPolylineToRect`: that one rounds differently and breaks runs differently.)
+ */
+export function clipToRect(points: Point[], box: Rect): Point[][] {
+  const runs: Point[][] = [];
+  let run: Point[] = [];
+  const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    let enter = 0, exit = 1;
+    for (const [p, q] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
+      if (p === 0) { if (q < 0) { enter = 1; exit = 0; break; } }
+      else { const t = q / p; if (p < 0) enter = Math.max(enter, t); else exit = Math.min(exit, t); }
+    }
+    if (enter > exit) { flush(); continue; }
+    const at = (t: number): Point => ({ x: a.x + dx * t, y: a.y + dy * t });
+    const start = at(enter), end = at(exit);
+    if (run.length && (Math.hypot(run[run.length - 1].x - start.x, run[run.length - 1].y - start.y) > 0.001 || enter > 0)) flush();
+    if (!run.length) run.push(start);
+    run.push(end);
+    if (exit < 1) flush();
+  }
+  flush();
+  return runs;
+}
+
+/** Drop interior points that neither turn nor stretch the line: the plotted-path reducer. */
+export function simplify(points: Point[]): Point[] {
+  if (points.length < 3) return points;
+  const out = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = out[out.length - 1], b = points[i], c = points[i + 1];
+    const span = Math.hypot(b.x - a.x, b.y - a.y);
+    const area = Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x));
+    if (span > 1.4 || area > 0.15) out.push(b);
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+/** Total length of a polyline. */
+export function pathLength(path: Point[]): number {
+  let length = 0;
+  for (let j = 1; j < path.length; j++) length += Math.hypot(path[j].x - path[j - 1].x, path[j].y - path[j - 1].y);
+  return length;
+}
 
 /** Split a page path into short steps and keep the ones a test allows, carrying arclength. */
 export function keepAlong(path: Point[], keep: (p: Point, at: number) => boolean, step = 0.15): Point[][] {

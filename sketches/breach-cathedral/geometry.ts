@@ -5,7 +5,10 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { TABLOID_PAGE, posterArtTransform } from '../phase-garden/poster.ts';
 import { lineRough, scratchLetterRun, scratchRandom, scratchRun, type LineFamily } from '../phase-garden/scratch.ts';
-import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../breach-cathedral-tower/slogan.ts';
+import { n } from '../kit/params.ts';
+import { clipToRect, simplify } from '../kit/page.ts';
+import { restPattern } from '../kit/rhythm.ts';
+import { clearBands, letterScratch, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../kit/lettering.ts';
 
 type Ink = 'carbon' | 'ultramarine' | 'vermilion' | 'acid' | 'violet';
 /** `owner` indexes the slab a stroke belongs to; `text` marks opt-in slogan lettering. */
@@ -15,11 +18,6 @@ type Slab = { x: number; y: number; z: number; w: number; h: number; d: number; 
 const W = 594, H = 840; // two depth pixels per page millimeter
 const ART = { x0: 18, x1: 279, y0: 76, y1: 357 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-
-function n(ctx: SketchContext, key: string, fallback: number, lo: number, hi: number): number {
-  const v = ctx.params[key];
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
-}
 
 function camera(): THREE.OrthographicCamera {
   const halfWidth = 7.6;
@@ -294,43 +292,6 @@ function shellStrokes(s: Shell, density: number, interruption: number, ctx: Sket
   return out;
 }
 
-function clipArt(points: Point[], ART: Window): Point[][] {
-  const runs: Point[][] = [];
-  let run: Point[] = [];
-  const flush = () => { if (run.length >= 2) runs.push(run); run = []; };
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    let enter = 0, exit = 1;
-    for (const [p, q] of [[-dx, a.x - ART.x0], [dx, ART.x1 - a.x], [-dy, a.y - ART.y0], [dy, ART.y1 - a.y]]) {
-      if (p === 0) { if (q < 0) { enter = 1; exit = 0; break; } }
-      else { const t = q / p; if (p < 0) enter = Math.max(enter, t); else exit = Math.min(exit, t); }
-    }
-    if (enter > exit) { flush(); continue; }
-    const lerp = (t: number): Point => ({ x: a.x + dx * t, y: a.y + dy * t });
-    const start = lerp(enter), end = lerp(exit);
-    if (run.length && (Math.hypot(run[run.length - 1].x - start.x, run[run.length - 1].y - start.y) > 0.001 || enter > 0)) flush();
-    if (!run.length) run.push(start);
-    run.push(end);
-    if (exit < 1) flush();
-  }
-  flush();
-  return runs;
-}
-
-function simplify(points: Point[]): Point[] {
-  if (points.length < 3) return points;
-  const out = [points[0]];
-  for (let i = 1; i < points.length - 1; i++) {
-    const a = out[out.length - 1], b = points[i], c = points[i + 1];
-    const span = Math.hypot(b.x - a.x, b.y - a.y);
-    const area = Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x));
-    if (span > 1.4 || area > 0.15) out.push(b);
-  }
-  out.push(points[points.length - 1]);
-  return out;
-}
-
 export function drawCathedral(ctx: SketchContext): Part[] {
   const architecture = slabs(ctx);
   const organism = shell(ctx);
@@ -338,7 +299,7 @@ export function drawCathedral(ctx: SketchContext): Part[] {
   const rawInterruption = n(ctx, 'interruption', 0.32, 0, 1);
   const interruption = rawInterruption <= 0.32 ? rawInterruption : 0.32 + (rawInterruption - 0.32) * 1.6;
   const rng = ctx.random('slab-interruptions');
-  const beats = Array.from({ length: 64 }, () => rng() < interruption);
+  const beats = restPattern(rng, interruption);
   // The first three strokes of every slab are its outline edges; the rest are hatch courses.
   const strokes: Stroke[] = architecture.flatMap((s, owner) =>
     slabStrokes(s, density, beats[(s.beat * 7) % 64]).map((stroke, k): Stroke => ({ ...stroke, owner, family: k < 3 ? 'edge' : 'hatch' })));
@@ -391,7 +352,7 @@ export function drawCathedral(ctx: SketchContext): Part[] {
           : lrng ? seen.flatMap(run => scratchLetterRun(run, letterRough, lrng, scratchEnv, stroke.cap!)) : seen;
         for (const run of runs) {
           const mm = run.map(toMm);
-          for (const path of clipArt(mm, window)) {
+          for (const path of clipToRect(mm, window)) {
             if (stroke.text) {
               // Glyph curves are millimetre-scale: keep every point.
               if (path.length > 1) (stroke.title ? titling : lettering).push(path);
