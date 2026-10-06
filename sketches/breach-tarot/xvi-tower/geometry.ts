@@ -84,8 +84,10 @@ function tower(ctx: SketchContext): Slab[] {
 
 /** The raking light: low from the bolt's side and a little toward the eye, so faces split into values. */
 export function rakingLight(ctx: SketchContext): THREE.Vector3 {
-  const angle = n(ctx, 'lightAngle', 0.5, 0, 1);
-  return new THREE.Vector3(0.95, 0.12 + 0.5 * angle, 0.45).normalize();
+  // Elevation from a few degrees (grazing: front faces fall dark, flanks blaze) to high (tops lit).
+  const e = (4 + 56 * n(ctx, 'lightAngle', 0.3, 0, 1)) * Math.PI / 180;
+  const toward = 0.15 + 0.5 * n(ctx, 'lightAngle', 0.3, 0, 1);
+  return new THREE.Vector3(Math.cos(e), Math.sin(e) * 1.4, toward).normalize();
 }
 
 /** Face darkness under the raking light, 0 (paper) to 1, scaled by the slab's own tone. */
@@ -325,21 +327,40 @@ export function drawTower(ctx: SketchContext): Part[] {
   const slip = { x: along.x / al * amount + along.y / al * amount * 0.25, y: along.y / al * amount - along.x / al * amount * 0.25 };
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const surfaces: SloganSurface[] = [];
-    architecture.forEach((s, id) => {
-      if (s.role !== 'stack' || s.w <= 1.2 || s.h <= 0.3) return;
-      const c = new THREE.Vector3(s.x, s.y, s.z + s.d / 2).project(view);
-      const p = { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height };
-      // Keep words off the bolt, so no word is torn in two.
-      if (sideOf(bolt, p).dist > half + 18) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
-    });
-    const slogans = planSlogans(ctx, surfaces, {
+    // Candidate faces: off the bolt (no word torn in two), off the shaft (clear of the helix), inside the card.
+    const faces = (boltGap: number, shaftGap: number): SloganSurface[] => {
+      const out: SloganSurface[] = [];
+      architecture.forEach((s, id) => {
+        if (s.role !== 'stack' || s.w <= 1.2 || s.h <= 0.3) return;
+        const p = pageOf(new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
+        const shaftX = pageOf(new THREE.Vector3(0, s.y, 0)).x;
+        if (sideOf(bolt, p).dist > half + boltGap && Math.abs(p.x - shaftX) > shaftGap && p.x > CARD.x0 + 8 && p.x < CARD.x1 - 8) {
+          out.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
+        }
+      });
+      return out;
+    };
+    const env = {
       view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y },
-    });
+    };
+    // The spread phrase is placed whole or not at all; a few fixed reshuffles keep every seed lettered.
+    let slogans = planSlogans(ctx, faces(18, 9), env);
+    for (const [k, gaps] of [[18, 9], [12, 6], [8, 4], [8, 0]].entries()) {
+      for (let j = 0; j < 6 && slogans.placed.length === 0 && sloganSettings(ctx).count > 0; j++) {
+        slogans = planSlogans(ctx, faces(gaps[0], gaps[1]), env, `slogan-${k}-${j}`);
+      }
+    }
     const pen = sloganSettings(ctx).pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
+    // A face that carries a word keeps its outline and rings but drops its middle field, so the word sits on clean stone.
+    const lettered = new Set(slogans.knockouts.keys());
+    const allBands = [...slogans.knockouts.values()].flat();
+    for (let k = strokes.length - 1; k >= 0; k--) {
+      const st = strokes[k];
+      if (st.owner !== undefined && lettered.has(st.owner) && st.family === 'hatch' && st.ink !== 'carbon') strokes.splice(k, 1);
+    }
     const projection = projectPolylinesClipped(strokes.map(s => s.points), view, W, H);
     const buckets = new Map<string, Point[][]>();
     const add = (key: string, path: Point[], text: boolean) => {
@@ -356,11 +377,13 @@ export function drawTower(ctx: SketchContext): Part[] {
       const stroke = strokes[projection.sourceIndices[i]];
       const key = `${stroke.group}-${stroke.ink}`;
       const text = stroke.family === 'text';
-      const bands = stroke.owner === undefined ? undefined : slogans.knockouts.get(stroke.owner);
+      // Words read on top: every other line, the helix and piers in front included, parts round each placed word.
+      const bands = text || allBands.length === 0 ? undefined : allBands;
       const pieces = clipProjectedPolyline(projection.polylines[i], W, H).flatMap(c => bands ? clearBands(c, bands, MM_Y) : [c]);
       for (const clipped of pieces) {
         const dense = densifyProjectedPolyline(clipped);
-        const runs = removeHidden ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
+        // Lettering was placed against this depth pass already; the helix parts round it, so it is not hidden again.
+        const runs = removeHidden && !text ? splitPolylineByDepth(dense, depth, 0.0014).visible : [dense];
         for (const run of runs) {
           const mm = run.map(p => ({ x: p.x * MM_X, y: p.y * MM_Y }));
           for (const inside of clipWindow(mm)) for (const path of shear(inside, bolt, slip, half)) {

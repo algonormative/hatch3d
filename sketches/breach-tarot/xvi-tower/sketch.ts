@@ -20,7 +20,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'storm', label: 'Storm', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
     { type: 'slider', id: 'lid', label: 'Crown lifted', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Tower' },
     { type: 'slider', id: 'pour', label: 'Helix swell', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Tower' },
-    { type: 'slider', id: 'lightAngle', label: 'Light height', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Tower' },
+    { type: 'slider', id: 'lightAngle', label: 'Light height', default: 0.3, min: 0, max: 1, step: 0.01, group: 'Tower' },
     { type: 'slider', id: 'hatchDensity', label: 'Hatch weight', default: 0.6, min: 0, max: 1, step: 0.01, group: 'Tower' },
     { type: 'slider', id: 'levels', label: 'Slab levels', default: 19, min: 15, max: 21, step: 1, group: 'Tower' },
     { type: 'slider', id: 'cantilever', label: 'Cantilever reach', default: 0.85, min: 0, max: 1, step: 0.01, group: 'Tower' },
@@ -29,7 +29,8 @@ const sketch: Sketch = {
     { type: 'slider', id: 'distance', label: 'Camera distance', default: 48, min: 30, max: 90, step: 0.5, group: 'Camera' },
     { type: 'slider', id: 'shellWidth', label: 'Membrane width', default: 1.1, min: 0.4, max: 1.8, step: 0.05, group: 'Camera' },
     { type: 'toggle', id: 'occlusion', label: 'Hidden lines', default: true, group: 'Camera' },
-    ...sloganControls(1).map((c): Control => c.type === 'text' && c.id === 'slogan' ? { ...c, default: 'it was never load bearing' } : c),
+    ...sloganControls(1).map((c): Control => c.type === 'text' && c.id === 'slogan' ? { ...c, default: 'it was never load bearing' }
+      : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.4 } : c),
     ...titleControls(),
   ],
   draw(ctx) {
