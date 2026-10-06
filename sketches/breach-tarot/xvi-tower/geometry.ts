@@ -85,12 +85,42 @@ function tower(ctx: SketchContext): Slab[] {
 /** The helix pours up out of the opened shaft and flares above the lifted crown. */
 function pour(ctx: SketchContext): Strand[] {
   const rise = n(ctx, 'pour', 0.5, 0, 1);
-  return helixStrands({ ...ctx, params: { helixTurns: 1.6, ...ctx.params } }).map(s => ({
-    ...s, x: 0, y: 0, z: 0,
-    y0: CROWN - 8 + (s.id === 'b' ? 0.8 : 0), y1: CROWN + 4 + 3 * rise - (s.id === 'b' ? 1.2 : 0),
-    radius: 0.95 * (s.id === 'b' ? 0.92 : 1), swell: 0.8 + 1.4 * rise, centre: CROWN + 4.5 + 3 * rise,
-    width: n(ctx, 'shellWidth', 0.9, 0.4, 1.8) * (s.id === 'b' ? 0.9 : 1),
+  // Left of the bolt, which strikes the crown's right side: the pour reads clear of the band.
+  return helixStrands({ ...ctx, params: { helixTurns: 1.15, shellTwist: 0.35, ...ctx.params } }).map(s => ({
+    ...s, x: -2.2, y: 0, z: 0.6,
+    y0: CROWN - 9 + (s.id === 'b' ? 0.8 : 0), y1: CROWN + 1.5 + 2.5 * rise - (s.id === 'b' ? 1.2 : 0),
+    radius: 1.45 * (s.id === 'b' ? 0.92 : 1), swell: 0.5 + 1.1 * rise, centre: CROWN + 1 + 2 * rise,
+    width: n(ctx, 'shellWidth', 1.3, 0.4, 1.8) * (s.id === 'b' ? 0.9 : 1),
   }));
+}
+
+/**
+ * The storm: slanted rain on a backdrop plane behind the tower, so the depth pass keeps it behind
+ * everything. Dashes thicken toward the top of the sky into a cloud bank and thin out to the horizon;
+ * a fixed 64-step rhythm breaks each fall.
+ */
+function storm(ctx: SketchContext): Stroke[] {
+  const amount = n(ctx, 'storm', 0.5, 0, 1);
+  if (amount <= 0) return [];
+  const rng = ctx.random('tower-card-storm');
+  const pattern = Array.from({ length: 64 }, (_, k) => k % 8 !== 7 && rng() < 0.75);
+  const z = -32, top = 62, slant = -0.32, pitch = 0.62 - 0.22 * amount;
+  const out: Stroke[] = [];
+  for (let i = 0, x = -60; x < 60; i++, x += pitch * (0.85 + 0.3 * rng())) {
+    let y = 0.4 + rng() * 2;
+    for (let k = 0; y < top; k++) {
+      const f = y / top;
+      // Short broken rain low down, long dense streaks under the cloud bank.
+      const dash = (0.5 + 2.8 * f * f) * (0.6 + 0.8 * rng());
+      const gap = (2.6 - 2.2 * f * amount) * (0.5 + rng());
+      if (pattern[(k * 5 + i * 3) % 64] && rng() < 0.35 + 0.65 * f) {
+        out.push({ ink: i % 9 === 0 ? 'violet' : f > 0.55 ? 'carbon' : 'ultramarine', group: 'storm', family: 'hatch',
+          points: [new THREE.Vector3(x + slant * y, y, z), new THREE.Vector3(x + slant * (y + dash), y + dash, z)] });
+      }
+      y += dash + gap;
+    }
+  }
+  return out;
 }
 
 /**
@@ -199,6 +229,7 @@ export function drawTower(ctx: SketchContext): Part[] {
   for (const s of strands) {
     for (const stroke of strandStrokes(s, density, interruption, ctx, view)) strokes.push({ ink: stroke.ink, group: 'helix', family: 'membrane', points: stroke.points });
   }
+  strokes.push(...storm(ctx));
   const geometries = architecture.map(slabGeometry);
   for (const s of strands) geometries.push(buildSurfaceMesh((u, v) => strandPoint(s, u, 2 * v - 1), {}, 480, 12));
   const pageOf = (p: THREE.Vector3): Point => { const c = p.clone().project(view); return { x: (c.x * 0.5 + 0.5) * TABLOID_PAGE.width, y: (-c.y * 0.5 + 0.5) * TABLOID_PAGE.height }; };
@@ -258,7 +289,7 @@ export function drawTower(ctx: SketchContext): Part[] {
       }
     }
     const parts: Part[] = [];
-    for (const group of ['system', 'helix', 'slogan', 'title']) for (const ink of INKS) {
+    for (const group of ['storm', 'system', 'helix', 'slogan', 'title']) for (const ink of INKS) {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
