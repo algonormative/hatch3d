@@ -34,11 +34,14 @@ describe('Breach Tarot: XIII Death', () => {
     // Ink per unit area falls toward the point, and nothing of the system reaches the void.
     const area = (lo: number, hi: number) => Math.PI * (hi * hi - lo * lo);
     expect(ink(20, 40) / area(20, 40)).toBeLessThan(ink(90, 130) / area(90, 130));
-    expect(system.some(path => path.some(p => r(p) < 2))).toBe(false);
+    // Nothing of the system or the helix crosses into the event horizon.
+    const core = 6 + 14 * 0.5;
+    expect(result.parts.filter(p => !p.id.startsWith('singularity') && !p.id.startsWith('threshold')).some(p => p.paths.some(path => path.some(q => r(q) < core)))).toBe(false);
+    expect(result.parts.find(p => p.id === 'singularity-carbon')!.paths.length).toBeGreaterThan(30);
   }, 30_000);
 
   it('undoes edges with closeness to the point and keeps hatch only at the periphery', () => {
-    const u = { void: 5, dots: 18, dashes: 38, edges: 72 };
+    const u = { core: 3, void: 5, dots: 18, dashes: 38, edges: 72 };
     const at = (d: number) => [{ x: SINGULARITY.x - 50, y: SINGULARITY.y - d }, { x: SINGULARITY.x + 50, y: SINGULARITY.y - d }];
     expect(len(unrenderEdge(at(45), u))).toBeCloseTo(100, 3);
     const near = len(unrenderEdge(at(10), u));

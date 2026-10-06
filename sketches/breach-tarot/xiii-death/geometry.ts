@@ -78,19 +78,52 @@ function nave(ctx: SketchContext): Slab[] {
   return out;
 }
 
-/** Radii on the page, in millimetres from the singularity, where each register gives way. */
-export interface Undoing { void: number; dots: number; dashes: number; edges: number }
+/**
+ * Infall: fragments torn from the nave on a spiral toward the point, chosen on the page and set back
+ * into the world along the camera ray, so the lens then sweeps them in. Stretched along the swirl.
+ */
+function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
+  const amount = n(ctx, 'infall', 0.5, 0, 1);
+  const rng = ctx.random('death-infall');
+  const count = Math.round(60 * amount);
+  const out: Slab[] = [];
+  const start = rng() * Math.PI * 2;
+  for (let i = 0; i < count; i++) {
+    const f = i / Math.max(1, count - 1);
+    // Two arms of a logarithmic spiral, from the card's edge in toward the halo.
+    const arm = i % 2 ? Math.PI : 0;
+    const a = start + arm + 2.6 * f + (rng() - 0.5) * 0.5;
+    const rho = 128 * Math.exp(-1.15 * f) + (rng() - 0.5) * 10;
+    const page = { x: SINGULARITY.x + rho * Math.cos(a), y: SINGULARITY.y + rho * Math.sin(a) * 1.15 };
+    const ndc = new THREE.Vector3(page.x / TABLOID_PAGE.width * 2 - 1, -(page.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
+    const dir = ndc.sub(view.position).normalize();
+    const p = view.position.clone().addScaledVector(dir, 14 + 46 * rng());
+    const size = 0.35 + 1.1 * (1 - f) * rng();
+    const s = solid(p.x, p.y, p.z, size * (1.6 + 2.4 * rng()), size * (0.25 + 0.3 * rng()), size * (0.4 + 0.6 * rng()), 300 + i, 'debris');
+    s.rx = (rng() - 0.5) * 1.6; s.ry = (rng() - 0.5) * 2.2; s.rz = a + Math.PI / 2 + (rng() - 0.5) * 0.8;
+    s.tone = 0.55;
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Radii on the page, in millimetres from the singularity, where each register gives way. `core` is
+ * the event horizon: a solid hatched disc, the darkest mark on the card, that nothing returns from.
+ */
+export interface Undoing { core: number; void: number; dots: number; dashes: number; edges: number }
 
 export function undoing(ctx: SketchContext): Undoing {
   const k = 0.6 + 0.8 * n(ctx, 'undoing', 0.5, 0, 1);
-  return { void: 5 * k, dots: 18 * k, dashes: 38 * k, edges: 72 * k };
+  const core = 6 + 14 * n(ctx, 'core', 0.5, 0, 1);
+  return { core, void: core + 3.5, dots: core + 18 * k, dashes: core + 40 * k, edges: core + 76 * k };
 }
 
 /** The pull: drawn space near the point is drawn inward and twisted, like matter round a black hole. */
 export function lens(ctx: SketchContext): (p: Point) => Point {
-  const pull = 0.8 * n(ctx, 'pull', 0.5, 0, 1);
-  const swirl = 2.8 * n(ctx, 'swirl', 0.5, 0, 1);
-  const reach = 55;
+  const pull = 1.1 * n(ctx, 'pull', 0.5, 0, 1);
+  const swirl = 6 * n(ctx, 'swirl', 0.5, 0, 1);
+  const reach = 88;
   return p => {
     const dx = p.x - SINGULARITY.x, dy = p.y - SINGULARITY.y;
     const r = Math.hypot(dx, dy);
@@ -177,7 +210,7 @@ function column(ctx: SketchContext): Strand[] {
 
 export function drawDeath(ctx: SketchContext): Part[] {
   const view = deathCamera(ctx);
-  const architecture = nave(ctx);
+  const architecture = [...nave(ctx), ...infall(ctx, view)];
   const strands = column(ctx);
   const density = n(ctx, 'hatchDensity', 0.62, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
@@ -236,7 +269,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
             const kept = stroke.family === 'hatch' ? unrenderHatch(inside, u)
               : stroke.family === 'edge' ? unrenderEdge(inside, u, rankOf(projection.sourceIndices[i]))
               // The helix threads the ring: unbent and whole, it simply passes through the void.
-              : stroke.family === 'membrane' ? keepAlong(inside, p => Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y) > u.void + 1.2)
+              : stroke.family === 'membrane' ? keepAlong(inside, p => Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y) > u.core + 1.2)
               : [inside];
             for (const path of kept) {
               const reduced = text ? path : simplify(path);
@@ -257,17 +290,29 @@ export function drawDeath(ctx: SketchContext): Part[] {
       const paths = buckets.get(`${group}-${ink}`);
       if (paths?.length) parts.push({ id: `${group}-${ink}`, pen: ink, paths });
     }
-    // The flat mark: the horizon rule, unbent, broken at the point by a small ring.
-    const gap = u.void + 2.5;
-    const ring = Array.from({ length: 73 }, (_, i) => ({
-      x: SINGULARITY.x + u.void * Math.cos(i / 72 * Math.PI * 2), y: SINGULARITY.y + u.void * Math.sin(i / 72 * Math.PI * 2),
+    // The flat marks: the horizon rule, unbent, broken at the point; the event horizon, a disc hatched
+    // solid in two crossing families; and one thin ring at the edge of the paper halo round it.
+    const gap = u.void + 2;
+    const circle = (r: number) => Array.from({ length: 145 }, (_, i) => ({
+      x: SINGULARITY.x + r * Math.cos(i / 144 * Math.PI * 2), y: SINGULARITY.y + r * Math.sin(i / 144 * Math.PI * 2),
     }));
+    const disc: Point[][] = [circle(u.core), circle(u.core - 0.6)];
+    for (const [angle, pitch] of [[Math.PI / 4, 0.55], [-Math.PI / 4, 0.8]] as const) {
+      const cx = Math.cos(angle), cy = Math.sin(angle), nx = -cy, ny = cx;
+      const r = u.core - 0.9;
+      for (let o = -r + pitch / 2; o < r; o += pitch) {
+        const h = Math.sqrt(r * r - o * o);
+        if (h < 0.3) continue;
+        const mx = SINGULARITY.x + nx * o, my = SINGULARITY.y + ny * o;
+        disc.push([{ x: mx - cx * h, y: my - cy * h }, { x: mx + cx * h, y: my + cy * h }]);
+      }
+    }
+    parts.push({ id: 'singularity-carbon', pen: 'carbon', paths: [...disc, circle(u.void)] });
     parts.push({ id: 'threshold-carbon', pen: 'carbon', paths: [
       [{ x: CARD.x0, y: HORIZON_Y }, { x: SINGULARITY.x - gap, y: HORIZON_Y }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }],
       [{ x: CARD.x0, y: HORIZON_Y + 0.9 }, { x: SINGULARITY.x - gap, y: HORIZON_Y + 0.9 }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y + 0.9 }, { x: CARD.x1, y: HORIZON_Y + 0.9 }],
-      ring,
     ] });
     parts.push(...cardFrame('XIII', 'DEATH'));
     return parts;

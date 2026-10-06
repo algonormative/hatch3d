@@ -16,6 +16,8 @@ const sketch: Sketch = {
   ],
   controls: [
     { type: 'slider', id: 'undoing', label: 'How far the drawing comes undone round the point', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Singularity' },
+    { type: 'slider', id: 'core', label: 'Event horizon size', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Singularity' },
+    { type: 'slider', id: 'infall', label: 'Fragments falling in', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Singularity' },
     { type: 'slider', id: 'pull', label: 'Pull toward the point', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Singularity' },
     { type: 'slider', id: 'swirl', label: 'Swirl round the point', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Singularity' },
     { type: 'slider', id: 'fov', label: 'Field of view', default: 64, min: 40, max: 90, step: 1, units: '°', group: 'Singularity' },
