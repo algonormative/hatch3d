@@ -24,7 +24,7 @@ const sketch: Sketch = {
       optionLabels: { seed: 'By seed', left: 'Left', right: 'Right' }, group: 'Pillars' },
     { type: 'slider', id: 'veilPitch', label: 'Veil thread pitch', default: 0.95, min: 0.6, max: 1.2, step: 0.01, units: 'mm', group: 'Veil' },
     { type: 'slider', id: 'veilClear', label: 'Paper round the shadow', default: 0.9, min: 0.3, max: 2.5, step: 0.05, units: 'mm', group: 'Veil' },
-    { type: 'slider', id: 'cable', label: 'Cable (helix) radius', default: 0.26, min: 0.08, max: 0.45, step: 0.01, group: 'Helix' },
+    { type: 'slider', id: 'cable', label: 'Cable (helix) radius', default: 0.36, min: 0.08, max: 0.45, step: 0.01, group: 'Helix' },
     { type: 'slider', id: 'unwindLength', label: 'Length of the unwinding', default: 44, min: 30, max: 100, step: 1, units: 'mm', group: 'Helix' },
     { type: 'slider', id: 'coil', label: 'Coil left on the threads', default: 2.4, min: 0.5, max: 5, step: 0.1, units: 'mm', group: 'Helix' },
     { type: 'slider', id: 'tessSize', label: 'Shadow size (of the veil width)', default: 0.5, min: 0.3, max: 0.7, step: 0.01, group: 'Shadow' },

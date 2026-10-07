@@ -4,7 +4,7 @@ import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { bandMarks } from '../../kit/fills.ts';
@@ -374,6 +374,26 @@ function temple(ctx: SketchContext, lay: Layout): Temple {
   return { slabs: [...left, ...right, ...beam], faces, look };
 }
 
+/**
+ * The dark pillar's front face, solid: the kit's contour rings stop at a band and leave a thin zigzag
+ * of diagonal hatch in the middle of a course; this carries the same rings (same pitch, same inset)
+ * on to the middle instead, so the face is concentric rules all the way in.
+ */
+function frontRings(sl: Slab, light: THREE.Vector3, pitch: number): THREE.Vector3[][] {
+  const a = sl.w / 2, b = sl.h / 2;
+  const d = faceDarkness(new THREE.Vector3(0, 0, 1), light, sl.tone);
+  if (d < 0.32) return [];
+  const ring = Math.max(0.072, 0.075 + 0.11 * (1 - d)) * pitch;
+  const band = Math.min(a, b) * (0.12 + 0.6 * d);
+  let t = ring;
+  for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring);
+  const z = sl.z + sl.d / 2 + 0.006;
+  const at = (x: number, y: number) => new THREE.Vector3(sl.x + x, sl.y + y, z);
+  const out: THREE.Vector3[][] = [];
+  for (; a - t >= 0.05 && b - t >= 0.05; t += ring) out.push([at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t))]);
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The card
 // ---------------------------------------------------------------------------------------------
@@ -405,19 +425,26 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
   const cableZ = -distance + (lay.pillarWidth + 12) / 2 * lay.u + 2.2;
   const cableY = (pageY: number) => EYE + (HORIZON_Y - pageY) * -cableZ / f;
   const cableEnd = veil.y0 + 3;
-  const cableRadius = n(ctx, 'cable', 0.26, 0.08, 0.45);
-  const cablePitch = 1.5;
+  const cableRadius = n(ctx, 'cable', 0.36, 0.08, 0.45);
+  // The cable's own turn is a little longer than the one the unwinding's coil was laid out on.
+  const cablePitch = 1.5, cableTurn = 1.7;
   const cable = helixAlong(ctx, view, new THREE.CatmullRomCurve3([
     new THREE.Vector3(0, cableY(CARD.top - 14), cableZ), new THREE.Vector3(0, cableY((CARD.top - 14 + cableEnd) / 2), cableZ), new THREE.Vector3(0, cableY(cableEnd), cableZ),
-  ], false, 'centripetal'), { radius: cableRadius, width: cableRadius * 1.1, pitch: cablePitch, spread: cableRadius * 0.2, narrow: cableRadius * 0.2, taper: 1.5, flare: 4 });
+  ], false, 'centripetal'), { radius: cableRadius, width: cableRadius * 1.1, pitch: cableTurn, spread: cableRadius * 0.2, narrow: cableRadius * 0.2, taper: 1.5, flare: 4, twist: 0.15, density: 0.55, interruption: 0.05 });
 
-  const geometries = [...slabs.map(slabGeometry), ...cable.meshes];
+  const slabGeometries = slabs.map(slabGeometry);
+  const geometries = [...slabGeometries, ...cable.meshes];
   fitDepthRange(view, geometries);
 
   try {
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const onCable = meshCoverage(cable.meshes, view, TABLOID_PAGE, 0.9);
+    // Paper round the temple, and a clean straight-edged column of paper round the cable (not its
+    // ragged silhouette) where it passes the sky ruling and the lintel's hatch.
+    const slabSolids = meshCoverage(slabGeometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const cableXs = cable.strokes.flatMap(h => h.points.map(q => pageOf(view, q))).filter(q => q.y > CARD.y0 - 2 && q.y < cableEnd).map(q => q.x);
+    const halo = { x0: Math.min(...cableXs) - 1.1, x1: Math.max(...cableXs) + 1.1 };
+    const inHalo = (p: Point) => p.x > halo.x0 && p.x < halo.x1 && p.y < cableEnd + 0.5;
+    const solids = (p: Point) => slabSolids(p) || inHalo(p);
 
     // The shadow: the cube-within-a-cube read of the tesseract, laid flat on the veil a little above its centre.
     const shadow = tesseractShadow(ctx);
@@ -482,14 +509,39 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       const at = new THREE.Vector3(sl.x, sl.y, sl.z);
       const { group, light, pitch: tightness } = look.get(sl)!;
       const pitch = n(ctx, 'hatchPitch', 1, 0.8, 2) * tightness * FACET_MM_PER_UNIT / mmPerUnit(at);
-      for (const st of facetStrokes(sl, light, eye, false, pitch)) strokes.push({ ink: 'carbon', group, family: st.family, points: st.points });
+      const front = sl.z + sl.d / 2 + 0.006;
+      const owner = slabs.indexOf(sl);
+      for (const st of facetStrokes(sl, light, eye, false, pitch)) {
+        // On the dark pillar the front face's diagonal fill gives way to rings carried to the middle.
+        if (group === 'dark' && st.family === 'hatch' && st.points.length === 2 && st.points.every(q => Math.abs(q.z - front) < 1e-6)) continue;
+        // The pale pillar is drawn in outline alone, its front faces: its rings and depth edges are only
+        // slivers of edge-on faces.
+        if (group === 'light' && (st.family === 'hatch' || st.points.length === 2)) continue;
+        strokes.push({ ink: 'carbon', group, family: st.family, points: st.points, owner });
+      }
+      if (group === 'dark') for (const ring of frontRings(sl, light, pitch)) strokes.push({ ink: 'carbon', group, family: 'hatch', points: ring, owner });
     }
+    // The pale pillar's inner flank is a sliver of 2 or 3 mm; its edges there are slashes and
+    // stubs, so the pale pillar is drawn only as far as its own front face.
+    const frontEdge = slabs.map(sl => {
+      const x0 = pageOf(view, new THREE.Vector3(sl.x - sl.w / 2, sl.y, sl.z + sl.d / 2)).x, x1 = pageOf(view, new THREE.Vector3(sl.x + sl.w / 2, sl.y, sl.z + sl.d / 2)).x;
+      return { x0, x1, left: sl.x < 0 };
+    });
+    const nearGlyph = glyphMask(glyphPaths, 2.4);
+    const nearHalo = (p: Point) => p.x > halo.x0 - 2.5 && p.x < halo.x1 + 2.5 && p.y < cableEnd + 3;
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
       begin: st => runs => {
         for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
-          for (const piece of keepAlong(inside, p => !onGlyph(p) && !inVeil(p, 0.3) && !onCable(p), 0.15)) {
-            // The pillars' inner flanks show as slivers beside the veil; their stray ticks are noise.
-            if (inVeil(piece[0], 4) && pathLength(piece) < 1.8) continue;
+          const fe = st.group === 'light' ? frontEdge[st.owner!] : null;
+          const onFace = (p: Point) => !fe || (fe.left ? p.x < fe.x1 + 0.15 : p.x > fe.x0 - 0.15);
+          for (const piece of keepAlong(inside, p => !onGlyph(p) && !inVeil(p, 0.3) && !inHalo(p) && onFace(p), 0.15)) {
+            const len = pathLength(piece), ends = [piece[0], piece[piece.length - 1]];
+            // Short remnants beside a word's halo or the cable's halo are stubs, not marks.
+            if (len < 3 && ends.some(q => nearGlyph(q) || nearHalo(q))) continue;
+            // The pillars' inner flanks show as slivers beside the veil. On the dark one the dense
+            // hatch is shading, but its stray ticks are noise; on the pale pillar and the lintel
+            // every short piece is a sliver of an edge-on face, so all of them go.
+            if (st.group === 'dark' ? inVeil(piece[0], 4) && len < 1.8 : len < 2 || (inVeil(piece[0], 6) && len < 3.4)) continue;
             buckets.add(`${st.group}-${st.ink}`, piece);
           }
         }
@@ -499,6 +551,9 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     // The helix cable's own strokes, in the helix's own inks (none remapped).
     const helix: Stroke[] = cable.strokes.map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
     projectStrokes(helix, { view, depth: depthBuffer, width: W, height: H }, {
+      // Nothing stands in front of the cable, and testing the strands against each other chops them
+      // into scraps where they cross, so they are drawn whole, like twisted wire.
+      hidden: () => false,
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
     });
 
@@ -514,11 +569,22 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       centre: centreX, step, half: half2, top: cableEnd, length: n(ctx, 'unwindLength', 44, 30, 100), coil: n(ctx, 'coil', 2.4, 0.5, 5),
       pitch: cablePitch * f / -cableZ,
     }, ctx.random('priestess-unwind'));
+    // Each thread keeps the helix's inks a different distance below the unwinding before it turns
+    // ultramarine, so the change of pen is a ragged band, not a line.
+    const brng = ctx.random('priestess-blend');
+    const unwindLength = unwound[0].straightAt - cableEnd;
     for (const th of unwound) {
       const hem = vrng() * vrng() * 3;
-      add(`unwind-${laminationInk(th.j)}`, th.points, p => !nearBand(p), 0.3);
       const x = centreX + th.j * step;
-      add('veil-ultramarine', [{ x, y: th.straightAt }, { x, y: veil.y1 - hem }], p => !nearBand(p), 0.2);
+      const path = [...th.points, { x, y: veil.y1 - hem }];
+      const change = cableEnd + unwindLength * (0.5 + 0.9 * brng());
+      const cut = path.findIndex(q => q.y >= change);
+      const at = cut <= 0 ? path.length - 1 : cut;
+      const a = path[at - 1] ?? path[0], b = path[at];
+      const k = b.y > a.y ? (change - a.y) / (b.y - a.y) : 0;
+      const join = { x: a.x + (b.x - a.x) * k, y: change };
+      add(`unwind-${laminationInk(th.j)}`, [...path.slice(0, at), join], p => !nearBand(p), 0.3);
+      add('veil-ultramarine', [join, ...path.slice(at)], p => !nearBand(p), 0.2);
     }
 
     // The shadow's bands, in carbon.
@@ -549,7 +615,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       const dashes = barPattern(jrng, 0.9);
       const cell = 8 + 6 * jrng();
       for (const piece of clipWindow([far, near])) {
-        for (const run of keepAlong(piece, (p, at) => dashes[Math.floor(at / cell) % 64] && !solids(p) && !inVeil(p, 1), 0.2)) buckets.add('floor-carbon', run, false, 2);
+        for (const run of keepAlong(piece, (p, at) => dashes[Math.floor(at / cell) % 64] && !solids(p) && !inVeil(p, 1), 0.2)) buckets.add('floor-carbon', run, false, 5);
       }
     }
 
