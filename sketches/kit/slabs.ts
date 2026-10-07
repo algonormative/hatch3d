@@ -144,9 +144,11 @@ export type FacetStroke = { ink: Ink; group: 'system'; family: 'edge' | 'hatch';
 /**
  * A slab drawn in the raking-light hatch: twelve outline edges; then on each face that sees the
  * eye, contour rings that follow its outline inward, as many as the face is dark; and inside them a
- * field of diagonal hatch, crossed by a second family on the darkest faces, for body.
+ * field of diagonal hatch, crossed by a second family on the darkest faces, for body. `pitch` scales
+ * the hatch spacing (1 = the Tower's, tuned to its depth), so slabs nearer or farther keep the same
+ * spacing on the sheet.
  */
-export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean): FacetStroke[] {
+export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch = 1): FacetStroke[] {
   const out: FacetStroke[] = [];
   const m = slabMatrix(s);
   const rot = new THREE.Matrix4().extractRotation(m);
@@ -176,7 +178,7 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     const at = (u: number, v: number) => centre.clone().addScaledVector(U, u).addScaledVector(V, v);
     const d = faceDarkness(normal, light, s.tone);
     // Contour rings: the outline repeated inward, spaced tighter the darker the face.
-    const ring = Math.max(FACET_MIN_PITCH, 0.075 + 0.11 * (1 - d));
+    const ring = Math.max(FACET_MIN_PITCH, 0.075 + 0.11 * (1 - d)) * pitch;
     const band = Math.min(a, b) * (0.12 + 0.6 * d);
     let t = ring;
     for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring) {
@@ -185,12 +187,12 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
     const ia = a - t, ib = b - t;
     if (ia < 0.05 || ib < 0.05 || d < 0.32) continue;
-    const families: [number, number, Ink][] = [[0.6, Math.max(FACET_MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5), 'ultramarine']];
-    if (d > 0.62) families.push([-0.95, Math.max(FACET_MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)), 'violet']);
-    for (const [angle, pitch, ink] of families) {
+    const families: [number, number, Ink][] = [[0.6, Math.max(FACET_MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5) * pitch, 'ultramarine']];
+    if (d > 0.62) families.push([-0.95, Math.max(FACET_MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)) * pitch, 'violet']);
+    for (const [angle, step, ink] of families) {
       const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx;
       const reach = Math.hypot(ia, ib);
-      for (let k = -reach + pitch / 2; k < reach; k += pitch) {
+      for (let k = -reach + step / 2; k < reach; k += step) {
         const span = clipRect(nx * k, ny * k, dx, dy, ia, ib);
         if (!span) continue;
         push(ink, 'hatch', at(nx * k + dx * span[0], ny * k + dy * span[0]), at(nx * k + dx * span[1], ny * k + dy * span[1]));
