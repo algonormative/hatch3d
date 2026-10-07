@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
+import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
-import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
@@ -260,8 +260,7 @@ function wallSlabs(rng: () => number, mx: number, mz: number, dir: THREE.Vector3
 
 /**
  * The helix as his tie: the deck's twin strands, knotted at his collar, thrown out ahead of him and
- * then streaming up beside his head and on into the open sky. The strands are built in their own
- * upright space and bent onto the tie's path.
+ * then streaming up beside his head and on into the open sky.
  */
 function tieHelix(ctx: SketchContext, view: THREE.Camera, knot: THREE.Vector3, facing: THREE.Vector3): { strokes: Stroke[]; meshes: THREE.BufferGeometry[] } {
   const up = new THREE.Vector3(0, 1, 0);
@@ -272,25 +271,8 @@ function tieHelix(ctx: SketchContext, view: THREE.Camera, knot: THREE.Vector3, f
     at(0, 0, 0), at(2.2, -1.4, -0.6), at(3.2, 1, -3.4), at(0.5, 6.5, -7.5), at(-3, 15 + 6 * reach, -5.5),
     at(-6.5, 26 + 12 * reach, 0.5), at(-10, 37 + 20 * reach, -3), at(-14, 49 + 28 * reach, 0.5),
   ], false, 'centripetal');
-  const length = curve.getLength();
-  const frames = curve.computeFrenetFrames(400, false);
-  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.35 } });
-  const strands: Strand[] = template.map((st, i) => ({
-    ...st, x: knot.x, y: knot.y, z: knot.z, y0: 0, y1: length, radius: 1.0 + 0.15 * i, depth: 1, width: 0.95 - 0.1 * i,
-    swell: 0, centre: -1e3, turns: length / 9,
-  }));
-  // Bend a point of upright strand space onto the tie's path: height along the strand becomes arc
-  // length along the curve, the sideways offsets ride the curve's frame.
-  const bend = (p: THREE.Vector3): THREE.Vector3 => {
-    const u = clamp((p.y - knot.y) / length, 0, 1);
-    const k = Math.min(400, Math.round(u * 400));
-    return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - knot.x).addScaledVector(frames.binormals[k], p.z - knot.z - 0.25);
-  };
-  const strokes: Stroke[] = [];
-  for (const st of strands) for (const h of strandStrokes(st, 0.35, 0.3, ctx, view)) {
-    strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points.map(bend) });
-  }
-  const meshes = strands.map(st => buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8));
+  const { strokes: helix, meshes } = helixAlong(ctx, view, curve, { radius: 1.0, width: 0.95, pitch: 9 });
+  const strokes: Stroke[] = helix.map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
   return { strokes, meshes };
 }
 

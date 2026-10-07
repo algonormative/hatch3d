@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../src/sketch/types.ts';
+import { buildSurfaceMesh } from '../../src/projection.ts';
 import { clamp, n } from './params.ts';
 import { POSTER_HALF_H, POSTER_HALF_W, POSTER_MM_PER_UNIT, SLAB_MIN_PITCH, densityPitch } from './slabs.ts';
 import type { Ink } from './types.ts';
@@ -196,4 +197,45 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
 export function alongRay(from: THREE.Vector3, angle: number): THREE.Matrix4 {
   return new THREE.Matrix4().makeTranslation(from.x, from.y, from.z)
     .multiply(new THREE.Matrix4().makeRotationZ(angle - Math.PI / 2));
+}
+
+export interface AlongOptions {
+  /** Strand radius round the curve, world units; the second strand sits `spread` wider. */
+  radius: number;
+  /** Ribbon width; the second strand is `narrow` slimmer. */
+  width: number;
+  /** Curve length per turn of the strands. */
+  pitch: number;
+  spread?: number;
+  narrow?: number;
+  /** Ribbon twist (the helix's shellTwist). */
+  twist?: number;
+  density?: number;
+  interruption?: number;
+}
+
+/**
+ * The twin helix laid along any curve: the two seeded strands are built in their own upright space
+ * (starting at the curve's first point) and bent onto the curve, height along the strand becoming
+ * arc length, the sideways offsets riding the curve's frame. Returns the strokes and the strands'
+ * surfaces for the depth pass.
+ */
+export function helixAlong(ctx: SketchContext, view: THREE.Camera, curve: THREE.CatmullRomCurve3, o: AlongOptions): { strokes: HelixStroke[]; meshes: THREE.BufferGeometry[] } {
+  const start = curve.getPointAt(0);
+  const length = curve.getLength();
+  const frames = curve.computeFrenetFrames(400, false);
+  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: o.twist ?? 0.35 } });
+  const strands: Strand[] = template.map((st, i) => ({
+    ...st, x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: o.radius + (o.spread ?? 0.15) * i, depth: 1, width: o.width - (o.narrow ?? 0.1) * i,
+    swell: 0, centre: -1e3, turns: length / o.pitch,
+  }));
+  const bend = (p: THREE.Vector3): THREE.Vector3 => {
+    const u = clamp((p.y - start.y) / length, 0, 1);
+    const k = Math.min(400, Math.round(u * 400));
+    return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - start.x).addScaledVector(frames.binormals[k], p.z - start.z - 0.25);
+  };
+  const strokes: HelixStroke[] = [];
+  for (const st of strands) for (const h of strandStrokes(st, o.density ?? 0.35, o.interruption ?? 0.3, ctx, view)) strokes.push({ ...h, points: h.points.map(bend) });
+  const meshes = strands.map(st => buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8));
+  return { strokes, meshes };
 }
