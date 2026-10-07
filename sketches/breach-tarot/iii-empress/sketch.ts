@@ -28,6 +28,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'windSwing', label: 'Wind: swing of the S', default: 4, min: 2, max: 30, step: 0.5, group: 'Wind' },
     { type: 'slider', id: 'windSlope', label: 'Wind: far end farther (+) or nearer (-)', default: 6, min: -30, max: 30, step: 0.5, group: 'Wind' },
     { type: 'slider', id: 'windRise', label: 'Wind: how far it rises and dips', default: 1.9, min: 0, max: 6, step: 0.1, group: 'Wind' },
+    { type: 'slider', id: 'windHalo', label: 'Wind: clear paper round it in the sky', default: 4, min: 1, max: 8, step: 0.5, units: 'mm', group: 'Wind' },
     { type: 'slider', id: 'windHigh', label: 'Wind: height over the crop', default: 1.6, min: 0.4, max: 4, step: 0.1, group: 'Wind' },
     { type: 'slider', id: 'windRadius', label: 'Wind: ribbon radius', default: 0.2, min: 0.08, max: 0.8, step: 0.01, group: 'Wind' },
     { type: 'slider', id: 'windPitch', label: 'Wind: length per turn', default: 4.5, min: 1.5, max: 12, step: 0.5, group: 'Wind' },

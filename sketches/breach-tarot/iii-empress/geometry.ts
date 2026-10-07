@@ -374,13 +374,44 @@ export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
         hash.set(key, [...(hash.get(key) ?? []), ...boxes]);
         const top = slabs.reduce((hi, s) => (s.y + s.h / 2 > hi.y ? new THREE.Vector3(s.x, s.y + s.h / 2, s.z) : hi), new THREE.Vector3(0, -1, 0));
         const widest = slabs.reduce((hi, s) => Math.max(hi, s.w), 0);
-        plants.push({ slabs, base, top, depth: d, outline: widest * mm < 7 });
+        plants.push({ slabs, base, top, depth: d, outline: widest * mm < 8 });
         break;
       }
     }
     v += step;
   }
   return { plants, ticks };
+}
+
+/** The slabs of a plant grouped by course: the two blocks of a split course (same height and tone, side by side) go together. */
+function courseGroups(slabs: Slab[]): Slab[][] {
+  const groups: Slab[][] = [];
+  for (const sl of slabs) {
+    const last = groups[groups.length - 1];
+    if (last && last[0].h === sl.h && last[0].tone === sl.tone) last.push(sl); else groups.push([sl]);
+  }
+  return groups;
+}
+
+/**
+ * A far plant drawn quietly: not its courses but its outline, one line up the left side, across the top, down the
+ * right and back along the foot, a hair in front of the faces so the hidden-line pass keeps it. The sides are smoothed over three courses, so
+ * the slight differences in width between courses do not make the edge shiver.
+ */
+function silhouette(plant: Plant): THREE.Vector3[] {
+  const e = 0.02;
+  const groups = courseGroups(plant.slabs);
+  const edge = (sl: Slab, x: number, y: number) => new THREE.Vector3(x * (sl.w / 2 + e), y * (sl.h / 2 + e), sl.d / 2 + e).applyMatrix4(slabMatrix(sl));
+  const ends = groups.map(g => {
+    // Left and right blocks of the course, by where they stand across it.
+    const side = new THREE.Vector3(1, 0, 0).applyMatrix4(new THREE.Matrix4().extractRotation(slabMatrix(g[0])));
+    const sorted = [...g].sort((a, b) => (a.x * side.x + a.y * side.y + a.z * side.z) - (b.x * side.x + b.y * side.y + b.z * side.z));
+    return { l: sorted[0], r: sorted[sorted.length - 1] };
+  });
+  const smoothed = (pts: THREE.Vector3[]) => pts.map((q, i) => i === 0 || i === pts.length - 1 ? q : pts[i - 1].clone().add(q).add(pts[i + 1]).multiplyScalar(1 / 3));
+  const left = smoothed(ends.map(g => edge(g.l, -1, 0))), right = smoothed(ends.map(g => edge(g.r, 1, 0)));
+  const first = ends[0], last = ends[ends.length - 1];
+  return [edge(first.l, -1, -1), ...left, edge(last.l, -1, 1), edge(last.r, 1, 1), ...right.reverse(), edge(first.r, 1, -1), edge(first.l, -1, -1)];
 }
 
 export function drawEmpress(ctx: SketchContext): Part[] {
@@ -399,6 +430,11 @@ export function drawEmpress(ctx: SketchContext): Part[] {
   const bandOf = (p: THREE.Vector3) => { const d = eye.z - p.z; return BAND_EDGES.findIndex((e, i) => d >= e && d < BAND_EDGES[i + 1]); };
   const strokes: Banded[] = [];
   for (const plant of plants) {
+    if (plant.outline) {
+      const line = silhouette(plant);
+      strokes.push({ ink: 'carbon', group: 'far', family: 'edge', points: line, band: bandOf(plant.base) });
+      continue;
+    }
     for (const sl of plant.slabs) {
       const at = new THREE.Vector3(sl.x, sl.y, sl.z);
       const band = bandOf(at);
@@ -413,13 +449,13 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     const right = new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)), along = new THREE.Vector3(Math.sin(yaw), 0, -Math.cos(yaw));
     const ends = ctx.random('crop-ridges');
     for (let k = -8; k <= 7; k++) {
-      const end = Math.min(reach, 40 * spacing / Math.max(0.05, ends()));
+      const end = Math.min(reach, 110, 40 * spacing / Math.max(0.05, ends()));
       const from = new THREE.Vector3().addScaledVector(right, (k + 0.5) * spacing).addScaledVector(along, NEAR * 0.8);
       const to = new THREE.Vector3().addScaledVector(right, (k + 0.5) * spacing).addScaledVector(along, end);
       strokes.push({ ink: 'carbon', group: 'ground', family: 'edge', points: [from, to], band: bandOf(from) });
     }
   }
-  for (const t of ticks) strokes.push({ ink: 'carbon', group: 'crop', family: 'edge', points: t, band: bandOf(t[0]) });
+  for (const t of ticks) strokes.push({ ink: 'carbon', group: 'far', family: 'edge', points: t, band: bandOf(t[0]) });
   for (const h of wind.strokes) strokes.push({ ink: h.ink, group: 'wind', family: 'membrane', points: h.points, band: bandOf(h.points[Math.floor(h.points.length / 2)]) });
 
   const geometries = [...plants.flatMap(p => p.slabs.map(slabGeometry)), ...wind.meshes];
@@ -434,6 +470,8 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       return Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * d * d));
     };
     const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    // The wind keeps a wider margin of clear paper than the crop, so the ribbon never touches the ruled sky.
+    const windClear = meshCoverage(wind.meshes, view, TABLOID_PAGE, n(ctx, 'windHalo', 4, 1, 8));
 
     // The phrase: each word cut into the front of a plant course, staggered from near to far.
     const settings = sloganSettings(ctx);
@@ -488,16 +526,17 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.6);
+    const onGlyph = glyphMask(glyphPaths, 0.9);
     const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
+    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
     for (let band = 0; band < BAND_EDGES.length - 1; band++) {
       const mine = strokes.filter(s => s.band === band);
       if (!mine.length) continue;
       projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(band) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+        // Scraps are dropped: ground rules under 3 mm and far outlines and ticks under 1.6 mm, which the plants in front cut up.
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, st.group === 'ground' ? 3 : st.group === 'far' ? 1.6 : undefined); },
       });
     }
     // The sky: a light ruling that thins and breaks as it comes down to the horizon, knocked out round what stands in it.
@@ -515,11 +554,11 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       const thinner = deep && t > 0.95 * reachSky;
       add('sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => {
         const step = Math.floor((p.x - CARD.x0) / 3.2 + i);
-        return !solids(p) && (!broken || pattern[step % 64]) && (!thinner || pattern[(step * 3 + 17) % 64]);
+        return !solids(p) && !windClear(p) && (!broken || pattern[step % 64]) && (!thinner || pattern[(step * 3 + 17) % 64]);
       });
     }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'ground', 'crop', 'wind', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'ground', 'far', 'crop', 'wind', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
     parts.push(...cardFrame('III', 'THE EMPRESS'));
     return parts;
