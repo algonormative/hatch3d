@@ -56,3 +56,27 @@ export function onGround(view: THREE.Camera, p: Point, page: PageSize = TABLOID_
   const dir = rayPoint(view, p, page).sub(view.position);
   return view.position.clone().addScaledVector(dir, -view.position.y / dir.y);
 }
+
+/**
+ * Fit the camera's near and far planes snugly round the scene's geometry, with `slack` either side
+ * (a fraction of each distance). The hidden-line test's bias is a fixed step of window depth, so a
+ * near plane far short of the scene spreads that step over tens or hundreds of world units: small
+ * blocks then show their back edges through their own faces. Fitting the range keeps it under a unit.
+ */
+export function fitDepthRange(view: THREE.PerspectiveCamera, geometries: THREE.BufferGeometry[], slack = 0.1): void {
+  view.updateMatrixWorld();
+  const inverse = view.matrixWorldInverse;
+  let lo = Infinity, hi = 0;
+  const centre = new THREE.Vector3();
+  for (const g of geometries) {
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    const sphere = g.boundingSphere!;
+    const depth = -centre.copy(sphere.center).applyMatrix4(inverse).z;
+    lo = Math.min(lo, depth - sphere.radius);
+    hi = Math.max(hi, depth + sphere.radius);
+  }
+  if (!Number.isFinite(lo)) return;
+  view.near = Math.max(0.5, lo * (1 - slack));
+  view.far = Math.max(view.near + 1, hi * (1 + slack));
+  view.updateProjectionMatrix();
+}

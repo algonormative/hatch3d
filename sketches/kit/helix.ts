@@ -212,6 +212,16 @@ export interface AlongOptions {
   twist?: number;
   density?: number;
   interruption?: number;
+  /**
+   * How many times wider the helix is at the curve's end than at its start. Its ribbons and their
+   * spread grow along the curve as `taper ** (s ** flare)` at curve fraction s, and the pitch grows
+   * with them (as that width to the power `pitchGrowth`), so it opens without winding tighter.
+   */
+  taper?: number;
+  /** 1 widens steadily (exponential in length); higher holds the widening back for the end. */
+  flare?: number;
+  /** 1 keeps every turn's proportions; lower lets the open end keep more turns. */
+  pitchGrowth?: number;
 }
 
 /**
@@ -225,12 +235,32 @@ export function helixAlong(ctx: SketchContext, view: THREE.Camera, curve: THREE.
   const length = curve.getLength();
   const frames = curve.computeFrenetFrames(400, false);
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: o.twist ?? 0.35 } });
+  // A taper scales the helix by width(s) at curve fraction s. The strands are built with uniform
+  // turns in their own height u; u is sent to the s where the turns so far, at a pitch growing with
+  // the width, reach that share of the whole.
+  const taper = o.taper !== undefined && Math.abs(o.taper - 1) > 1e-6 ? o.taper : null;
+  const STEPS = 400;
+  const width = (s: number) => taper! ** (s ** (o.flare ?? 1));
+  const turnsTo: number[] = [0];
+  if (taper) for (let i = 1; i <= STEPS; i++) turnsTo.push(turnsTo[i - 1] + 1 / (STEPS * width((i - 0.5) / STEPS) ** (o.pitchGrowth ?? 1)));
+  const curveAt = (u: number): number => {
+    const want = u * turnsTo[STEPS];
+    let lo = 0, hi = STEPS;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (turnsTo[mid] < want) lo = mid; else hi = mid; }
+    const span = turnsTo[hi] - turnsTo[lo];
+    return (lo + (span > 0 ? (want - turnsTo[lo]) / span : 0)) / STEPS;
+  };
   const strands: Strand[] = template.map((st, i) => ({
     ...st, x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: o.radius + (o.spread ?? 0.15) * i, depth: 1, width: o.width - (o.narrow ?? 0.1) * i,
-    swell: 0, centre: -1e3, turns: length / o.pitch,
+    swell: 0, centre: -1e3, turns: taper ? length / o.pitch * turnsTo[STEPS] : length / o.pitch,
   }));
   const bend = (p: THREE.Vector3): THREE.Vector3 => {
     const u = clamp((p.y - start.y) / length, 0, 1);
+    if (taper) {
+      const s = curveAt(u), scale = width(s);
+      const k = Math.min(400, Math.round(s * 400));
+      return curve.getPointAt(s).addScaledVector(frames.normals[k], (p.x - start.x) * scale).addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * scale);
+    }
     const k = Math.min(400, Math.round(u * 400));
     return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - start.x).addScaledVector(frames.binormals[k], p.z - start.z - 0.25);
   };

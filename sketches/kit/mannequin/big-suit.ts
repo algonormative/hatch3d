@@ -30,6 +30,11 @@ export interface BigSuitOptions {
    * where it passes under, so cloth and shoe never cut into each other.
    */
   feet?: Tube[];
+  /**
+   * Where the sleeve ends along the hand, 0 = at the wrist (a fitted cuff, the hand out). Unset, it
+   * swallows the hand: the big suit's sleeve.
+   */
+  cuff?: number;
 }
 
 export interface BigSuit {
@@ -140,7 +145,8 @@ export function bigSuit(s: Skeleton, o: BigSuitOptions = {}): BigSuit {
     const r = grow(1.0, 1.1);
     const corner = down(0.065).addScaledVector(f.x, h * (shoulder - r));
     const w = s.joints.get(`wrist_${side}`)!;
-    const chain = [corner, s.at(`elbow_${side}`), w.end.clone().addScaledVector(w.end.clone().sub(w.origin).normalize(), 0.2 * k)];
+    const cuff = o.cuff === undefined ? w.end.clone().addScaledVector(w.end.clone().sub(w.origin).normalize(), 0.2 * k) : w.origin.clone().lerp(w.end, o.cuff);
+    const chain = [corner, s.at(`elbow_${side}`), cuff];
     sleeves.push(new Tube(`sleeve_${side}`, chain, [[0, r * 1.12, r * 1.12], [0.5, r, r], [1, r * 0.96, r * 0.96]],
       squareRef(chain, [s.axes(`shoulder_${side}`).z, s.axes(`shoulder_${side}`).x]), h, [r * 0.9, 0], undefined, 0, 3));
     // The trouser leg from the seat to the floor, pooling over the shoe.

@@ -48,6 +48,15 @@ describe('the big suit', () => {
     }
   });
 
+  it('cut fitted, with the cuff at the wrist, lets the hands out', () => {
+    const fitted = bigSuit(s, { size: 1.05, feet: body.limbs, cuff: 0 });
+    for (const sleeve of fitted.sleeves) {
+      const side = sleeve.id.endsWith('_l') ? 'l' : 'r';
+      expect(sleeve.centre(1).distanceTo(s.at(`wrist_${side}`))).toBeLessThan(1e-6);
+      expect(sleeve.centre(1).distanceTo(s.at(`elbow_${side}`))).toBeLessThan(s.at(`wrist_${side}`, true).distanceTo(s.at(`elbow_${side}`)));
+    }
+  });
+
   it('lays each trouser hem over its shoe without cutting into it', () => {
     for (const leg of suit.trousers) {
       expect(leg).toBeInstanceOf(BreakTube);
