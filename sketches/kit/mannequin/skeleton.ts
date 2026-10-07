@@ -40,8 +40,11 @@ const CANON = {
   hipX: 0.062, hipY: -0.02, thigh: 0.245, shin: 0.235, foot: 0.13,
 } as const;
 
-function defs(): JointDef[] {
-  const c = CANON;
+/** Multipliers on the canon's lengths and offsets (1 = canon), for stylized figures. */
+export type Proportions = Partial<Record<keyof typeof CANON, number>>;
+
+function defs(scale: Proportions = {}): JointDef[] {
+  const c = Object.fromEntries(Object.entries(CANON).map(([k, v]) => [k, v * (scale[k as keyof typeof CANON] ?? 1)])) as Record<keyof typeof CANON, number>;
   const out: JointDef[] = [
     { name: 'pelvis', attach: [0, c.pelvisY, 0], rest: [0, 1, 0], length: c.lumbar },
     { name: 'spine', parent: 'pelvis', attach: [0, c.lumbar, 0], rest: [0, 1, 0], length: c.thorax },
@@ -123,6 +126,8 @@ export interface PoseOptions {
   height?: number;
   /** Where the figure stands (ground support: the point under it) or hangs from (hang support). */
   position?: THREE.Vector3;
+  /** Stylized proportions: multipliers on the canon (longer legs, a smaller head). */
+  proportions?: Proportions;
 }
 
 /** Forward kinematics: pose a skeleton in the world. */
@@ -132,7 +137,7 @@ export function poseSkeleton(pose: Pose, options: PoseOptions = {}): Skeleton {
   const b = pose.body ?? {};
   const d = THREE.MathUtils.degToRad;
   const bodyRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(d(b.pitch ?? 0), d(b.yaw ?? 0), d(b.roll ?? 0), 'YXZ'));
-  for (const def of DEFS) {
+  for (const def of options.proportions ? defs(options.proportions) : DEFS) {
     const parent = def.parent ? joints.get(def.parent)! : undefined;
     const attach = new THREE.Vector3(...def.attach).multiplyScalar(height);
     const origin = parent ? parent.origin.clone().add(attach.applyQuaternion(parent.rot)) : attach.applyQuaternion(bodyRot);

@@ -47,7 +47,7 @@ export function drape(b: Body, o: DrapeOptions): Drape {
   // The body's envelope in cylindrical coordinates round the vertical through the pelvis.
   const samples: THREE.Vector3[] = [];
   // Trunk and legs only: arms pass in front of the cloth or out through it, rather than tenting it.
-  const legs = b.limbs.filter(t => /^(thigh|shin)_/.test(t.id));
+  const legs = b.limbs.filter(t => /^(thigh|shin|leg)_/.test(t.id));
   for (const t of [b.trunk, ...legs]) for (let i = 0; i <= 24; i++) for (let j = 0; j < 16; j++) samples.push(t.point(i / 24, j / 16));
   for (const slab of b.blocks.filter((_, i) => i % 2 === 1)) samples.push(new THREE.Vector3(slab.x, slab.y, slab.z));
   const low = Math.min(...samples.map(p => p.y));

@@ -13,7 +13,8 @@ export type Key = [u: number, rx: number, ry: number];
 
 /**
  * A limb or trunk: a spine curve with sections sampled into a lookup table. Sections are ellipses,
- * or, with `facets`, polygons inscribed in them, so the body is cut into planes like the slabs.
+ * or, with `facets`, polygons inscribed in them, so the body is cut into planes like the slabs, or,
+ * with `square` above 2, superellipses: boxes with rounded corners, for stiff tailoring.
  * Coordinates are (u along the spine, v round it); `ref` picks the side the section's x axis faces.
  */
 export class Tube {
@@ -22,7 +23,7 @@ export class Tube {
   private readonly table: { c: THREE.Vector3; n: THREE.Vector3; b: THREE.Vector3; rx: number; ry: number }[];
   constructor(readonly id: string, spine: THREE.Vector3[], keys: Key[], ref: THREE.Vector3,
     readonly hand: 1 | -1, readonly caps: [number, number] = [0, 0], readonly mask?: (u: number, v: number) => boolean,
-    readonly facets = 0) {
+    readonly facets = 0, readonly square = 2) {
     const curve = new THREE.CatmullRomCurve3(spine, false, 'centripetal');
     this.length = curve.getLength();
     const M = 480;
@@ -61,6 +62,9 @@ export class Tube {
       const seg = TAU / this.facets;
       const local = ((angle % seg) + seg) % seg - seg / 2;
       k = Math.cos(seg / 2) / Math.cos(local);
+    } else if (this.square !== 2) {
+      const p = this.square;
+      k = (Math.abs(Math.cos(angle)) ** p + Math.abs(Math.sin(angle)) ** p) ** (-1 / p);
     }
     return c.addScaledVector(nn, rx * k * Math.cos(angle)).addScaledVector(bb, ry * k * Math.sin(angle));
   }

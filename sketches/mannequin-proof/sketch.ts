@@ -12,6 +12,7 @@ import { clipToRect } from '../kit/page.ts';
 import { n } from '../kit/params.ts';
 import { POSES, poseSkeleton, type Pose } from '../kit/mannequin/skeleton.ts';
 import { stickStrokes } from '../kit/mannequin/stick.ts';
+import { ELONGATED, flowBody, gesture } from '../kit/mannequin/gesture.ts';
 import type { Stroke } from '../kit/types.ts';
 
 /**
@@ -36,12 +37,19 @@ function layout(name: keyof typeof POSES, i: number): { pose: Pose; position: TH
 }
 
 function draw(ctx: SketchContext): Part[] {
-  const STYLES = ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit'] as const;
+  const STYLES = ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit', 'gesture'] as const;
   const style = STYLES.find(x => x === ctx.params.style) ?? 'stick';
   const withProps = ctx.params.props !== false;
   const turn = n(ctx, 'turn', 28, -60, 60) * Math.PI / 180, tilt = n(ctx, 'tilt', 8, -20, 30) * Math.PI / 180;
   const facets = Math.round(n(ctx, 'facets', 0, 0, 12));
-  const skeletons = ORDER.map((name, i) => { const { pose, position } = layout(name, i); return poseSkeleton(pose, { position }); });
+  // The gesture style: each pose pushed along its line of action, in long proportions (the hanging
+  // pose keeps its searched arms).
+  const flowing = style === 'gesture';
+  const skeletons = ORDER.map((name, i) => {
+    const { pose, position } = layout(name, i);
+    return flowing ? poseSkeleton(gesture(pose, { push: name === 'hang' ? 1 : 1.25, arc: name === 'hang' ? 0 : -6, lean: name === 'walk' ? 4 : 0 }), { position, proportions: ELONGATED })
+      : poseSkeleton(pose, { position });
+  });
   // An orthographic view fitted to every figure, matching the box's aspect.
   const view = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 600);
   view.position.set(Math.sin(turn) * Math.cos(tilt), Math.sin(tilt), Math.cos(turn) * Math.cos(tilt)).multiplyScalar(200);
@@ -69,7 +77,7 @@ function draw(ctx: SketchContext): Part[] {
     }
     return buckets.toParts(ORDER, INKS);
   }
-  const bodies = skeletons.map(s => buildBody(s, { facets, jacket: style === 'suit' }));
+  const bodies = skeletons.map(s => (flowing ? flowBody(s, { facets }) : buildBody(s, { facets, jacket: style === 'suit' })));
   const rng = ctx.random('proof-drape');
   const drapes = style === 'robe' || style === 'cloak'
     ? bodies.map((b, i) => drape(b, { rng, attach: ORDER[i] === 'hang' ? 'waist' : 'shoulders', length: ORDER[i] === 'hang' ? 0.42 : 1, open: style === 'cloak' ? 1.1 : 0 }))
@@ -121,7 +129,7 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
-    { type: 'select', id: 'style', label: 'Renderer', default: 'stick', options: ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit'], group: 'Figure' },
+    { type: 'select', id: 'style', label: 'Renderer', default: 'stick', options: ['stick', 'bare', 'suit', 'robe', 'cloak', 'outfit', 'gesture'], group: 'Figure' },
     { type: 'toggle', id: 'props', label: 'Held props', default: true, group: 'Figure' },
     { type: 'slider', id: 'facets', label: 'Planes per limb (0 = smooth)', default: 0, min: 0, max: 12, step: 1, group: 'Figure' },
     { type: 'slider', id: 'density', label: 'Line density', default: 0.55, min: 0, max: 1, step: 0.01, group: 'Figure' },
