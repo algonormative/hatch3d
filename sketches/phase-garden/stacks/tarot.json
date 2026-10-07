@@ -21,6 +21,10 @@
     { "name": "0-fool", "title": "Breach Tarot: 0 The Fool", "sketch": "sketches/breach-tarot/0-fool/sketch.ts", "seed": 1 },
     { "name": "i-magician", "title": "Breach Tarot: I The Magician", "sketch": "sketches/breach-tarot/i-magician/sketch.ts", "seed": 1 },
     { "name": "xii-hanged-man", "title": "Breach Tarot: XII The Hanged Man", "sketch": "sketches/breach-tarot/xii-hanged-man/sketch.ts", "seed": 3 },
-    { "name": "xxi-world", "title": "Breach Tarot: XXI The World", "sketch": "sketches/breach-tarot/xxi-world/sketch.ts", "seed": 3 }
+    { "name": "xxi-world", "title": "Breach Tarot: XXI The World", "sketch": "sketches/breach-tarot/xxi-world/sketch.ts", "seed": 3 },
+    { "name": "ii-high-priestess", "title": "Breach Tarot: II The High Priestess", "sketch": "sketches/breach-tarot/ii-high-priestess/sketch.ts", "seed": 2 },
+    { "name": "iii-empress", "title": "Breach Tarot: III The Empress", "sketch": "sketches/breach-tarot/iii-empress/sketch.ts", "seed": 2 },
+    { "name": "iv-emperor", "title": "Breach Tarot: IV The Emperor", "sketch": "sketches/breach-tarot/iv-emperor/sketch.ts", "seed": 2 },
+    { "name": "v-hierophant", "title": "Breach Tarot: V The Hierophant", "sketch": "sketches/breach-tarot/v-hierophant/sketch.ts", "seed": 2 }
   ]
 }
