@@ -4,10 +4,11 @@ import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
-import { helixAlong } from '../../kit/helix.ts';
+import { helixAlong, helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
-import { n } from '../../kit/params.ts';
+import { clamp, n } from '../../kit/params.ts';
 import { atPage, fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
@@ -502,22 +503,114 @@ function laneNetwork(ctx: SketchContext, view: THREE.PerspectiveCamera, wall: Wa
 /* The helix: thread through a needle                                                         */
 /* ------------------------------------------------------------------------------------------ */
 
+interface PieceOptions { radius: number; pitch: number; taper: number; flare: number; pitchGrowth: number; ends?: { margin: number; tip: number } }
+
 /**
- * The twin helix as two pieces that meet at the pinch. The kit's wiggles are fixed in world units,
+ * The kit's helix, laid along a curve with its ends brought to a clean stop: each strand narrows its
+ * ribbon to a thread over the last stretch of its run and stops there, short of the window's edge by
+ * `margin` millimetres, the second strand a little before the first. Built as `helixAlong` builds it
+ * (same strands, same strokes), with the ribbon's width scaled toward its centre line before the bend.
+ */
+function helixAlongEnded(ctx: SketchContext, view: THREE.PerspectiveCamera, curve: THREE.CatmullRomCurve3,
+  o: { radius: number; width: number; pitch: number; spread: number; narrow: number; twist: number; density: number; interruption: number; taper: number; flare: number; pitchGrowth: number }, margin: number, tip: number) {
+  const start = curve.getPointAt(0);
+  const length = curve.getLength();
+  const frames = curve.computeFrenetFrames(400, false);
+  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: o.twist } });
+  const STEPS = 400;
+  const widthAt = (s: number) => o.taper ** (s ** o.flare);
+  const turnsTo: number[] = [0];
+  for (let i = 1; i <= STEPS; i++) turnsTo.push(turnsTo[i - 1] + 1 / (STEPS * widthAt((i - 0.5) / STEPS) ** o.pitchGrowth));
+  const curveAt = (u: number): number => {
+    const want = u * turnsTo[STEPS];
+    let lo = 0, hi = STEPS;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (turnsTo[mid] < want) lo = mid; else hi = mid; }
+    const span = turnsTo[hi] - turnsTo[lo];
+    return (lo + (span > 0 ? (want - turnsTo[lo]) / span : 0)) / STEPS;
+  };
+  const strands = template.map((st, i) => ({
+    ...st, x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: o.radius + o.spread * i, depth: 1, width: o.width - o.narrow * i,
+    swell: 0, centre: -1e3, turns: length / o.pitch * turnsTo[STEPS],
+  }));
+  const bend = (p: THREE.Vector3): THREE.Vector3 => {
+    const u = clamp((p.y - start.y) / length, 0, 1);
+    const s = curveAt(u), scale = widthAt(s);
+    const k = Math.min(400, Math.round(s * 400));
+    return curve.getPointAt(s).addScaledVector(frames.normals[k], (p.x - start.x) * scale).addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * scale);
+  };
+  // Where each strand stops: before its centre line leaves the window by `margin`, the second strand a little earlier.
+  const reach = (st: typeof strands[number]) => {
+    for (let k = 0; k <= 400; k++) {
+      const q = pageOf(view, bend(strandPoint(st, k / 400, 0)));
+      if (q.x < CARD.x0 + margin || q.x > CARD.x1 - margin || q.y < CARD.y0 + margin || q.y > CARD.y1 - margin) return Math.max(0, (k - 4) / 400);
+    }
+    return 1;
+  };
+  const natural = Math.min(1, ...strands.map(reach));
+  // Where a strand stops, as a share of the strand's run (u); the second stops a little short of the first along the curve.
+  const uOfS = (sv2: number) => turnsTo[Math.round(clamp(sv2, 0, 1) * STEPS)] / turnsTo[STEPS];
+  const sOfU = (u: number) => curveAt(u);
+  const stop = strands.map((_, i) => uOfS(sOfU(natural) - 0.03 * i));
+  // The tip: over its last `tip` millimetres on the sheet each strand narrows its ribbon to the centre line, so the
+  // wide, open part stays wide and only the very end comes to a point.
+  const arc = strands.map(st => {
+    const acc = [0];
+    let prev = pageOf(view, bend(strandPoint(st, 0, 0)));
+    for (let k = 1; k <= 400; k++) {
+      const q = pageOf(view, bend(strandPoint(st, k / 400, 0)));
+      acc.push(acc[k - 1] + Math.hypot(q.x - prev.x, q.y - prev.y));
+      prev = q;
+    }
+    return acc;
+  });
+  const lenAt = (i: number, t: number) => { const f = clamp(t, 0, 1) * 400, k = Math.min(399, Math.floor(f)); return arc[i][k] + (arc[i][k + 1] - arc[i][k]) * (f - k); };
+  const gOf = (i: number, t: number) => clamp((lenAt(i, stop[i]) - lenAt(i, t)) / tip, 0, 1) ** 0.8;
+  const strokes: HelixStroke[] = [];
+  strands.forEach((st, i) => {
+    const thin = (p: THREE.Vector3): THREE.Vector3 => {
+      const t = clamp((p.y - start.y) / length, 0, 1);
+      const c = strandPoint(st, t, 0);
+      return c.addScaledVector(p.clone().sub(c), gOf(i, t));
+    };
+    for (const h of strandStrokes(st, o.density, o.interruption, ctx, view)) {
+      const out: THREE.Vector3[] = [];
+      for (let k = 0; k < h.points.length; k++) {
+        const p = h.points[k], t = (p.y - start.y) / length;
+        if (t > stop[i]) {
+          const prev = h.points[k - 1];
+          if (prev && (prev.y - start.y) / length < stop[i]) {
+            const tp = (prev.y - start.y) / length;
+            out.push(thin(prev.clone().lerp(p, (stop[i] - tp) / (t - tp))));
+          }
+          break;
+        }
+        out.push(thin(p));
+      }
+      if (out.length > 1) strokes.push({ ...h, points: out.map(bend) });
+    }
+  });
+  const meshes = strands.map((st, i) => buildSurfaceMesh((u, v) => {
+    const t = Math.min(u, stop[i]);
+    const c = bend(strandPoint(st, t, 0));
+    return c.lerp(bend(strandPoint(st, t, 2 * v - 1)), gOf(i, t));
+  }, {}, 320, 8));
+  return { strokes, meshes };
+}
+
+/**
+ * The twin helix as pieces that meet at the pinch. The kit's wiggles are fixed in world units,
  * so a thread this thin is built `S` times the size, seen from a camera moved out to match, and
  * brought back. `taper` is how much wider the piece is at its end than at its start.
  */
-function helixPiece(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THREE.Vector3[], o: { radius: number; pitch: number; taper: number; flare: number; pitchGrowth: number }) {
+function helixPiece(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THREE.Vector3[], o: PieceOptions) {
   const S = 40;
   const sv = view.clone();
   sv.position.multiplyScalar(S); sv.near *= S; sv.far *= S;
   sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
   const big = new THREE.CatmullRomCurve3(pts.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
   const r = o.radius * S;
-  const made = helixAlong(ctx, sv, big, {
-    radius: r, width: r * 0.95, pitch: o.pitch * S, spread: r * 0.3, narrow: r * 0.12, twist: 0.35, density: 0.5, interruption: 0.3,
-    taper: o.taper, flare: o.flare, pitchGrowth: o.pitchGrowth,
-  });
+  const spec = { radius: r, width: r * 0.95, pitch: o.pitch * S, spread: r * 0.3, narrow: r * 0.12, twist: 0.35, density: 0.5, interruption: 0.3, taper: o.taper, flare: o.flare, pitchGrowth: o.pitchGrowth };
+  const made = o.ends ? helixAlongEnded(ctx, sv, big, spec, o.ends.margin, o.ends.tip) : helixAlong(ctx, sv, big, spec);
   return {
     strokes: made.strokes.map(h => ({ ...h, points: h.points.map(q => q.clone().multiplyScalar(1 / S)) })),
     meshes: made.meshes.map(g => g.scale(1 / S, 1 / S, 1 / S)),
@@ -544,9 +637,13 @@ export function drawHierophant(ctx: SketchContext): Part[] {
     // The piers alone are heavy: outline and a ring, then hatch across the whole face, tighter at the foot
     // where the shadow gathers and opening toward the top.
     if (isPier) {
-      for (const st of facetStrokes(sl, dark, eye, true)) strokes.push({ ink: 'carbon', group, family: st.family, points: st.points });
+      for (const st of facetStrokes(sl, dark, eye, true)) {
+        // The undersides of the courses show only as slivers through the joints: no ticks there.
+        if (st.points.every(q => Math.abs(q.y - (sl.y - sl.h / 2)) < 0.02)) continue;
+        strokes.push({ ink: 'carbon', group, family: st.family, points: st.points });
+      }
       const rise = pc.kind === 'cap' ? 1 : pc.course / COURSES.length;
-      for (const pts of stoneHatch(sl, mm, n(ctx, 'pierHatch', 1.2, 0.8, 2.5) * (1 + rise), pc.kind === 'pier' && pc.course <= 1)) strokes.push({ ink: 'carbon', group, family: 'hatch', points: pts });
+      for (const pts of stoneHatch(sl, mm, n(ctx, 'pierHatch', 1.35, 0.8, 2.5) * (1 + rise), pc.kind === 'pier' && pc.course <= 1)) strokes.push({ ink: 'carbon', group, family: 'hatch', points: pts });
       continue;
     }
     for (const st of facetStrokes(sl, light, eye, Math.max(sl.w, sl.h) * mm < 1.5, n(ctx, 'ringScale', 1, 1, 3) * FACET_MM_PER_UNIT / mm)) {
@@ -576,10 +673,11 @@ export function drawHierophant(ctx: SketchContext): Part[] {
   const beyond = (dx: number, dy: number, k: number) => atPage(view, { x: midPage.x + toward * dx, y: midPage.y + dy }, d0 * k);
   const slotPts = [mid, beyond(0.5, -6, 1.12), beyond(1.5, -34, 1.45), beyond(5, -60, 1.9), beyond(24, -82, 2.5), beyond(75, -86, 3.2)];
   const climbPts = [slotPts[slotPts.length - 1], beyond(105, -100, 3.8), beyond(118, -128, 4.1), beyond(126, -160, 4.4), beyond(130, -188, 4.6)];
-  const rNear = n(ctx, 'threadNear', 0.3, 0.1, 0.8), rThread = n(ctx, 'threadThin', 0.022, 0.008, 0.08), rParted = n(ctx, 'threadParted', 0.16, 0.03, 0.3), rFar = n(ctx, 'threadFar', 11, 2, 15);
+  const rNear = n(ctx, 'threadNear', 0.3, 0.1, 0.8), rThread = n(ctx, 'threadThin', 0.022, 0.008, 0.08), rParted = n(ctx, 'threadParted', 0.5, 0.03, 0.8), rFar = n(ctx, 'threadFar', 11, 2, 15);
   const nearHelix = helixPiece(ctx, view, nearPts, { radius: rNear, pitch: n(ctx, 'threadPitch', 5, 2, 12), taper: rThread / rNear, flare: 2.3, pitchGrowth: 0.4 });
-  const slotHelix = helixPiece(ctx, view, slotPts, { radius: rThread, pitch: 5, taper: rParted / rThread, flare: 1, pitchGrowth: 0.3 });
-  const climbHelix = helixPiece(ctx, view, climbPts, { radius: rParted, pitch: n(ctx, 'climbPitch', 6, 3, 30), taper: rFar / rParted, flare: n(ctx, 'threadFlare', 1.3, 0.8, 4), pitchGrowth: 0.8 });
+  const slotHelix = helixPiece(ctx, view, slotPts, { radius: rThread, pitch: n(ctx, 'slotPitch', 5, 2, 12), taper: rParted / rThread, flare: n(ctx, 'slotFlare', 0.55, 0.3, 1.5), pitchGrowth: 0.3 });
+  const rClimb = n(ctx, 'climbStart', 0.16, 0.05, 0.5);
+  const climbHelix = helixPiece(ctx, view, climbPts, { radius: rClimb, pitch: n(ctx, 'climbPitch', 6, 3, 30), taper: rFar / rClimb, flare: n(ctx, 'threadFlare', 1.3, 0.8, 4), pitchGrowth: 0.8, ends: { margin: n(ctx, 'endMargin', 9, 3, 20), tip: n(ctx, 'tipLength', 10, 3, 30) } });
   for (const h of nearHelix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
   const farStrokes: Stroke[] = [...slotHelix.strokes, ...climbHelix.strokes].map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
 
@@ -636,6 +734,25 @@ export function drawHierophant(ctx: SketchContext): Part[] {
     });
     // Behind the wall the far thread is out of sight, wherever the wall covers it on the sheet.
     for (const h of farRuns) for (const inside of clipWindow(h.run)) for (const piece of keepAlong(inside, p => !solids0(p), 0.2)) helixRuns.push({ key: h.key, run: piece });
+    // Where the ribbon is narrow its laminations would crowd to a clot: keep the edges and let a lamination in only
+    // where it has half a millimetre of paper to itself.
+    const order = ['helix-vermilion', 'helix-acid', 'helix-ultramarine', 'helix-violet'];
+    const taken = new Set<number>();
+    const cell = (q: Point) => Math.floor(q.x / 0.3) * 100003 + Math.floor(q.y / 0.3);
+    const kept: typeof helixRuns = [];
+    for (const h of [...helixRuns].sort((p, q) => order.indexOf(p.key) - order.indexOf(q.key))) {
+      const samples: Point[] = [];
+      for (let i = 1; i < h.run.length; i++) {
+        const a = h.run[i - 1], b = h.run[i], steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.2));
+        for (let k = 0; k < steps; k++) samples.push({ x: a.x + (b.x - a.x) * k / steps, y: a.y + (b.y - a.y) * k / steps });
+      }
+      const crowded = samples.length ? samples.filter(q => taken.has(cell(q))).length / samples.length : 0;
+      if (h.key !== 'helix-vermilion' && crowded > 0.6) continue;
+      for (const q of samples) taken.add(cell(q));
+      kept.push(h);
+    }
+    helixRuns.length = 0;
+    helixRuns.push(...kept);
     const helixClear = glyphMask(helixRuns.flatMap(h => clipWindow(h.run)), n(ctx, 'helixClear', 0.9, 0, 3));
 
     const buckets = new PartBuckets(0.4);
