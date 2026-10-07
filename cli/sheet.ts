@@ -2,7 +2,7 @@
  * Review sheets for the steering loop: renders side by side, close-ups, and what changed between
  * two renders. PNG or JPEG in (diff: PNG), PNG out; nothing is re-rendered.
  *
- *   node --import tsx cli/sheet.ts montage <out.png> [--width 520] <label=render.png> ...
+ *   node --import tsx cli/sheet.ts montage <out.png> [--width 520] <label=render.png> ... [/ <label=render.png> ...]
  *   node --import tsx cli/sheet.ts crop <in.png> <out.png> <x0> <y0> <x1> <y1> [--scale 3]
  *   node --import tsx cli/sheet.ts diff <before.png> <after.png> <out.png> [--threshold 40] [--regions 8]
  *
@@ -138,8 +138,16 @@ function main(argv: string[]): number {
   const positional = rest.filter((a, i) => !a.startsWith('--') && !rest[i - 1]?.startsWith('--'));
   if (command === 'montage' && positional.length >= 2) {
     const [out, ...items] = positional;
-    const tiles = items.map(item => { const at = item.indexOf('='); return { label: at > 0 ? item.slice(0, at) : item, image: load(at > 0 ? item.slice(at + 1) : item, flag('--width', 520)) }; });
-    renderSvg(sheetSvg([tiles], flag('--width', 520)), out);
+    // A lone `/` starts a new row; a render named twice is embedded once.
+    const images = new Map<string, Image>();
+    const rows: Tile[][] = [[]];
+    for (const item of items) {
+      if (item === '/') { rows.push([]); continue; }
+      const at = item.indexOf('='), path = at > 0 ? item.slice(at + 1) : item;
+      if (!images.has(path)) images.set(path, load(path, flag('--width', 520)));
+      rows[rows.length - 1].push({ label: at > 0 ? item.slice(0, at) : item, image: images.get(path)! });
+    }
+    renderSvg(sheetSvg(rows.filter(r => r.length), flag('--width', 520)), out);
     return 0;
   }
   if (command === 'crop' && positional.length === 6) {
