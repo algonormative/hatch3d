@@ -125,25 +125,31 @@ export function fieldOf(ctx: SketchContext): Field {
 }
 
 /**
- * The wind: one thin helix ribbon in a long shallow S over the ripe tops, from the left or right
- * edge. Its height follows the crop's own, heavily smoothed: higher over ripe patches, lower over
- * seedlings, but never jumping.
+ * The wind: one thin helix ribbon in a long S over the ripe tops, from the left or right edge, in the
+ * helix's own inks. Its height follows the crop's own, smoothed: higher over ripe patches, lower over
+ * seedlings, with a wave added so the S holds in every seed.
  */
 export function windRibbon(ctx: SketchContext, view: THREE.PerspectiveCamera, field: Field): Wind {
   const rng = ctx.random('crop-wind');
   const dir = ctx.params.windFrom === 'right' ? -1 : 1;
   const depth = n(ctx, 'windDepth', 30, 18, 120) * (0.94 + 0.12 * rng());
-  const swing = n(ctx, 'windSwing', 9, 2, 30) * (0.85 + 0.3 * rng());
+  const swing = n(ctx, 'windSwing', 4, 2, 30) * (0.85 + 0.3 * rng());
   const phase = (rng() - 0.5) * 0.6;
   const slope = n(ctx, 'windSlope', 6, -30, 30);
   const clearance = n(ctx, 'windHigh', 1.6, 0.4, 4), radius = n(ctx, 'windRadius', 0.2, 0.08, 0.8);
   const spacing = n(ctx, 'furrow', 2.8, 2, 7), row = n(ctx, 'row', 3.4, 2.5, 8);
   const eye = view.position.y;
   const count = 18;
+  // One full wave across the visible width of the card (the ribbon runs a little past each edge): a peak a quarter of
+  // the way across and a trough at three quarters, or the other way up, a little skewed. It lifts the ribbon where it
+  // brings it nearer and lowers it where it sends it back, so the S shows on the sheet whatever the crop does.
+  const psi = (ctx.random('crop-wind-rise')() < 0.5 ? 0 : Math.PI) + phase;
   const at = Array.from({ length: count + 1 }, (_, i) => {
-    const t = i / count;
-    const d = depth + slope * (t - 0.5) + swing * Math.sin(2 * Math.PI * t + phase);
-    return { x: dir * (t * 2 - 1) * 0.44 * d, d };
+    const r = dir * (i / count * 2 - 1) * 0.44;
+    const frac = (r + 0.287) / 0.574;
+    const w = Math.sin(2 * Math.PI * frac + psi);
+    const d = depth + slope * (frac - 0.5) - swing * w;
+    return { x: r * d, d, w };
   });
   // The crop's typical height round each point: a row either side and a furrow either side.
   const tallest = at.map(p => {
@@ -153,11 +159,17 @@ export function windRibbon(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
   });
   const smoothed = tallest.map((_, i) => {
     let s = 0, k = 0;
-    for (let j = 0; j <= count; j++) { const w = Math.exp(-(((j - i) / 2.6) ** 2)); s += tallest[j] * w; k += w; }
+    for (let j = 0; j <= count; j++) { const w = Math.exp(-(((j - i) / 2) ** 2)); s += tallest[j] * w; k += w; }
     return s / k;
   });
   const mean = tallest.reduce((a, b) => a + b, 0) / tallest.length;
-  const pts = at.map((p, i) => new THREE.Vector3(p.x, clamp(mean * 0.7 + smoothed[i] * 0.3 + clearance + 1.1 * Math.sin(2 * Math.PI * (i / count) * 1.5 + phase), eye + 2.5, eye + 12), -p.d));
+  // Height: the crop's own (half its smoothed local height, half its overall mean) lifted by a clearance, plus the
+  // wave. The wave never dips under the horizon: the base is held up by its amplitude.
+  const rise = n(ctx, 'windRise', 1.9, 0, 6);
+  const pts = at.map((p, i) => {
+    const base = Math.max(mean * 0.5 + smoothed[i] * 0.5 + clearance, eye + 1.2 + rise);
+    return new THREE.Vector3(p.x, clamp(base + rise * p.w, eye + 1.2, eye + 14), -p.d);
+  });
   const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
   // The kit's helix wiggles by amounts fixed in world units (a third of a unit up and down, a seventh in and out),
   // which swamp a thin ribbon. So the ribbon is built four times the size, seen by a camera moved out to match, and
@@ -408,7 +420,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     }
   }
   for (const t of ticks) strokes.push({ ink: 'carbon', group: 'crop', family: 'edge', points: t, band: bandOf(t[0]) });
-  for (const h of wind.strokes) strokes.push({ ink: h.ink === 'carbon' ? 'carbon' : 'ultramarine', group: 'wind', family: 'membrane', points: h.points, band: bandOf(h.points[Math.floor(h.points.length / 2)]) });
+  for (const h of wind.strokes) strokes.push({ ink: h.ink, group: 'wind', family: 'membrane', points: h.points, band: bandOf(h.points[Math.floor(h.points.length / 2)]) });
 
   const geometries = [...plants.flatMap(p => p.slabs.map(slabGeometry)), ...wind.meshes];
   try {

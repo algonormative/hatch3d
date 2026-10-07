@@ -6,9 +6,10 @@ import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.t
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
+import { helixAlong } from '../../kit/helix.ts';
 import { bandMarks } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage, pathLength } from '../../kit/page.ts';
-import { n } from '../../kit/params.ts';
+import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
@@ -19,11 +20,14 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * II The High Priestess: there is a direction you cannot point. She keeps the hidden knowledge, and
  * here that is the fourth dimension, which we only ever see as a shadow. No figure: two pillar towers
  * of slab courses stand either side of the axis, one dark and heavily hatched, one light and barely
- * drawn, joined by a lintel. Between them hangs the veil, a flat plane of fine vertical threads,
- * the calmest field on the card. On the veil lies the card's one flat mark: the shadow of a
- * tesseract (16 vertices at ±1 in four dimensions, 32 edges), turned in two planes that involve w,
- * perspective-divided to 3D and cast onto the veil, each edge a narrow hatched band with the threads
- * knocked out round it. The phrase is cut into the pillars' faces, word by word, alternating sides.
+ * drawn, joined by a lintel. Between them hangs the veil, made of the helix: a wound cable comes down
+ * from the sky over the lintel, and where it reaches the top of the veil it unwinds, its strands
+ * loosening and forking until they are the veil's straight threads. On the veil lies the card's one
+ * flat mark: the shadow of a tesseract (16 vertices at ±1 in four dimensions, 32 edges), turned in
+ * two planes that involve w, perspective-divided to 3D and cast onto the veil, each edge a narrow
+ * hatched band with the threads knocked out round it. The phrase is cut into the pillars' faces,
+ * word by word, alternating sides. The temple stands narrow, so the sky and horizon run out to
+ * both edges of the card.
  */
 const W = 1118, H = 1728;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -217,6 +221,75 @@ export function shadowBands(pts: Point[], half: number, hatchPitch = 0.55): { ou
 }
 
 // ---------------------------------------------------------------------------------------------
+// The unwinding: the cable's strands becoming the veil's threads
+// ---------------------------------------------------------------------------------------------
+
+export interface UnwindSpec {
+  /** Page x of the axis and the spacing of the finished threads, millimetres. */
+  centre: number;
+  step: number;
+  /** Threads run j = -half..half, j = 0 being the one on the axis. */
+  half: number;
+  /** Page y where the cable ends and the unwinding begins, and how far down it lasts. */
+  top: number;
+  length: number;
+  /** Radius of the wobble the wound cable leaves on the strands, and the cable's pitch, millimetres. */
+  coil: number;
+  pitch: number;
+}
+
+/** One strand of the unwinding: a thread j, its page polyline, the page y where it is straight. */
+export interface UnwoundThread { j: number; points: Point[]; straightAt: number }
+
+const trailingZeros = (k: number): number => { let m = 0; while (k > 0 && k % 2 === 0) { k /= 2; m++; } return m; };
+const FAN_END = 0.9;
+
+/**
+ * The cable's strands unwinding into threads. The threads are born the way the helix's laminations
+ * thin: the one on the axis first, then the ones 32 apart, 16, 8 and so on, each forking from the
+ * thread nearer the axis and born when the spread has opened enough to hold it. While they are young
+ * they still carry the cable's coil, a sinusoid that loosens (longer pitch, smaller radius) as they
+ * spread, and by the end of the unwinding they hang straight at the veil's spacing.
+ */
+export function unwindThreads(spec: UnwindSpec, rng: () => number): UnwoundThread[] {
+  const { centre, step, half, top, length, coil, pitch } = spec;
+  // Opens quickly from the axis and eases to vertical, so the threads hang straight where it ends.
+  const spread = (u: number) => 1 - (1 - Math.min(1, u / FAN_END)) ** 1.7;
+  const unspread = (b: number) => (1 - (1 - b) ** (1 / 1.7)) * FAN_END;
+  // The coil's phase: turns accumulate at the cable's pitch and lengthen to 3.5 times that.
+  const k1 = (3.5 - 1) * pitch;
+  const phase = (u: number) => 2 * Math.PI * length / k1 * Math.log((pitch + k1 * u) / pitch);
+  const nominal = (j: number, u: number) => centre + j * step * spread(u) + coil * (1 - smooth(0, 0.92, u)) * Math.sin(2.4 * j + phase(u));
+  const out: UnwoundThread[] = [];
+  for (let j = -half; j <= half; j++) {
+    const level = j === 0 ? 7 : Math.min(7, trailingZeros(Math.abs(j)));
+    const jitter = rng();
+    // Level 0 and 1 threads are born in their own windows near the end of the spread; the rest
+    // when the spread has opened enough that their stride (2^level × step) clears 1.6 mm.
+    const born = level >= 4 ? 0 : level === 0 ? 0.88 + 0.1 * jitter : level === 1 ? 0.66 + 0.16 * jitter : Math.min(0.62, 1.68 / 2 ** level) * (0.8 + 0.2 * jitter);
+    const u0 = unspread(born);
+    const parent = j === 0 ? 0 : j - Math.sign(j) * 2 ** level;
+    const fork = 0.08;
+    const points: Point[] = [];
+    const samples = Math.max(2, Math.ceil((1 - u0) * length / 0.6));
+    for (let i = 0; i <= samples; i++) {
+      const u = u0 + (1 - u0) * i / samples;
+      const w = level >= 4 ? 1 : smooth(0, 1, (u - u0) / fork);
+      const x = w * nominal(j, u) + (1 - w) * nominal(parent, u);
+      points.push({ x, y: top + u * length });
+    }
+    out.push({ j, points, straightAt: top + length });
+  }
+  return out;
+}
+
+/** The helix's own lamination palette (violet and ultramarine strands, a vermilion line every thirteenth, acid on the axis). */
+export function laminationInk(j: number): Ink {
+  const k = Math.abs(j);
+  return j === 0 ? 'acid' : k % 13 === 0 ? 'vermilion' : k % 2 === 0 ? (k % 4 === 0 ? 'violet' : 'ultramarine') : 'violet';
+}
+
+// ---------------------------------------------------------------------------------------------
 // The temple
 // ---------------------------------------------------------------------------------------------
 
@@ -314,11 +387,9 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
   const lay: Layout = {
     view, u: distance / f, distance, cx: TABLOID_PAGE.width / 2,
     groundY: pageOf(view, new THREE.Vector3(0, 0, -distance)).y,
-    pillarCentre: n(ctx, 'pillarCentre', 74, 40, 95), pillarWidth: n(ctx, 'pillarWidth', 36, 20, 50), lintelTop: n(ctx, 'lintelTop', 62, 46, 100),
+    pillarCentre: n(ctx, 'pillarCentre', 62, 40, 95), pillarWidth: n(ctx, 'pillarWidth', 27, 20, 50), lintelTop: n(ctx, 'lintelTop', 62, 46, 100),
   };
   const { slabs, faces, look } = temple(ctx, lay);
-  const geometries = slabs.map(slabGeometry);
-  fitDepthRange(view, geometries);
 
   // The veil: a flat rectangle on the sheet (the plane faces the eye), between the pillars' inner
   // faces, hung from just under the lintel to just above the ground.
@@ -329,14 +400,29 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
   const veil = { x0: veilTL.x, x1: veilBR.x, y0: veilTL.y, y1: veilBR.y };
   const inVeil = (p: Point, grow = 0) => p.x > veil.x0 - grow && p.x < veil.x1 + grow && p.y > veil.y0 - grow && p.y < veil.y1 + grow;
 
+  // The cable: the twin helix, wound, coming down the axis from above the card, in front of the lintel,
+  // and ending just inside the top of the veil, where the unwinding takes over.
+  const cableZ = -distance + (lay.pillarWidth + 12) / 2 * lay.u + 2.2;
+  const cableY = (pageY: number) => EYE + (HORIZON_Y - pageY) * -cableZ / f;
+  const cableEnd = veil.y0 + 3;
+  const cableRadius = n(ctx, 'cable', 0.26, 0.08, 0.45);
+  const cablePitch = 1.5;
+  const cable = helixAlong(ctx, view, new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, cableY(CARD.top - 14), cableZ), new THREE.Vector3(0, cableY((CARD.top - 14 + cableEnd) / 2), cableZ), new THREE.Vector3(0, cableY(cableEnd), cableZ),
+  ], false, 'centripetal'), { radius: cableRadius, width: cableRadius * 1.1, pitch: cablePitch, spread: cableRadius * 0.2, narrow: cableRadius * 0.2, taper: 1.5, flare: 4 });
+
+  const geometries = [...slabs.map(slabGeometry), ...cable.meshes];
+  fitDepthRange(view, geometries);
+
   try {
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
     const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const onCable = meshCoverage(cable.meshes, view, TABLOID_PAGE, 0.9);
 
     // The shadow: the cube-within-a-cube read of the tesseract, laid flat on the veil a little above its centre.
     const shadow = tesseractShadow(ctx);
     const size = n(ctx, 'tessSize', 0.5, 0.3, 0.7) * (veil.x1 - veil.x0);
-    const centre = { x: (veil.x0 + veil.x1) / 2, y: (veil.y0 + veil.y1) / 2 - n(ctx, 'tessRise', 0.1, -0.2, 0.3) * (veil.y1 - veil.y0) };
+    const centre = { x: (veil.x0 + veil.x1) / 2, y: (veil.y0 + veil.y1) / 2 - n(ctx, 'tessRise', 0.06, -0.2, 0.3) * (veil.y1 - veil.y0) };
     const half = n(ctx, 'tessBand', 0.85, 0.5, 2);
     const flat = shadow.pts.map(p => ({ x: centre.x + p.x * size, y: centre.y + p.y * size }));
     const bands = shadowBands(flat, half);
@@ -401,7 +487,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
       begin: st => runs => {
         for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
-          for (const piece of keepAlong(inside, p => !onGlyph(p) && !inVeil(p, 0.3), 0.15)) {
+          for (const piece of keepAlong(inside, p => !onGlyph(p) && !inVeil(p, 0.3) && !onCable(p), 0.15)) {
             // The pillars' inner flanks show as slivers beside the veil; their stray ticks are noise.
             if (inVeil(piece[0], 4) && pathLength(piece) < 1.8) continue;
             buckets.add(`${st.group}-${st.ink}`, piece);
@@ -410,14 +496,29 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       },
     });
 
-    // The veil: fine vertical threads in page space, hung from the lintel and ending in a ragged hem.
+    // The helix cable's own strokes, in the helix's own inks (none remapped).
+    const helix: Stroke[] = cable.strokes.map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
+    projectStrokes(helix, { view, depth: depthBuffer, width: W, height: H }, {
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+    });
+
+    // The veil: the cable's strands unwind into fine vertical threads in page space, hung from the top
+    // of the veil and ending in a ragged hem. The unwinding keeps the helix's lamination inks; the
+    // straight threads below it are ultramarine.
     const vrng = ctx.random('priestess-veil');
     const pitch = n(ctx, 'veilPitch', 0.95, 0.6, 1.2);
-    const threads = Math.floor((veil.x1 - veil.x0 - 1.2) / pitch);
-    for (let k = 0; k <= threads; k++) {
-      const x = veil.x0 + 0.6 + k * (veil.x1 - veil.x0 - 1.2) / Math.max(1, threads);
+    const half2 = Math.floor((veil.x1 - veil.x0 - 1.2) / pitch / 2);
+    const step = (veil.x1 - veil.x0 - 1.2) / (2 * half2);
+    const centreX = (veil.x0 + veil.x1) / 2;
+    const unwound = unwindThreads({
+      centre: centreX, step, half: half2, top: cableEnd, length: n(ctx, 'unwindLength', 44, 30, 100), coil: n(ctx, 'coil', 2.4, 0.5, 5),
+      pitch: cablePitch * f / -cableZ,
+    }, ctx.random('priestess-unwind'));
+    for (const th of unwound) {
       const hem = vrng() * vrng() * 3;
-      add('veil-ultramarine', [{ x, y: veil.y0 + 0.4 }, { x, y: veil.y1 - hem }], p => !nearBand(p), 0.2);
+      add(`unwind-${laminationInk(th.j)}`, th.points, p => !nearBand(p), 0.3);
+      const x = centreX + th.j * step;
+      add('veil-ultramarine', [{ x, y: th.straightAt }, { x, y: veil.y1 - hem }], p => !nearBand(p), 0.2);
     }
 
     // The shadow's bands, in carbon.
@@ -453,7 +554,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     }
 
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'floor', 'dark', 'light', 'lintel', 'veil', 'shadow', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'floor', 'dark', 'light', 'lintel', 'helix', 'unwind', 'veil', 'shadow', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p) && !inVeil(p, 1), 0.3) });
     parts.push(...cardFrame('II', 'THE HIGH PRIESTESS'));
     return parts;

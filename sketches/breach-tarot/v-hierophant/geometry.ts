@@ -4,23 +4,26 @@ import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
+import { atPage, fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
 /**
- * V The Hierophant: by continuing, you agree. The institution as the middleman. One long high
- * wall of a few big slab courses crosses the card, dead level, shallowly bowed toward the eye. At
- * its centre stands one narrow gate between two taller piers, dark inside. Every lane on the ground
- * runs into it: a fan of ruled lanes and paving courses from all across the foot of the card,
- * narrowing to the gate; through the slot they open out again beyond. The facade is cut all over
- * with fine print, justified rows of asemic marks in patches and blanks, with the four words of
- * the phrase set among them in the same pen at the same size.
+ * V The Hierophant: by continuing, you agree. The institution as the middleman. A long high wall of
+ * a few big slab courses turns across the card on a strong diagonal, near and tall at one side and
+ * running away to a vanishing point well off the other, dead level in its courses. Its one narrow
+ * gate stands between two taller piers in the near third, dark inside. Every lane on the ground
+ * sweeps in from across the foreground and merges, like on-ramps, into that gate. The helix is the
+ * thread through the needle: it comes in from the near side, pinches to a bare thread as it passes
+ * the slot, and fans out beyond, seen only through the slot and then rising and opening above the
+ * wall top in the distance. The facade is cut all over with fine print, justified rows of asemic
+ * marks in patches and blanks, with the four words of the phrase set among them.
  */
 const W = 1118, H = 1728;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -39,74 +42,105 @@ export function gateCamera(ctx: SketchContext): THREE.PerspectiveCamera {
 }
 
 type Piece = { slab: Slab; kind: 'wing' | 'pier' | 'cap' | 'lintel'; side: number; course: number; sealed?: boolean };
-type Quad = { x: number; z: number }[];
 
 interface Wall {
   pieces: Piece[];
-  /** Ground footprints (x, z) of everything solid: piers and the two wings. */
-  footprints: Quad[];
+  /** The gate's centre on the ground, on the wall's centreline; `ex` runs along the wall to the right of the picture, `ez` out of its face toward the eye. */
+  G: THREE.Vector3; ex: THREE.Vector3; ez: THREE.Vector3;
+  /** +1 when the wall is near on the left and recedes to the right, -1 when mirrored. */
+  sx: number;
   D: number; gw: number; pw: number; dw: number; dp: number; wallH: number; gateTop: number;
 }
 
-/** The wall: two wings of staggered slab courses, two piers, a lintel. All courses dead level. */
-export function buildWall(ctx: SketchContext, view: THREE.PerspectiveCamera): Wall {
+/** Which way the wall turns: near on the left (gate in the left third) or mirrored, by the seed unless the control says. */
+function wallSide(ctx: SketchContext): number {
+  const p = ctx.params.side;
+  if (p === 'left') return 1;
+  if (p === 'right') return -1;
+  return ctx.random('hier-side')() < 0.5 ? 1 : -1;
+}
+
+/** The wall: two wings of staggered slab courses, two piers, a lintel. All courses dead level; the plan runs on a diagonal. */
+export function buildWall(ctx: SketchContext, view: THREE.PerspectiveCamera, sx: number): Wall {
   const rng = ctx.random('hier-wall'), tone = ctx.random('hier-tone');
   const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const D = n(ctx, 'dist', 70, 40, 140);
-  const wallH = n(ctx, 'wallH', 26, 10, 40);
-  const a = THREE.MathUtils.degToRad(n(ctx, 'bay', 20, 0, 40));
-  const gw = n(ctx, 'gateW', 2.6, 1.4, 5);
-  const pw = n(ctx, 'pierW', 4.4, 2, 9);
-  const capH = n(ctx, 'capH', 3, 0.5, 8);
-  const dw = 4.4, dp = dw + 1.6, joint = 0.2 + dw / 2 * Math.sin(a);
+  const wallH = n(ctx, 'wallH', 18, 10, 40);
+  const phi = THREE.MathUtils.degToRad(n(ctx, 'angle', 36, 18, 60));
+  const gw = n(ctx, 'gateW', 3.6, 1.6, 6);
+  const pw = n(ctx, 'pierW', 4.2, 2, 9);
+  const capH = n(ctx, 'capH', 2.5, 0.5, 8);
+  const dw = n(ctx, 'wallT', 2.2, 1.5, 6), dp = dw + 1;
+  const D = n(ctx, 'gateDist', 46, 26, 80);
+  const theta = sx * phi;
+  const ex = new THREE.Vector3(Math.cos(theta), 0, -Math.sin(theta)), ez = new THREE.Vector3(Math.sin(theta), 0, Math.cos(theta));
+  // The gate stands in the near third: its centre lands a set fraction across the card from the near edge.
+  const frac = n(ctx, 'gateAt', 0.3, 0.12, 0.4);
+  const xPage = sx > 0 ? CARD.x0 + frac * (CARD.x1 - CARD.x0) : CARD.x1 - frac * (CARD.x1 - CARD.x0);
+  const G = new THREE.Vector3((xPage - TABLOID_PAGE.width / 2) * D / f, 0, -D);
   const heights = COURSES.map(w => w * (wallH - (COURSES.length - 1) * COURSE_GAP));
   const bottoms = heights.map((_, c) => heights.slice(0, c).reduce((s, h) => s + h + COURSE_GAP, 0));
   const nC = COURSES.length;
   const pieces: Piece[] = [];
-  const footprints: Quad[] = [];
-  const halfW = (CARD.x1 - CARD.x0) / 2;
+  const at = (s: number) => G.clone().addScaledVector(ex, s);
+  const pageX = (s: number) => pageOf(view, at(s)).x;
+  // The picture's x grows with s along the wall; find the s that lands a given page x (the wall's plane keeps depth above 12).
+  const depthAt = (s: number) => -at(s).z;
+  let sA = -400, sB = 400;
+  while (depthAt(sA) < 12) sA += 2;
+  while (depthAt(sB) < 12) sB -= 2;
+  const sAt = (px: number) => {
+    let lo = sA, hi = sB;
+    for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (pageX(mid) < px) lo = mid; else hi = mid; }
+    return (lo + hi) / 2;
+  };
+  // Where the wall runs out: off the near edge by a margin, and short of the far edge so the horizon shows there.
+  const endAt = n(ctx, 'endAt', 0.86, 0.6, 1.1);
+  const cardW = CARD.x1 - CARD.x0;
+  const sLeft = sx > 0 ? sAt(CARD.x0 - 16) : sAt(CARD.x0 + (1 - endAt) * cardW);
+  const sRight = sx > 0 ? sAt(CARD.x0 + endAt * cardW) : sAt(CARD.x1 + 16);
+  const joint = 0.2;
   for (const side of [-1, 1]) {
-    const Bx = side * (gw / 2 + pw + joint);
-    // The wing runs out until it clears the card edge, with a margin.
-    const reach = 1.08 * halfW / f;
-    const sEnd = (reach * D - Math.abs(Bx)) / (Math.cos(a) + reach * Math.sin(a));
-    const dir = { x: side * Math.cos(a), z: Math.sin(a) };
-    const nrm = { x: -dir.z, z: dir.x };
-    const q = (s: number, k: number) => ({ x: Bx + dir.x * s + nrm.x * k * dw / 2, z: -D + dir.z * s + nrm.z * k * dw / 2 });
-    footprints.push([q(0, 1), q(0, -1), q(sEnd, -1), q(sEnd, 1)]);
-    for (let c = 0; c < nC; c++) {
-      let s = 0, len = 4 + 14 * rng();
-      while (s < sEnd - 0.5) {
-        const sa = s, sb = Math.min(sEnd, s + len);
-        s = sb; len = 11 + 14 * rng();
-        const w = sb - sa - 0.2;
-        if (w < 1.5) continue;
-        const mid = (sa + sb) / 2;
-        const sl = solid(Bx + dir.x * mid, bottoms[c] + heights[c] / 2, -D + dir.z * mid, w, heights[c], dw, pieces.length, 'stack');
-        sl.ry = -side * a;
-        // Pale courses (rings only, so the print reads clean) with the odd dark sealed block that carries none.
+    const limit = side < 0 ? sLeft : sRight;
+    const s0 = side * (gw / 2 + pw + joint);
+    if ((limit - s0) * side > 1) for (let c = 0; c < nC; c++) {
+      let s = s0, first = true;
+      while ((limit - s) * side > 0.5) {
+        // Slabs of 45..95 mm on the sheet, so the near ones are short in the world and the far ones long;
+        // the first of a course a short one, so joints stagger.
+        const wPage = first ? 14 + 50 * rng() : 45 + 50 * rng();
+        first = false;
+        let e = sAt(pageX(s) + side * wPage);
+        e = side < 0 ? Math.max(e, limit) : Math.min(e, limit);
+        if ((e - s) * side < 0.4) e = limit;
+        const w = Math.abs(e - s) - joint;
+        const mid = (s + e) / 2;
+        s = e;
+        if (w < 1.2) continue;
+        const centre = at(mid);
+        const sl = solid(centre.x, bottoms[c] + heights[c] / 2, centre.z, w, heights[c], dw, pieces.length, 'stack');
+        sl.ry = theta;
+        // Pale courses (rings only, so the print reads clean), the odd one left without print.
         const sealed = tone() < 0.14;
-        sl.tone = sealed ? 1.45 : 0.15 + 0.25 * tone();
+        sl.tone = sealed ? 0.3 : 0.15 + 0.25 * tone();
         pieces.push({ slab: sl, kind: 'wing', side, course: c, sealed });
       }
     }
-    const x1 = side * (gw / 2), x2 = side * (gw / 2 + pw);
-    footprints.push([{ x: x1, z: -D - dp / 2 }, { x: x2, z: -D - dp / 2 }, { x: x2, z: -D + dp / 2 }, { x: x1, z: -D + dp / 2 }]);
     // The pier: a stack of whole slabs on the wall's own courses, then a cap.
+    const cp = at(side * (gw / 2 + pw / 2));
     for (let c = 0; c < nC; c++) {
-      const sl = solid(side * (gw / 2 + pw / 2), bottoms[c] + heights[c] / 2, -D, pw, heights[c], dp, pieces.length, 'pier');
-      sl.tone = 1.45;
+      const sl = solid(cp.x, bottoms[c] + heights[c] / 2, cp.z, pw, heights[c], dp, pieces.length, 'pier');
+      sl.ry = theta; sl.tone = 1;
       pieces.push({ slab: sl, kind: 'pier', side, course: c });
     }
     const top = bottoms[nC - 1] + heights[nC - 1] + COURSE_GAP;
-    const cap = solid(side * (gw / 2 + pw / 2), top + capH / 2, -D, pw, capH, dp, pieces.length, 'pier');
-    cap.tone = 1.45;
+    const cap = solid(cp.x, top + capH / 2, cp.z, pw, capH, dp, pieces.length, 'pier');
+    cap.ry = theta; cap.tone = 1;
     pieces.push({ slab: cap, kind: 'cap', side, course: nC });
   }
-  const lintel = solid(0, bottoms[nC - 1] + heights[nC - 1] / 2, -D, gw - 0.3, heights[nC - 1], dw, pieces.length, 'stack');
-  lintel.tone = 1;
+  const lintel = solid(G.x, bottoms[nC - 1] + heights[nC - 1] / 2, G.z, gw - 0.3, heights[nC - 1], dw, pieces.length, 'stack');
+  lintel.ry = theta; lintel.tone = 0.3;
   pieces.push({ slab: lintel, kind: 'lintel', side: 0, course: nC - 1 });
-  return { pieces, footprints, D, gw, pw, dw, dp, wallH, gateTop: bottoms[nC - 1] };
+  return { pieces, G, ex, ez, sx, D, gw, pw, dw, dp, wallH, gateTop: bottoms[nC - 1] };
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -129,7 +163,7 @@ function asemicGlyph(rng: () => number): { strokes: G[]; w: number } {
   else if (k < 0.56) s.push([[0, BL], [w, XH]]);
   else if (k < 0.66) { s.push([[0, XH - 0.5], [0, BL]]); s.push([[0, XH + 1], [w, XH + 1], [w, BL], [0, BL]]); }
   else if (k < 0.74) s.push([[w, XH], [0, XH + 1.3], [w, BL - 1.3], [0, BL]]);
-  else if (k < 0.8) { s.push([[w / 2, AS], [w / 2, BL]]); s.push([[0, XH + 0.6], [w, XH + 0.6]]); }
+  else if (k < 0.82) { s.push([[w / 2, AS], [w / 2, BL]]); s.push([[0, XH + 0.6], [w, XH + 0.6]]); }
   else if (k < 0.9) { s.push([[0, AS], [0, DS]]); s.push([[0, XH + 1], [w, XH + 1], [w, BL - 1]]); }
   else { s.push([[0, XH], [w, XH], [0, BL], [w, BL]]); }
   if (rng() < 0.07) s.push([[w / 2, AS + 0.4], [w / 2, AS + 1.4]]);
@@ -161,26 +195,54 @@ interface Slot {
 
 interface Printed { asemic: THREE.Vector3[][]; words: THREE.Vector3[][] }
 
+/** The light on the wall's face: mostly frontal, so the pale courses carry only rings and the print reads clean. */
+function wallLight(w: Wall): THREE.Vector3 {
+  return w.ez.clone().multiplyScalar(0.8).addScaledVector(w.ex, 0.25).add(new THREE.Vector3(0, 0.55, 0)).normalize();
+}
+/** The light on the piers: low and from the side, so their faces fall to a middle dark. */
+function pierLight(w: Wall): THREE.Vector3 {
+  return w.ez.clone().multiplyScalar(0.42).addScaledVector(w.ex, 0.57).add(new THREE.Vector3(0, 0.7, 0)).normalize();
+}
+
 export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.PerspectiveCamera, depthVisible: (lines: THREE.Vector3[][]) => boolean): Printed {
   const rng = ctx.random('hier-print'), wrng = ctx.random('hier-words');
-  const eye = view.position;
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const L = n(ctx, 'printLine', 1.6, 1.2, 1.6), P = n(ctx, 'printPitch', 2.5, 2, 3.6);
-  const density = n(ctx, 'print', 0.8, 0, 1), margin = n(ctx, 'margin', 1.2, 0.5, 6);
+  const density = n(ctx, 'print', 0.9, 0, 1), margin = n(ctx, 'margin', 1.2, 0.5, 6);
   const unit = L / 8;
   const settings = sloganSettings(ctx);
   const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
   const style = { face: settings.face, height: settings.size };
-  const mpu = (s: Slab) => f / (eye.z - s.z);
+  const light = wallLight(wall);
+
+  // The face of each wing slab, in page millimetres at its centre: how many a world unit along it and up it comes to on the sheet.
+  const mats = new Map<number, THREE.Matrix4>();
+  const faceMat = (i: number) => { let m = mats.get(i); if (!m) { m = slabMatrix(wall.pieces[i].slab); mats.set(i, m); } return m; };
+  const scales = new Map<number, { hx: number; hy: number }>();
+  const faceScale = (i: number) => {
+    let s = scales.get(i);
+    if (!s) {
+      const sl = wall.pieces[i].slab, m = faceMat(i);
+      const at = (u: number, v: number) => pageOf(view, new THREE.Vector3(u, v, sl.d / 2 + 0.03).applyMatrix4(m));
+      const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+      s = { hx: dist(at(-0.5, 0), at(0.5, 0)), hy: dist(at(0, -0.5), at(0, 0.5)) };
+      scales.set(i, s);
+    }
+    return s;
+  };
+  const world = (i: number, u: number, v: number) => {
+    const sl = wall.pieces[i].slab, sc = faceScale(i);
+    return new THREE.Vector3(u / sc.hx, v / sc.hy, sl.d / 2 + 0.03).applyMatrix4(faceMat(i));
+  };
 
   // Every row of every wing slab, and which ones carry text.
   const slots: Slot[] = [];
   wall.pieces.forEach((pc, i) => {
     if (pc.kind !== 'wing' || pc.sealed) return;
-    const sl = pc.slab, k = mpu(sl);
-    const Wmm = sl.w * k, Hmm = sl.h * k;
-    const band = faceBand(sl, k);
-    const mx = band + margin, my = band + margin * 0.7;
+    const sl = pc.slab, sc = faceScale(i);
+    const Wmm = sl.w * sc.hx, Hmm = sl.h * sc.hy;
+    const normal = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(sl.rx, sl.ry, sl.rz, 'XYZ'));
+    const band = Math.min(sl.w, sl.h) / 2 * (0.12 + 0.6 * faceDarkness(normal, light, sl.tone));
+    const mx = band * sc.hx + margin, my = band * sc.hy + margin * 0.7;
     const width = Wmm - 2 * mx;
     if (width < 14) return;
     const rows: Slot[] = [];
@@ -206,18 +268,13 @@ export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.Perspec
 
   // The phrase: one word to a row, staggered from the top of the wall down and side to side, each
   // tried at a few places along its row until one lands inside the card and in clear view.
-  const mat = new Map<number, THREE.Matrix4>();
-  const faceMat = (i: number) => { let m = mat.get(i); if (!m) { m = slabMatrix(wall.pieces[i].slab); mat.set(i, m); } return m; };
-  const world = (i: number, u: number, v: number) => {
-    const sl = wall.pieces[i].slab, kk = 1 / mpu(sl);
-    return new THREE.Vector3(u * kk, v * kk, sl.d / 2 + 0.03).applyMatrix4(faceMat(i));
-  };
-  const topY = pageOf(view, new THREE.Vector3(0, wall.wallH, -wall.D)).y, baseY = pageOf(view, new THREE.Vector3(0, 0, -wall.D)).y;
-  const targetsX = [0.22, 0.76, 0.3, 0.7];
+  const targetsX = wall.sx > 0 ? [0.3, 0.72, 0.42, 0.8] : [0.7, 0.28, 0.58, 0.2];
+  const topY = CARD.y0 + 60, baseY = HORIZON_Y + 30;
   const taken: Slot[] = [];
+  const takenAt: Point[] = [];
   words.forEach((word, i) => {
     const tx = CARD.x0 + (CARD.x1 - CARD.x0) * (targetsX[i % 4] + (wrng() - 0.5) * 0.08);
-    const ty = topY + 9 + (baseY - topY - 18) * (i + 0.5) / words.length;
+    const ty = topY + (baseY - topY) * (i + 0.5) / words.length;
     const ww = measureStrokeText(word, style);
     const cands: { slot: Slot; frac: number; cost: number }[] = [];
     for (const slot of slots) {
@@ -225,7 +282,9 @@ export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.Perspec
       for (const frac of [0.12, 0.28, 0.44, 0.6, 0.76, 0.9]) {
         const u = slot.u0 + slot.width * frac;
         const p = pageOf(view, world(slot.piece, u, slot.v + settings.size / 2));
-        if (p.x - ww / 2 < CARD.x0 + 7 || p.x + ww / 2 > CARD.x1 - 7 || p.y < CARD.y0 + 5 || p.y > baseY - 4) continue;
+        // Well apart from the others, so the eye finds one and has to hunt for the next.
+        if (takenAt.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 55)) continue;
+        if (p.x - ww / 2 < CARD.x0 + 7 || p.x + ww / 2 > CARD.x1 - 7 || p.y < CARD.y0 + 5 || p.y > HORIZON_Y + 45) continue;
         // A word forced into an unprinted row would sit alone and be easy to find: prefer rows already in a paragraph.
         const near = (r: number) => slots.some(o => o.piece === slot.piece && o.r === r && o.printed);
         const lonely = !slot.printed && !near(slot.r - 1) && !near(slot.r + 1);
@@ -240,6 +299,7 @@ export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.Perspec
       c.slot.special = { word, frac: c.frac };
       c.slot.printed = true; c.slot.last = false;
       taken.push(c.slot);
+      takenAt.push(pageOf(view, world(c.slot.piece, u + ww / 2, c.slot.v + settings.size / 2)));
       return;
     }
   });
@@ -249,7 +309,6 @@ export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.Perspec
   for (const slot of slots) {
     if (!slot.printed) continue;
     const width = slot.width * (slot.last && !slot.special ? slot.ragged : 1);
-    const items: { x: number; word?: string; strokes?: G[]; w: number }[] = [];
     const specialW = slot.special ? measureStrokeText(slot.special.word, style) : 0;
     const chosen: { strokes?: G[]; w: number; word?: string }[] = [];
     let used = 0, placed = !slot.special;
@@ -269,59 +328,200 @@ export function setFinePrint(ctx: SketchContext, wall: Wall, view: THREE.Perspec
     const sum = chosen.reduce((s, c) => s + c.w, 0);
     const gap = slot.last && !slot.special ? gmin * 1.15 : Math.min(gmin * 3.5, (width - sum) / (chosen.length - 1));
     let x = 0;
-    for (const c of chosen) { items.push({ x, ...c }); x += c.w + gap; }
-    // A justified row of the paragraph runs the whole width; the special row is held to its place.
-    for (const it of items) {
-      const u = slot.u0 + it.x;
-      if (it.word) {
-        for (const path of strokeText(it.word, 0, 0, style)) out.push(path.map(q2 => world(slot.piece, u + q2.x, slot.v + style.height - q2.y)));
-      } else if (it.strokes) {
-        for (const st of it.strokes) {
+    for (const c of chosen) {
+      const u = slot.u0 + x;
+      if (c.word) {
+        for (const path of strokeText(c.word, 0, 0, style)) out.push(path.map(q2 => world(slot.piece, u + q2.x, slot.v + style.height - q2.y)));
+      } else if (c.strokes) {
+        for (const st of c.strokes) {
           asemic.push(st.map(([gx, gy]) => world(slot.piece, u + (gx + LEAN * (BL - gy)) * unit, slot.v + (BL - gy) * unit)));
         }
       }
+      x += c.w + gap;
     }
   }
   return { asemic, words: out };
 }
 
-/** The contour-ring band (mm) the slab's facet hatch lays inside its front face, so the print stays clear of it. */
-function faceBand(sl: Slab, mmPerUnit: number): number {
-  const light = new THREE.Vector3(0.25, 0.55, 0.8).normalize();
-  const normal = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(sl.rx, sl.ry, sl.rz, 'XYZ'));
-  const d = faceDarkness(normal, light, sl.tone);
-  return Math.min(sl.w, sl.h) / 2 * (0.12 + 0.6 * d) * mmPerUnit;
+/** Hatch across a slab's whole front face (inside one ring just in from the outline), `pitchMm` apart on the sheet, crossed on request. */
+function stoneHatch(sl: Slab, mmPerUnit: number, pitchMm: number, cross: boolean): THREE.Vector3[][] {
+  const m = slabMatrix(sl);
+  const hx = sl.w / 2, hy = sl.h / 2, z = sl.d / 2 + 0.006;
+  const P = (u: number, v: number) => new THREE.Vector3(u, v, z).applyMatrix4(m);
+  const out: THREE.Vector3[][] = [];
+  const r = 0.1;
+  out.push([P(-(hx - r), -(hy - r)), P(hx - r, -(hy - r)), P(hx - r, hy - r), P(-(hx - r), hy - r), P(-(hx - r), -(hy - r))]);
+  const a = hx - 0.2, b = hy - 0.2;
+  const families: [number, number][] = [[0.9, pitchMm]];
+  if (cross) families.push([-0.9, pitchMm * 1.6]);
+  for (const [angle, pm] of families) {
+    const step = pm / mmPerUnit, dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx;
+    const reach = Math.hypot(a, b);
+    for (let k = -reach + step / 2; k < reach; k += step) {
+      // The line (nx, ny)·k + t (dx, dy) clipped to the face rectangle.
+      let lo = -Infinity, hi = Infinity, ok = true;
+      for (const [o, d, h] of [[nx * k, dx, a], [ny * k, dy, b]]) {
+        if (Math.abs(d) < 1e-9) { if (Math.abs(o) > h) ok = false; continue; }
+        const t0 = (-h - o) / d, t1 = (h - o) / d;
+        lo = Math.max(lo, Math.min(t0, t1)); hi = Math.min(hi, Math.max(t0, t1));
+      }
+      if (ok && hi - lo > 0.05) out.push([P(nx * k + dx * lo, ny * k + dy * lo), P(nx * k + dx * hi, ny * k + dy * hi)]);
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------------------------------ */
 /* The lanes                                                                                  */
 /* ------------------------------------------------------------------------------------------ */
 
-/** The parts of the segment a→b (ground x, z) that fall outside every footprint, as [t0, t1] ranges. */
-function outside(a: { x: number; z: number }, b: { x: number; z: number }, quads: Quad[]): [number, number][] {
-  const dx = b.x - a.x, dz = b.z - a.z;
-  const inside: [number, number][] = [];
-  for (const q of quads) {
-    let area = 0;
-    for (let i = 0; i < q.length; i++) { const p = q[i], r = q[(i + 1) % q.length]; area += p.x * r.z - r.x * p.z; }
-    let te = 0, tl = 1, ok = true;
-    for (let i = 0; i < q.length && ok; i++) {
-      const p = q[i], r = q[(i + 1) % q.length];
-      const ex = r.x - p.x, ez = r.z - p.z;
-      const nx = area > 0 ? ez : -ez, nz = area > 0 ? -ex : ex;
-      const dn = nx * dx + nz * dz, num = nx * (p.x - a.x) + nz * (p.z - a.z);
-      if (Math.abs(dn) < 1e-12) { if (num < 0) ok = false; continue; }
-      const t = num / dn;
-      if (dn > 0) tl = Math.min(tl, t); else te = Math.max(te, t);
+interface Network {
+  /** Lane edges, course lines and the straight run through the passage, in page millimetres; `behind` ones lie past the gate's front. */
+  paths: { path: Point[]; behind: boolean }[];
+}
+
+/**
+ * Lanes in plan: each a ribbon curving in from a point round the foot and sides of the card and
+ * arriving square to the gate, the ribbons lying edge to edge across the slot. Where they run side
+ * by side there is one line between them; as they part, the line opens into two, so the lanes merge
+ * as on-ramps do. Courses of paving cross each ribbon, longer the wider the ribbon looks.
+ */
+function laneNetwork(ctx: SketchContext, view: THREE.PerspectiveCamera, wall: Wall): Network {
+  const rng = ctx.random('hier-lanes');
+  const K = Math.round(n(ctx, 'lanes', 12, 3, 16));
+  const { G, ex, ez, gw, dp } = wall;
+  const frame = (a: number, b: number) => G.clone().addScaledVector(ez, a).addScaledVector(ex, b);
+  const aOf = (p: THREE.Vector3) => ez.dot(p.clone().sub(G)), bOf = (p: THREE.Vector3) => ex.dot(p.clone().sub(G));
+  const ground = (x: number, z: number) => pageOf(view, new THREE.Vector3(x, 0, z));
+
+  // Entry points: round the U of the card's foot and sides, kept to the ground in front of the wall.
+  const yS = HORIZON_Y + 25;
+  const perimeter = [{ x: CARD.x0, y: yS }, { x: CARD.x0, y: CARD.y1 }, { x: CARD.x1, y: CARD.y1 }, { x: CARD.x1, y: yS }];
+  const seg = perimeter.slice(1).map((p, i) => Math.hypot(p.x - perimeter[i].x, p.y - perimeter[i].y));
+  const total = seg.reduce((s, v) => s + v, 0);
+  const along = (tau: number): Point => {
+    let d = tau * total;
+    for (let i = 0; i < seg.length; i++) {
+      if (d <= seg[i] || i === seg.length - 1) {
+        const t = d / seg[i];
+        return { x: perimeter[i].x + (perimeter[i + 1].x - perimeter[i].x) * t, y: perimeter[i].y + (perimeter[i + 1].y - perimeter[i].y) * t };
+      }
+      d -= seg[i];
     }
-    if (ok && te < tl) inside.push([te, tl]);
+    return perimeter[0];
+  };
+  const fine: THREE.Vector3[] = [];
+  for (let i = 0; i <= 600; i++) {
+    const e = onGround(view, along(i / 600));
+    if (aOf(e) > dp / 2 + 2.5) fine.push(e);
   }
-  inside.sort((p, q) => p[0] - q[0]);
-  const out: [number, number][] = [];
-  let at = 0;
-  for (const [t0, t1] of inside) { if (t0 > at) out.push([at, t0]); at = Math.max(at, t1); }
-  if (at < 1) out.push([at, 1]);
-  return out.filter(([t0, t1]) => t1 - t0 > 1e-6);
+  const entries: THREE.Vector3[] = [];
+  for (let j = 0; j < K && fine.length; j++) {
+    const t = (j + 0.5 + (rng() - 0.5) * 0.6) / K;
+    entries.push(fine[Math.min(fine.length - 1, Math.max(0, Math.floor(t * fine.length)))]);
+  }
+  entries.sort((p, q) => bOf(p) - bOf(q));
+  const k = entries.length;
+  const trunk = gw - 0.7, w = trunk / k;
+
+  type Leaf = { left: THREE.Vector3[]; right: THREE.Vector3[]; centre: THREE.Vector3[] };
+  const leaves: Leaf[] = [];
+  const N = 140;
+  entries.forEach((E, j) => {
+    const bj = -trunk / 2 + (j + 0.5) * w;
+    const P3 = frame(dp / 2, bj);
+    const dist = E.distanceTo(P3);
+    const P2 = frame(dp / 2 + THREE.MathUtils.clamp(0.55 * dist, 8, 18), bj);
+    const P1 = E.clone().lerp(P2, 0.5);
+    // Start a little beyond the entry so the lane runs off the card, never ends in it.
+    const P0 = E.clone().addScaledVector(E.clone().sub(P1).normalize(), 4);
+    const curve = new THREE.CubicBezierCurve3(P0, P0.clone().lerp(P1, 0.7).lerp(E, 0.2), P2.clone().lerp(P3, 0.2).lerp(P1, 0.1), P3);
+    const leaf: Leaf = { left: [], right: [], centre: [] };
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const c = curve.getPoint(t), T = curve.getTangent(t);
+      // The normal that points along +b at the gate, kept the same way round all the way.
+      const nrm = new THREE.Vector3(-T.z, 0, T.x).normalize();
+      leaf.centre.push(c);
+      leaf.right.push(c.clone().addScaledVector(nrm, w / 2));
+      leaf.left.push(c.clone().addScaledVector(nrm, -w / 2));
+    }
+    leaves.push(leaf);
+  });
+
+  const paths: Network['paths'] = [];
+  const toPage = (pts: THREE.Vector3[]): Point[] => pts.map(p => ground(p.x, p.z));
+  const sepAt = (i: number, a: THREE.Vector3[], b: THREE.Vector3[]) => a[i].distanceTo(b[i]);
+  const drawRun = (pts: THREE.Vector3[], keep: (i: number) => boolean) => {
+    let run: THREE.Vector3[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (keep(i)) run.push(pts[i]); else { if (run.length > 1) paths.push({ path: toPage(run), behind: false }); run = []; }
+    }
+    if (run.length > 1) paths.push({ path: toPage(run), behind: false });
+  };
+  const thr = 0.12;
+  // Over the last stretch before the gate the lines crowd: only every other boundary between lanes is kept there.
+  const cvg = Math.round(N * 0.7);
+  const keepB = (b: number, i: number) => i < cvg || b % 2 === 0 || b === 0 || b === leaves.length;
+  leaves.forEach((lf, j) => {
+    // The edge toward -b is always drawn (boundary j); the edge toward +b (boundary j + 1) only where it is not shared with the next lane.
+    drawRun(lf.left, i => keepB(j, i));
+    if (j === leaves.length - 1) drawRun(lf.right, () => true);
+    else {
+      const nx = leaves[j + 1];
+      drawRun(lf.right, i => (sepAt(i, lf.right, nx.left) >= thr || i === N) && keepB(j + 1, i));
+      drawRun(nx.left, i => sepAt(i, lf.right, nx.left) >= thr && keepB(j + 1, i));
+    }
+  });
+  // The edges that run through the passage and stop at the back of the gate.
+  const edges = [-trunk / 2, ...leaves.map((_, j) => -trunk / 2 + (j + 1) * w)];
+  edges.forEach((b, e) => {
+    if (e % 2 === 1 && e !== edges.length - 1) return;
+    const a = frame(dp / 2, b), c = frame(-dp / 2, b);
+    paths.push({ path: [ground(a.x, a.z), ground(c.x, c.z)], behind: true });
+  });
+  // Courses of paving across each ribbon: spaced by how wide the ribbon looks, set half a course off in the next one;
+  // over the last stretch only every other ribbon keeps its courses, and they open out.
+  leaves.forEach((lf, j) => {
+    let acc = (j % 2) * 0.5, prev = ground(lf.centre[N].x, lf.centre[N].z);
+    for (let i = N - 1; i >= 0; i--) {
+      const cp = ground(lf.centre[i].x, lf.centre[i].z);
+      const lp = ground(lf.left[i].x, lf.left[i].z), rp = ground(lf.right[i].x, lf.right[i].z);
+      const width = Math.hypot(lp.x - rp.x, lp.y - rp.y);
+      const crowded = i >= cvg;
+      const step = Math.max(2.2, 1.7 * width) * (crowded ? 1.8 : 1);
+      acc += Math.hypot(cp.x - prev.x, cp.y - prev.y) / step;
+      prev = cp;
+      if (acc >= 1) { acc -= 1; if (i > 3 && (!crowded || j % 2 === 0)) paths.push({ path: [lp, rp], behind: false }); }
+    }
+  });
+  return { paths };
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* The helix: thread through a needle                                                         */
+/* ------------------------------------------------------------------------------------------ */
+
+/**
+ * The twin helix as two pieces that meet at the pinch. The kit's wiggles are fixed in world units,
+ * so a thread this thin is built `S` times the size, seen from a camera moved out to match, and
+ * brought back. `taper` is how much wider the piece is at its end than at its start.
+ */
+function helixPiece(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THREE.Vector3[], o: { radius: number; pitch: number; taper: number; flare: number; pitchGrowth: number }) {
+  const S = 40;
+  const sv = view.clone();
+  sv.position.multiplyScalar(S); sv.near *= S; sv.far *= S;
+  sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
+  const big = new THREE.CatmullRomCurve3(pts.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
+  const r = o.radius * S;
+  const made = helixAlong(ctx, sv, big, {
+    radius: r, width: r * 0.95, pitch: o.pitch * S, spread: r * 0.3, narrow: r * 0.12, twist: 0.35, density: 0.5, interruption: 0.3,
+    taper: o.taper, flare: o.flare, pitchGrowth: o.pitchGrowth,
+  });
+  return {
+    strokes: made.strokes.map(h => ({ ...h, points: h.points.map(q => q.clone().multiplyScalar(1 / S)) })),
+    meshes: made.meshes.map(g => g.scale(1 / S, 1 / S, 1 / S)),
+  };
 }
 
 export function drawHierophant(ctx: SketchContext): Part[] {
@@ -329,47 +529,94 @@ export function drawHierophant(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
-  const wall = buildWall(ctx, view);
-  const { D, dp } = wall;
-  const wallLight = new THREE.Vector3(0.25, 0.55, 0.8).normalize();
-  const darkLight = new THREE.Vector3(-0.25, 0.55, -0.8).normalize();
+  const sx = wallSide(ctx);
+  const wall = buildWall(ctx, view, sx);
+  const { G, ex, ez, dp } = wall;
+  const light = wallLight(wall), dark = pierLight(wall);
 
   const strokes: Stroke[] = [];
   for (const pc of wall.pieces) {
     const sl = pc.slab, at = new THREE.Vector3(sl.x, sl.y, sl.z);
-    const isDark = pc.kind === 'pier' || pc.kind === 'cap' || pc.sealed === true;
-    const group = isDark ? 'pier' : 'wall';
-    // Rings a little more open than the Tower's, so a whole wall of them stays calm.
-    const ring = n(ctx, 'ringScale', 1.5, 1, 3);
-    for (const st of facetStrokes(sl, isDark ? darkLight : wallLight, eye, Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5, ring * FACET_MM_PER_UNIT / mmPerUnit(at))) {
+    const mm = mmPerUnit(at);
+    const isPier = pc.kind === 'pier' || pc.kind === 'cap';
+    const group = isPier ? 'pier' : 'wall';
+    // The wall is one stone mass drawn in carbon: outlines and sparse contour rings, and no coloured fields.
+    // The piers alone are heavy: outline and a ring, then hatch across the whole face, tighter at the foot
+    // where the shadow gathers and opening toward the top.
+    if (isPier) {
+      for (const st of facetStrokes(sl, dark, eye, true)) strokes.push({ ink: 'carbon', group, family: st.family, points: st.points });
+      const rise = pc.kind === 'cap' ? 1 : pc.course / COURSES.length;
+      for (const pts of stoneHatch(sl, mm, n(ctx, 'pierHatch', 1.2, 0.8, 2.5) * (1 + rise), pc.kind === 'pier' && pc.course <= 1)) strokes.push({ ink: 'carbon', group, family: 'hatch', points: pts });
+      continue;
+    }
+    for (const st of facetStrokes(sl, light, eye, Math.max(sl.w, sl.h) * mm < 1.5, n(ctx, 'ringScale', 1, 1, 3) * FACET_MM_PER_UNIT / mm)) {
       // Undersides show only as slivers through the course joints, and the lintel's soffit as a 2 mm band: leave them bare.
       if (st.points.every(q => Math.abs(q.y - (sl.y - sl.h / 2)) < 0.02)) continue;
-      strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
+      // A stone face has no hatched field in it.
+      if (st.family === 'hatch' && st.points.length === 2) continue;
+      strokes.push({ ink: 'carbon', group, family: st.family, points: st.points });
     }
   }
-  const geometries = wall.pieces.map(pc => slabGeometry(pc.slab));
-  try {
-    fitDepthRange(view, geometries);
-    const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const solids0 = meshCoverage(geometries, view, TABLOID_PAGE, 0.15);
-    const solidsGate = meshCoverage(geometries, view, TABLOID_PAGE, 0.35);
 
+  // The helix. Near side: in from the foreground, sweeping toward the slot and narrowing until it is a bare thread in the passage.
+  const hS = n(ctx, 'threadHeight', 6.2, 3, 10);
+  const P = (a: number, b: number, h: number) => G.clone().addScaledVector(ez, a).addScaledVector(ex, b).setY(h);
+  const lat = -sx; // the foreground lies on the side of the axis toward the bottom of the card
+  // It comes in from just outside the foot of the card on the near side, over the lanes.
+  const startPage = { x: sx > 0 ? CARD.x1 + 14 : CARD.x0 - 14, y: CARD.y1 - 4 };
+  const nearPts = [
+    atPage(view, startPage, 17), P(20, lat * 4.5, 2.6), P(12, lat * 2, 3.8), P(6, lat * 0.6, 5), P(dp / 2 + 0.3, 0, hS - 0.2), P(0, 0, hS),
+  ];
+  const mid = nearPts[nearPts.length - 1];
+  const midPage = pageOf(view, mid);
+  const d0 = eye.distanceTo(mid);
+  const toward = sx; // the far part veers toward the open side of the card
+  // Beyond the gate: through the slot the strands start to part; behind the wall it is out of sight; then, over the far
+  // wing, it rises above the wall top and opens, the strands loosening and fanning, toward the top of the card.
+  const beyond = (dx: number, dy: number, k: number) => atPage(view, { x: midPage.x + toward * dx, y: midPage.y + dy }, d0 * k);
+  const slotPts = [mid, beyond(0.5, -6, 1.12), beyond(1.5, -34, 1.45), beyond(5, -60, 1.9), beyond(24, -82, 2.5), beyond(75, -86, 3.2)];
+  const climbPts = [slotPts[slotPts.length - 1], beyond(105, -100, 3.8), beyond(118, -128, 4.1), beyond(126, -160, 4.4), beyond(130, -188, 4.6)];
+  const rNear = n(ctx, 'threadNear', 0.3, 0.1, 0.8), rThread = n(ctx, 'threadThin', 0.022, 0.008, 0.08), rParted = n(ctx, 'threadParted', 0.16, 0.03, 0.3), rFar = n(ctx, 'threadFar', 11, 2, 15);
+  const nearHelix = helixPiece(ctx, view, nearPts, { radius: rNear, pitch: n(ctx, 'threadPitch', 5, 2, 12), taper: rThread / rNear, flare: 2.3, pitchGrowth: 0.4 });
+  const slotHelix = helixPiece(ctx, view, slotPts, { radius: rThread, pitch: 5, taper: rParted / rThread, flare: 1, pitchGrowth: 0.3 });
+  const climbHelix = helixPiece(ctx, view, climbPts, { radius: rParted, pitch: n(ctx, 'climbPitch', 6, 3, 30), taper: rFar / rParted, flare: n(ctx, 'threadFlare', 1.3, 0.8, 4), pitchGrowth: 0.8 });
+  for (const h of nearHelix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
+  const farStrokes: Stroke[] = [...slotHelix.strokes, ...climbHelix.strokes].map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
+
+  // Two depth views, each fitted to what it must tell apart: the wall and the near thread, which share a tight range;
+  // and the far thread, whose distance would otherwise blur the wall's hidden lines. The far thread is hidden behind
+  // the wall on the page instead, by where the wall covers the sheet.
+  const wallGeos = [...wall.pieces.map(pc => slabGeometry(pc.slab)), ...nearHelix.meshes];
+  const slabGeos = wallGeos.slice(0, wall.pieces.length);
+  const farGeos = [...slotHelix.meshes, ...climbHelix.meshes];
+  const geometries = [...wallGeos, ...farGeos];
+  const viewW = view.clone(), viewF = view.clone();
+  try {
+    fitDepthRange(viewW, wallGeos);
+    fitDepthRange(viewF, farGeos);
+    const depthW = renderDepthBufferCPU(wallGeos, viewW, W, H);
+    const depthF = renderDepthBufferCPU(farGeos, viewF, W, H);
+    const knock = n(ctx, 'knockout', 1.1, 0.3, 3);
+    const standingW = meshCoverage(wallGeos, viewW, TABLOID_PAGE, knock), standingF = meshCoverage(farGeos, viewF, TABLOID_PAGE, knock);
+    const solids = (p: Point) => standingW(p) || standingF(p);
+    const solids0 = meshCoverage(slabGeos, viewW, TABLOID_PAGE, 0.15);
+    const solidsGate = meshCoverage(slabGeos, viewW, TABLOID_PAGE, 0.35);
+    const envW = { view: viewW, depth: depthW, width: W, height: H };
     const depthVisible = (lines3: THREE.Vector3[][]) => {
       let total = 0, seen = 0;
-      const count = (hidden: boolean, addTo: (k2: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth: depthBuffer, width: W, height: H }, {
+      const count = (hidden: boolean, addTo: (k2: number) => void) => projectStrokes(lines3.map(points => ({ points })), envW, {
         hidden: () => hidden, begin: () => runs => { for (const r2 of runs) addTo(r2.length); },
       });
       count(false, k2 => { total += k2; });
       count(true, k2 => { seen += k2; });
       return total > 0 && seen >= total * 0.98;
     };
-    const printed = setFinePrint(ctx, wall, view, depthVisible);
+    const printed = setFinePrint(ctx, wall, viewW, depthVisible);
 
     // Page-space marks from 3D strokes, clipped to the depth view and window and tested against the depth pass.
     const toPage = (lines3: THREE.Vector3[][]): Point[][] => {
       const res: Point[][] = [];
-      projectStrokes(lines3.map(points => ({ points })), { view, depth: depthBuffer, width: W, height: H }, {
+      projectStrokes(lines3.map(points => ({ points })), envW, {
         begin: () => runs => { for (const run of runs) res.push(scalePoints(run, MM_X, MM_Y)); },
       });
       return res;
@@ -379,134 +626,67 @@ export function drawHierophant(ctx: SketchContext): Part[] {
     const printPaths = toPage(printed.asemic).flatMap(p => clipWindow(p));
     const onPrint = glyphMask(printPaths, 0.42);
 
+    // The thread as drawn (what the depth passes leave of it), and the paper it keeps round itself.
+    const helixRuns: { key: string; run: Point[] }[] = [];
+    const collect = (st: Stroke) => (runs: { x: number; y: number }[][]) => { for (const run of runs) helixRuns.push({ key: `helix-${st.ink}`, run: scalePoints(run, MM_X, MM_Y) }); };
+    projectStrokes(strokes.filter(st => st.group === 'helix'), envW, { begin: collect });
+    const farRuns: typeof helixRuns = [];
+    projectStrokes(farStrokes, { view: viewF, depth: depthF, width: W, height: H }, {
+      begin: st => runs => { for (const run of runs) farRuns.push({ key: `helix-${st.ink}`, run: scalePoints(run, MM_X, MM_Y) }); },
+    });
+    // Behind the wall the far thread is out of sight, wherever the wall covers it on the sheet.
+    for (const h of farRuns) for (const inside of clipWindow(h.run)) for (const piece of keepAlong(inside, p => !solids0(p), 0.2)) helixRuns.push({ key: h.key, run: piece });
+    const helixClear = glyphMask(helixRuns.flatMap(h => clipWindow(h.run)), n(ctx, 'helixClear', 0.9, 0, 3));
+
     const buckets = new PartBuckets(0.4);
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onWord(p) && !onPrint(p) && extra(p), 0.15)) buckets.add(key, piece);
     };
-    projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+    for (const h of helixRuns) for (const inside of clipWindow(h.run)) buckets.add(h.key, inside);
+    projectStrokes(strokes.filter(st => st.group !== 'helix'), envW, {
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => !helixClear(p)); },
     });
     for (const p of printPaths) {
-      for (const piece of keepAlong(p, q => !onWord(q), 0.2)) buckets.add('print-lettering', piece, true);
+      for (const piece of keepAlong(p, q => !onWord(q) && !helixClear(q), 0.2)) buckets.add('print-lettering', piece, true);
     }
     for (const p of wordPaths) buckets.add('slogan-lettering', p, true);
 
-    // The ground. Ruled lanes run from all across the foot and sides of the card into the gate: each a
-    // ribbon of its own with paper between, some paved in courses, some ruled along their length, some
-    // plain. Past the slot a few of them open out again.
-    const lrng = ctx.random('hier-lanes');
-    const lanes = Math.round(n(ctx, 'lanes', 20, 4, 40));
-    const mouth = n(ctx, 'mouth', 3.2, 0.5, 5);
-    const zPier = -D + dp / 2, zBack = -D - dp / 2;
-    const baseSide = pageOf(view, new THREE.Vector3(wall.gw / 2 + wall.pw, 0, zPier)).y;
-    const yS = baseSide + 9;
-    const perimeter = [{ x: CARD.x0, y: yS }, { x: CARD.x0, y: CARD.y1 }, { x: CARD.x1, y: CARD.y1 }, { x: CARD.x1, y: yS }];
-    const seg = perimeter.slice(1).map((p, i) => Math.hypot(p.x - perimeter[i].x, p.y - perimeter[i].y));
-    const total = seg.reduce((s2, v) => s2 + v, 0);
-    const along = (tau: number): Point => {
-      let d = tau * total;
-      for (let i = 0; i < seg.length; i++) {
-        if (d <= seg[i] || i === seg.length - 1) {
-          const t = d / seg[i];
-          return { x: perimeter[i].x + (perimeter[i + 1].x - perimeter[i].x) * t, y: perimeter[i].y + (perimeter[i + 1].y - perimeter[i].y) * t };
-        }
-        d -= seg[i];
-      }
-      return perimeter[0];
-    };
-    type Ray = { xg: number; slope: number };
-    const rays: Ray[] = [];
-    // Uneven lanes: the rays are jittered along the foot of the card, in order.
-    const taus = Array.from({ length: lanes + 1 }, (_, j) => (j + 0.5 + (lrng() - 0.5) * 0.7) / (lanes + 1)).sort((p, q) => p - q);
-    for (let j = 0; j <= lanes; j++) {
-      const xg = -mouth + 2 * mouth * j / lanes;
-      const b = onGround(view, along(taus[j]));
-      rays.push({ xg, slope: (b.x - xg) / (b.z + D) });
-    }
-    const mix = (p: Ray, q: Ray, t: number): Ray => ({ xg: p.xg + (q.xg - p.xg) * t, slope: p.slope + (q.slope - p.slope) * t });
-    const xAt = (r: Ray, z: number) => r.xg + r.slope * (z + D);
-    const zNear = -9;
-    const lanePaths: { path: Point[]; behind: boolean }[] = [];
-    const ground = (x: number, z: number) => pageOf(view, new THREE.Vector3(x, 0, z));
-    const emit = (a: { x: number; z: number }, b: { x: number; z: number }) => {
-      for (const [t0, t1] of outside(a, b, wall.footprints)) {
-        const pa = { x: a.x + (b.x - a.x) * t0, z: a.z + (b.z - a.z) * t0 }, pb = { x: a.x + (b.x - a.x) * t1, z: a.z + (b.z - a.z) * t1 };
-        // Split at the pier's front plane: in front of it nothing hides the ground; behind, only the slot shows it.
-        const dz = pb.z - pa.z;
-        const tc = dz !== 0 ? (zPier - pa.z) / dz : -1;
-        const cuts = tc > 0 && tc < 1 ? [tc, 1] : [1];
-        let from = pa;
-        for (const tk of cuts) {
-          const to = tk === 1 ? pb : { x: pa.x + (pb.x - pa.x) * tk, z: pa.z + dz * tk };
-          lanePaths.push({ path: [ground(from.x, from.z), ground(to.x, to.z)], behind: (from.z + to.z) / 2 < zPier });
-          from = to;
-        }
-      }
-    };
-    const line = (r: Ray) => emit({ x: xAt(r, zNear), z: zNear }, { x: xAt(r, zBack), z: zBack });
-    // Paving courses: page spacing grows toward the eye; neighbouring ribbons are set half a course off.
-    const rowStart = n(ctx, 'rowStart', 1.5, 0.6, 4), rowGrow = n(ctx, 'rowGrow', 1.12, 1.03, 1.3);
-    const rowYs: number[] = [];
-    for (let y = baseSide + 1.2, step = rowStart; y < CARD.y1 + 14; y += step, step *= rowGrow) rowYs.push(y);
-    const zOf = (y: number) => onGround(view, { x: TABLOID_PAGE.width / 2, y }).z;
-    const ribbons: Ray[] = [];
-    for (let j = 0; j < lanes; j++) {
-      const inset = 0.1 + 0.16 * lrng(), inset2 = 0.1 + 0.16 * lrng(), kind = lrng();
-      const ra = mix(rays[j], rays[j + 1], inset), rb = mix(rays[j], rays[j + 1], 1 - inset2);
-      line(ra); line(rb);
-      ribbons.push(mix(ra, rb, 0.5));
-      if (kind < 0.6) {
-        for (let k = 0; k < rowYs.length - 1; k++) {
-          const y = j % 2 ? (rowYs[k] + rowYs[k + 1]) / 2 : rowYs[k], z = zOf(y);
-          emit({ x: xAt(ra, z), z }, { x: xAt(rb, z), z });
-        }
-      } else if (kind < 0.85) {
-        for (const t of [0.34, 0.66]) line(mix(ra, rb, t));
-      }
-    }
-    // Past the slot: the lanes that reach it open out again from the back of the gate, never crossing.
-    const fan = n(ctx, 'fan', 38, 10, 120), Db = D + dp / 2;
-    ribbons.forEach(r => {
-      const x0 = xAt(r, zBack);
-      if (Math.abs(x0) > wall.gw / 2) return;
-      emit({ x: x0, z: zBack }, { x: x0 * (3000 - (Db - fan)) / (Db - (Db - fan)), z: -3000 });
-    });
-    const beyond: Point[][] = [];
-    for (const lp of lanePaths) for (const inside of clipWindow(lp.path)) {
-      for (const piece of keepAlong(inside, p => !lp.behind || !solids0(p), 0.25)) {
-        buckets.add('lane-carbon', piece);
-        if (lp.behind) beyond.push(piece);
-      }
+    // The ground: lanes in plan, curving in from across the foreground to the gate.
+    const net = laneNetwork(ctx, viewW, wall);
+    for (const lp of net.paths) for (const inside of clipWindow(lp.path)) {
+      for (const piece of keepAlong(inside, p => (!lp.behind || !solids0(p)) && !helixClear(p), 0.25)) buckets.add('lane-carbon', piece);
     }
 
-    // The slot: a dark ruled fill clear of the lines glimpsed through it and of the wall round it.
+    // The slot: a dark ruled fill above the horizon, clear of the wall round it and of the thread through it.
     const accent = (typeof ctx.params.accent === 'string' ? ctx.params.accent : 'ultramarine') as string;
     const gateInk = accent === 'ultramarine' || accent === 'vermilion' ? accent : 'carbon';
-    const onBeyond = glyphMask(beyond, 0.4);
-    const slotL = pageOf(view, new THREE.Vector3(-wall.gw / 2, 0, zPier)), slotR = pageOf(view, new THREE.Vector3(wall.gw / 2, 0, zPier));
-    const slotTop = pageOf(view, new THREE.Vector3(0, wall.gateTop, zPier)).y - 3;
+    const corners = [-1, 1].flatMap(b => [dp / 2, -dp / 2].flatMap(a => [0, wall.gateTop].map(h => pageOf(view, G.clone().addScaledVector(ez, a).addScaledVector(ex, b * wall.gw / 2).setY(h)))));
+    const slotX0 = Math.min(...corners.map(p => p.x)), slotX1 = Math.max(...corners.map(p => p.x));
+    const slotTop = Math.min(...corners.map(p => p.y)) - 3, slotBottom = Math.max(...corners.map(p => p.y));
+    // The slot's own dark takes the place of the sky seen through it.
+    const inSlot = (p: Point) => p.x > slotX0 - 1 && p.x < slotX1 + 1 && p.y > slotTop && p.y < HORIZON_Y && !solidsGate(p);
     const pitch = n(ctx, 'gatePitch', 0.5, 0.35, 1.2);
-    for (let x = slotL.x - 1, i = 0; x <= slotR.x + 1; x += pitch, i++) {
-      // Dark above the horizon; below it the ground beyond is left to its own lines.
-      add(`gate-${gateInk}`, [{ x, y: slotTop }, { x, y: slotL.y }], p => !solidsGate(p) && !onBeyond(p) && p.y < HORIZON_Y - 0.4);
+    for (let x = slotX0 - 1; x <= slotX1 + 1; x += pitch) {
+      add(`gate-${gateInk}`, [{ x, y: slotTop }, { x, y: slotBottom }], p => !solidsGate(p) && !helixClear(p) && p.y < HORIZON_Y - 0.4);
     }
-    buckets.add('gate-carbon', [{ x: slotL.x, y: HORIZON_Y }, { x: slotR.x, y: HORIZON_Y }]);
 
-    // The sky: lightly ruled, densest at the top, opening toward the wall and knocked out round everything standing in it.
+    // The horizon, wherever the wall leaves it open.
+    for (const piece of keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidsGate(p) && !helixClear(p), 0.3)) buckets.add('horizon-carbon', piece);
+
+    // The sky: lightly ruled, densest at the top, opening toward the horizon and knocked out round everything standing in it.
     const pattern = barPattern(ctx.random('hier-sky'), 0.86);
-    const skyTop = CARD.y0, skyBottom = pageOf(view, new THREE.Vector3(0, wall.wallH, -D + 6)).y;
-    const skyPitch = n(ctx, 'skyPitch', 2.2, 0.8, 5);
+    const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
+    const skyPitch = n(ctx, 'skyPitch', 1.4, 0.8, 5);
     for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += skyPitch) {
       const t = (y - skyTop) / (skyBottom - skyTop);
-      if (!(t < 0.2 || i % 2 === 0 || (i % 3 === 0 && t < 0.75))) continue;
-      const broken = t > 0.22;
-      add('sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !solids(p) && (!broken || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]));
+      if (!(t < 0.14 || i % 2 === 0 || (i % 3 === 0 && t < 0.6))) continue;
+      const broken = t > 0.16;
+      add('sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !solids(p) && !inSlot(p) && (!broken || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]));
     }
-    const parts = buckets.toParts(['sky', 'wall', 'pier', 'lane', 'gate', 'print', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'horizon', 'wall', 'pier', 'lane', 'gate', 'helix', 'print', 'slogan'], INKS);
     parts.push(...cardFrame('V', 'THE HIEROPHANT'));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
   }
 }
-
