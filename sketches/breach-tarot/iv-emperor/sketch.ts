@@ -34,6 +34,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'groundGap', label: 'Closest paving joints', default: 3.2, min: 1.5, max: 8, step: 0.1, units: 'mm', group: 'Avenue' },
     { type: 'slider', id: 'avenueTone', label: 'Avenue hatch loudness', default: 0.35, min: 0, max: 1, step: 0.01, group: 'Hatch' },
     { type: 'slider', id: 'avenueFacet', label: 'Avenue facet hatch spacing', default: 22, min: 6, max: 40, step: 0.5, group: 'Hatch' },
+    { type: 'slider', id: 'calmAbove', label: 'Near cubes kept to rings above', default: 22, min: 5, max: 100, step: 1, units: 'mm', group: 'Hatch' },
     { type: 'slider', id: 'outlineBelow', label: 'Cubes only outlined below', default: 5, min: 0, max: 20, step: 0.5, units: 'mm', group: 'Hatch' },
     { type: 'slider', id: 'facet', label: 'Facet hatch spacing', default: 12, min: 6, max: 18, step: 0.1, group: 'Hatch' },
     { type: 'slider', id: 'knockout', label: 'Paper round what stands', default: 1.1, min: 0.3, max: 3, step: 0.05, units: 'mm', group: 'Hatch' },

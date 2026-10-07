@@ -33,6 +33,8 @@ export const BROAD: Proportions = { shoulderX: 1.28, hipX: 1.12 };
 export const BUILD = 1.3;
 /** The plinth: steps of this rise and tread, in canon units (the canon figure stands 24 tall). */
 export const STEPS = 3, RISE = 0.85, TREAD = 1.4;
+/** The trouser hem's height above the ankle, and how far past the wrist the armrest runs, in canon units. */
+export const HEM = 0.9, PALM = 1.45;
 
 /** A level frame: `z` the way it faces, `x` its left. */
 export interface Frame { origin: THREE.Vector3; x: THREE.Vector3; z: THREE.Vector3 }
@@ -93,6 +95,13 @@ export interface Colossus {
   head: { centre: THREE.Vector3; r: number; axis: THREE.Vector3; face: THREE.Vector3; side: THREE.Vector3 };
   /** Seat, armrests, back, then the plinth's steps from the top down. */
   throne: Slab[];
+  /**
+   * The hands and shoes, each one faceted tube, one form: a mitten from inside the cuff, flat on the
+   * armrest's end and curling over its front edge; a low blunt shoe from inside the trouser hem down
+   * to the step and forward to a square toe.
+   */
+  hands: Tube[];
+  shoes: Tube[];
   frame: Frame;
   /** The plinth's bottom step in the frame: what the avenue must stand clear of. */
   base: { x0: number; x1: number; z0: number; z1: number };
@@ -132,10 +141,16 @@ export function colossus(height: number, anchor: THREE.Vector3, yaw: number): Co
   const s = seatedSkeleton(height, anchor, yaw);
   const flow = flowBody(s, { facets: 6, build: BUILD, bow: 0.015 });
   const body: Body = { ...flow, trunk: jacketed(flow.trunk), head: undefined };
+  // The sleeves stop at the wrists. The trousers stop at a level hem a little above the ankle,
+  // where the shin is plumb, so the shoe can stand under it.
   const stops = new Map<string, number>();
   for (const side of ['l', 'r'] as Side[]) {
     const leg = body.limbs.find(t => t.id === `leg_${side}`)!, arm = body.limbs.find(t => t.id === `arm_${side}`)!;
-    stops.set(leg.id, uNear(leg, s.at(`ankle_${side}`)));
+    const uKnee = uNear(leg, s.at(`knee_${side}`)), uAnkle = uNear(leg, s.at(`ankle_${side}`));
+    const hemY = s.at(`ankle_${side}`).y + HEM * k;
+    let u = uKnee;
+    while (u < uAnkle && leg.centre(u).y > hemY) u += 0.001;
+    stops.set(leg.id, u);
     stops.set(arm.id, uNear(arm, s.at(`wrist_${side}`)));
   }
   const head = headOf(s, k);
@@ -161,21 +176,19 @@ export function colossus(height: number, anchor: THREE.Vector3, yaw: number): Co
   const shins = legPts.filter(q => q.y < kneeY - 1.8 * BUILD * k);
   const seatFront = Math.min(kneeZ - 1.15 * k, Math.min(...shins.map(q => q.z)) - gap);
   const seatTop = Math.min(...[...trunkPts, ...legPts].filter(q => q.z > zBack && q.z < seatFront).map(q => q.y)) - gap;
-  // An armrest each side of the seat, under the forearm and clear of the thigh beside it, stopping
-  // where the hand hangs over its end.
+  // An armrest each side of the seat, under the forearm and clear of the thigh beside it: broad, so
+  // the far one shows past the thighs, and long enough for the palm to lie flat on its end.
   const rests = (['l', 'r'] as Side[]).map(side => {
     const sign = side === 'l' ? 1 : -1;
     const elbow = toFrame(f, s.at(`elbow_${side}`)), wrist = toFrame(f, s.at(`wrist_${side}`));
     const fore = elbow.clone().lerp(wrist, 0.5);
     const thigh = legPts.filter(q => Math.sign(q.x) === sign && q.y > seatTop && q.z < seatFront + 2 * k);
     const inner = Math.max(Math.abs(fore.x) - 0.7 * k, Math.max(...thigh.map(q => Math.abs(q.x))) + 2 * gap);
-    const outer = Math.max(inner + 1.4 * k, Math.abs(fore.x) + 0.8 * k);
+    const outer = Math.max(inner + 2.6 * k, Math.abs(fore.x) + 1.7 * k);
     const arm = arms.find(t => t.id === `arm_${side}`)!;
     const uElbow = uNear(arm, s.at(`elbow_${side}`)), uWrist = stops.get(arm.id)!;
     const top = Math.min(...samples(arm, uElbow - 0.06, uWrist).map(q => q.y)) - gap;
-    const hand = samples(arm, uWrist, 1).filter(q => q.y < top + gap && Math.abs(q.x) > inner - gap && Math.abs(q.x) < outer + gap);
-    const zFront = Math.min(seatFront, hand.length ? Math.min(...hand.map(q => q.z)) - gap : wrist.z);
-    return { sign, inner, outer, zFront, top };
+    return { side, sign, inner, outer, zFront: wrist.z + PALM * k, top, wrist };
   });
   const [L, R] = rests;
   const crown = Math.max(...coilPts.map(q => q.y));
@@ -193,5 +206,53 @@ export function colossus(height: number, anchor: THREE.Vector3, yaw: number): Co
     base = { x0: -R.outer - out, x1: L.outer + out, z0: backZ0 - out, z1: fronts.top + i * TREAD * k };
     throne.push(frameBox(f, base.x0, base.x1, P - (i + 1) * RISE * k, P - i * RISE * k, base.z0, base.z1));
   }
-  return { skeleton: s, body, k, stops, head, throne, frame: f, base };
+
+  // The hands: each one mitten, a single faceted tube that leaves the cuff, lies flat along the
+  // armrest's end and curls over its front edge to hang down its face, fingertips blunt. Its section
+  // is broad and flat, six planes round, the flat side down.
+  const hands: Tube[] = [];
+  const hw = 0.7 * k, ht = 0.22 * k;
+  for (const r of rests) {
+    const sg = r.sign, zF = r.zFront, T = r.top;
+    const hx = sg * Math.max(Math.abs(r.wrist.x), r.inner + hw + 2 * gap);
+    const lie = T + gap + 0.9 * ht;
+    const spine = [
+      new THREE.Vector3(sg * Math.abs(r.wrist.x), lie + 0.35 * k, r.wrist.z - 0.3 * k),
+      new THREE.Vector3(hx, lie, r.wrist.z + 0.5 * k),
+      new THREE.Vector3(hx, lie, zF - 0.35 * k),
+      new THREE.Vector3(hx, T + 0.24 * k, zF + 0.24 * k),
+      new THREE.Vector3(hx, T - 0.35 * k, zF + gap + 0.9 * ht),
+      new THREE.Vector3(hx, T - 0.95 * k, zF + gap + 0.9 * ht),
+    ].map(p => fromFrame(f, p.x, p.y, p.z));
+    hands.push(new Tube(`hand_${r.side}`, spine, [[0, 0.62 * hw, 1.6 * ht], [0.2, hw, ht], [0.75, hw, ht], [1, 0.9 * hw, 0.9 * ht]],
+      f.z.clone().add(new THREE.Vector3(0, 1, 0)).normalize(), 1, [0, 0.3 * k], undefined, 6));
+  }
+  // The shoes: each one low blunt shoe, a single faceted tube from inside the trouser hem down to the
+  // heel and forward along the step to a square toe, its flat sole planted just above the step.
+  const shoes: Tube[] = [];
+  const sw = 0.62 * k, sh = 0.42 * k;
+  for (const side of ['l', 'r'] as Side[]) {
+    const a = toFrame(f, s.at(`ankle_${side}`)), toe = toFrame(f, s.at(`ankle_${side}`, true));
+    const fy = Math.atan2(toe.x - a.x, toe.z - a.z);
+    const ff = frameAt(fromFrame(f, a.x, 0, a.z), Math.atan2(f.z.x, f.z.z) + fy);
+    const hem = s.at(`ankle_${side}`).y + HEM * k, sole = P + gap + 0.87 * sh;
+    const spine = [
+      new THREE.Vector3(0, hem + 0.3 * k, 0),
+      new THREE.Vector3(0, sole + 0.55 * k, 0.05 * k),
+      new THREE.Vector3(0, sole, 0.9 * k),
+      new THREE.Vector3(0, sole, 2.6 * k),
+    ].map(p => fromFrame(ff, p.x, p.y, p.z));
+    shoes.push(new Tube(`shoe_${side}`, spine, [[0, 0.82 * sw, 0.82 * sw], [0.3, sw, 1.25 * sh], [0.62, sw, sh], [1, sw, 0.9 * sh]],
+      ff.z.clone().add(new THREE.Vector3(0, 1, 0)).normalize(), 1, [0, 0.14 * k], undefined, 6));
+  }
+  return { skeleton: s, body, k, stops, head, throne, hands, shoes, frame: f, base };
+}
+
+/** A tube's surface only up to `stop` along it: the sleeve or trouser without the hand or foot. */
+export function cutTube(t: Tube, stop: number): Tube {
+  return Object.assign(Object.create(Object.getPrototypeOf(t)) as Tube, t, {
+    point: (u: number, v: number, lift = 0) => t.point(u * stop, v, lift),
+    normal: (u: number, v: number) => t.normal(u * stop, v),
+    centre: (u: number) => t.centre(u * stop),
+  });
 }

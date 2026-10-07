@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
-import { projectPolylinesClipped } from '../../../src/projection.ts';
+import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { hatchedBar } from '../../kit/fills.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -14,12 +14,12 @@ import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { bodyMeshes } from '../../kit/mannequin/body.ts';
-import { TIER, perpendicular, runs, stride, tierOf, toneField, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
+import { toneField, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
+import { contourTube } from '../../kit/mannequin/body.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { colossus, frameAt, fromFrame, headCoil, headOf, plinthFronts, seatedSkeleton, toFrame, type Colossus, type Frame } from './figure.ts';
+import { colossus, cutTube, frameAt, fromFrame, headCoil, headOf, plinthFronts, seatedSkeleton, toFrame, type Colossus, type Frame } from './figure.ts';
 
 /**
  * IV The Emperor: you are already standing on it. Power is order, and it is colossal by distance: a
@@ -93,7 +93,9 @@ function avenue(ctx: SketchContext, view: THREE.Camera, av: Frame, length: numbe
       if (-centre.z < 9) continue;
       const foot = [-1, 1].flatMap(a => [-1, 1].map(q => fromFrame(av, x + a * c / 2, 0, z + q * c / 2)));
       if (foot.some(onPlinth)) continue;
-      // Kept only if some of it is on the card.
+      // Kept only if some of it is on the card, and none of it runs off the card's foot: the rows may
+      // leave by the sides, but no block is cut by the bottom rule.
+      if (Math.max(...foot.map(p => pageOf(view, p).y)) > CARD.y1 - 1) continue;
       const ps = foot.map(p => pageOf(view, p.setY(c)));
       if (Math.max(...ps.map(p => p.x)) < CARD.x0 || Math.min(...ps.map(p => p.x)) > CARD.x1 || Math.min(...ps.map(p => p.y)) > CARD.y1) continue;
       const sl = solid(centre.x, c / 2, centre.z, c, c, c, out.length, 'stack');
@@ -104,27 +106,10 @@ function avenue(ctx: SketchContext, view: THREE.Camera, av: Frame, length: numbe
   return out;
 }
 
-/**
- * The bare end of a limb past `from` along it (a hand, a shoe): rings round it `spacing` apart, as
- * many as its tone asks for, thinned on the sheet like the cloth, and its plane edges.
- */
-function bareEnd(t: Tube, from: number, env: ToneEnv, spacing: number): ClothStroke[] {
-  const out: ClothStroke[] = [];
-  const R = Math.max(4, Math.round((1 - from) * t.length / spacing)) * 4;
-  const around = Math.max(96, Math.round(t.circ / 0.06));
-  for (let i = 0; i < R; i++) {
-    const u = from + (1 - from) * (i + 0.5) / R;
-    const pts: THREE.Vector3[] = [], keep: boolean[] = [];
-    for (let q = 0; q <= around; q++) {
-      const v = q / around, p = t.point(u, v);
-      pts.push(p);
-      const st = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + (1 - from) / R, v)));
-      keep.push(i % st === 0 && env.dark(p, t.normal(u, v)) > TIER[tierOf(i)]);
-    }
-    runs(pts, keep, 'carbon', 'figure', out);
-  }
-  for (let q = 0; q < t.facets; q++) out.push({ ink: 'carbon', group: 'figure', points: Array.from({ length: 31 }, (_, i) => t.point(from + (1 - from) * i / 30, q / t.facets, 0.004)) });
-  return out;
+/** A sleeve or trouser cut at the cuff or hem, for the depth pass: its surface and a disc closing the end. */
+function cutMeshes(t: Tube): THREE.BufferGeometry[] {
+  const segs = t.facets >= 3 ? t.facets * 4 : 32;
+  return [t.mesh(96, segs), buildSurfaceMesh((u, v) => t.centre(1).lerp(t.point(1, v), u), {}, 2, segs)];
 }
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side so the knot reads as one form. */
@@ -173,7 +158,8 @@ export function drawEmperor(ctx: SketchContext): Part[] {
   };
   const cubes = avenue(ctx, view, av, length, lane, c, pitch, onPlinth);
   const slabs = [...fig.throne, ...cubes];
-  const groupOf = (i: number) => (i < fig.throne.length ? 'throne' : 'avenue');
+  const nFigure = fig.throne.length;
+  const groupOf = (i: number) => (i < nFigure ? 'throne' : 'avenue');
 
   // The head: the helix wound into an egg-shaped coil, in its own inks.
   const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
@@ -188,37 +174,57 @@ export function drawEmperor(ctx: SketchContext): Part[] {
   const strokes: Stroke[] = [];
   const push = (list: ClothStroke[], group: string) => { for (const st of list) strokes.push({ ink: st.ink, group, family: st.family ?? 'hatch', points: st.points }); };
   // The suit: pinstripes along each piece, the jacket's lapels and tie, cuffs at the wrists and hems
-  // at the ankles. Past them the hands and shoes are bare planes, hatched round in rings, the shoes
-  // a shade darker.
+  // above the shoes. The sleeves and trousers end there; the hands and shoes are planes, drawn with
+  // the slabs below.
+  const limbs = body.limbs.map(t => cutTube(t, fig.stops.get(t.id)!));
   push(pinstripeTube(body.trunk, env, HEMS.trunk, SUIT), 'figure');
   push(suitFront(body.trunk, env, SUIT), 'figure');
   for (const t of body.limbs) {
     const stop = fig.stops.get(t.id)!;
-    const leg = t.id.startsWith('leg');
-    if (leg) push(pinstripeTube(t, env, { seams: [0, 0.5], hems: [stop - 0.004], creases: [0.25], stop }, SUIT), 'figure');
+    if (t.id.startsWith('leg')) push(pinstripeTube(t, env, { seams: [0, 0.5], hems: [stop - 0.004], creases: [0.25], stop }, SUIT), 'figure');
     else push(pinstripeTube(t, env, { seams: [0.5], hems: [], stop: stop - 0.012, cuffs: [stop - 0.035] }, SUIT), 'figure');
-    push(bareEnd(t, stop, leg ? { ...env, dark: (p, nrm) => Math.min(1, dark(p, nrm) + 0.25) } : env, 0.22 * k), 'figure');
   }
-  for (const t of [body.trunk, ...body.limbs]) push(silhouettes(t, env, { ink: 'carbon', group: 'figure' }), 'figure');
+  // The hands and shoes: one form each, ringed by the light like the limbs, the shoes a shade darker.
+  const shoeEnv = { ...env, dark: (p: THREE.Vector3, nrm: THREE.Vector3) => Math.min(1, dark(p, nrm) + 0.25) };
+  // Rings and plane edges stop where the blunt end begins, which closes with one edge round it; past
+  // that only the outline shows, so the toe and fingertips read flat, not as a star of converging edges.
+  const blunt = (t: Tube, e: ToneEnv) => {
+    const u = 1 - t.caps[1] / t.length;
+    push(contourTube(cutTube(t, u), e, SUIT, 0.22 * k), 'figure');
+    push([{ ink: 'carbon', group: 'figure', points: Array.from({ length: 73 }, (_, i) => t.point(u, i / 72, 0.004)) }], 'figure');
+  };
+  for (const t of fig.hands) blunt(t, env);
+  for (const t of fig.shoes) blunt(t, shoeEnv);
+  for (const t of [body.trunk, ...limbs, ...fig.hands, ...fig.shoes]) push(silhouettes(t, env, { ink: 'carbon', group: 'figure' }), 'figure');
   for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
 
   // Slabs (throne, cubes): the raking hatch lit from the head, quieter the nearer they stand to it;
-  // small far cubes are only outlined.
+  // small far cubes only outlined, and the big near ones kept to rings and one field.
   const facet = n(ctx, 'facet', 12, 6, 18);
   const outlineBelow = n(ctx, 'outlineBelow', 5, 0, 20);
+  /** Slab `i`'s strokes at its current tone (replacing any it had). */
+  const hatch = (i: number, replace = false) => {
+    if (replace) for (let j = strokes.length - 1; j >= 0; j--) if (strokes[j].owner === i) strokes.splice(j, 1);
+    const sl = slabs[i], at = new THREE.Vector3(sl.x, sl.y, sl.z), mpu = mmPerUnit(at), cube = i >= nFigure;
+    const small = Math.max(sl.w, sl.h) * mpu < (cube ? outlineBelow : 1.5);
+    const spacing = cube ? n(ctx, 'avenueFacet', 22, 6, 40) : facet;
+    for (const st of facetStrokes(sl, head.centre.clone().sub(at).normalize(), eye, small, spacing / mpu)) {
+      strokes.push({ ink: 'carbon', group: groupOf(i), family: st.family, points: st.points, owner: i });
+    }
+  };
   for (const [i, sl] of slabs.entries()) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const toHead = head.centre.clone().sub(at).normalize();
-    sl.tone = (2.4 * dark(at, toHead) - 1.1) * (i < fig.throne.length ? 1 : n(ctx, 'avenueTone', 0.35, 0, 1));
     const mpu = mmPerUnit(at);
-    const small = Math.max(sl.w, sl.h) * mpu < (i < fig.throne.length ? 1.5 : outlineBelow);
-    const spacing = i < fig.throne.length ? facet : n(ctx, 'avenueFacet', 22, 6, 40);
-    for (const st of facetStrokes(sl, toHead, eye, small, spacing / mpu)) {
-      strokes.push({ ink: 'carbon', group: groupOf(i), family: st.family, points: st.points, owner: i });
-    }
+    const cube = i >= nFigure;
+    sl.tone = (2.4 * dark(at, toHead) - 1.1) * (cube ? n(ctx, 'avenueTone', 0.35, 0, 1) : 1);
+    if (cube && sl.w * mpu > n(ctx, 'calmAbove', 22, 5, 100)) sl.tone = Math.min(sl.tone, 0.12);
+    hatch(i);
   }
 
-  const geometries = [...slabs.map(slabGeometry), ...bodyMeshes(body, 0.8), ...helix.meshes, skull(head)];
+  const trunkMesh = body.trunk.mesh(96, body.trunk.facets >= 3 ? body.trunk.facets * 4 : 32);
+  const ends = [...fig.hands, ...fig.shoes].map(t => t.mesh(120, t.facets * 4));
+  const geometries = [...slabs.map(slabGeometry), trunkMesh, ...limbs.flatMap(cutMeshes), ...ends, ...helix.meshes, skull(head)];
   // Small blocks hide their own back edges only if the depth range fits the scene.
   fitDepthRange(view, geometries);
   try {
@@ -251,27 +257,41 @@ export function drawEmperor(ctx: SketchContext): Part[] {
       return total > 0 && seen >= total * share;
     };
     // Each candidate face: a slab's matrix turned so the face is its local +z, with the face's size.
-    const faces = [...fig.throne, ...cubes].flatMap(sl => [0, 1, 2, 3].map(q => {
+    // A throne face whose hatch would be crossed (too dark to read a word in) is left out; a cube that
+    // takes a word is re-hatched calm, in rings and one field, so the word reads.
+    // The seat (the first throne slab) is left out too: its front stands between the legs, behind the feet.
+    const faces = [...fig.throne.slice(1), ...cubes].flatMap(sl => [0, 1, 2, 3].map(q => {
       const m = slabMatrix(sl).multiply(new THREE.Matrix4().makeRotationY(q * Math.PI / 2));
       const fw = q % 2 ? sl.d : sl.w, half = q % 2 ? sl.w / 2 : sl.d / 2;
       const normal = new THREE.Vector3(0, 0, 1).transformDirection(m);
       const centre = new THREE.Vector3(0, 0, half).applyMatrix4(m);
-      return { m, fw, fh: sl.h, half, facing: normal.dot(eye.clone().sub(centre).normalize()), centre };
-    })).filter(fc => fc.facing > 0.3).map(fc => {
+      const light = head.centre.clone().sub(new THREE.Vector3(sl.x, sl.y, sl.z)).normalize();
+      return { sl, m, fw, fh: sl.h, half, facing: normal.dot(eye.clone().sub(centre).normalize()), centre, d: faceDarkness(normal, light, sl.tone) };
+    })).filter(fc => cubes.includes(fc.sl) ? fc.facing > 0.1 : fc.facing > 0.3 && fc.d < 0.62).map(fc => {
       const ps = [-1, 1].flatMap(x => [-1, 1].map(y => pageOf(view, new THREE.Vector3(x * fc.fw / 2, y * fc.fh / 2, fc.half).applyMatrix4(fc.m))));
       return { ...fc, box: { x0: Math.min(...ps.map(p => p.x)), x1: Math.max(...ps.map(p => p.x)), y0: Math.min(...ps.map(p => p.y)), y1: Math.max(...ps.map(p => p.y)) } };
     }).filter(fc => fc.box.x1 > CARD.x0 + 12 && fc.box.x0 < CARD.x1 - 12 && fc.box.y1 > CARD.y0 + 5 && fc.box.y0 < CARD.y1 - 5);
     const placed: Point[] = [];
+    const used = new Set<Slab>();
+    type Face = (typeof faces)[number];
+    /** A word's size in a face's own plane: wider as the face turns away from the eye. */
+    const sized = (fc: Face, word: string) => {
+      const unit = 1 / mmPerUnit(fc.centre);
+      return { unit, ww: measureStrokeText(word, style) * unit / Math.max(0.1, fc.facing), hh: style.height * unit };
+    };
+    const fits = (fc: Face, word: string, room: number) => {
+      const { ww, hh } = sized(fc, word);
+      return ww <= fc.fw - 2 * room * hh && hh <= fc.fh - 2 * room * hh;
+    };
     const tryWord = (word: string, target: number, side: number, reach: number, room = 1.2): boolean => {
-      const pick = faces.filter(({ box }) => side === 0 || (side < 0 ? box.x0 < MID_X - 8 : box.x1 > MID_X + 8))
+      // Only faces the word fits on, on blocks with no word yet, ranked by how near they lie to its height.
+      const pick = faces.filter(fc => !used.has(fc.sl) && fits(fc, word, room))
+        .filter(({ box }) => side === 0 || (side < 0 ? box.x0 < MID_X - 8 : box.x1 > MID_X + 8))
         .map(fc => ({ fc, score: Math.max(0, fc.box.y0 - target, target - fc.box.y1) + 25 * wrng() }))
         .sort((p, q) => p.score - q.score).slice(0, reach > 100 ? 80 : 18).map(({ fc }) => fc);
       for (const fc of pick) {
-        // Sized on the sheet: wider in the face's own plane as it turns away from the eye.
-        const unit = 1 / mmPerUnit(fc.centre);
-        const ww = measureStrokeText(word, style) * unit / Math.max(0.35, fc.facing), hh = style.height * unit;
+        const { unit, ww, hh } = sized(fc, word);
         const margin2 = room * hh;
-        if (ww > fc.fw - 2 * margin2 || hh > fc.fh - 2 * margin2) continue;
         const sx = ww / measureStrokeText(word, style);
         for (let attempt = 0; attempt < 60; attempt++) {
           const x0 = -ww / 2 + (wrng() - 0.5) * (fc.fw - ww - 2 * margin2), y0 = hh / 2 + (wrng() - 0.5) * (fc.fh - hh - 2 * margin2);
@@ -288,6 +308,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
           if (!visible(word3) || !visible([frameLine], 0.995)) continue;
           textStrokes.push(...word3);
           placed.push(centre);
+          used.add(fc.sl);
           return true;
         }
       }
@@ -299,9 +320,10 @@ export function drawEmperor(ctx: SketchContext): Part[] {
       const target = yTop + (yBottom - yTop) * (words.length > 1 ? i / (words.length - 1) : 0.5);
       // Its own side near its own height first, then its own side anywhere, then either side, and last
       // with less paper round it.
-      if (!tryWord(word, target, side, 40) && !tryWord(word, target, side, 110) && !tryWord(word, target, 0, 170)) tryWord(word, target, 0, 250, 0.6);
+      if (!tryWord(word, target, side, 40) && !tryWord(word, target, side, 110) && !tryWord(word, target, 0, 170)) tryWord(word, target, 0, 120, 0.6);
       side = -side;
     });
+    for (const sl of used) if (cubes.includes(sl) && sl.tone > 0.12) { sl.tone = 0.12; hatch(slabs.indexOf(sl), true); }
     const glyphPaths: Point[][] = [];
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const cl of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(cl), MM_X, MM_Y)));
@@ -324,7 +346,11 @@ export function drawEmperor(ctx: SketchContext): Part[] {
       list.push(st);
       bySlab.set(st.owner, list);
     }
-    const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => { for (const run of runs2) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); };
+    // The coil keeps to its own ribbons: the pulse ticks the helix strews past its edges read as scraps at this size.
+    const onCoil = meshCoverage(helix.meshes, view, TABLOID_PAGE, 0.3);
+    const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => {
+      for (const run of runs2) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), st.group === 'helix' ? onCoil : undefined);
+    };
     for (const [i, mine] of bySlab) {
       const sl = slabs[i];
       const tol = Math.max(0.12, Math.min(0.5 * Math.max(1, k / 4), 0.25 * Math.min(sl.w, sl.h, sl.d)));
