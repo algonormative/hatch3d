@@ -1,6 +1,6 @@
 /**
  * Review sheets for the steering loop: renders side by side, close-ups, and what changed between
- * two renders. PNG in, PNG out; nothing is re-rendered.
+ * two renders. PNG or JPEG in (diff: PNG), PNG out; nothing is re-rendered.
  *
  *   node --import tsx cli/sheet.ts montage <out.png> [--width 520] <label=render.png> ...
  *   node --import tsx cli/sheet.ts crop <in.png> <out.png> <x0> <y0> <x1> <y1> [--scale 3]
@@ -19,12 +19,30 @@ interface Image { id: string; href: string; width: number; height: number }
 type Tile = { label: string; image: Image; view?: [number, number, number, number] };
 
 let loaded = 0;
+/** A JPEG's size, from its start-of-frame marker. */
+export function jpegSize(bytes: Buffer): { width: number; height: number } {
+  let i = 2;
+  while (i + 9 < bytes.length) {
+    if (bytes[i] !== 0xff) { i++; continue; }
+    const marker = bytes[i + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { height: bytes.readUInt16BE(i + 5), width: bytes.readUInt16BE(i + 7) };
+    i += 2 + bytes.readUInt16BE(i + 2);
+  }
+  throw new Error('sheet: no JPEG frame header found');
+}
+
 /**
- * A PNG as an embeddable image. Shown at `targetWidth` or less, it is first shrunk by a whole factor
- * with a box filter: the renderer's own downscale aliases fine hatching into moiré.
+ * A PNG or JPEG as an embeddable image. A PNG shown at `targetWidth` or less is first shrunk by a
+ * whole factor with a box filter: the renderer's own downscale aliases fine hatching into moiré.
+ * JPEGs are embedded as they are (there is no decoder here), so pass renders as PNG where possible.
  */
 function load(path: string, targetWidth?: number): Image {
   const bytes = readFileSync(path);
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const { width, height } = jpegSize(bytes);
+    return { id: `img${loaded++}`, href: `data:image/jpeg;base64,${bytes.toString('base64')}`, width, height };
+  }
+  if (bytes.readUInt32BE(0) !== 0x89504e47) throw new Error(`sheet: ${path} is neither PNG nor JPEG`);
   const png = PNG.sync.read(bytes);
   const k = targetWidth ? Math.floor(png.width / targetWidth) : 1;
   if (k < 2) return { id: `img${loaded++}`, href: `data:image/png;base64,${bytes.toString('base64')}`, width: png.width, height: png.height };
@@ -78,6 +96,7 @@ export function sheetSvg(rows: Tile[][], width: number): string {
 
 /** Changed regions between two same-size PNGs: boxes in pixels, largest first. */
 export function changedRegions(before: Buffer, after: Buffer, threshold = 40, cell = 60): { changed: number; regions: { x0: number; y0: number; x1: number; y1: number; pixels: number }[] } {
+  if (before.readUInt32BE(0) !== 0x89504e47 || after.readUInt32BE(0) !== 0x89504e47) throw new Error('sheet: diff compares PNG renders (render.png), not JPEGs');
   const a = PNG.sync.read(before), b = PNG.sync.read(after);
   if (a.width !== b.width || a.height !== b.height) throw new Error(`sheet: sizes differ (${a.width}×${a.height} vs ${b.width}×${b.height})`);
   const cw = Math.ceil(a.width / cell), ch = Math.ceil(a.height / cell);
