@@ -23,6 +23,11 @@
   "include": [
     "cli/sketch.ts",
     "cli/finalize.ts",
+    "cli/plotter-check.ts",
+    "cli/print-queue.ts",
+    "cli/art-match.ts",
+    "cli/baselines.ts",
+    "cli/sheet.ts",
     "cli/sketch/**/*.ts",
     "src/sketch/**/*.ts",
     "src/utils/clip.ts",

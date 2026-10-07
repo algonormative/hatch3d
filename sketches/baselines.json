@@ -1,0 +1,76 @@
+{
+  "entries": [
+    {
+      "entry": "sketches/breach-tarot/xiii-death/sketch.ts",
+      "seed": 1,
+      "identity": "d50050c14a8a22d52d3bae36450b0a2bf1cd9cc559694a8990786d8149d0bbda",
+      "note": "print-queue/breach-tarot-2026-10-06-xiii-death"
+    },
+    {
+      "entry": "sketches/breach-tarot/xvi-tower/sketch.ts",
+      "seed": 1,
+      "identity": "1638228742bb79e02127bde73810349f70605996bdefbc2054d3d7604a10efea",
+      "note": "print-queue/breach-tarot-2026-10-06-xvi-tower"
+    },
+    {
+      "entry": "sketches/breach-tarot/xvii-star/sketch.ts",
+      "seed": 2,
+      "identity": "e739faf0f8fe4ab2c90afbdcea9d1c329bd93105752cf2e1cc3a74b05b29b6ad",
+      "note": "print-queue/breach-tarot-2026-10-06-xvii-star"
+    },
+    {
+      "entry": "sketches/breach-tarot/xix-sun/sketch.ts",
+      "seed": 1,
+      "identity": "71eb24cd7162f015b607a7a16d3e18cf4151cd82a1a5a218d2779fdb2e209bef",
+      "note": "print-queue/breach-tarot-2026-10-06-xix-sun"
+    },
+    {
+      "entry": "sketches/breach-tarot/0-fool/sketch.ts",
+      "seed": 1,
+      "identity": "df42b9b2943dbe26dacd7cb03797ba26571947efd99aed8d1d8e8a38f894ab63",
+      "note": "print-queue/breach-tarot-2026-10-07-0-fool"
+    },
+    {
+      "entry": "sketches/breach-tarot/i-magician/sketch.ts",
+      "seed": 1,
+      "identity": "ae9a2dad1cf0224b0151194dcb31147742968841d1de21048db363f057fd5c76",
+      "note": "print-queue/breach-tarot-2026-10-07-i-magician"
+    },
+    {
+      "entry": "sketches/breach-tarot/xii-hanged-man/sketch.ts",
+      "seed": 3,
+      "identity": "fd4440c053395fe8b88bc7284aa6e125f8e5d370e76b23824312783e85a35258",
+      "note": "print-queue/breach-tarot-2026-10-07-xii-hanged-man"
+    },
+    {
+      "entry": "sketches/breach-tarot/xxi-world/sketch.ts",
+      "seed": 3,
+      "identity": "e37e7598ed7510441af1ee60882662c0bdc252c6b408c0d54e36daf22c14e1fe",
+      "note": "print-queue/breach-tarot-2026-10-07-xxi-world"
+    },
+    {
+      "entry": "sketches/breach-cathedral-tower/sketch.ts",
+      "seed": 211,
+      "identity": "e5b226ba19ec6af61641d2fbc5c905daab62fd38834218d0e23d9fc40a6ff466",
+      "note": "Breach Cathedral: Tower, the owner's favourite (phase-garden heat round)"
+    },
+    {
+      "entry": "sketches/breach-cathedral-agent/sketch.ts",
+      "seed": 3,
+      "identity": "5880a40468723f47dc37b831513c14956aab8563ef0f2626edc0b28929d8e47c",
+      "note": "print-queue/phase-garden-2026-10-06-agent-3 (Plenipotentiary)"
+    },
+    {
+      "entry": "sketches/breach-cathedral/sketch.ts",
+      "seed": 17,
+      "identity": "c610fe3d6633069cdd0b46872cb8ed8132a58cd6e0b607e5a294e8dc2759c669",
+      "note": "Breach Cathedral print seed (phase-garden heat round)"
+    },
+    {
+      "entry": "sketches/breach-cathedral-extended/sketch.ts",
+      "seed": 219,
+      "identity": "824aa067dbf74203b127349f10e740d0c0ce00a139272156de89b35475fbcead",
+      "note": "Breach Cathedral extended print seed (phase-garden heat round)"
+    }
+  ]
+}

@@ -10,6 +10,22 @@ Headless Node CLIs (run via `tsx`). No browser required.
 | `stats:diff` | `npm run stats:diff -- a.svg b.svg …` | Variability across variants (below) |
 | `feed` | `npm run feed` | Render curated/biased presets and push to the feed app |
 | `pref:sync` | `npm run pref:sync` | Collect curation signals, recompute the preference model |
+| `finalize` | `npm run finalize -- run <stack.json> --only a,b` | Palette, placement and vpype prep of sketch prints (below) |
+| `plotter-check` | `npm run plotter-check -- <piece-dir> …` | plotter-server's own import checks, with a negative control |
+| `art-match` | `npm run art-match -- <plain.svg> <print.svg>` | Is the print the approved art, path for path, under the border fit? |
+| `print-queue` | `npm run print-queue -- <stack.json> --into <dir> --prefix p --notes n.json` | Write checked vault print-queue entries |
+| `baselines` | `npm run baselines -- check` | Byte-identity of every print seed (`sketches/baselines.json`) |
+| `sheet` | `npm run sheet -- montage\|crop\|diff …` | Review sheets: side by side, close-ups, what changed |
+
+## From sketch to print queue
+
+The steps a sketch print goes through, each a command; none of them uploads or plots anything.
+
+1. **Steer.** `npm run sketch -- render <entry> --seed N --out dir` per pass; `npm run sketch -- experiment <matrix.json> --out dir` renders a seed (or params) matrix with a labelled contact sheet for picking by eye. `npm run sheet -- montage out.png a=…/render.png b=…` puts any renders side by side, `sheet crop` zooms (fractions of the image, `--scale`), and `sheet diff before.png after.png out.png` finds and shows what changed between two renders.
+2. **Guard what is printed.** After any kit or engine change, `npm run baselines -- check` re-renders every print seed and compares identities (a few seconds). A deliberate change is re-recorded with `baselines -- update <entry>`, a dry run until `--yes`, and its print-queue entries need re-prepping.
+3. **Finalize.** Add the piece to its stack (`sketches/phase-garden/stacks/*.json`), commit, then `npm run finalize -- run <stack.json> --only name`.
+4. **Check.** `npm run plotter-check -- .sketch-output/finalize/<stack>/<name>` runs plotter-server's `validatePreparedPenPlan` and `buildPenPlan` (from a checkout at `PLOTTER_SERVER_DIR`, default `~/git/plotter-server`), and requires a recoloured copy to be rejected so a pass means the check was live.
+5. **Queue.** `npm run print-queue -- <stack.json> --into ~/git/vault/print-queue --prefix <family> --notes notes.json --only name` writes the vault entry: it re-runs the plotter check and an art match against the sketch's own render, refuses to write a piece that fails either, and records the art identity, hashes, pen plan and regenerate command. `notes.json` maps piece names to the entry's markdown description.
 
 ## `stats` — deterministic SVG measurement
 
