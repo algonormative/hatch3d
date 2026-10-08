@@ -25,6 +25,11 @@
     { "name": "ii-high-priestess", "title": "Breach Tarot: II The High Priestess", "sketch": "sketches/breach-tarot/ii-high-priestess/sketch.ts", "seed": 2 },
     { "name": "iii-empress", "title": "Breach Tarot: III The Empress", "sketch": "sketches/breach-tarot/iii-empress/sketch.ts", "seed": 2 },
     { "name": "iv-emperor", "title": "Breach Tarot: IV The Emperor", "sketch": "sketches/breach-tarot/iv-emperor/sketch.ts", "seed": 2 },
-    { "name": "v-hierophant", "title": "Breach Tarot: V The Hierophant", "sketch": "sketches/breach-tarot/v-hierophant/sketch.ts", "seed": 2 }
+    { "name": "v-hierophant", "title": "Breach Tarot: V The Hierophant", "sketch": "sketches/breach-tarot/v-hierophant/sketch.ts", "seed": 2 },
+    { "name": "vi-lovers", "title": "Breach Tarot: VI The Lovers", "sketch": "sketches/breach-tarot/vi-lovers/sketch.ts", "seed": 2 },
+    { "name": "vii-chariot", "title": "Breach Tarot: VII The Chariot", "sketch": "sketches/breach-tarot/vii-chariot/sketch.ts", "seed": 2 },
+    { "name": "viii-strength", "title": "Breach Tarot: VIII Strength", "sketch": "sketches/breach-tarot/viii-strength/sketch.ts", "seed": 2 },
+    { "name": "x-wheel", "title": "Breach Tarot: X Wheel of Fortune", "sketch": "sketches/breach-tarot/x-wheel/sketch.ts", "seed": 2 },
+    { "name": "xi-justice", "title": "Breach Tarot: XI Justice", "sketch": "sketches/breach-tarot/xi-justice/sketch.ts", "seed": 3 }
   ]
 }
