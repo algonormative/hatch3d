@@ -16,7 +16,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { figureMeshes, figureStrokes, footOf, meeting } from './figures.ts';
 import { roundedPocket } from './pocket.ts';
 import { shadowOf } from './shadows.ts';
-import { Spine, leadStrand, strand, winding, type Ribbon } from './strands.ts';
+import { Spine, strand, winding, type Ribbon } from './strands.ts';
 import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from './towers.ts';
 
 /**
@@ -136,8 +136,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
     const start = toward.multiplyScalar(Math.cos(arm)).add(new THREE.Vector3(0, Math.sin(arm), 0));
     return new THREE.CubicBezierCurve3(from, from.clone().addScaledVector(start, reach * 0.45), meet.clone().addScaledVector(tau, -reach * 0.4), meet.clone());
   };
-  const leadA = lead(near.top), leadB = lead(far.top);
-  const spineA = new Spine(leadA, tail, S), spineB = new Spine(leadB, tail, S);
+  const spineA = new Spine(lead(near.top), tail, S), spineB = new Spine(lead(far.top), tail, S);
   const ribbon: Ribbon = {
     radius: n(ctx, 'helixR', 1.9, 0.5, 4) * S, width: n(ctx, 'ribbon', 0.12, 0.08, 1.5) * S, pitch: n(ctx, 'pitch', 3.2, 1.5, 12) * S,
     open: n(ctx, 'open', 2.0, 0.5, 12) * S, flare: n(ctx, 'flare', 2.0, 0.5, 12) * S, slim: n(ctx, 'slim', 0, 0, 1),
@@ -145,10 +144,6 @@ export function drawLovers(ctx: SketchContext): Part[] {
   // Phase: each strand has wound its own number of turns by the meeting point; turn the second so the two sit as in the full helix beyond it.
   const strandA = strand(ctx, bigView, spineA, 0, ribbon, 0, S);
   const strandB = strand(ctx, bigView, spineB, 1, ribbon, -(winding(spineB, ribbon).joinTurns - winding(spineA, ribbon).joinTurns), S);
-  // Each strand's lead-in, from its tower top to the meeting point, a thin ribbon on its own smooth arc.
-  const leadWidth = n(ctx, 'leadWidth', 0.1, 0.02, 0.4) * S;
-  const leadRibbonA = leadStrand(ctx, bigView, new Spine(leadA, null, S), 0, leadWidth, S);
-  const leadRibbonB = leadStrand(ctx, bigView, new Spine(leadB, null, S), 1, leadWidth, S);
 
   const lit = (_p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.9 * (1 - Math.max(0, normal.dot(light))) ** 1.3 + 0.04, 0, 1);
   const env = { forward, density: 0.4, dark: lit, screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; } };
@@ -161,7 +156,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
       placed.push({ ink: st.ink, group: tower.id, family: st.family, points: st.points, band, kind: 'slab' });
     }
   }
-  for (const s of [strandA, strandB, leadRibbonA, leadRibbonB]) for (const st of s.strokes) for (const piece of chunk(st.points, 12)) {
+  for (const s of [strandA, strandB]) for (const st of s.strokes) for (const piece of chunk(st.points, 12)) {
     placed.push({ ...st, points: piece, band: bandOf(piece[Math.floor(piece.length / 2)]), kind: 'helix' });
   }
   for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env)) {
@@ -172,7 +167,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
   const slabGeos = [...near.pieces, ...far.pieces].map(p => slabGeometry(p.sl));
   const leftGeos = figureMeshes(lovers.left), rightGeos = figureMeshes(lovers.right);
   const figureGeos = [...leftGeos, ...rightGeos];
-  const geometries = [...slabGeos, strandA.mesh, strandB.mesh, leadRibbonA.mesh, leadRibbonB.mesh, ...figureGeos];
+  const geometries = [...slabGeos, strandA.mesh, strandB.mesh, ...figureGeos];
   const shadowGeos = [shadowOf(slabGeos, light), shadowOf(leftGeos, light), shadowOf(rightGeos, light)];
   try {
     fitDepthRange(view, geometries);
@@ -261,8 +256,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
     const standing = meshCoverage(slabGeos, view, TABLOID_PAGE, 0.5, 4);
     const onLover = meshCoverage(figureGeos, view, TABLOID_PAGE, 0.7, 4);
     const tilt = THREE.MathUtils.degToRad(n(ctx, 'shadowAngle', 62, 20, 85)), step = n(ctx, 'shadowPitch', 0.55, 0.4, 2);
-    // Scraps of a tower's shadow cut off by a lover's shadow, a few millimetres long, are dropped.
-    const hatch = (key: string, shortest: number, families: readonly (readonly [number, number])[], keep: (p: Point) => boolean) => {
+    const hatch = (key: string, families: readonly (readonly [number, number])[], keep: (p: Point) => boolean) => {
       for (const [angle, pitch] of families) {
         const cx = Math.cos(angle), cy = -Math.sin(angle), nx = -cy, ny = cx;
         const span = Math.hypot(CARD.x1 - CARD.x0, CARD.y1 - CARD.y0);
@@ -270,16 +264,16 @@ export function drawLovers(ctx: SketchContext): Part[] {
         for (let o = -span / 2; o < span / 2; o += pitch) {
           const line: Point[] = [{ x: mid.x + nx * o - cx * span, y: mid.y + ny * o - cy * span }, { x: mid.x + nx * o + cx * span, y: mid.y + ny * o + cy * span }];
           for (const inside of clipWindow(line, { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + 0.8, y1: CARD.y1 })) {
-            for (const piece of keepAlong(inside, keep, 0.2)) buckets.add(key, piece, false, shortest);
+            for (const piece of keepAlong(inside, keep, 0.2)) buckets.add(key, piece, false, 1.5);
           }
         }
       }
     };
     const cross = tilt - THREE.MathUtils.degToRad(100);
-    hatch('shadow-carbon', 3.5, [[tilt, step], [cross, step * 3]], p => towerShade(p) && !loverShade(p) && !standing(p) && !loverPocket(p));
+    hatch('shadow-carbon', [[tilt, step], [cross, step * 3]], p => towerShade(p) && !loverShade(p) && !standing(p) && !loverPocket(p));
     // Each lover's own shadow in its own part; where the two overlap the left one draws it.
-    hatch('shadow-left-carbon', 1.5, [[tilt, step], [cross, step * 1.5]], p => leftShade(p) && !standing(p) && !onLover(p));
-    hatch('shadow-right-carbon', 1.5, [[tilt, step], [cross, step * 1.5]], p => rightShade(p) && !leftShade(p) && !standing(p) && !onLover(p));
+    hatch('shadow-left-carbon', [[tilt, step], [cross, step * 1.5]], p => leftShade(p) && !standing(p) && !onLover(p));
+    hatch('shadow-right-carbon', [[tilt, step], [cross, step * 1.5]], p => rightShade(p) && !leftShade(p) && !standing(p) && !onLover(p));
 
     // The sky: a light ruling, thinning and breaking as it comes down to the horizon, knocked out round everything standing in it.
     const reach = n(ctx, 'sky', 0.9, 0, 1);
