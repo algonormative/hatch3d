@@ -310,8 +310,10 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   // The ground as the cantilever card has it, less any debris that would sit inside the machine's footprint.
   const footprint = M.R + 2.4;
   // A paving stone whose top shows less than the smallest feature deep on paper, toward the horizon, is left out:
-  // the paving runs on as far as it can be drawn, and the ground beyond is open to the horizon line.
-  const deep = (s: Slab) => pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z + s.d / 2)).y - pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z - s.d / 2)).y;
+  // the paving runs on as far as it can be drawn, and the ground beyond is open to the horizon line. (A stone
+  // reaching the eye's plane, with a camera pulled in close, is near and large: it stays.)
+  const deep = (s: Slab) => s.z + s.d / 2 > view.position.z - 1 ? Infinity
+    : pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z + s.d / 2)).y - pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z - s.d / 2)).y;
   const ground = all.slice(all.length - GROUND_COUNT).filter(s => (s.role !== 'debris' || Math.hypot(s.x - M.x, s.z - M.z) > footprint + Math.max(s.w, s.d) / 2)
     && (s.role !== 'stub' || FEATURE === 0 || deep(s) >= FEATURE));
   const m = machine(ctx, view);
