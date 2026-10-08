@@ -7,7 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import type { FinishingOptions, Params, RenderResult } from '../../src/sketch/types.ts';
+import type { FinishingOptions, FormatOptions, Params, RenderResult } from '../../src/sketch/types.ts';
 
 const run = promisify(execFile);
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
@@ -71,7 +71,7 @@ export interface ExternalCheckpointManifest {
   packageSha256: string; lockSha256: string; replayPackageSha256: string; replayLockSha256: string;
   sourceFiles: ExternalSourceFile[]; archives: ExternalArchive[];
   toolkit: { core: string; host: string };
-  params: Params; seed: number; finishing?: FinishingOptions; identity: string; canonicalSvgSha256: string;
+  params: Params; seed: number; finishing?: FinishingOptions; format?: FormatOptions; identity: string; canonicalSvgSha256: string;
 }
 export interface ExternalProject { root: string; familyRoot: string; entry: string; familyDir: string; relativeEntry: string; pkg: Record<string, unknown>; packageBytes: Buffer; lockBytes: Buffer }
 
@@ -379,7 +379,7 @@ async function npmCommand(cwd: string, args: string[], cache: string): Promise<s
   finally { await rm(emptyConfig, { force: true }); await rm(emptyGlobal, { force: true }); }
 }
 
-async function renderPacked(root: string, entry: string, params: Params, seed: number, finishing?: FinishingOptions): Promise<RenderResult> {
+async function renderPacked(root: string, entry: string, params: Params, seed: number, finishing?: FinishingOptions, format?: FormatOptions): Promise<RenderResult> {
   const childFile = join(root, 'node_modules/@hatch3d/plot-host/dist/child.js');
   const require = createRequire(join(root, 'node_modules/@hatch3d/plot-host/package.json'));
   let loader: string;
@@ -396,7 +396,7 @@ async function renderPacked(root: string, entry: string, params: Params, seed: n
     child.on('message', (message: unknown) => { const reply = message as { ok?: boolean; value?: RenderResult; error?: { message?: string } }; if (reply.ok && reply.value?.schemaVersion === 1) finish(undefined, reply.value); else finish(new Error(`External replay render failed: ${reply.error?.message ?? 'invalid response'}`)); });
     child.on('error', error => finish(error));
     child.on('exit', code => finish(new Error(`External replay child exited ${code}: ${stderr}`)));
-    child.send({ mode: 'render', entry, params, seed, ...(finishing === undefined ? {} : { finishing }) }, error => { if (error) finish(error); });
+    child.send({ mode: 'render', entry, params, seed, ...(finishing === undefined ? {} : { finishing }), ...(format === undefined ? {} : { format }) }, error => { if (error) finish(error); });
   });
 }
 
@@ -468,7 +468,7 @@ export async function replayExternalCheckpoint(checkpoint: string): Promise<Rend
     const expected = manifest.archives.filter(archive => originalPackages[archive.nodePath]?.dev !== true);
     for (const archive of expected) if (!installed.some(node => node.nodePath === archive.nodePath && node.name === archive.name && node.version === archive.version)) throw new Error(`Replayed dependency missing or moved: ${archive.nodePath}`);
     for (const node of installed) if (!manifest.archives.some(archive => archive.nodePath === node.nodePath && archive.name === node.name && archive.version === node.version)) throw new Error(`Replayed dependency lacks captured archive: ${node.nodePath}`);
-    const result = await renderPacked(isolated, project.entry, manifest.params, manifest.seed, manifest.finishing);
+    const result = await renderPacked(isolated, project.entry, manifest.params, manifest.seed, manifest.finishing, manifest.format);
     if (result.identity !== manifest.identity || hash(result.svg) !== manifest.canonicalSvgSha256) throw new Error('External checkpoint replay differs from canonical SVG or render identity');
     return result;
   } finally { await rm(isolated, { recursive: true, force: true }); }
@@ -519,7 +519,7 @@ export async function createExternalCheckpoint(project: ExternalProject, result:
       nodeVersion: process.version, npmVersion: await npmVersion(), platform: process.platform, arch: process.arch,
       packageSha256: hash(project.packageBytes), lockSha256: hash(project.lockBytes), replayPackageSha256: hash(replay.pkg), replayLockSha256: hash(replay.lock), sourceFiles: captured, archives,
       toolkit: { core: nodes.find(node => node.name === '@hatch3d/plot-core')!.version, host: nodes.find(node => node.name === '@hatch3d/plot-host')!.version },
-      params: structuredClone(result.params), seed: result.seed, ...(result.finishing === undefined ? {} : { finishing: structuredClone(result.finishing) }), identity: result.identity, canonicalSvgSha256: hash(result.svg) };
+      params: structuredClone(result.params), seed: result.seed, ...(result.finishing === undefined ? {} : { finishing: structuredClone(result.finishing) }), ...(result.format === undefined ? {} : { format: structuredClone(result.format) }), identity: result.identity, canonicalSvgSha256: hash(result.svg) };
     await writeFile(join(pending, 'checkpoint.json'), JSON.stringify(manifest, null, 2), { flag: 'wx' });
     const regenerated = await replayExternalCheckpoint(pending);
     if (regenerated.identity !== result.identity || regenerated.svg !== result.svg) throw new Error('Captured external source does not reproduce the supplied render identity');

@@ -54,6 +54,12 @@ export interface SketchContext {
   params: Params;
   seed: number;
   assets: Record<string, RasterAsset>;
+  /**
+   * The page this render draws on. For a `pageAware` sketch it is the requested `finishing.page` over the
+   * declared page (see `targetPage`); for any other sketch it is the declared page. Hosts that predate it, and
+   * tests that call `draw()` directly, may leave it out: read it as the declared page then.
+   */
+  page?: Page;
   /** Independent deterministic stream for one named part. */
   random(partId: string): () => number;
 }
@@ -70,7 +76,14 @@ export interface Part {
 
 export interface Sketch {
   name: string;
+  /** The declared page. A `pageAware` sketch treats it as the default and draws on `ctx.page`. */
   page: Page;
+  /**
+   * Opt in to drawing on the page a render asks for. With `finishing.page` set, a page-aware sketch draws on
+   * that page (`ctx.page`) and finishing does not rescale it; any other sketch draws on its declared page and
+   * finishing fits it uniformly onto the requested one. Not part of the metadata, so render identities don't move.
+   */
+  pageAware?: boolean;
   pens: Pen[];
   controls: Control[];
   navigators?: Navigator[];
@@ -110,10 +123,15 @@ export interface RenderStats {
   partCount: number;
 }
 
+/** Options a sketch's format module reads from the render target, e.g. `{ fit: 'width' }`. Flat JSON values only. */
+export type FormatOptions = Record<string, string | number | boolean>;
+
 export interface RenderResult {
   schemaVersion: 1;
   metadata: SketchMetadata;
   finishing?: FinishingOptions;
+  /** Present only when the request carried format options; part of the identity then. */
+  format?: FormatOptions;
   params: Params;
   /** Values passed to draw(); present only for sketches declaring macros. */
   effectiveParams?: Params;

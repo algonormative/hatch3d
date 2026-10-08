@@ -10,7 +10,7 @@ import { prepareRender, preparationOperations, preparationSummary, svgSha256, ty
 import { sourceStamp } from './source-stamp.js';
 import { queuePreparedRender, queueSketchRender, validatePlotterUploadConfig, PlotterUploadError, type PlotterUploadConfig } from './plugins/plotter-upload.js';
 import { BORDER_STYLES, PAPER_SIZES } from '../../src/utils/page-finishing.js';
-import type { FinishingOptions, RenderResult } from '../../src/sketch/types.js';
+import type { FinishingOptions, FormatOptions, RenderResult } from '../../src/sketch/types.js';
 
 export interface SketchServerOptions { entry: string; port?: number; outputDir?: string; plotterUpload?: PlotterUploadConfig; plotprepExecutable?: string }
 export interface SketchServer { url: string; close: () => Promise<void> }
@@ -328,7 +328,7 @@ export async function startSketchServer({ entry, port = 0, outputDir, plotterUpl
       }
       if (req.method === 'POST' && path === '/api/render') {
         const body = await readJson(req);
-        if (Object.keys(body).some(key => !['requestId', 'params', 'seed', 'finishing'].includes(key))) throw new Error('Render request accepts only requestId, params, seed, and finishing');
+        if (Object.keys(body).some(key => !['requestId', 'params', 'seed', 'finishing', 'format'].includes(key))) throw new Error('Render request accepts only requestId, params, seed, finishing, and format');
         const id = requestId(body.requestId);
         if (!validParams(body.params)) throw new Error('Invalid params');
         if (body.seed !== undefined && (!Number.isSafeInteger(body.seed) || (body.seed as number) < 0)) throw new Error('Seed must be a nonnegative integer');
@@ -340,7 +340,8 @@ export async function startSketchServer({ entry, port = 0, outputDir, plotterUpl
         try {
           const metadata = await inspectSketch({ entry: absoluteEntry, timeoutMs: 10_000, signal: controller.signal });
           const beforeStamp = await sourceStamp(absoluteEntry, metadata.assets);
-          const result = await renderSketch({ entry: absoluteEntry, params: body.params, seed: body.seed as number | undefined, finishing: body.finishing as FinishingOptions | undefined, timeoutMs: 15000, signal: controller.signal });
+          const result = await renderSketch({ entry: absoluteEntry, params: body.params, seed: body.seed as number | undefined, finishing: body.finishing as FinishingOptions | undefined,
+            ...(body.format === undefined ? {} : { format: body.format as FormatOptions }), timeoutMs: 15000, signal: controller.signal });
           if (sequence !== generation || controller.signal.aborted) { json(res, 409, { requestId: id, error: 'Superseded render' }); return; }
           const afterStamp = await sourceStamp(absoluteEntry, result.metadata.assets);
           if (beforeStamp !== afterStamp) { json(res, 409, { requestId: id, error: 'Sketch source or declared assets changed during render' }); return; }
@@ -376,7 +377,7 @@ export async function startSketchServer({ entry, port = 0, outputDir, plotterUpl
           return { pinId: pin.pinId, pinnedAt: pin.pinnedAt, identity: pin.result.identity, name: pin.result.metadata.name,
             page: pin.result.metadata.page,
             pens: report ? report.pens.map(pen => ({ id: pen.pen_id, color: pen.color, width: pen.stroke_width_mm, passes: pen.passes })) : pin.result.metadata.pens,
-            finishing: pin.result.finishing, params: pin.result.params, seed: pin.result.seed,
+            finishing: pin.result.finishing, ...(pin.result.format === undefined ? {} : { format: pin.result.format }), params: pin.result.params, seed: pin.result.seed,
             stats: report ? { pathCount: report.geometry.output.paths, pointCount: report.geometry.output.vertices,
               lengthMm: report.geometry.output.drawn_length_mm, partCount: report.parts.filter(part => part.path_count_after > 0).length } : pin.result.stats,
             canonicalStats: pin.preparation ? pin.result.stats : undefined, preparation: pin.preparation };

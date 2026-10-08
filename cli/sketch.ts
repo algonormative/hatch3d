@@ -9,7 +9,7 @@ import { runExperimentBatch } from './sketch/experiments.ts';
 import { readBounded } from './sketch/checkpoint-external.ts';
 import { inspectSketch, renderSketch, SketchRunnerError } from './sketch/runner.ts';
 import type { ExperimentMatrix } from '../packages/plot-host/src/experiment-types.js';
-import type { FinishingOptions, Params, RenderResult } from '../src/sketch/types.ts';
+import type { FinishingOptions, FormatOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
   return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
@@ -18,7 +18,7 @@ function usage(): string {
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'finishing', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'],
   checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'], experiment: ['out', 'timeout'],
 };
 
@@ -101,18 +101,36 @@ async function finishing(value: string | undefined): Promise<FinishingOptions | 
   return parsed as FinishingOptions;
 }
 
-async function requestConfig(path: string | undefined): Promise<{ params?: Params; seed?: number; finishing?: FinishingOptions }> {
+/** `--page WxH[,margin]`: shorthand for `finishing.page` width, height and (optionally) margin, in millimetres. */
+export function pageShorthand(value: string, finishing: FinishingOptions | undefined): FinishingOptions {
+  const match = /^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:,(\d+(?:\.\d+)?))?$/.exec(value.trim());
+  if (!match) throw new SketchRunnerError('invalid_page', '--page must be WIDTHxHEIGHT[,MARGIN] in millimetres, e.g. 70x120 or 70x120,4.5');
+  const [width, height] = [Number(match[1]), Number(match[2])];
+  return { ...finishing, page: { ...finishing?.page, width, height, ...(match[3] === undefined ? {} : { margin: Number(match[3]) }) } };
+}
+
+async function format(value: string | undefined): Promise<FormatOptions | undefined> {
+  if (value === undefined) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value.startsWith('@') ? await readFile(resolve(value.slice(1)), 'utf8') : value); }
+  catch { throw new SketchRunnerError('invalid_format', '--format must be a JSON object or @path/to/format.json'); }
+  if (!object(parsed)) throw new SketchRunnerError('invalid_format', '--format must be a JSON object');
+  return parsed as FormatOptions;
+}
+
+async function requestConfig(path: string | undefined): Promise<{ params?: Params; seed?: number; finishing?: FinishingOptions; format?: FormatOptions }> {
   if (path === undefined) return {};
   let parsed: unknown;
   try { parsed = JSON.parse(await readFile(resolve(path), 'utf8')); }
   catch { throw new SketchRunnerError('invalid_config', '--config must be a readable JSON request document'); }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new SketchRunnerError('invalid_config', '--config must contain an object');
   const record = parsed as Record<string, unknown>;
-  if (Object.keys(record).some((key) => key !== 'params' && key !== 'seed' && key !== 'finishing')) throw new SketchRunnerError('invalid_config', '--config accepts only params, seed, and finishing');
+  if (Object.keys(record).some((key) => !['params', 'seed', 'finishing', 'format'].includes(key))) throw new SketchRunnerError('invalid_config', '--config accepts only params, seed, finishing, and format');
   if (record.params !== undefined && (typeof record.params !== 'object' || record.params === null || Array.isArray(record.params))) throw new SketchRunnerError('invalid_config', '--config params must be an object');
   if (record.seed !== undefined && (!Number.isSafeInteger(record.seed) || (record.seed as number) < 0)) throw new SketchRunnerError('invalid_config', '--config seed must be a nonnegative safe integer');
   if (record.finishing !== undefined && !object(record.finishing)) throw new SketchRunnerError('invalid_config', '--config finishing must be an object');
-  return { params: record.params as Params | undefined, seed: record.seed as number | undefined, finishing: record.finishing as FinishingOptions | undefined };
+  if (record.format !== undefined && !object(record.format)) throw new SketchRunnerError('invalid_config', '--config format must be an object');
+  return { params: record.params as Params | undefined, seed: record.seed as number | undefined, finishing: record.finishing as FinishingOptions | undefined, ...(record.format === undefined ? {} : { format: record.format as FormatOptions }) };
 }
 
 export async function main(args: string[]): Promise<void> {
@@ -176,8 +194,11 @@ export async function main(args: string[]): Promise<void> {
     process.once('SIGTERM', shutdown);
     return;
   }
-  if (flags.config && (flags.params || flags.seed || flags.finishing)) throw new SketchRunnerError('usage', '--config cannot be combined with --params, --seed, or --finishing');
-  const request = flags.config ? await requestConfig(flags.config) : { params: await params(flags.params), seed: integer(flags.seed, 'seed'), finishing: await finishing(flags.finishing) };
+  if (flags.config && (flags.params || flags.seed || flags.finishing || flags.page || flags.format)) throw new SketchRunnerError('usage', '--config cannot be combined with --params, --seed, --finishing, --page, or --format');
+  const finish = await finishing(flags.finishing);
+  const formatOptions = await format(flags.format);
+  const request = flags.config ? await requestConfig(flags.config) : { params: await params(flags.params), seed: integer(flags.seed, 'seed'),
+    finishing: flags.page ? pageShorthand(flags.page, finish) : finish, ...(formatOptions === undefined ? {} : { format: formatOptions }) };
   const result = await renderSketch({ entry, ...request, timeoutMs });
   const outputDir = resolve(flags.out ?? `sketch-output/${basename(entry).replace(/\.[^.]+$/, '')}`);
   const paths = await writeArtifacts(result, outputDir, pngSettings!);
