@@ -149,6 +149,12 @@
       "seed": 1,
       "identity": "26a45b7644be36790c1fd541084493ab5ffdf8f74989b9b6d98d3b47f23feeee",
       "note": "print-queue/breach-tarot-2026-10-08-xx-judgement"
+    },
+    {
+      "entry": "sketches/breach-tarot/xviii-moon/sketch.ts",
+      "seed": 1,
+      "identity": "995ba28cc522312620e2646facb572ed8763b7a9c2f0a9f7be52ef56fb37875d",
+      "note": "print-queue/breach-tarot-2026-10-08-xviii-moon"
     }
   ]
 }
