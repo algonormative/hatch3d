@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { clamp, n } from '../params.ts';
-import { densityPitch } from '../slabs.ts';
+import { densityLevel, densityPitch } from '../slabs.ts';
 import type { Family, Ink } from '../types.ts';
 import { Tube, type ClothStroke } from './tube.ts';
 
@@ -125,7 +125,7 @@ export function toneField(ctx: SketchContext, source: THREE.Vector3, opts: ToneF
 export function ribbonTube(t: Tube, env: ToneEnv, opts: { band: number; gap: number; rests: (k: number) => boolean }, look: Look = LOOK): ClothStroke[] {
   const out: ClothStroke[] = [];
   const Wb = opts.band, L = t.length, gap = opts.gap;
-  const lamPrimary = Math.max(3, Math.round(densityPitch(env.density, 3, 5, 7)));
+  const lamPrimary = Math.max(3, Math.round(densityLevel(env.density, 3, 5, 7)));
   const N = lamPrimary * 4;
   const perTurn = Math.max(96, Math.round(t.circ / 0.09));
   const bAt = (u: number, v: number) => u * L / Wb + t.hand * v;

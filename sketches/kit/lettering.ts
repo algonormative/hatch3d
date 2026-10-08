@@ -4,7 +4,7 @@ import type { ProjectedPoint } from '../../src/projection.ts';
 import type { PackedDepthBuffer } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
 import { measureStrokeText, roughMargin, strokeFaceSupports, strokeText } from '../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../phase-garden/poster.ts';
+import { PAGE } from './format.ts';
 import { letterScratchMargin } from '../phase-garden/scratch.ts';
 import { onGround, pageOf } from './perspective.ts';
 import type { Rect } from './page.ts';
@@ -446,7 +446,7 @@ export function onWordBox(boxes: WordBox[], p: Point): boolean {
  * A page bitmap of glyph strokes dilated by `clear` millimetres: where no other mark may cross.
  * Resolution `res` is cells per millimetre.
  */
-export function glyphMask(paths: Point[][], clear: number, res = 6, page: { width: number; height: number } = TABLOID_PAGE): (p: Point) => boolean {
+export function glyphMask(paths: Point[][], clear: number, res = 6, page: { width: number; height: number } = PAGE): (p: Point) => boolean {
   if (!paths.length) return () => false;
   const gw = Math.ceil(page.width * res), gh = Math.ceil(page.height * res);
   const grid = new Uint8Array(gw * gh);

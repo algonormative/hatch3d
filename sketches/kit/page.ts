@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Point } from '../../src/sketch/types.ts';
+import { PAGE } from './format.ts';
 
 /** Page-space path helpers shared by the Breach sketches. */
 
@@ -93,9 +94,9 @@ export function densify(path: Point[], step = 0.8): Point[] {
 
 /**
  * A page bitmap of where some meshes cover the sheet, dilated by `halo` millimetres: the shared
- * test for marks that must stand in front of, or leave room round, 3D geometry.
+ * test for marks that must stand in front of, or leave room round, 3D geometry. The page defaults to the format's.
  */
-export function meshCoverage(geometries: THREE.BufferGeometry[], view: THREE.Camera, page: { width: number; height: number },
+export function meshCoverage(geometries: THREE.BufferGeometry[], view: THREE.Camera, page: { width: number; height: number } = PAGE,
   halo = 0, res = 3): (p: Point) => boolean {
   const gw = Math.ceil(page.width * res), gh = Math.ceil(page.height * res);
   let grid = new Uint8Array(gw * gh);

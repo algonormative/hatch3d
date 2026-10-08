@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { TABLOID_PAGE, TALL_ART, posterArtTransform } from '../phase-garden/poster.ts';
-import { densityPitch, slabGeometry, slabMatrix, slabStrokes, solid, type Role, type Slab } from '../kit/slabs.ts';
+import { densityLevel, slabGeometry, slabMatrix, slabStrokes, solid, type Role, type Slab } from '../kit/slabs.ts';
 import { clipToRect } from '../kit/page.ts';
 import { hatchedBar, type Bar } from '../kit/fills.ts';
 import type { Ink } from '../kit/types.ts';
@@ -211,7 +211,7 @@ function ribbonStrokes(fn: (t: number, v: number) => THREE.Vector3, env: Env, rn
     out.push({ ink, group, points: Array.from({ length: count + 1 }, (_, i) => f(i / count)) });
   for (const v of [-1, 1]) trace('vermilion', 'contour', along, t => fn(t, v));
   trace('acid', 'force', along, t => fn(t, 0));
-  const N = Math.round(densityPitch(env.density, 8, 14, 18)) * 2;
+  const N = Math.round(densityLevel(env.density, 8, 14, 18)) * 2;
   for (let j = 1; j < N; j++) {
     if (j === N / 2) continue;
     const v = -1 + 2 * j / N;
@@ -226,7 +226,7 @@ function ribbonStrokes(fn: (t: number, v: number) => THREE.Vector3, env: Env, rn
     }
     runs(pts, keep, j % 5 === 0 ? 'violet' : 'ultramarine', 'force', out);
   }
-  const ribs = Math.round(densityPitch(env.density, 60, 130, 170));
+  const ribs = Math.round(densityLevel(env.density, 60, 130, 170));
   let last: { x: number; y: number } | null = null;
   for (let i = 0; i <= ribs; i++) {
     const t = i / ribs;

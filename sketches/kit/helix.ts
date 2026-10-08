@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import type { SketchContext } from '../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../src/projection.ts';
 import { clamp, n } from './params.ts';
-import { POSTER_HALF_H, POSTER_HALF_W, POSTER_MM_PER_UNIT, SLAB_MIN_PITCH, densityPitch } from './slabs.ts';
+import { SHEET } from './format.ts';
+import { POSTER_HALF_H, POSTER_HALF_W, POSTER_MM_PER_UNIT, SLAB_MIN_PITCH, densityLevel, densityPitch } from './slabs.ts';
 import type { Ink } from './types.ts';
 
 /**
@@ -111,9 +112,10 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
   const out: HelixStroke[] = [];
   const group: HelixStroke['group'] = s.id === 'a' ? 'strand-a' : 'strand-b';
   const rng = ctx.random(`lamellar-${s.id}`);
+  // On-sheet millimetres: tabloid's frame, times the format's page ratio per axis (1 at tabloid).
   const screen = (p: THREE.Vector3) => {
     const q = p.clone().project(view);
-    return { x: q.x * POSTER_HALF_W * POSTER_MM_PER_UNIT, y: q.y * POSTER_HALF_H * POSTER_MM_PER_UNIT };
+    return { x: q.x * POSTER_HALF_W * POSTER_MM_PER_UNIT * SHEET.x, y: q.y * POSTER_HALF_H * POSTER_MM_PER_UNIT * SHEET.y };
   };
   const at = (t: number, v: number) => screen(strandPoint(s, t, v));
   for (const v of [-1, 1]) out.push(trace('vermilion', group, 480, t => strandPoint(s, t, v)));
@@ -163,7 +165,7 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
     }
   }
   if (s.id === 'a') out.push(trace('acid', group, 480, t => strandPoint(s, t, 0)));
-  const ribs = Math.round(densityPitch(density, 40, 120, 170));
+  const ribs = Math.round(densityLevel(density, 40, 120, 170));
   let last: { x: number; y: number } | null = null;
   for (let i = 0; i <= ribs; i++) {
     const u = i / ribs;

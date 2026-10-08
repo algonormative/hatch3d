@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clamp } from '../params.ts';
-import { densityPitch } from '../slabs.ts';
+import { densityLevel, densityPitch } from '../slabs.ts';
 import type { Ink } from '../types.ts';
 import { LOOK, TIER, perpendicular, runs, stride, tierOf, type Look, type ToneEnv } from './hatch.ts';
 import type { ClothStroke, Tube } from './tube.ts';
@@ -109,7 +109,7 @@ export function suitFront(trunk: Tube, env: ToneEnv, look: Look = LOOK): ClothSt
     line(look.edge, look.contour, edgeIn);
     line(look.edge, look.contour, edgeOut);
     // Lapel cloth: laminations parallel to the roll line, thicker toward the dark lower lapel.
-    const count = Math.round(densityPitch(env.density, 6, 10, 13));
+    const count = Math.round(densityLevel(env.density, 6, 10, 13));
     for (let k = 1; k < count; k++) {
       const f = k / count;
       const pts: THREE.Vector3[] = [], keep: boolean[] = [];
@@ -133,7 +133,7 @@ export function suitFront(trunk: Tube, env: ToneEnv, look: Look = LOOK): ClothSt
   line(look.edge, look.contour, s => { const u = tieTop - (tieTop - tieEnd) * s; return [u, 0.25 - half(u)]; }, 60, 0.07);
   line(look.edge, look.contour, s => { const u = tieTop - (tieTop - tieEnd) * s; return [u, 0.25 + half(u)]; }, 60, 0.07);
   line(look.edge, look.contour, s => [0.85, 0.25 + (2 * s - 1) * half(0.85)], 6, 0.07);
-  const stripes = Math.round(densityPitch(env.density, 22, 34, 44));
+  const stripes = Math.round(densityLevel(env.density, 22, 34, 44));
   for (let k = 0; k < stripes; k++) {
     const c = tieEnd + (0.85 - tieEnd) * (k + 0.5) / stripes;
     if (k % 6 === 5) continue;

@@ -4,7 +4,7 @@ import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, type HelixStroke, type Strand } from '../../kit/helix.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { atPage } from '../../kit/perspective.ts';
-import { densityPitch } from '../../kit/slabs.ts';
+import { densityLevel } from '../../kit/slabs.ts';
 import type { Ink } from '../../kit/types.ts';
 import { CARD } from '../card.ts';
 
@@ -137,7 +137,7 @@ function strandStrokes(ctx: SketchContext, s: Strand, bend: (p: THREE.Vector3) =
     }
   }
   if (s.id === 'a') out.push(trace('acid', 1200, t => strandPoint(s, t * tMax, 0)));
-  const ribs = Math.round(densityPitch(density, 40, 120, 170));
+  const ribs = Math.round(densityLevel(density, 40, 120, 170));
   let last: { x: number; y: number } | null = null;
   for (let i = 0; i <= ribs; i++) {
     const u = i / ribs;

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../phase-garden/poster.ts';
+import { PITCH_SCALE } from './format.ts';
 import { n } from './params.ts';
 import type { Ink } from './types.ts';
 
@@ -25,15 +26,21 @@ export const POSTER_HALF_H = 13.0;
 export const POSTER_HALF_W = POSTER_HALF_H * TABLOID_PAGE.width / TABLOID_PAGE.height;
 /** Page millimetres per world unit in that frame. */
 export const POSTER_MM_PER_UNIT = TABLOID_PAGE.height / (2 * POSTER_HALF_H);
+// World-unit pitches below are tuned on tabloid; the format's pitch scale (1 at tabloid) holds them on paper.
 // Slanted front hatch loses ~7% to its slant; keep the perpendicular gap at 0.5 mm or more.
-export const SLAB_MIN_PITCH = 0.56 / POSTER_MM_PER_UNIT;
-const FACET_MIN_PITCH = 0.072; // world units: about 0.6 mm on the sheet at the tower's depth
+export const SLAB_MIN_PITCH = 0.56 / POSTER_MM_PER_UNIT * PITCH_SCALE;
+const FACET_MIN_PITCH = 0.072 * PITCH_SCALE; // world units: about 0.6 mm on the sheet at the tower's depth
 
-/** Hatch pitch for a 0..1 density: `sparse` at 0, `neutral` at 0.55, `dense` at 1. */
-export function densityPitch(density: number, sparse: number, neutral: number, dense: number): number {
+/** A 0..1 density level: `sparse` at 0, `neutral` at 0.55, `dense` at 1. For counts and other unitless amounts. */
+export function densityLevel(density: number, sparse: number, neutral: number, dense: number): number {
   return density < 0.55
     ? sparse + (neutral - sparse) * density / 0.55
     : neutral + (dense - neutral) * (density - 0.55) / 0.45;
+}
+
+/** Hatch pitch, in world units, for a 0..1 density: the level times the format's pitch scale, so floors and tone scale together. */
+export function densityPitch(density: number, sparse: number, neutral: number, dense: number): number {
+  return densityLevel(density, sparse, neutral, dense) * PITCH_SCALE;
 }
 
 export function solid(x: number, y: number, z: number, w: number, h: number, d: number, beat: number, role: Role): Slab {
