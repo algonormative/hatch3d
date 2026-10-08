@@ -212,3 +212,20 @@ export function brokenMeshes(b: Broken): THREE.BufferGeometry[] {
     return g;
   });
 }
+
+/** Only the triangles of some meshes that face the eye: a broken piece's near face, without the shell behind it. */
+export function frontOf(geos: THREE.BufferGeometry[], eye: THREE.Vector3): THREE.BufferGeometry[] {
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  return geos.map(g => {
+    const pos = g.getAttribute('position');
+    const keep: number[] = [];
+    for (let t = 0; t < pos.count / 3; t++) {
+      a.fromBufferAttribute(pos, t * 3); b.fromBufferAttribute(pos, t * 3 + 1); c.fromBufferAttribute(pos, t * 3 + 2);
+      const normal = b.clone().sub(a).cross(c.clone().sub(a));
+      if (eye.clone().sub(a).dot(normal) > 0) keep.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(keep, 3));
+    return out;
+  });
+}

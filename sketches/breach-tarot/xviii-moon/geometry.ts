@@ -16,7 +16,8 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { roadPlan, roadStrokes } from './road.ts';
 import { crescent, rimPoint } from './crescent.ts';
 import { onRock, rockMesh, station } from './station.ts';
-import { broken, brokenMeshes, brokenNormal, brokenPoint } from './broken.ts';
+import { broken, brokenMeshes, brokenNormal, brokenPoint, frontOf } from './broken.ts';
+import { towerVariant, type TowerForm } from './towers.ts';
 
 /**
  * XVIII The Moon: none of this light is its own. Two squat towers of long slabs stand either side of
@@ -226,15 +227,21 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const base = form === 'station' ? station(ctx, view, f) : null;
   const shards = form === 'broken' ? broken(ctx, view, f) : null;
 
-  // The light on the towers: from the moon, high on the right and a little behind, so the faces turned right stay pale and the faces turned to us fall dark.
-  const light = new THREE.Vector3(0.7, 0.45, 0.05).normalize();
+  // The towers as they stand, or the howl (the wolf torn toward the broken moon, the dog staked by its volley), lit by the moon's own sun.
+  const towerForm: TowerForm = ctx.params.towerForm === 'howl' ? 'howl' : 'stack';
+  const moonMark = shards ? { page: pageOf(view, shards.centre), radius: shards.radius * f / eye.distanceTo(shards.centre) * 1.3, volley: shards.piercers } : undefined;
+  const set = towerVariant(ctx, towerForm, land.near, land.far, view, moonMark);
+  const nearT = set.near, farT = set.far;
+  // The light on the towers as they stand: from the moon, high on the right and a little behind, so the faces turned
+  // right stay pale and the faces turned to us fall dark. The howl takes the moon's sun instead.
+  const light = towerForm === 'stack' ? new THREE.Vector3(0.7, 0.45, 0.05).normalize() : ((shards ?? base)?.light ?? new THREE.Vector3(-0.85, 0.3, 0).normalize());
   const lightM = new THREE.Vector3(light.x, -light.y, light.z);
   const hatch = n(ctx, 'hatch', 2.2, 1, 5);
   const strokes: Stroke[] = [];
-  const standing = [...land.near, ...land.far];
+  const standing = [...nearT, ...farT, ...set.spears];
   standing.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos))) {
+    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), towerForm !== 'stack')) {
       strokes.push({ ink: st.ink, group: 'tower', family: st.family, points: st.points, owner });
     }
   });
@@ -295,7 +302,8 @@ export function drawMoon(ctx: SketchContext): Part[] {
     fitDepthRange(viewR, standGeos);
     fitDepthRange(viewM, waterGeos);
     fitDepthRange(viewC, moonGeos);
-    const depthR = renderDepthBufferCPU(standGeos, viewR, W, H);
+    const ground = set.ground ?? [];
+    const depthR = renderDepthBufferCPU([...standGeos, ...ground], viewR, W, H);
     const depthM = renderDepthBufferCPU(waterGeos, viewM, W, H);
     const depthC = renderDepthBufferCPU(moonGeos, viewC, W, H);
     // The rock's own lines are hidden only by the blocks built into it.
@@ -332,7 +340,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const waterText: THREE.Vector3[][] = [];
     const used = new Set<Slab>();
     for (const { word, side, target } of plan) {
-      const pool = side === 'near' ? land.near : side === 'far' ? land.far : extra;
+      const pool = side === 'near' ? set.words?.near ?? nearT : side === 'far' ? set.words?.far ?? farT : extra;
       const place = (sl: Slab) => {
         const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
         const m = slabMatrix(sl);
@@ -429,7 +437,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     viewT.near = viewR.near;
     viewT.far = 1.2 * Math.max(...road.flatMap(st => st.points.map(p => eye.z - p.z)));
     viewT.updateProjectionMatrix();
-    const depthT = renderDepthBufferCPU(standGeos, viewT, W, H);
+    const depthT = renderDepthBufferCPU([...standGeos, ...ground], viewT, W, H);
     projectStrokes(road, { view: viewT, depth: depthT, width: W, height: H, bias: biasOf(viewT, slack, 200) }, {
       begin: st => runs => { for (const run of runs) addTo(`helix-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => p.y < shore(p.x) - 0.2); },
     });
@@ -451,6 +459,8 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // The moon, a slab at a time, with slack in proportion to its slabs. Hatch on a face seen nearly edge-on
     // comes out as a bead of ticks: hatch shorter than `moonTick` is left out.
     const tick = n(ctx, 'moonTick', 1.2, 0.4, 3);
+    // Nothing of the moon draws over a tower (a tower that rises into its sky stands in front of it).
+    const solids = meshCoverage(standGeos, viewR, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
     const moonBySlab = new Map<number, Stroke[]>();
     for (const st of moonStrokes) moonBySlab.set(st.owner!, [...(moonBySlab.get(st.owner!) ?? []), st]);
     const blockEdges: Point[][] = [];
@@ -461,7 +471,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
         begin: st => runs => {
           for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
             if (st.family === 'edge') blockEdges.push(inside);
-            for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && moon ? tick : undefined);
+            for (const piece of keepAlong(inside, p => !onGlyph(p) && !solids(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && moon ? tick : undefined);
           }
         },
       });
@@ -517,7 +527,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
         }
       }
       projectStrokes(lines3.map(points => ({ points })), { view: viewC, depth: depthC, width: W, height: H, bias: biasOf(viewC, 0.02 * shards.radius, eye.distanceTo(shards.centre)) }, {
-        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p)); },
+        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p) && !solids(p)); },
       });
     }
     if (base) {
@@ -569,7 +579,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
         }
       }
       projectStrokes(lines3.map(l => ({ points: l.pts })), { view: viewC, depth: depthB, width: W, height: H, bias: biasOf(viewC, 0.01 * base.radius, eye.distanceTo(base.centre)) }, {
-        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p)); },
+        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p) && !solids(p)); },
       });
     }
 
@@ -588,8 +598,24 @@ export function drawMoon(ctx: SketchContext): Part[] {
 
     // The night: a ruling, full lines at the top, opening by halves as it comes down and breaking into dashes low in
     // the sky, which thin toward the horizon; knocked out round the towers, and with a halo of paper round the moon.
-    const solids = meshCoverage(standGeos, viewR, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const shine = meshCoverage(moonGeos, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
+    // The broken moon knocks the sky out only where a piece's near face or a block stands. Through a gap that looks
+    // into a piece from behind its near face, the eye meets that piece's broken side: it is ruled as dark rock. Through
+    // every other gap the sky's ruling runs on, as sky seen through the broken moon.
+    const shells = shards ? moonGeos.slice(0, moonGeos.length - blockGeos.length) : [];
+    const skyCover = shards ? [...frontOf(shells, eye), ...blockGeos] : moonGeos;
+    const shine = meshCoverage(skyCover, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
+    const fronts = shards ? meshCoverage(skyCover, viewC, TABLOID_PAGE, 0) : () => false;
+    const anyShell = shards ? meshCoverage(shells, viewC, TABLOID_PAGE, 0) : () => false;
+    const inside = (p: Point) => anyShell(p) && !fronts(p);
+    if (shards) {
+      const c = pageOf(view, shards.centre), r = shards.radius * f / eye.distanceTo(shards.centre) * 1.6;
+      const ang = THREE.MathUtils.degToRad(n(ctx, 'brokenSideAngle', 52, -90, 90)), pitchB = n(ctx, 'brokenSidePitch', 0.6, 0.3, 1.5);
+      const dx = Math.cos(ang), dy = Math.sin(ang);
+      for (let o = -r; o <= r; o += pitchB) {
+        const line = [{ x: c.x - dy * o - dx * r, y: c.y + dx * o - dy * r }, { x: c.x - dy * o + dx * r, y: c.y + dx * o + dy * r }];
+        addTo('rock-carbon', line, p => inside(p) && !shine(p) && !solids(p));
+      }
+    }
     const skyRng = ctx.random('moon-sky');
     const cells = Array.from({ length: 64 }, () => skyRng());
     const night = n(ctx, 'night', 1, 0, 1.5);
@@ -603,7 +629,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
       const keep = t < 0.64 ? 1 : 0.92 - 0.6 * (t - 0.64) / 0.3;
       const shift = Math.floor(skyRng() * 64);
       addTo(tier === 1 ? 'sky-ultramarine' : 'sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }],
-        p => !solids(p) && !shine(p) && (keep >= 1 || cells[(Math.floor((p.x - CARD.x0) / 4.6) + shift) % 64] < keep));
+        p => !solids(p) && !shine(p) && !inside(p) && (keep >= 1 || cells[(Math.floor((p.x - CARD.x0) / 4.6) + shift) % 64] < keep));
     }
 
     // The crescent's unlit rest of the disc: a faint dashed rim, from horn to horn the long way round.
@@ -629,6 +655,6 @@ export function drawMoon(ctx: SketchContext): Part[] {
     parts.push(...cardFrame('XVIII', 'THE MOON'));
     return parts;
   } finally {
-    for (const geo of [...standGeos, ...waterGeos, ...moonGeos]) geo.dispose();
+    for (const geo of [...standGeos, ...waterGeos, ...moonGeos, ...(set.ground ?? [])]) geo.dispose();
   }
 }
