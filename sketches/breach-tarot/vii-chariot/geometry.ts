@@ -7,7 +7,7 @@ import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage, type Rect } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, pathLength, type Rect } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
@@ -36,8 +36,13 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 const BAND_EDGES = [0, 18, 24, 30, 37, 45, 55, 68, 85, 110, 160, 240, 400, Infinity];
 /** Hidden-line slack in world units: slabs are under half a unit thick, the helix a ribbon about a unit across. */
 const SLAB_SLACK = 0.05, HELIX_SLACK = 0.15;
-/** A road row on the ground lies almost flat to the eye, so its own depth changes fast from pixel to pixel: its slack is a share of its distance (negative means that). */
+/**
+ * A road row on the ground lies almost flat to the eye, so its own depth changes fast from pixel to
+ * pixel (as the square of its distance): its slack grows with distance (negative means that), up to a
+ * share of it far off.
+ */
 const ROAD_SLACK = -0.05;
+const groundSlack = (share: number, dd: number) => Math.max(SLAB_SLACK, Math.min(share * dd, 0.0002 * dd * dd));
 /** The helix's strand-space scale: the kit's wiggles are fixed in world units, so a thin smooth helix is built `S` times the size and brought back. */
 const S = 40;
 /** How late the helix thins along its length (the kit's flare): it keeps its width up the ramp and thins along the ground. */
@@ -141,18 +146,53 @@ export function makePath(ctx: SketchContext, view: THREE.PerspectiveCamera): Roa
   const bank = n(ctx, 'bank', 0.8, 0, 1);
   const up = new THREE.Vector3(0, 1, 0);
   const halfW = n(ctx, 'laneW', 2.6, 1.2, 5) + GAP / 2;
+  const tangent = (s: number) => raw(s + 0.5).sub(raw(s - 0.5)).normalize();
+  /** The fully banked surface normal: between straight up and the line of sight, square to the road. */
+  const banked = (s: number, T: THREE.Vector3): THREE.Vector3 => {
+    const ref = up.clone().multiplyScalar(1 - bank).addScaledVector(eye.clone().sub(raw(s)).normalize(), bank);
+    return ref.addScaledVector(T, -ref.dot(T)).normalize();
+  };
+  // The normal carried along the road without twisting (a rotation-minimising frame): through the knee
+  // the paving only pitches up, it does not roll.
+  const DS = 0.05, cells = Math.ceil(length / DS);
+  const carried: THREE.Vector3[] = [], turn: number[] = [];
+  const rollTo = (N: THREE.Vector3, target: THREE.Vector3, T: THREE.Vector3) => Math.atan2(T.dot(new THREE.Vector3().crossVectors(N, target)), N.dot(target));
+  for (let i = 0; i <= cells; i++) {
+    const T = tangent(i * DS);
+    if (!i) carried.push(up.clone().addScaledVector(T, -up.dot(T)).normalize());
+    else {
+      const q = new THREE.Quaternion().setFromUnitVectors(tangent((i - 1) * DS), T);
+      const N = carried[i - 1].clone().applyQuaternion(q);
+      carried.push(N.addScaledVector(T, -N.dot(T)).normalize());
+    }
+    // The roll from the carried normal to the banked one, unwrapped so it never jumps a full turn.
+    let phi = rollTo(carried[i], banked(i * DS, T), T);
+    if (i) while (phi - turn[i - 1] > Math.PI) phi -= 2 * Math.PI;
+    if (i) while (phi - turn[i - 1] < -Math.PI) phi += 2 * Math.PI;
+    turn.push(phi);
+  }
+  const lead = n(ctx, 'bankLead', 0, 0, 20), over = n(ctx, 'bankOver', 0.5, 0.05, 1);
   /**
-   * The road banks toward the eye from the moment it leaves the ground, quickly, so the paving never
-   * passes the eye's height edge on and is never seen from underneath. Where the bank would tip the low
-   * edge into the ground, the road is lifted so that edge just touches it: it peels up off the ground.
+   * The road's frame. On the ground it lies flat; through the knee it pitches up without rolling, and the
+   * roll toward the eye is laid on evenly over the first `bankOver` of the ramp, so the turn from ground
+   * to ramp is one sweep. Past that the paving is fully banked toward the eye, so it never passes the
+   * eye's height edge on. Where the bank would tip the low edge into the ground, the road is lifted so
+   * that edge just touches it: it peels up off the ground.
    */
   const frame = (s: number): Frame3 => {
-    const h = 0.5;
-    const T = raw(s + h).sub(raw(s - h)).normalize();
-    const P = raw(s);
-    const w = bank * smooth(sLift - n(ctx, 'bankLead', 0, 0, 20), sLift + n(ctx, 'bankOver', 0.35, 0.05, 1) * (sEnd - sLift), s);
-    const ref = up.clone().multiplyScalar(1 - w).addScaledVector(eye.clone().sub(P).normalize(), w);
-    const N = ref.addScaledVector(T, -ref.dot(T)).normalize();
+    const T = tangent(s);
+    const target = banked(s, T);
+    const k = Math.max(0, Math.min(cells, Math.round(s / DS)));
+    const w = smooth(sLift - lead, sLift + over * (sEnd - sLift), s);
+    let N: THREE.Vector3;
+    if (w >= 1) N = target;
+    else {
+      const C = carried[k].clone().addScaledVector(T, -carried[k].dot(T)).normalize();
+      let phi = rollTo(C, target, T);
+      while (phi - turn[k] > Math.PI) phi -= 2 * Math.PI;
+      while (phi - turn[k] < -Math.PI) phi += 2 * Math.PI;
+      N = C.applyAxisAngle(T, w * phi);
+    }
     const B = new THREE.Vector3().crossVectors(N, T).normalize();
     return { T, N, B };
   };
@@ -166,7 +206,7 @@ export function makePath(ctx: SketchContext, view: THREE.PerspectiveCamera): Roa
 export type Side = 'dark' | 'pale';
 /** A slab in flight is on a parabola from `from` to `to`, `h` high at its middle, and has come a share `u` of the way. */
 export interface Flight { from: THREE.Vector3; to: THREE.Vector3; h: number; u: number }
-export interface Piece { slab: Slab; side: Side; kind: 'road' | 'landed' | 'flying'; row: number; ramp: boolean; flight?: Flight }
+export interface Piece { slab: Slab; side: Side; kind: 'road' | 'landed' | 'flying'; row: number; ramp: boolean; flight?: Flight; /** A short slab laid at the knee: takes no word. */ sub?: boolean }
 const arcAt = (f: Flight, u: number): THREE.Vector3 => f.from.clone().lerp(f.to, u).add(new THREE.Vector3(0, f.h * 4 * u * (1 - u), 0));
 
 /** A slab laid on the road's frame: `lat` across from the centreline, sitting on it. */
@@ -255,7 +295,16 @@ export function buildRoad(ctx: SketchContext, path: RoadPath, d: Dims): Build {
     const s0 = s1 - len;
     if (s0 < 0) break;
     const ramp = (s0 + s1) / 2 > path.sLift;
-    for (const lane of [0, 1] as const) pieces.push({ slab: cellSlab(path, d, s0, s1, lane, beat++), side: sideOfLane(lane), kind: 'road', row, ramp });
+    // Where the road bends hard (the knee), a row is laid as several shorter slabs, so the bend is a sweep
+    // and not one slab tipped up on its edge. Only the middle one of them takes a word.
+    const a = path.frame(s0), b = path.frame(s1);
+    const bend = Math.max(Math.acos(Math.min(1, a.T.dot(b.T))), Math.acos(Math.min(1, a.N.dot(b.N))));
+    const parts = Math.max(1, Math.ceil(bend / THREE.MathUtils.degToRad(n(ctx, 'kneeTurn', 20, 5, 90))));
+    for (let k = parts - 1; k >= 0; k--) {
+      const t0 = s0 + (s1 - s0) * k / parts, t1 = s0 + (s1 - s0) * (k + 1) / parts;
+      const sub = parts > 1 && k !== Math.floor(parts / 2);
+      for (const lane of [0, 1] as const) pieces.push({ slab: cellSlab(path, d, t0, t1, lane, beat++), side: sideOfLane(lane), kind: 'road', row, ramp, sub });
+    }
     s1 = s0;
   }
   const cells: { s0: number; s1: number }[] = [];
@@ -389,8 +438,17 @@ function laneHatch(sl: Slab, count: number): THREE.Vector3[][] {
   return out;
 }
 
+/** How wide a road slab's top is on the sheet, square to its stripes (which run its length). */
+function laneWidthOnPage(view: THREE.Camera, sl: Slab): number {
+  const m = slabMatrix(sl), y = sl.h / 2;
+  const at = (x: number, z: number) => pageOf(view, new THREE.Vector3(x, y, z).applyMatrix4(m));
+  const a = at(-sl.w / 2, 0), b = at(sl.w / 2, 0), f = at(0, -sl.d / 2), g = at(0, sl.d / 2);
+  const dx = g.x - f.x, dy = g.y - f.y, len = Math.hypot(dx, dy) || 1;
+  return Math.abs((b.x - a.x) * dy - (b.y - a.y) * dx) / len;
+}
+
 /** What the helix needs from the road: its course from a ghost point past the head back to the tail, where the head falls on it, the line of sight square to the road there, and the road's normal along it. */
-export interface Track { curve: THREE.CatmullRomCurve3; sHead: number; headN: THREE.Vector3; ramp: THREE.Vector3[]; normals: THREE.Vector3[]; flats: number[]; head: number }
+export interface Track { curve: THREE.CatmullRomCurve3; sHead: number; headN: THREE.Vector3; ramp: THREE.Vector3[]; normals: THREE.Vector3[]; flats: number[]; head: number; hold: number; lift: number }
 
 /**
  * The streak's width along its run past the head, at share x of the way to the tail: `taper ** (x ** flare)`,
@@ -411,11 +469,11 @@ export function helixTrack(ctx: SketchContext, path: RoadPath, d: Dims, eye: THR
   let sTail = path.sEnd;
   while (sTail > 0 && path.depth(sTail) < reach) sTail -= 0.5;
   const sHead = path.sEnd - 0.1 * d.row;
-  const flat = n(ctx, 'helixFlat', 0.45, 0.15, 1), bulge = n(ctx, 'helixHead', 0.45, 0, 2);
+  const flat = n(ctx, 'helixFlat', 0.45, 0.15, 1), bulge = n(ctx, 'helixHead', 0.65, 0, 2);
   // The head's swelling runs over its first `helixHeadLength` world units.
   let lm = 0;
   for (let s = sHead; s > sTail; s -= 0.5) lm += path.at(s).distanceTo(path.at(s - 0.5));
-  const head = n(ctx, 'helixHeadLength', 10, 2, 40) / lm;
+  const head = n(ctx, 'helixHeadLength', 10, 2, 40) / lm, hold = n(ctx, 'helixHoldLength', 3, 1, 40) / lm;
   // Sampled every half unit, then eased (the head held fixed) so the streak takes the knee as one
   // smooth sweep instead of folding into the road's sharp bend and twist.
   const STEP = 0.5, steps = Math.max(2, Math.floor((sHead - sTail) / STEP));
@@ -430,7 +488,7 @@ export function helixTrack(ctx: SketchContext, path: RoadPath, d: Dims, eye: THR
     rawF.push(f);
   }
   const ease = (v: THREE.Vector3[]) => {
-    const reachK = Math.round(n(ctx, 'helixEase', 4, 0, 15) / STEP);
+    const reachK = Math.round(n(ctx, 'helixEase', 8, 0, 15) / STEP);
     if (!reachK) return v;
     return v.map((p, k) => {
       const hold = smooth(0, 12, k * STEP);
@@ -450,23 +508,37 @@ export function helixTrack(ctx: SketchContext, path: RoadPath, d: Dims, eye: THR
   lm = 0;
   for (let i = 1; i < main.length; i++) lm += main[i].distanceTo(main[i - 1]);
   // Turns past the head, as a share of the turns the same length would hold at the head's pitch.
+  const lift = (sHead - path.sLift) / (sHead - sTail);
+  const pitchAt = pitchOf(ctx, taper, bulge, head, hold, lift);
   let share = 0;
-  for (let i = 0; i < 200; i++) share += widthOf(taper, HELIX_FLARE, (i + 0.5) / 200, bulge, head) ** -HELIX_PITCH_GROWTH / 200;
-  const ghost = HEAD_CUT / (1 - HEAD_CUT) * lm * share * (1 + bulge) ** HELIX_PITCH_GROWTH;
+  for (let i = 0; i < 200; i++) share += 1 / (pitchAt((i + 0.5) / 200) * 200);
+  const ghost = HEAD_CUT / (1 - HEAD_CUT) * lm * share * pitchAt(0);
   const out = main[0].clone().sub(main[1]).normalize();
   const lead = Array.from({ length: 6 }, (_, k) => main[0].clone().addScaledVector(out, ghost * (6 - k) / 6));
   const fr = path.frame(sHead);
   // At the head the strands are set round the line of sight (square to the road), so they stack into one full head.
   const look = eye.clone().sub(main[0]).normalize();
   const headDir = look.addScaledVector(fr.T, -look.dot(fr.T)).normalize();
-  return { curve: new THREE.CatmullRomCurve3([...lead, ...main], false, 'centripetal'), sHead: ghost / (ghost + lm), headN: headDir, ramp: main, normals: [...lead.map(() => fr.N), ...normals], flats: [...lead.map(() => flats[0]), ...flats], head };
+  return { curve: new THREE.CatmullRomCurve3([...lead, ...main], false, 'centripetal'), sHead: ghost / (ghost + lm), headN: headDir, ramp: main, normals: [...lead.map(() => fr.N), ...normals], flats: [...lead.map(() => flats[0]), ...flats], head, hold, lift };
 }
 /**
  * The share of the strands' run laid out past the head and cut off (the kit pinches a strand's ends, and
  * lays its laminations in 16 bars, every third an open rest: the head starts on a full bar), and how the
  * pitch grows with the width.
  */
-const HEAD_CUT = 5 / 16 + 0.004, HELIX_PITCH_GROWTH = 0.25;
+const HEAD_CUT = 6 / 16 + 0.004, HELIX_PITCH_GROWTH = 0.25;
+/**
+ * The pitch along the run, as a multiple of `helixPitch`, at share x of the way from the head to the
+ * tail: it grows a little with the width, and is held long (`helixHold` times longer) over the first
+ * `helixHoldLength` units below the head, so the head stays one full pair before the strands twist.
+ * Past the lift-off (share `lift`) it stretches out again (up to `helixTailStretch` times longer), so the
+ * tail along the ground trails off as two smooth strands, not a coil.
+ */
+const pitchOf = (ctx: SketchContext, taper: number, bulge: number, head: number, hold: number, lift: number) => (x: number) => {
+  const xc = Math.max(0, x);
+  return widthOf(taper, HELIX_FLARE, xc, bulge, head) ** HELIX_PITCH_GROWTH * (1 + n(ctx, 'helixHold', 3.5, 0, 6) * Math.exp(-((xc / hold) ** 2)))
+    * (1 + n(ctx, 'helixTailStretch', 6, 0, 20) * smooth(lift, lift + 0.25 * (1 - lift), xc));
+};
 
 /**
  * The helix, built `S` times the size and brought back, so the kit's fixed wiggles do not bend a thin
@@ -481,17 +553,18 @@ function chariotHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, track: 
   const curve = new THREE.CatmullRomCurve3(track.curve.points.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
   const r = n(ctx, 'helixRadius', 1.1, 0.3, 3) * S;
   const taper = n(ctx, 'helixTaper', 0.12, 0.01, 1);
-  const pitch = n(ctx, 'helixPitch', 70, 8, 200) * S;
+  const pitch = n(ctx, 'helixPitch', 12, 8, 200) * S;
   const start = curve.getPointAt(0);
   const length = curve.getLength();
   const frames = curve.computeFrenetFrames(400, false);
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: n(ctx, 'helixTwist', 0.2, 0, 1) } });
   const STEPS = 400;
   const sHead = track.sHead;
-  const bulge = n(ctx, 'helixHead', 0.45, 0, 2);
+  const bulge = n(ctx, 'helixHead', 0.65, 0, 2);
   const widthAt = (s: number) => widthOf(taper, HELIX_FLARE, (s - sHead) / (1 - sHead), bulge, track.head);
   const turnsTo: number[] = [0];
-  for (let i = 1; i <= STEPS; i++) turnsTo.push(turnsTo[i - 1] + 1 / (STEPS * widthAt((i - 0.5) / STEPS) ** HELIX_PITCH_GROWTH));
+  const pitchAt = pitchOf(ctx, taper, bulge, track.head, track.hold, track.lift);
+  for (let i = 1; i <= STEPS; i++) turnsTo.push(turnsTo[i - 1] + 1 / (STEPS * pitchAt(((i - 0.5) / STEPS - sHead) / (1 - sHead))));
   const curveAt = (u: number): number => {
     const want = u * turnsTo[STEPS];
     let lo = 0, hi = STEPS;
@@ -505,10 +578,13 @@ function chariotHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, track: 
   // The angle round the curve's frame at the head where the line of sight lies, plus the chosen offset.
   const sight = Math.atan2(track.headN.dot(frames.binormals[kH]), track.headN.dot(frames.normals[kH]));
   const phi = sight + THREE.MathUtils.degToRad(n(ctx, 'helixStart', 20, -180, 180));
+  const firstRest = [0, 1, 2].map(k => Math.ceil(HEAD_CUT * 16) + k).find(b => b % 3 === 1)!;
   const strands: Strand[] = template.map((st, i) => ({
     ...st, hand: 1, theta0: phi - 2 * Math.PI * turns * uHead + i * Math.PI,
-    x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: r + r * 0.3 * i, depth: 1, width: r * n(ctx, 'helixWidth', 0.75, 0.2, 2) * (1 - 0.12 * i),
-    swell: 0, centre: -1e3, turns,
+    x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: r + r * 0.3 * i, depth: 1, width: r * n(ctx, 'helixWidth', 0.65, 0.2, 2) * (1 - 0.12 * i),
+    // The kit opens every third bar of laminations (a rest) except near its breach centre: the centre is set
+    // on the first rest below the head, so the climb up the ramp stays solid; the rests lower down remain.
+    swell: 0, centre: (firstRest + 0.5) / 16 * length, turns,
   }));
   // The road's normal along the curve (from the track point nearest each step), so the streak can be pressed flat toward the paving.
   const nearest = Array.from({ length: STEPS + 1 }, (_, k) => {
@@ -691,13 +767,17 @@ export function drawChariot(ctx: SketchContext): Part[] {
       const pg = pageBox(view, sl);
       // Only while its top is seen fairly open: edge on, the stripes only scribble.
       if (pc.side === 'dark' && open > 0.12 && Math.min(pg.x1 - pg.x0, pg.y1 - pg.y0) > 1.7 && sl.w * mm > 5) {
-        for (const points of laneHatch(sl, Math.max(1, Math.round(sl.w * mm / (hatch * 0.85))))) strokes.push({ ink: 'carbon', group: 'road', family: 'hatch', points, band, slack });
+        // Where the lane is seen nearly edge on (on the ground, at the knee) its stripes are kept at least 0.55 mm apart on the sheet, or they pile up into a solid bar.
+        const count = Math.round(sl.w * mm / (hatch * 0.85));
+        for (const points of laneHatch(sl, Math.max(1, Math.min(count, Math.round(laneWidthOnPage(view, sl) / 0.55))))) strokes.push({ ink: 'carbon', group: 'road', family: 'hatch', points, band, slack });
       }
       continue;
     }
-    // Landed and flying slabs: the pale ones in outline only, the dark ones hatched by the light face by face.
+    // Landed and flying slabs: the pale ones in outline only, the dark ones hatched by the light face by
+    // face, opened up (a lighter tone, a wider pitch) so they stay the dark force without outweighing the helix.
     const group = pc.side;
-    const facets = facetStrokes(sl, light, eye, pc.side === 'pale', hatch * 9 / mm);
+    const dark = pc.side === 'dark';
+    const facets = facetStrokes(dark ? { ...sl, tone: n(ctx, 'darkTone', 0.9, 0.2, 1.5) } : sl, light, eye, !dark, hatch * n(ctx, 'darkPitch', 12, 6, 30) / mm);
     for (const st of facets) strokes.push({ ink: st.ink, group, family: st.family, points: st.points, band, slack: SLAB_SLACK });
   }
   // The road's far end: two edge rules running out to the horizon at the vanishing point.
@@ -733,7 +813,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
     const biasOf = (band: number, slack: number) => {
       const lo = BAND_EDGES[band], hi = Number.isFinite(BAND_EDGES[band + 1]) ? BAND_EDGES[band + 1] : lo * 1.4;
       const dd = Math.sqrt(Math.max(lo, 8) * hi);
-      return Math.max(3e-5, (slack < 0 ? -slack * dd : slack) * nearP * farP / ((farP - nearP) * dd * dd));
+      return Math.max(3e-5, (slack < 0 ? groundSlack(-slack, dd) : slack) * nearP * farP / ((farP - nearP) * dd * dd));
     };
     const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
     const cellsNear = meshCoverage(cellBoxes, wide, TABLOID_PAGE, 0.8);
@@ -760,7 +840,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
     };
     type Want = 'flying' | 'landed' | 'side';
     const wants: Want[] = ['flying', 'side', 'landed', 'flying', 'side', 'landed', 'flying'];
-    const kindOf = (pc: Piece): Want | null => pc.kind === 'road' ? (pc.ramp ? 'side' : null) : pc.kind;
+    const kindOf = (pc: Piece): Want | null => pc.kind === 'road' ? (pc.ramp && !pc.sub ? 'side' : null) : pc.kind;
     const used = new Set<Piece>();
     const placed: Point[] = [];
     words.forEach((word, i) => {
@@ -807,6 +887,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
+    const nearHelix = meshCoverage(helix.meshes, view, TABLOID_PAGE, 2);
     const batches = new Map<string, Banded[]>();
     for (const st of strokes) {
       const key = `${st.band}:${st.slack}`;
@@ -815,7 +896,17 @@ export function drawChariot(ctx: SketchContext): Part[] {
     }
     for (const mine of batches.values()) {
       projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(mine[0].band, mine[0].slack) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), st.group === 'road' ? p => !overRoad(p) : undefined, 0.6); },
+        begin: st => runs => {
+          for (const run of runs) {
+            if (st.group !== 'road') { add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, 0.6); continue; }
+            // Road lines are cut where the helix or a slab stands over them; a short scrap left right beside the
+            // helix (between its strands) is dropped, or it reads as a stray tick.
+            for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) for (const piece of keepAlong(inside, p => !onGlyph(p) && !overRoad(p), 0.15)) {
+              const scrap = pathLength(piece) < 2.5 && piece.every(nearHelix);
+              if (!scrap) buckets.add(`${st.group}-${st.ink}`, piece, false, 0.6);
+            }
+          }
+        },
       });
     }
     const helixBatches = new Map<number, Banded[]>();
