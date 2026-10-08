@@ -16,8 +16,9 @@ const sketch: Sketch = {
     LETTERING_PEN,
   ],
   controls: [
-    { type: 'select', id: 'form', label: 'The tower', default: 'cantilever', options: ['cantilever', 'machine'],
+    { type: 'select', id: 'form', label: 'The tower', default: 'machine', options: ['cantilever', 'machine'],
       optionLabels: { cantilever: 'Cantilevered stack (approved)', machine: 'The supercomputer, square on, struck from behind' }, group: 'Tower' },
+    { type: 'slider', id: 'machineOpen', label: 'Opening of the C', default: 1.55, min: 0.1, max: 2.4, step: 0.01, units: 'rad', group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
     { type: 'select', id: 'machineTicks', label: 'Status ticks', default: 'dead', options: ['dead', 'lit'],
       optionLabels: { dead: 'Dead where the bolt passes behind', lit: 'Lit everywhere' }, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
     { type: 'toggle', id: 'machineClock', label: 'Clock across the sky', default: false, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },

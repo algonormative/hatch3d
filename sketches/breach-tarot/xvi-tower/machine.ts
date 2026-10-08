@@ -40,7 +40,7 @@ const GROUND_COUNT = 1 + 18 * 9 + 7;
 
 /** The machine, in the Tower's frame (ground y = 0, the eye 2.2 up, 48 back): centred, its open front facing the eye. */
 const M = {
-  x: 0, z: -4, R: 10, inner: 0.62, height: 13.5, columns: 12, open: 1.55, plate: 0.55, gap: 0.11, tone: 0.65, pitch: 1.2, hollow: 1,
+  x: 0, z: -4, R: 10, inner: 0.62, height: 13.5, columns: 12, plate: 0.55, gap: 0.11, tone: 0.65, pitch: 1.2, hollow: 1,
   lidDepth: 2.2, lidGap: 2.8, lidClear: 1.2, helixRadius: 1.5, helixWidth: 1.2,
 };
 
@@ -50,7 +50,9 @@ type Machine = { solids: Slab[]; kind: ('blade' | 'panel' | 'bench')[]; column: 
 function machine(ctx: SketchContext): Machine {
   const rng = ctx.random('tower-card-machine');
   const lidAmount = n(ctx, 'lid', 0.5, 0, 1);
-  const { R, height, columns, open, plate, gap } = M;
+  const { R, height, columns, plate, gap } = M;
+  // The opening of the C at the front, in radians of the ring: about a quarter, as on the Cray-1.
+  const open = n(ctx, 'machineOpen', 1.55, 0.1, 2.4);
   const inner = R * M.inner, rm = (R + inner) / 2;
   const base = new THREE.Vector3(M.x, 0, M.z);
   const step = (Math.PI * 2 - open) / columns;
