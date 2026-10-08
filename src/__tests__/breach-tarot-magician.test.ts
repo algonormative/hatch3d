@@ -36,7 +36,7 @@ describe('Breach Tarot: I The Magician', () => {
       const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
       return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), pts };
     };
-    const scratch = box(await renderSketch({ entry, seed: 1, params: { veil: 0 } }));
+    const scratch = box(await renderSketch({ entry, seed: 1, params: { veil: 0, figureStyle: 'scratch' } }));
     const bodyResult = await renderSketch({ entry, seed: 1, params: { veil: 0, figureStyle: 'body' } });
     const body = box(bodyResult);
     expect(bodyResult.diagnostics).toEqual([]);

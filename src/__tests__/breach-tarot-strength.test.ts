@@ -56,7 +56,7 @@ describe('Breach Tarot: VIII Strength', () => {
       const pts = points(parts, 'figure-');
       return { x0: Math.min(...pts.map(p => p.x)), x1: Math.max(...pts.map(p => p.x)), y0: Math.min(...pts.map(p => p.y)), y1: Math.max(...pts.map(p => p.y)) };
     };
-    const scratch = await renderSketch({ entry, seed: 2 });
+    const scratch = await renderSketch({ entry, seed: 2, params: { figureStyle: 'scratch' } });
     const body = await renderSketch({ entry, seed: 2, params: { figureStyle: 'body' } });
     const a = box(scratch.parts), b = box(body.parts);
     for (const k of ['x0', 'x1', 'y0', 'y1'] as const) expect(Math.abs(a[k] - b[k])).toBeLessThanOrEqual(1);
