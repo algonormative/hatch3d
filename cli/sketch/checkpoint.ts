@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { fork } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -204,31 +204,39 @@ async function verifyCapture(checkpoint: string, manifest: CheckpointManifest): 
 }
 
 async function renderCaptured(root: string, entry: string, params: Params, seed: number, finishing?: FinishingOptions, format?: FormatOptions): Promise<RenderResult> {
-  const child = fork(join(root, 'cli/sketch/child.ts'), [], {
-    cwd: root, execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-  });
-  let stderr = '';
-  child.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
   return await new Promise<RenderResult>((resolveResult, rejectResult) => {
     let settled = false;
+    let child: ChildProcess | undefined;
     const finish = (error?: Error, result?: RenderResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (child.exitCode === null) child.kill('SIGKILL');
+      if (child && child.exitCode === null) child.kill('SIGKILL');
       if (error) rejectResult(error);
       else if (result) resolveResult(result);
       else rejectResult(new Error('Captured render produced no result'));
     };
     const timer = setTimeout(() => finish(new Error('Captured render timed out')), 15000);
-    child.on('message', (message: unknown) => {
-      const reply = message as { ok?: boolean; value?: RenderResult; error?: { message?: string } };
-      if (reply.ok && reply.value?.schemaVersion === 1) finish(undefined, reply.value);
-      else finish(new Error(`Captured render failed: ${reply.error?.message ?? 'invalid response'}`));
-    });
-    child.on('error', error => finish(error));
-    child.on('exit', code => finish(new Error(`Captured runner exited ${code}: ${stderr.slice(-1000)}`)));
-    child.send({ mode: 'render', entry, params, seed, ...(finishing === undefined ? {} : { finishing }), ...(format === undefined ? {} : { format }) }, error => { if (error) finish(error); });
+    // One timer covers both attempts: a sketch that is not page-aware is rendered again with the target withheld.
+    const start = (withholdTarget: boolean) => {
+      const current = fork(join(root, 'cli/sketch/child.ts'), [], { cwd: root, execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+      child = current;
+      const live = () => !settled && child === current;
+      let stderr = '';
+      current.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
+      current.on('message', (message: unknown) => {
+        if (!live()) return;
+        const reply = message as { ok?: boolean; retry?: string; value?: RenderResult; error?: { message?: string } };
+        if (reply.ok && reply.value?.schemaVersion === 1) finish(undefined, reply.value);
+        else if (reply.retry === 'withholdTarget' && !withholdTarget) { current.kill('SIGKILL'); start(true); }
+        else finish(new Error(`Captured render failed: ${reply.error?.message ?? 'invalid response'}`));
+      });
+      current.on('error', error => { if (live()) finish(error); });
+      current.on('exit', code => { if (live()) finish(new Error(`Captured runner exited ${code}: ${stderr.slice(-1000)}`)); });
+      current.send({ mode: 'render', entry, params, seed, ...(finishing === undefined ? {} : { finishing }), ...(format === undefined ? {} : { format }), ...(withholdTarget ? { withholdTarget } : {}) },
+        error => { if (error && live()) finish(error); });
+    };
+    start(false);
   });
 }
 

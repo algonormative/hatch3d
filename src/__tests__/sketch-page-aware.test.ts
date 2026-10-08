@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
@@ -98,4 +99,24 @@ describe('page-aware sketches', () => {
     expect(formatted.identity).not.toBe(plain.identity);
     await expect(renderSketch({ entry, format: { fit: { nested: true } } as never })).rejects.toThrow(/Format option fit/);
   });
+
+  it('one timeout covers the retry: a slow legacy render leaves no process behind', async () => {
+    dir ??= await mkdtemp(join(tmpdir(), 'hatch3d-page-aware-'));
+    const pids = join(dir, 'pids.txt');
+    await writeFile(join(dir, 'slow-layout.ts'), `import { appendFileSync } from 'node:fs';
+      import { adoptRenderTarget, renderTarget } from ${JSON.stringify(targetModule)};
+      appendFileSync(${JSON.stringify(pids)}, process.pid + '\\n');
+      if ((renderTarget().page?.width ?? 100) !== 100) adoptRenderTarget();`);
+    const entry = join(dir, 'slow.ts');
+    await writeFile(entry, `import './slow-layout.ts';
+      export default { name: 'slow', page: { width: 100, height: 160, margin: 10 }, pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [],
+        draw() { for (;;) { /* never returns */ } } };`);
+    await expect(renderSketch({ entry, finishing: { page: { width: 50, height: 80 } }, timeoutMs: 4000 })).rejects.toThrow(/exceeded 4000 ms/);
+    const started = (await readFile(pids, 'utf8')).trim().split('\n').map(Number);
+    // The first process adopted the target and asked for the retry; the second ran draw() until the timeout.
+    expect(started).toHaveLength(2);
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 30 && started.some(alive); i++) await sleep(100);
+    expect(started.filter(alive)).toEqual([]);
+  }, 20_000);
 });

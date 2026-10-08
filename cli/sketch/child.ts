@@ -1,7 +1,6 @@
-import { fork } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { mapFinishingAssetMetadata, resolveFinishing, validateSketch, resolveParams, finalParts, svgFor, publishRenderTarget, renderTargetAdopted, targetPage } from '../../packages/plot-core/src/index.ts';
 import type { RenderTarget } from '../../packages/plot-core/src/index.ts';
@@ -11,9 +10,14 @@ import type { Diagnostic, FinishingOptions, FormatOptions, Params, RenderResult,
 
 /** `withholdTarget`: render without publishing the target (the retry for a sketch that is not page-aware). */
 type Request = { mode: 'inspect' | 'render'; entry: string; params?: Params; seed?: number; finishing?: FinishingOptions; format?: FormatOptions; withholdTarget?: boolean };
-type Reply = { ok: true; value: SketchMetadata | RenderResult } | { ok: false; error: { name: string; message: string } };
+/** `retry`: the host should render again in a fresh process with the target withheld. */
+type Reply = { ok: true; value: SketchMetadata | RenderResult } | { ok: false; retry?: 'withholdTarget'; error: { name: string; message: string } };
 
-/** The sketch is not page-aware, but modules it loaded adopted the published target. */
+/**
+ * The sketch is not page-aware, but modules it loaded adopted the published target. Module state cannot be
+ * unloaded, so the host renders it again in a fresh process with nothing published: it keeps its declared page
+ * and finishing fits it onto the request, exactly as before. The host owns that process, its timer and its abort.
+ */
 class WithholdTarget extends Error {}
 function randomStream(seed: number, partId: string): () => number {
   const digest = createHash('sha256').update(`${seed}\0${partId}`).digest();
@@ -95,26 +99,9 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   return { schemaVersion: 1, metadata, ...(finishing ? { finishing: request.finishing } : {}), ...(format ? { format } : {}), params, ...(effectiveParams ? { effectiveParams } : {}), seed, parts, svg, identity, diagnostics, stats: { pathCount, pointCount, lengthMm: quantize(lengthMm), partCount: parts.filter((part) => !part.diagnostic).length }, durationMs: quantize(performance.now() - started) };
 }
 
-/**
- * Render in a fresh process with nothing published. Module state cannot be unloaded, so a sketch that is not
- * page-aware, but whose modules shaped themselves to the requested page, is drawn again by a child of this
- * process: it keeps its declared page and finishing fits it onto the request, exactly as before.
- */
-function withoutTarget(request: Request): Promise<Reply> {
-  const child = fork(fileURLToPath(import.meta.url), [], { execArgv: process.execArgv, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
-  return new Promise<Reply>((done) => {
-    const fail = (message: string) => done({ ok: false, error: { name: 'Error', message } });
-    child.once('message', (reply: Reply) => done(reply));
-    child.once('error', (error) => fail(error.message));
-    child.once('exit', (code, signal) => fail(`Render process exited (${signal ?? code})`));
-    child.send({ ...request, withholdTarget: true }, (error) => { if (error) fail(error.message); });
-  }).finally(() => child.kill('SIGKILL'));
-}
-
-const replyFor = (error: unknown): Reply => ({ ok: false, error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) } });
+const replyFor = (error: unknown): Reply => ({ ok: false, ...(error instanceof WithholdTarget ? { retry: 'withholdTarget' as const } : {}),
+  error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) } });
 
 process.on('message', (message: Request) => {
-  void execute(message).then((value): Reply | Promise<Reply> => ({ ok: true, value }),
-    (error: unknown) => error instanceof WithholdTarget && !message.withholdTarget ? withoutTarget(message) : replyFor(error))
-    .then((reply) => process.send?.(reply));
+  void execute(message).then((value): Reply => ({ ok: true, value }), replyFor).then((reply) => process.send?.(reply));
 });
