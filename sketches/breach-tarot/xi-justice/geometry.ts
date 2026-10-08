@@ -125,7 +125,7 @@ function buildColumn(ctx: SketchContext, L: Layout): Piece[] {
 }
 
 /** The heap on the short arm's pan: rows of blocks narrowing upward, offset like bond, the top one turned a little. */
-function buildPile(ctx: SketchContext, L: Layout, cx: number, base: number): Piece[] {
+function buildPile(ctx: SketchContext, L: Layout, cx: number, base: number, panW: number): Piece[] {
   const rng = ctx.random('justice-pile');
   const { U, D } = L;
   const rows = Math.round(n(ctx, 'pileRows', 5, 3, 9));
@@ -133,6 +133,7 @@ function buildPile(ctx: SketchContext, L: Layout, cx: number, base: number): Pie
   const weights = Array.from({ length: rows }, (_, i) => 1.15 - 0.3 * i / (rows - 1));
   const wsum = weights.reduce((a, b) => a + b, 0);
   const out: Piece[] = [];
+  const rowSlabs: Slab[][] = [];
   let y = base + GAP;
   let prevW = pileW * 1.1, prevC = cx;
   for (let i = 0; i < rows; i++) {
@@ -148,6 +149,7 @@ function buildPile(ctx: SketchContext, L: Layout, cx: number, base: number): Pie
     const c = clamp(prevC + (rng() - 0.5) * 2 * slack, cx - pileW * 0.18, cx + pileW * 0.18);
     let x = c - rowW / 2;
     let tallest = 0;
+    const thisRow: Slab[] = [];
     for (let j = 0; j < count; j++) {
       const w = avail * share[j] / ssum;
       const h = rowH * (0.88 + 0.12 * rng());
@@ -156,13 +158,78 @@ function buildPile(ctx: SketchContext, L: Layout, cx: number, base: number): Pie
       sl.tone = 1.5 + 0.2 * rng();
       if (i === rows - 1) sl.ry = (rng() - 0.5) * 0.3;
       out.push({ slab: sl, group: 'pile', light: 'dark' });
+      thisRow.push(sl);
       x += w + 0.15;
       tallest = Math.max(tallest, h);
     }
     y += tallest + GAP;
     prevW = rowW; prevC = c;
+    rowSlabs.push(thisRow);
   }
+  roughenHeap(ctx, L, rowSlabs, cx, panW);
   return out;
+}
+
+/**
+ * Gives the heap back some irregularity after it is built, on its own random stream so the layout
+ * and the words stay where they were: rows slip sideways over the row below, a few blocks stand
+ * forward or back, an end block is turned and pushed out to clear its neighbour, and the apex
+ * is off true and tilted, resting on one corner. Nothing may overlap: every move keeps the blocks'
+ * clearances and keeps each row mostly over the row below.
+ */
+function roughenHeap(ctx: SketchContext, L: Layout, rows: Slab[][], cx: number, panW: number): void {
+  const rough = ctx.random('justice-heap-rough');
+  const { U } = L;
+  const span = (row: Slab[]) => ({ lo: Math.min(...row.map(s => s.x - s.w / 2)), hi: Math.max(...row.map(s => s.x + s.w / 2)) });
+  // The pan under the heap, inset a little.
+  const pan = { lo: cx - panW / 2 + 2 * U, hi: cx + panW / 2 - 2 * U };
+  let below = pan;
+  rows.forEach((row, i) => {
+    const mine = span(row), width = mine.hi - mine.lo;
+    // Overhang no more than a fifth of the row's width past the row below, and none past the pan.
+    const over = i === 0 ? 0 : 0.2 * width;
+    const dMin = Math.max(pan.lo, below.lo - over) - mine.lo, dMax = Math.min(pan.hi, below.hi + over) - mine.hi;
+    const slip = (rough() - 0.5) * 2 * 4.5 * U;
+    const dx = rough() < 0.7 && dMin <= dMax ? clamp(slip, dMin, dMax) : 0;
+    for (const sl of row) sl.x += dx;
+    // A block stands forward or back.
+    if (row.length > 1 && i > 0 && i < rows.length - 1 && rough() < 0.6) {
+      const sl = row[Math.floor(rough() * row.length)];
+      sl.z += (rough() < 0.5 ? -1 : 1) * (0.4 + 0.5 * rough());
+    }
+    // An end block slips outward, still over the row below.
+    if (row.length > 1 && i > 0 && i < rows.length - 1 && rough() < 0.5) {
+      const left = rough() < 0.5;
+      const sl = left ? row.reduce((a, b) => (a.x < b.x ? a : b)) : row.reduce((a, b) => (a.x > b.x ? a : b));
+      const room = left ? (sl.x - sl.w / 2) - Math.max(pan.lo, below.lo - 0.3 * sl.w) : Math.min(pan.hi, below.hi + 0.3 * sl.w) - (sl.x + sl.w / 2);
+      sl.x += (left ? -1 : 1) * clamp(0.4 + 3.5 * U * rough(), 0, Math.max(0, room));
+    }
+    below = span(row);
+  });
+  // One end block of a middle row is turned about the vertical and pushed out so its inner side
+  // keeps clear of its neighbour; the first (row, end) in a seeded order that stays on the pan.
+  const ends: { row: Slab[]; left: boolean }[] = [];
+  for (const row of rows.slice(1, rows.length - 1)) if (row.length > 1) ends.push({ row, left: true }, { row, left: false });
+  for (let k = ends.length - 1; k > 0; k--) { const m = Math.floor(rough() * (k + 1)); [ends[k], ends[m]] = [ends[m], ends[k]]; }
+  const turned = (rough() < 0.5 ? 1 : -1) * (0.22 + 0.12 * rough());
+  for (const { row, left } of ends) {
+    const sl = left ? row.reduce((a, b) => (a.x < b.x ? a : b)) : row.reduce((a, b) => (a.x > b.x ? a : b));
+    const ry = turned;
+    const grown = (sl.w / 2) * Math.cos(ry) + (sl.d / 2) * Math.abs(Math.sin(ry)) - sl.w / 2;
+    const push = Math.max(0, grown) + 0.2;
+    const edge = left ? (sl.x - sl.w / 2) - push : (sl.x + sl.w / 2) + push;
+    if (left ? edge >= pan.lo : edge <= pan.hi) {
+      sl.ry = ry;
+      sl.x += (left ? -1 : 1) * push;
+      break;
+    }
+  }
+  // The apex: a little off the heap's middle, tilted, resting on one corner.
+  const apex = rows[rows.length - 1].reduce((a, b) => (a.w > b.w ? a : b));
+  const tilt = (rough() < 0.5 ? -1 : 1) * (0.05 + 0.04 * rough());
+  apex.x += (rough() - 0.5) * 2 * 2.5 * U;
+  apex.rz = tilt;
+  apex.y += (apex.w / 2) * Math.abs(Math.sin(tilt)) + (apex.h / 2) * (1 - Math.cos(tilt)) + GAP;
 }
 
 /** Everything solid in the picture. */
@@ -186,14 +253,14 @@ export function buildBalance(ctx: SketchContext, L: Layout): Balance {
   };
   const shortPan = mk(L.shortX, shortW, 5.2), longPan = mk(L.longX, longW, 3.6);
   pieces.push(shortPan, longPan);
-  const pile = buildPile(ctx, L, L.xOf(L.shortX), panY + GAP);
+  const pile = buildPile(ctx, L, L.xOf(L.shortX), panY + GAP, shortW * U);
   pieces.push(...pile);
   // The single block: small, dark, turned a little so it shows a corner.
   const bs = n(ctx, 'blockSize', 13, 8, 24) * U;
   const blockSlab = solid(L.xOf(L.longX), panY + GAP + bs * 0.45, -D, bs, bs * 0.9, 2.6, pieces.length, 'stack');
   blockSlab.ry = 0.32; blockSlab.tone = 1.7;
   pieces.push({ slab: blockSlab, group: 'pile', light: 'dark' });
-  const backs = pieces.filter(p => p.group !== 'column').map(p => p.slab.z - Math.max(p.slab.d, p.slab.w) / 2);
+  const backs = pieces.filter(p => p.group !== 'column').map(p => p.slab.home.z - Math.max(p.slab.d, p.slab.w) / 2);
   return {
     pieces, pile, column, beam, shortPan: shortPan.slab, longPan: longPan.slab, block: blockSlab,
     chainFront: -D + beamD / 2 + n(ctx, 'cordStand', 0.8, 0.5, 1.6),
@@ -412,7 +479,7 @@ function hull(points: P2[]): P2[] {
 }
 
 /** The ground shadows, as flat polygons (x, z) on y = 0. */
-interface Shadow { polygons: P2[][] }
+interface Shadow { polygons: P2[][]; frame: P2[][] }
 
 /**
  * The shadow of the balance on the ground, light from high behind it so the shadow falls toward the
@@ -462,14 +529,17 @@ function castShadow(ctx: SketchContext, view: THREE.PerspectiveCamera, L: Layout
     // hang plumb from the ends of the turned beam.
     polygons.push(hull(bal.column.flatMap(pc => cast(pc.slab, flat))));
     polygons.push(cast(bal.beam, flat).map(v => turn(v, phi)));
-    for (const sl of [bal.shortPan, ...bal.pile.map(pc => pc.slab)]) polygons.push(move(cast(sl, flat), eS));
-    for (const sl of [bal.longPan, bal.block]) polygons.push(move(cast(sl, flat), eL));
-    return { polygons };
+    // The frame the shadow is centred by: column, beam and the two pans (the heap's blocks never decide it).
+    const frame = [polygons[0], polygons[1], move(cast(bal.shortPan, flat), eS), move(cast(bal.longPan, flat), eL)];
+    polygons.push(frame[2]);
+    for (const sl of bal.pile.map(pc => pc.slab)) polygons.push(move(cast(sl, flat), eS));
+    polygons.push(frame[3], move(cast(bal.block, flat), eL));
+    return { polygons, frame };
   };
   // Centre the shadow's spread on the card, then add the control's shift.
   let shift = 0;
   for (let i = 0; i < 4; i++) {
-    const xs = build(shift).polygons.flatMap(poly => poly.map(v => onPage(v).x));
+    const xs = build(shift).frame.flatMap(poly => poly.map(v => onPage(v).x));
     shift += (CARD.x0 + CARD.x1) / 2 - (Math.min(...xs) + Math.max(...xs)) / 2;
   }
   return build(shift + userShift);
@@ -584,26 +654,38 @@ export function drawJustice(ctx: SketchContext): Part[] {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
     const onGlyph = glyphMask(glyphPaths, 0.8);
+    const heapTop = Math.min(...bal.pile.flatMap(pc => {
+      const m = slabMatrix(pc.slab);
+      return [-1, 1].flatMap(sx => [-1, 1].map(sz => pageOf(view, new THREE.Vector3(sx * pc.slab.w / 2, pc.slab.h / 2, sz * pc.slab.d / 2).applyMatrix4(m)).y));
+    }));
     const buckets = new PartBuckets(0.4);
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
     };
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H, bias }, {
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+      begin: st => runs => {
+        // The heap's chain hangs behind it: below the heap's top it is cut, so no sliver shows through a gap between blocks.
+        const extra = st.group === 'helix' ? (p: Point) => !(p.y > heapTop && Math.abs(p.x - L.shortX) < 9) : undefined;
+        for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), extra);
+      },
     });
 
     // The shadow: flat hatch on the ground, no outline, kept to the shadow's own shape and clear of what stands.
     const shadow = castShadow(ctx, view, L, bal);
     const wide = wideOf(view);
-    const shadowGeos = shadow.polygons.map(poly => {
+    const meshOf = (poly: P2[]) => {
       const pos: number[] = [];
       for (let i = 1; i < poly.length - 1; i++) for (const q of [poly[0], poly[i], poly[i + 1]]) pos.push(q.x, 0, q.z);
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       return g;
-    });
+    };
+    // The beam's shadow is its own part, so the tip of the shadow can be told from the rest of it.
+    const beamGeo = meshOf(shadow.polygons[1]);
+    const restGeos = shadow.polygons.filter((_, i) => i !== 1).map(meshOf);
     try {
-      const inShadow = meshCoverage(shadowGeos, wide, TABLOID_PAGE, 0, 4);
+      const inBeam = meshCoverage([beamGeo], wide, TABLOID_PAGE, 0, 4);
+      const inRest = meshCoverage(restGeos, wide, TABLOID_PAGE, 0, 4);
       const pageBox = { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + 2, y1: CARD.y1 };
       const ang = n(ctx, 'shadowAngle', 0, -60, 60) * Math.PI / 180, step = n(ctx, 'shadowPitch', 0.95, 0.5, 2);
       const cx = (pageBox.x0 + pageBox.x1) / 2, cy = (pageBox.y0 + pageBox.y1) / 2, reach = 400;
@@ -611,11 +693,13 @@ export function drawJustice(ctx: SketchContext): Part[] {
       for (let o = -reach; o <= reach; o += step) {
         const mx = cx - uy * o, my = cy + ux * o;
         for (const run of clipToRect([{ x: mx - ux * reach, y: my - uy * reach }, { x: mx + ux * reach, y: my + uy * reach }], pageBox)) {
-          add('shadow-carbon', run, p => inShadow(p) && !solids(p));
+          add('shadow-beam-carbon', run, p => inBeam(p) && !solids(p));
+          add('shadow-carbon', run, p => inRest(p) && !inBeam(p) && !solids(p));
         }
       }
     } finally {
-      for (const g of shadowGeos) g.dispose();
+      beamGeo.dispose();
+      for (const g of restGeos) g.dispose();
     }
 
     // The sky: a light ruling that thins and breaks as it comes down to the horizon, knocked out
@@ -636,7 +720,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
       });
     }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'shadow', 'column', 'beam', 'pans', 'pile', 'helix', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'shadow-beam', 'shadow', 'column', 'beam', 'pans', 'pile', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
     parts.push(...cardFrame('XI', 'JUSTICE'));
     return parts;
