@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -32,8 +32,7 @@ import { bodyPerson } from './figure.ts';
  * the figure, looking down: the lion. The sky is light. The phrase is cut into the dam's courses, a
  * word to a course.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** The helix is built this many times larger and brought back, so its fixed-size wiggles stay small. */
@@ -65,7 +64,7 @@ export function strengthCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const spec = damSpec(ctx);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, spec.eye, 0], target: [0, spec.eye, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -79,7 +78,7 @@ export interface Plan {
 }
 
 export function damPlan(spec: DamSpec, f: number): Plan {
-  const cx = TABLOID_PAGE.width / 2;
+  const cx = PAGE.width / 2;
   const A: V2 = { x: (CARD.x0 - 14 - cx) * spec.nearDepth / f, z: -spec.nearDepth };
   const B: V2 = { x: (CARD.x1 + 14 - cx) * spec.farDepth / f, z: -spec.farDepth };
   const c = { x: B.x - A.x, z: B.z - A.z };
@@ -241,7 +240,7 @@ export function sleepingHelix(ctx: SketchContext, view: THREE.PerspectiveCamera,
   const rng = ctx.random('strength-coil');
   const hanged = rng() < 0.5 ? 1 : -1;
   const sway = n(ctx, 'tailSway', 0.1, 0, 0.3);
-  const cx = TABLOID_PAGE.width / 2;
+  const cx = PAGE.width / 2;
   const dc = clamp(n(ctx, 'coilDepth', 580, 250, 900) + layout.depth, 250, 900);
   const centre: V2 = { x: (clamp(n(ctx, 'coilAcross', 100, CARD.x0, CARD.x1) + layout.across, CARD.x0, CARD.x1) - cx) * dc / f, z: -dc };
   const flare = n(ctx, 'tailFlare', 7, 2, 12);
@@ -384,7 +383,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
   const view = strengthCamera(ctx);
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const f = TABLOID_PAGE.height / 2 / fovT;
+  const f = PAGE.height / 2 / fovT;
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const plan = damPlan(spec, f);
   const dam = buildDam(ctx, spec, plan);
@@ -428,8 +427,8 @@ export function drawStrength(ctx: SketchContext): Part[] {
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2);
 
     // Page masks: where the wall stands, where the helix lies, and the pocket of clear paper round the person.
-    const damCover = meshCoverage(slabGeos, view, TABLOID_PAGE, n(ctx, 'knockout', 0.6, 0.2, 2));
-    const helixCover = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'helixKnockout', 1.1, 0.3, 3));
+    const damCover = meshCoverage(slabGeos, view, PAGE, n(ctx, 'knockout', 0.6, 0.2, 2));
+    const helixCover = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'helixKnockout', 1.1, 0.3, 3));
     const b = figure.bounds;
     // The pocket reaches well above the head and out on both sides but stops just under the feet, so the walkway shows.
     const prx = (b.x1 - b.x0) / 2 * n(ctx, 'pocket', 1.5, 1, 3.5) + 3, pry = (b.y1 - b.y0 + 7) / 2;
@@ -575,7 +574,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     const reachSky = n(ctx, 'sky', 0.45, 0, 1);
     if (reachSky > 0) {
       const skyPattern = barPattern(ctx.random('strength-sky'), 0.86);
-      const skyClear = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
+      const skyClear = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
       const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
       for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += n(ctx, 'skyPitch', 1.3, 0.8, 2.5)) {
         const t = (y - skyTop) / (skyBottom - skyTop);

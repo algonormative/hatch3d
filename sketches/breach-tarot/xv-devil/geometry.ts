@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -35,15 +35,14 @@ import { stoneStrokes } from './stone.ts';
  * stands in it, black at the top as the traditional Devil's ground is. The phrase is cut into the
  * pillar's courses and the door lintels, a word to a face.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 
 export function devilCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: param(ctx, 'fov'), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -75,7 +74,7 @@ export function drawDevil(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const forward = new THREE.Vector3();
   view.getWorldDirection(forward);
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const { pillar, figures, doors, routes } = devilLayout(ctx);
   const doorPieces: (DoorPiece & { side: -1 | 1 })[] = doors.flatMap(d => d.pieces.map(p => ({ ...p, side: d.side })));
@@ -109,8 +108,8 @@ export function drawDevil(ctx: SketchContext): Part[] {
     const ropeDepth = renderDepthBufferCPU([...pillarGeos, ...doorGeos, ...figureGeos], view, W, H);
     const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slabSlack = param(ctx, 'slabSlack');
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, param(ctx, 'knockout'));
-    const pocket = meshCoverage(figureGeos, view, TABLOID_PAGE, param(ctx, 'pocket'));
+    const solids = meshCoverage(geometries, view, PAGE, param(ctx, 'knockout'));
+    const pocket = meshCoverage(figureGeos, view, PAGE, param(ctx, 'pocket'));
 
     // The phrase, a word to a face: first and last on the door lintels, the rest down across the pillar.
     const settings = sloganSettings(ctx);
@@ -187,8 +186,8 @@ export function drawDevil(ctx: SketchContext): Part[] {
 
     // The pillar's shadow, thrown toward the eye across the ground by the light behind it: ruled flat on the sheet,
     // left clear round the leashes, the figures and the doors.
-    const shade = meshCoverage(shadowGeos, view, TABLOID_PAGE, 0, 4);
-    const standingMask = meshCoverage([...pillarGeos, ...leashGeos, ...figureGeos, ...doorGeos], view, TABLOID_PAGE, 1.2, 4);
+    const shade = meshCoverage(shadowGeos, view, PAGE, 0, 4);
+    const standingMask = meshCoverage([...pillarGeos, ...leashGeos, ...figureGeos, ...doorGeos], view, PAGE, 1.2, 4);
     for (let y = HORIZON_Y + 1.2; y < CARD.y1; y += param(ctx, 'shadowPitch')) {
       add('shadow-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => shade(p) && !standingMask(p), 3);
     }
@@ -204,9 +203,9 @@ export function drawDevil(ctx: SketchContext): Part[] {
     const echoPaths: Point[][] = [];
     if (ctx.params.echo !== false) {
       const k = param(ctx, 'echoScale');
-      const cx = TABLOID_PAGE.width / 2;
+      const cx = PAGE.width / 2;
       const window = { x0: CARD.x0, x1: CARD.x1, y0: skyTop + band * (skyBottom - skyTop) + 3, y1: HORIZON_Y - 5 };
-      const clearOf = meshCoverage(geometries, view, TABLOID_PAGE, 2.2);
+      const clearOf = meshCoverage(geometries, view, PAGE, 2.2);
       const clear = (p: Point) => !clearOf(p) && !onGlyph(p);
       const up = (p: Point): Point => ({ x: cx + k * (p.x - cx), y: HORIZON_Y + k * (p.y - HORIZON_Y) });
       // Each course's front face on the sheet, foot to top; every course stands on the middle, so the outline is the right side

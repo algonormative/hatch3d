@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -29,8 +29,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * through the hub's bore, then thinning away toward the horizon. The phrase is cut a word to a
  * tower, in order round the wheel, so reading it means going round.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** World size of the whole wheel: the tip of an ordinary tower stands this far from the hub. */
@@ -61,7 +60,7 @@ type WSlab = Slab & { kind: Kind; psi: number; tower: number };
  */
 function placement(ctx: SketchContext) {
   const fov = n(ctx, 'fov', 60, 36, 75);
-  const f = TABLOID_PAGE.height / 2 / Math.tan(rad(fov / 2));
+  const f = PAGE.height / 2 / Math.tan(rad(fov / 2));
   const towerH = n(ctx, 'towerH', 24, 12, 40), proud = n(ctx, 'proud', 2.8, 1, 3.4);
   const ringOuter = R_OUT - towerH;
   const hubY = n(ctx, 'sink', 0.38, 0.1, 0.5) * ringOuter;
@@ -76,7 +75,7 @@ export function wheelCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const p = placement(ctx);
   return horizonCamera({
     fov: p.fov, eye: [0, p.eyeH, 0], target: [0, p.eyeH, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -124,7 +123,7 @@ export interface Layout { C: THREE.Vector3; frame: Frame; ringOuter: number; hub
 /** Where the wheel stands: the hub lands at `hubX` across the sheet, `D` units from the eye, at `hubY` above the plain. */
 export function layout(ctx: SketchContext): Layout {
   const p = placement(ctx);
-  const x = (n(ctx, 'hubX', 118, 100, 200) - TABLOID_PAGE.width / 2) * p.D / p.f;
+  const x = (n(ctx, 'hubX', 118, 100, 200) - PAGE.width / 2) * p.D / p.f;
   const C = new THREE.Vector3(x, p.hubY, -p.D);
   return { C, frame: wheelFrame(C, n(ctx, 'turn', 25, 15, 60)), ringOuter: p.ringOuter, hubY: p.hubY, D: p.D };
 }
@@ -373,7 +372,7 @@ function chunk(points: THREE.Vector3[], max = 20): THREE.Vector3[][] {
 /** The solid parts of the card and where the axle runs: everything before the helix is built. */
 export function scene(ctx: SketchContext) {
   const view = wheelCamera(ctx);
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const depthOf = (p: THREE.Vector3) => Math.max(1, -p.z);
   const L = layout(ctx);
   const fr = L.frame;
@@ -424,7 +423,7 @@ export function scene(ctx: SketchContext) {
   };
 
   // Paving blocks keep clear of the axle on the sheet.
-  const nearHelix = meshCoverage(helix.full, view, TABLOID_PAGE, 1);
+  const nearHelix = meshCoverage(helix.full, view, PAGE, 1);
   const wheel: WSlab[] = [...rim(ctx, L), ...towers(ctx, L), ...hubAndSpokes(ctx, L, bore)];
   const slabs: WSlab[] = [...wheel, ...pavers(ctx, L, view, nearHelix, wheel)].filter(s => Math.max(...corners(s).map(q => q.y)) > 0.02);
   return { view, f, L, tNear, tFar, r0, taper, flare, bore, slabs, helix };
@@ -462,7 +461,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
     const slimBuffer = renderDepthBufferCPU(slimGeos, view, W, H);
     const nearP = view.near, farP = view.far;
     const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
 
     // The phrase: one word to a tower round the rim, in order from the rising side over the top and down.
     const settings = sloganSettings(ctx);

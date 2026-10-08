@@ -1,5 +1,6 @@
 import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { assertFormatPage } from '../../kit/format.ts';
 import { sloganControls, titleControls, LETTERING_PEN } from '../../kit/lettering.ts';
 import { drawTower } from './geometry.ts';
 import { drawMachineTower } from './machine.ts';
@@ -7,6 +8,7 @@ import { drawMachineTower } from './machine.ts';
 const sketch: Sketch = {
   name: 'Breach Tarot: XVI The Tower',
   page: TABLOID_PAGE,
+  pageAware: true,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -41,6 +43,7 @@ const sketch: Sketch = {
     ...titleControls(),
   ],
   draw(ctx) {
+    assertFormatPage(ctx.page);
     return ctx.params.form === 'machine' ? drawMachineTower(ctx) : drawTower(ctx);
   },
 };

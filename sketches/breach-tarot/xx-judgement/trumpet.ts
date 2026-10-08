@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, type HelixStroke, type Strand } from '../../kit/helix.ts';
+import { PAGE } from '../../kit/format.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { atPage } from '../../kit/perspective.ts';
 import { densityLevel } from '../../kit/slabs.ts';
@@ -93,7 +94,7 @@ function strandStrokes(ctx: SketchContext, s: Strand, bend: (p: THREE.Vector3) =
   const rng = ctx.random(`horn-${s.id}`);
   const at = (t: number, v: number) => {
     const q = bend(strandPoint(s, t, v)).project(view);
-    return { x: q.x * 139.7, y: q.y * 215.9 };
+    return { x: q.x * (PAGE.width / 2), y: q.y * (PAGE.height / 2) };
   };
   const trace = (ink: Ink, count: number, fn: (t: number) => THREE.Vector3): HelixStroke => ({ ink, group, points: Array.from({ length: count + 1 }, (_, i) => bend(fn(i / count))) });
   for (const v of [-1, 1]) out.push(trace('vermilion', 1200, t => strandPoint(s, t * tMax, v)));

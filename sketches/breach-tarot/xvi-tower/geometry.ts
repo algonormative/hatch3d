@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { towerSlabs } from '../../breach-cathedral-tower/geometry.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -25,8 +25,7 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * print. The tower itself is unsealed rather than destroyed: its crown lifts off like a lid and
  * the helix pours up out of the opened shaft.
  */
-const W = 559, H = 864;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.2;
 /** The tower's own frame: Breach Cathedral Tower coordinates run from −10.9 to 10.6; ground is 0 here. */
@@ -36,7 +35,7 @@ const LIFT = 10.9, CROWN = 10.6 + LIFT;
 export function towerCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 56, 40, 80), eye: [0, EYE, n(ctx, 'distance', 48, 30, 90)], target: [0, EYE, 0], far: 400,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 

@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -25,8 +25,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * the tops near it bend away from it, a stalk's lean growing with height. Near plants are hatched,
  * far ones outline only, the farthest ticks. The words are cut into plant faces from near to far.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** The nearest row of plants, in world units from the eye. */
@@ -43,7 +42,7 @@ export function empressCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -270,7 +269,7 @@ function buildPlant(base: THREE.Vector3, m: number, height: number, w0: number, 
  */
 export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, field: Field, wind: Wind): { plants: Plant[]; ticks: THREE.Vector3[][] } {
   const rowRng = ctx.random('crop-rows'), plantRng = ctx.random('crop-plants');
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const eye = view.position.y;
   const spacing = n(ctx, 'furrow', 2.8, 2, 7), rowStep = n(ctx, 'row', 3.4, 2.5, 8), reach = n(ctx, 'reach', 400, 100, 1400);
   const windTop = THREE.MathUtils.degToRad(n(ctx, 'lean', 10, 0, 40));
@@ -320,7 +319,7 @@ export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
       const d = -base.z;
       if (d < NEAR - 1) continue;
       const at = pageOf(view, base);
-      if (at.x < CARD.x0 - 30 || at.x > CARD.x1 + 30 || at.y > TABLOID_PAGE.height) continue;
+      if (at.x < CARD.x0 - 30 || at.x > CARD.x1 + 30 || at.y > PAGE.height) continue;
       const spec: Spec = { r: Array.from({ length: 64 }, () => plantRng()), yaw: (plantRng() - 0.5) * 0.2 };
       const miss = plantRng();
       const g = clamp(field.growth(base.x, d) + (spec.r[44] - 0.5) * 0.06, 0, 1);
@@ -417,7 +416,7 @@ function silhouette(plant: Plant): THREE.Vector3[] {
 export function drawEmpress(ctx: SketchContext): Part[] {
   const view = empressCamera(ctx);
   const eye = view.position.clone();
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const field = fieldOf(ctx);
   const wind = windRibbon(ctx, view, field);
@@ -469,9 +468,9 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       const d = Math.sqrt(Math.max(lo, 8) * hi);
       return Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * d * d));
     };
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
     // The wind keeps a wider margin of clear paper than the crop, so the ribbon never touches the ruled sky.
-    const windClear = meshCoverage(wind.meshes, view, TABLOID_PAGE, n(ctx, 'windHalo', 4, 1, 8));
+    const windClear = meshCoverage(wind.meshes, view, PAGE, n(ctx, 'windHalo', 4, 1, 8));
 
     // The phrase: each word cut into the front of a plant course, staggered from near to far.
     const settings = sloganSettings(ctx);

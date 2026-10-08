@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
 import type { HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -29,9 +29,8 @@ import { buildVessel, type Vessel } from './vessel.ts';
  * lightly ruled and knocked out round everything in it; the phrase is cut into the vessels'
  * courses, word by word.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
-const PW = TABLOID_PAGE.width;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+const PW = PAGE.width;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** The helix is built this many times the size and brought back: the kit's wiggles are fixed in world units. */
@@ -41,11 +40,11 @@ export function temperanceCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
-const focalOf = (view: THREE.PerspectiveCamera) => TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+const focalOf = (view: THREE.PerspectiveCamera) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
 /** The world point at page position `p`, `t` units in front of the eye. */
 const worldAt = (view: THREE.PerspectiveCamera, p: Point, t: number) =>
   new THREE.Vector3((p.x - PW / 2) * t / focalOf(view), view.position.y + (HORIZON_Y - p.y) * t / focalOf(view), -t);
@@ -164,13 +163,13 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2), helixSlack = n(ctx, 'helixSlack', 0.4, 0.1, 2);
 
     const knock = n(ctx, 'knockout', 1.1, 0.3, 3);
-    const nearCover = meshCoverage(nearGeos, view, TABLOID_PAGE, knock);
-    const farCover = meshCoverage(farGeos, view, TABLOID_PAGE, knock);
+    const nearCover = meshCoverage(nearGeos, view, PAGE, knock);
+    const farCover = meshCoverage(farGeos, view, PAGE, knock);
     const solids = (p: Point) => nearCover(p) || farCover(p);
-    const helixCover = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'helixKnockout', 1.0, 0.3, 3));
+    const helixCover = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'helixKnockout', 1.0, 0.3, 3));
     // Where the helix hangs in front of a vessel it only clears a thin margin of the vessel's own lines.
-    const helixTight = meshCoverage(helix.meshes, view, TABLOID_PAGE, 0.5);
-    const helixClear = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
+    const helixTight = meshCoverage(helix.meshes, view, PAGE, 0.5);
+    const helixClear = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
 
     // The phrase: each word cut into a front face of one vessel, going from one to the other and
     // down: it, goes, both, ways. A word is placed on the course nearest its target share of the
@@ -258,7 +257,7 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     // waterline, courses and all, bent a little by the ripple and broken where the ripples cross it, fading
     // with depth; the water ruling inside it thins to its blue lines. A quiet note.
     const waterline = pageOf(view, far.axis).y;
-    const farBody = meshCoverage(farGeos, view, TABLOID_PAGE, 0);
+    const farBody = meshCoverage(farGeos, view, PAGE, 0);
     const rippleRng = ctx.random('temperance-ripples');
     const rp1 = rippleRng() * 6.28, rp2 = rippleRng() * 6.28;
     const rippleCut = n(ctx, 'rippleCut', 0.9, 0.2, 1.2);

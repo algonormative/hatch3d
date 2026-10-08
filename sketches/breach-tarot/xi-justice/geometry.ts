@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -25,8 +25,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * ruling knocked out round all of it; the horizon runs open to both edges. The words are cut into
  * the blocks of the heap and the courses of the column.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 /** Hidden-line slack for slabs, in world units. */
@@ -38,7 +37,7 @@ const GAP = 0.12;
 export function justiceCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -65,10 +64,10 @@ export interface Layout {
 
 export function layoutOf(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
   const D = n(ctx, 'dist', 30, 24, 90);
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const U = D / f;
   const mirror = shortSide(ctx) < 0 ? 1 : -1;
-  const flipX = (mm: number) => mirror > 0 ? mm : TABLOID_PAGE.width - mm;
+  const flipX = (mm: number) => mirror > 0 ? mm : PAGE.width - mm;
   // The chains hang at spanL (the short arm's pan) and spanR (the long arm's); the pivot divides the span by `ratio`.
   const spanL = n(ctx, 'spanL', 64, 40, 100), spanR = n(ctx, 'spanR', 236, 200, 252);
   const ratio = n(ctx, 'ratio', 2.4, 1.6, 4);
@@ -82,7 +81,7 @@ export function layoutOf(ctx: SketchContext, view: THREE.PerspectiveCamera): Lay
     D, U, f, mirror, pivotX: xs[1], shortX: xs[0], longX: xs[2],
     beamL: Math.min(xs[3], xs[4]), beamR: Math.max(xs[3], xs[4]), beamY, beamH,
     panTop: beamY + beamH / 2 + drop, panThick,
-    xOf: mm => (mm - TABLOID_PAGE.width / 2) * U,
+    xOf: mm => (mm - PAGE.width / 2) * U,
     hOf: mm => EYE - (mm - HORIZON_Y) * U,
   };
 }
@@ -322,7 +321,7 @@ function cordRoutes(ctx: SketchContext, L: Layout, bal: Balance): { routes: { pt
   // load, so it must be placed by where it shows, not by where it is).
   const P = (xmm: number, ymm: number, z: number) => {
     const k = -z / L.f;
-    return new THREE.Vector3((xmm - TABLOID_PAGE.width / 2) * k, EYE - (ymm - HORIZON_Y) * k, z);
+    return new THREE.Vector3((xmm - PAGE.width / 2) * k, EYE - (ymm - HORIZON_Y) * k, z);
   };
   const zf = bal.chainFront, zb = bal.chainBack;
   const px = L.pivotX;
@@ -592,8 +591,8 @@ export function drawJustice(ctx: SketchContext): Part[] {
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
     const nearP = view.near, farP = view.far;
     const bias = Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * L.D * L.D));
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const cordClear = meshCoverage(cords.map(c => c.mesh), view, TABLOID_PAGE, n(ctx, 'cordHalo', 3, 1, 8));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const cordClear = meshCoverage(cords.map(c => c.mesh), view, PAGE, n(ctx, 'cordHalo', 3, 1, 8));
 
     // The phrase: each word cut into the front of a block of the heap or a course of the column.
     const settings = sloganSettings(ctx);
@@ -684,8 +683,8 @@ export function drawJustice(ctx: SketchContext): Part[] {
     const beamGeo = meshOf(shadow.polygons[1]);
     const restGeos = shadow.polygons.filter((_, i) => i !== 1).map(meshOf);
     try {
-      const inBeam = meshCoverage([beamGeo], wide, TABLOID_PAGE, 0, 4);
-      const inRest = meshCoverage(restGeos, wide, TABLOID_PAGE, 0, 4);
+      const inBeam = meshCoverage([beamGeo], wide, PAGE, 0, 4);
+      const inRest = meshCoverage(restGeos, wide, PAGE, 0, 4);
       const pageBox = { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + 2, y1: CARD.y1 };
       const ang = n(ctx, 'shadowAngle', 0, -60, 60) * Math.PI / 180, step = n(ctx, 'shadowPitch', 0.95, 0.5, 2);
       const cx = (pageBox.x0 + pageBox.x1) / 2, cy = (pageBox.y0 + pageBox.y1) / 2, reach = 400;

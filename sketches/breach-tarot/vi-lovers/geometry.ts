@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -34,8 +34,7 @@ import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from '.
  * course faces word by word: `wants` on the near tower and `want` on the far one sit at mirrored
  * places, slightly off.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 7.2;
@@ -47,7 +46,7 @@ const BAND_EDGES = [18, 24, 27, 30, 34, 39, 45, 53, 62, 75, 95, Infinity];
 export function loversCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -65,10 +64,10 @@ export function drawLovers(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const forward = new THREE.Vector3();
   view.getWorldDirection(forward);
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   /** The world point `d` units in front of the eye that lands at page position (px, py). */
-  const at = (px: number, py: number, d: number) => new THREE.Vector3((px - TABLOID_PAGE.width / 2) * d / f, EYE + (HORIZON_Y - py) * d / f, -d);
+  const at = (px: number, py: number, d: number) => new THREE.Vector3((px - PAGE.width / 2) * d / f, EYE + (HORIZON_Y - py) * d / f, -d);
   const bandOf = (p: THREE.Vector3) => Math.max(0, BAND_EDGES.findIndex((edge, i) => eye.z - p.z >= edge && eye.z - p.z < BAND_EDGES[i + 1]));
 
   // The pattern both towers are cut from, and how they stand: turned toward each other, each leaning toward the other.
@@ -183,7 +182,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
       const d = Math.sqrt(lo * hi);
       return Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
     };
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
     // Each lover's own clear pocket of paper: nothing of the towers or the sky comes near its lines.
     const loverPocket = roundedPocket(figureGeos, view, n(ctx, 'pocket', 3, 0.5, 8));
 
@@ -255,11 +254,11 @@ export function drawLovers(ctx: SketchContext): Part[] {
     // The shadows: thrown back across the ground, hatched flat on the sheet. A tower's shadow is a lighter tone (one family, a
     // sparse second) and keeps clear of the lovers and of the towers; each lover's own, darker and crossed, starts at its feet.
     const spread = n(ctx, 'shadowSpread', 0.8, 0, 2);
-    const towerShade = meshCoverage([shadowGeos[0]], view, TABLOID_PAGE, 0, 4);
-    const leftShade = meshCoverage([shadowGeos[1]], view, TABLOID_PAGE, spread, 4), rightShade = meshCoverage([shadowGeos[2]], view, TABLOID_PAGE, spread, 4);
+    const towerShade = meshCoverage([shadowGeos[0]], view, PAGE, 0, 4);
+    const leftShade = meshCoverage([shadowGeos[1]], view, PAGE, spread, 4), rightShade = meshCoverage([shadowGeos[2]], view, PAGE, spread, 4);
     const loverShade = (p: Point) => leftShade(p) || rightShade(p);
-    const standing = meshCoverage(slabGeos, view, TABLOID_PAGE, 0.5, 4);
-    const onLover = meshCoverage(figureGeos, view, TABLOID_PAGE, 0.7, 4);
+    const standing = meshCoverage(slabGeos, view, PAGE, 0.5, 4);
+    const onLover = meshCoverage(figureGeos, view, PAGE, 0.7, 4);
     const tilt = THREE.MathUtils.degToRad(n(ctx, 'shadowAngle', 62, 20, 85)), step = n(ctx, 'shadowPitch', 0.55, 0.4, 2);
     // Scraps of a tower's shadow cut off by a lover's shadow, a few millimetres long, are dropped.
     const hatch = (key: string, shortest: number, families: readonly (readonly [number, number])[], keep: (p: Point) => boolean) => {

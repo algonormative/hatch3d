@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
@@ -26,8 +26,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * wall top in the distance. The facade is cut all over with fine print, justified rows of asemic
  * marks in patches and blanks, with the four words of the phrase set among them.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 8.3;
@@ -38,7 +37,7 @@ const COURSE_GAP = 0.15;
 export function gateCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -64,7 +63,7 @@ function wallSide(ctx: SketchContext): number {
 /** The wall: two wings of staggered slab courses, two piers, a lintel. All courses dead level; the plan runs on a diagonal. */
 export function buildWall(ctx: SketchContext, view: THREE.PerspectiveCamera, sx: number): Wall {
   const rng = ctx.random('hier-wall'), tone = ctx.random('hier-tone');
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const wallH = n(ctx, 'wallH', 18, 10, 40);
   const phi = THREE.MathUtils.degToRad(n(ctx, 'angle', 36, 18, 60));
   const gw = n(ctx, 'gateW', 3.6, 1.6, 6);
@@ -77,7 +76,7 @@ export function buildWall(ctx: SketchContext, view: THREE.PerspectiveCamera, sx:
   // The gate stands in the near third: its centre lands a set fraction across the card from the near edge.
   const frac = n(ctx, 'gateAt', 0.3, 0.12, 0.4);
   const xPage = sx > 0 ? CARD.x0 + frac * (CARD.x1 - CARD.x0) : CARD.x1 - frac * (CARD.x1 - CARD.x0);
-  const G = new THREE.Vector3((xPage - TABLOID_PAGE.width / 2) * D / f, 0, -D);
+  const G = new THREE.Vector3((xPage - PAGE.width / 2) * D / f, 0, -D);
   const heights = COURSES.map(w => w * (wallH - (COURSES.length - 1) * COURSE_GAP));
   const bottoms = heights.map((_, c) => heights.slice(0, c).reduce((s, h) => s + h + COURSE_GAP, 0));
   const nC = COURSES.length;
@@ -620,7 +619,7 @@ function helixPiece(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THRE
 export function drawHierophant(ctx: SketchContext): Part[] {
   const view = gateCamera(ctx);
   const eye = view.position.clone();
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const sx = wallSide(ctx);
   const wall = buildWall(ctx, view, sx);
@@ -695,10 +694,10 @@ export function drawHierophant(ctx: SketchContext): Part[] {
     const depthW = renderDepthBufferCPU(wallGeos, viewW, W, H);
     const depthF = renderDepthBufferCPU(farGeos, viewF, W, H);
     const knock = n(ctx, 'knockout', 1.1, 0.3, 3);
-    const standingW = meshCoverage(wallGeos, viewW, TABLOID_PAGE, knock), standingF = meshCoverage(farGeos, viewF, TABLOID_PAGE, knock);
+    const standingW = meshCoverage(wallGeos, viewW, PAGE, knock), standingF = meshCoverage(farGeos, viewF, PAGE, knock);
     const solids = (p: Point) => standingW(p) || standingF(p);
-    const solids0 = meshCoverage(slabGeos, viewW, TABLOID_PAGE, 0.15);
-    const solidsGate = meshCoverage(slabGeos, viewW, TABLOID_PAGE, 0.35);
+    const solids0 = meshCoverage(slabGeos, viewW, PAGE, 0.15);
+    const solidsGate = meshCoverage(slabGeos, viewW, PAGE, 0.35);
     const envW = { view: viewW, depth: depthW, width: W, height: H };
     const depthVisible = (lines3: THREE.Vector3[][]) => {
       let total = 0, seen = 0;

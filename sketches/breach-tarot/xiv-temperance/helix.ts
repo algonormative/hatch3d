@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
+import { PAGE } from '../../kit/format.ts';
 import { clamp } from '../../kit/params.ts';
 
 /**
@@ -64,7 +65,7 @@ export function twinHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, pla
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: o.twist } });
   const strokes: HelixStroke[] = [];
   const meshes: THREE.BufferGeometry[] = [];
-  const f = 215.9 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
 
   for (const plan of plans) {
     const core = plan.points.map(p => p.clone().multiplyScalar(S));

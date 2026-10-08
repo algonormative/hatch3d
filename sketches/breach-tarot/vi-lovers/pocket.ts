@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Point } from '../../../src/sketch/types.ts';
 import { meshCoverage } from '../../kit/page.ts';
 import { pageOf } from '../../kit/perspective.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE } from '../../kit/format.ts';
 
 /**
  * A lover's clear pocket of paper: where the figure's surfaces cover the sheet, grown by `margin`
@@ -24,7 +24,7 @@ export function roundedPocket(geometries: THREE.BufferGeometry[], view: THREE.Ca
   if (!Number.isFinite(x0)) return () => false;
   const pad = 2 * margin + 2;
   x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
-  const covered = meshCoverage(geometries, view, TABLOID_PAGE, margin * 0.8, res);
+  const covered = meshCoverage(geometries, view, PAGE, margin * 0.8, res);
   const gw = Math.ceil((x1 - x0) * res), gh = Math.ceil((y1 - y0) * res);
   let grid = new Float32Array(gw * gh);
   for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) grid[j * gw + i] = covered({ x: x0 + (i + 0.5) / res, y: y0 + (j + 0.5) / res }) ? 1 : 0;

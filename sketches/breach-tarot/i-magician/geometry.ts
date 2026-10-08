@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
@@ -28,8 +28,7 @@ import { bodyFigure, figureMeshes, figureStrokes } from './figure.ts';
  * ground cracks out from under it. Over
  * its head, in full view with everything cleared round it, the lemniscate: the card's flat mark.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FIGURE = 24;
 const EYE = 9;
@@ -41,7 +40,7 @@ const FIGURE_EDGE_SLACK = 1;
 export function magicianCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -105,14 +104,14 @@ export function drawMagician(ctx: SketchContext): Part[] {
   const view = magicianCamera(ctx);
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const f = TABLOID_PAGE.height / 2 / fovT;
+  const f = PAGE.height / 2 / fovT;
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const halfW = (CARD.x1 - CARD.x0) / 2;
   const half = (z: number) => halfW / f * (eye.z - z);
   // Small and far: the figure stands a set height on the card.
   const figureMm = n(ctx, 'figure', 40, 14, 100);
   const depth = FIGURE * f / figureMm;
-  const base = new THREE.Vector3((TABLOID_PAGE.width / 2 - (CARD.x0 + CARD.x1) / 2) / f * depth + n(ctx, 'figureX', 0, -0.3, 0.3) * half(-depth), 0, -depth);
+  const base = new THREE.Vector3((PAGE.width / 2 - (CARD.x0 + CARD.x1) / 2) / f * depth + n(ctx, 'figureX', 0, -0.3, 0.3) * half(-depth), 0, -depth);
   const light = new THREE.Vector3(0.1, 0.9, 0.5).normalize();
   const s = poseSkeleton(chargingPose(n(ctx, 'turn', 8, -60, 60)), { height: FIGURE, position: base, proportions: ELONGATED });
   const rng = ctx.random('magician-power');
@@ -231,7 +230,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
     const wrng = ctx.random('magician-words');
     const textStrokes: THREE.Vector3[][] = [];
     const taken: { x0: number; x1: number; y0: number; y1: number }[] = [];
-    const cover = meshCoverage(geometries, view, TABLOID_PAGE, 2);
+    const cover = meshCoverage(geometries, view, PAGE, 2);
     const top2 = HORIZON_Y + 6, bottom = CARD.y1 - 5;
     let side = wrng() < 0.5 ? -1 : 1, lastY = top2 - 8;
     words.forEach((word, i) => {
@@ -318,7 +317,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
     // The ground: dark rows, the field's light pooled round its feet.
     const rows: Stroke[] = [];
     for (let y = HORIZON_Y + 0.6, i = 0; y < CARD.y1; y += 0.7, i++) {
-      const z = onGround(view, { x: TABLOID_PAGE.width / 2, y }).z;
+      const z = onGround(view, { x: PAGE.width / 2, y }).z;
       const reachX = half(z) + 2;
       const pts: THREE.Vector3[] = [], keep: boolean[] = [];
       for (let q = 0; q <= 200; q++) {
@@ -366,7 +365,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
     for (const path of markPaths) for (const inside of clipWindow(path)) buckets.add('mark-carbon', inside);
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['ground', 'cracks', 'blocks', 'field', 'helix', 'figure', 'mark', 'slogan'], INKS);
-    const solidThings = meshCoverage(geometries, view, TABLOID_PAGE, 0.4);
+    const solidThings = meshCoverage(geometries, view, PAGE, 0.4);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidThings(p) && !onMark(p) && !inPocket(p), 0.3) });
     parts.push(...cardFrame('I', 'THE MAGICIAN'));
     return parts;

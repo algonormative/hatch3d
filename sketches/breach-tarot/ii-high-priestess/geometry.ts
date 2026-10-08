@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -29,8 +29,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * word by word, alternating sides. The temple stands narrow, so the sky and horizon run out to
  * both edges of the card.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 8.3;
@@ -39,7 +38,7 @@ const COURSE_GAP = 0.5;
 export function priestessCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -318,7 +317,7 @@ const BACK_LIGHT = new THREE.Vector3(-0.25, 0.55, -0.8).normalize();
 function pillar(ctx: SketchContext, lay: Layout, side: -1 | 1, dark: boolean, top: number, faces: Face[], look: Map<Slab, Look>): Slab[] {
   const rng = ctx.random(side < 0 ? 'priestess-pillar-left' : 'priestess-pillar-right');
   const { u, distance: D, pillarWidth: pw } = lay;
-  const cx = (lay.cx + side * lay.pillarCentre - TABLOID_PAGE.width / 2) * u;
+  const cx = (lay.cx + side * lay.pillarCentre - PAGE.width / 2) * u;
   const out: Slab[] = [];
   let y = 0;
   // The light pillar is lit from the side its inner flank faces, so that flank stays open paper.
@@ -355,7 +354,7 @@ function lintel(lay: Layout, top: number, look: Map<Slab, Look>): Slab[] {
   const out: Slab[] = [];
   let y = top;
   for (const [h, inset, tone] of [[9, 0, 0.7], [3, 4, 0.5]] as const) {
-    const sl = solid((lay.cx - TABLOID_PAGE.width / 2) * u, (y + h / 2) * u, -D, (span - 2 * inset) * u, (h - COURSE_GAP) * u, (pw + 12 - 2 * inset) * u, out.length, 'stack');
+    const sl = solid((lay.cx - PAGE.width / 2) * u, (y + h / 2) * u, -D, (span - 2 * inset) * u, (h - COURSE_GAP) * u, (pw + 12 - 2 * inset) * u, out.length, 'stack');
     sl.tone = tone;
     out.push(sl);
     look.set(sl, { group: 'lintel', light: FRONT_LIGHT, pitch: 2.2 });
@@ -401,11 +400,11 @@ function frontRings(sl: Slab, light: THREE.Vector3, pitch: number): THREE.Vector
 export function drawHighPriestess(ctx: SketchContext): Part[] {
   const view = priestessCamera(ctx);
   const eye = view.position.clone();
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const distance = n(ctx, 'distance', 90, 50, 220);
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const lay: Layout = {
-    view, u: distance / f, distance, cx: TABLOID_PAGE.width / 2,
+    view, u: distance / f, distance, cx: PAGE.width / 2,
     groundY: pageOf(view, new THREE.Vector3(0, 0, -distance)).y,
     pillarCentre: n(ctx, 'pillarCentre', 62, 40, 95), pillarWidth: n(ctx, 'pillarWidth', 27, 20, 50), lintelTop: n(ctx, 'lintelTop', 62, 46, 100),
   };
@@ -440,7 +439,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
     // Paper round the temple, and a clean straight-edged column of paper round the cable (not its
     // ragged silhouette) where it passes the sky ruling and the lintel's hatch.
-    const slabSolids = meshCoverage(slabGeometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const slabSolids = meshCoverage(slabGeometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
     const cableXs = cable.strokes.flatMap(h => h.points.map(q => pageOf(view, q))).filter(q => q.y > CARD.y0 - 2 && q.y < cableEnd).map(q => q.x);
     const halo = { x0: Math.min(...cableXs) - 1.1, x1: Math.max(...cableXs) + 1.1 };
     const inHalo = (p: Point) => p.x > halo.x0 && p.x < halo.x1 && p.y < cableEnd + 0.5;

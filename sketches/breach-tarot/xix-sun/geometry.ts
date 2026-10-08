@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { alongRay, helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { glyphMask, groundWord, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -24,8 +24,7 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * long shadow comes toward the viewer across the paving, split by one shaft of light where the wall
  * is breached. The disc's rim, a few flat rings, is the card's flat mark.
  */
-const W = 559, H = 864;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.4;
 const SUN_DIST = 150;
@@ -33,7 +32,7 @@ const SUN_DIST = 150;
 export function sunCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 40, 80), eye: [0, EYE, 0], target: [0, EYE, -100], far: 800,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -43,10 +42,10 @@ export interface Sun { page: Point; centre: THREE.Vector3; radius: number; rays:
 export function sun(ctx: SketchContext, view: THREE.PerspectiveCamera): Sun {
   const rng = ctx.random('sun-rays');
   const window = HORIZON_Y - CARD.y0;
-  const page = { x: TABLOID_PAGE.width / 2, y: HORIZON_Y - (0.36 + 0.2 * n(ctx, 'height', 0.5, 0, 1)) * window };
+  const page = { x: PAGE.width / 2, y: HORIZON_Y - (0.36 + 0.2 * n(ctx, 'height', 0.5, 0, 1)) * window };
   const centre = atPage(view, page, SUN_DIST);
   // World units per page millimetre at the sun's distance.
-  const unit = SUN_DIST / (TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
+  const unit = SUN_DIST / (PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
   const radius = (30 + 22 * n(ctx, 'size', 0.5, 0, 1)) * unit;
   const count = 2 * Math.round(6 + 4 * n(ctx, 'rays', 0.5, 0, 1));
   const spin = rng() * Math.PI / count;
@@ -199,8 +198,8 @@ export function drawSun(ctx: SketchContext): Part[] {
         };
       },
     });
-    const disc = s.radius * TABLOID_PAGE.height / 2 / (SUN_DIST * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
-    const solidThings = meshCoverage(geometries, view, TABLOID_PAGE, 1.4);
+    const disc = s.radius * PAGE.height / 2 / (SUN_DIST * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
+    const solidThings = meshCoverage(geometries, view, PAGE, 1.4);
     // Fine rays over the whole sky, from just beyond the disc, in a fixed 64-step rhythm.
     const rng = ctx.random('sun-fine');
     const pattern = barPattern(rng, 0.8);

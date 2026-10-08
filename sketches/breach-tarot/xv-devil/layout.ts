@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE } from '../../kit/format.ts';
 import { buildDoor, type Door } from './doors.ts';
 import { standing, type Figure } from './figures.ts';
 import { param } from './params.ts';
@@ -51,7 +51,7 @@ export interface Layout {
  * wrist. Pure layout: no drawing, so what the card says can be checked without rendering it.
  */
 export function devilLayout(ctx: SketchContext): Layout {
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(param(ctx, 'fov') / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(param(ctx, 'fov') / 2));
   const rng = ctx.random('devil-layout');
   const v = param(ctx, 'variety');
 

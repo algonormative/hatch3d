@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { clearBands, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -29,11 +29,10 @@ import { storm, tower, towerCamera } from './geometry.ts';
  * longer crosses anything that could slip. The clock the machine ran on, a hatched square wave
  * across the sky, can come too (`machineClock`).
  */
-const W = 559, H = 864;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 /** The machine's own depth pass: the same projection at twice the resolution, its range fitted. */
 const W2 = 2 * W, H2 = 2 * H;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
-const MM2_X = TABLOID_PAGE.width / W2, MM2_Y = TABLOID_PAGE.height / H2;
+const MM2_X = PAGE.width / W2, MM2_Y = PAGE.height / H2;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** tower() pushes the ground last: the plinth, 18 × 9 paving stones and 7 pieces of debris. */
 const GROUND_COUNT = 1 + 18 * 9 + 7;
@@ -237,7 +236,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   const view = towerCamera(ctx);
   const viewB = horizonCamera({
     fov: n(ctx, 'fov', 56, 40, 80), eye: [0, 2.2, n(ctx, 'distance', 48, 30, 90)], target: [0, 2.2, 0], far: 400,
-    page: TABLOID_PAGE, depth: { width: W2, height: H2 }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W2, height: H2 }, horizonY: HORIZON_Y,
   });
   const eye = view.position.clone();
   const all = tower(ctx);
@@ -319,7 +318,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     // on whichever face of the panel sees the eye, clear of the helix, inside the card.
     type Face = SloganSurface & { col: number; y: number };
     // A face behind the helix's axis must stand clear of where the helix crosses the sheet.
-    const onHelix = meshCoverage(rise.meshes, view, TABLOID_PAGE, 2.5);
+    const onHelix = meshCoverage(rise.meshes, view, PAGE, 2.5);
     const axisDepth = eye.distanceTo(core);
     // Each panel offers whichever of its four upright faces sees the eye best: outer, inner, or the
     // radial ends at the mouth of the C; each bench base offers its outer face.
@@ -446,7 +445,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     });
 
     // Everything standing (the machine, its lid, the helix) stands in front of the bolt and the clock.
-    const standing = meshCoverage(machineGeoms, view, TABLOID_PAGE, 1.2);
+    const standing = meshCoverage(machineGeoms, view, PAGE, 1.2);
     if (clock) {
       const box = { x0: CARD.x0, x1: CARD.x1, y0: cy - amp - 4, y1: cy + amp + 4 };
       for (const path of bandMarks(wave, clockHalf, box, { pitch: 0.8, angle: Math.PI / 4 })) {

@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { hatchedBar } from '../../kit/fills.ts';
@@ -35,8 +35,7 @@ import { colossus, cutTube, frameAt, fromFrame, headCoil, headOf, plinthFronts, 
  * base and the avenue stay heavy, and the ruled sky opens round it. Over the eyes, the one flat mark: a
  * hatched censor bar on the sheet itself. The phrase is cut word by word into the throne and the cubes.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const GROUPS = ['sky', 'ground', 'avenue', 'throne', 'figure', 'helix', 'bar', 'slogan'] as const;
 const EYE = 6;
@@ -47,7 +46,7 @@ const SUIT: Look = { cloth: 'carbon', accent: 'carbon', edge: 'carbon', crease: 
 export function emperorCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 2, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -57,7 +56,7 @@ export function emperorCamera(ctx: SketchContext): THREE.PerspectiveCamera {
  * the horizon, and the figure is scaled so the top of its head reaches `headTop`.
  */
 export function placeColossus(ctx: SketchContext, view: THREE.Camera, yaw: number): { anchor: THREE.Vector3; height: number } {
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2));
   const drop = n(ctx, 'baseDrop', 10, 3, 40), headTop = n(ctx, 'headTop', 80, 50, 140), offX = n(ctx, 'throneX', 46, 0, 100);
   const at = (Z: number) => new THREE.Vector3(offX * Z / f, 0, -Z);
   const sized = (Z: number) => {
@@ -133,7 +132,7 @@ const twos = (k: number) => { if (k === 0) return 12; let t = 0; while (k % 2 ==
 export function drawEmperor(ctx: SketchContext): Part[] {
   const view = emperorCamera(ctx);
   const eye = view.position.clone();
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const forward = new THREE.Vector3();
   view.getWorldDirection(forward);
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
@@ -229,7 +228,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
   fitDepthRange(view, geometries);
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
     const glowAt = pageOf(view, head.centre);
 
     // The censor bar: flat on the sheet across the eyes, at an odd seeded angle, knocking out what it covers.
@@ -347,7 +346,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
       bySlab.set(st.owner, list);
     }
     // The coil keeps to its own ribbons: the pulse ticks the helix strews past its edges read as scraps at this size.
-    const onCoil = meshCoverage(helix.meshes, view, TABLOID_PAGE, 0.3);
+    const onCoil = meshCoverage(helix.meshes, view, PAGE, 0.3);
     const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => {
       for (const run of runs2) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), st.group === 'helix' ? onCoil : undefined);
     };

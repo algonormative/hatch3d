@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -38,8 +38,7 @@ import { chartresPlan, type P2, type Plan } from './labyrinth.ts';
  * flaring as it rises, with clear paper round it. The phrase is cut into the near walls, a word to a
  * ring, read walking inward; the first set's four marks keep the old card's four corners.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** Circuit pitch (path plus wall), and the masonry, in the Fool's block sizes. */
 const PITCH = 10, THICK = 2.0, COURSE = 2.2, COPING = 0.6;
@@ -53,7 +52,7 @@ export interface WorldView { view: THREE.PerspectiveCamera; centre: THREE.Vector
 export function worldCamera(ctx: SketchContext, plan: Plan): WorldView {
   const rim = plan.wall(0) + PITCH;
   const fov = n(ctx, 'fov', 45, 25, 75);
-  const f = TABLOID_PAGE.height / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+  const f = PAGE.height / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
   const tilt = THREE.MathUtils.degToRad(n(ctx, 'tilt', 40, 20, 90));
   const dist = f * rim / (n(ctx, 'fit', 0.94, 0.6, 1.05) * (CARD.x1 - CARD.x0) / 2);
   const centre = new THREE.Vector3(0, 0, -dist);
@@ -62,7 +61,7 @@ export function worldCamera(ctx: SketchContext, plan: Plan): WorldView {
   view.position.set(0, dist * Math.sin(tilt), -dist + dist * Math.cos(tilt));
   view.lookAt(centre);
   const cy = CARD.y0 + n(ctx, 'centreY', 0.64, 0.3, 0.85) * (CARD.y1 - CARD.y0);
-  view.setViewOffset(W, H, 0, -(cy - TABLOID_PAGE.height / 2) / (TABLOID_PAGE.height / H), W, H);
+  view.setViewOffset(W, H, 0, -(cy - PAGE.height / 2) / (PAGE.height / H), W, H);
   view.updateProjectionMatrix();
   view.updateMatrixWorld();
   return { view, centre };
@@ -134,7 +133,7 @@ export function drawWorld(ctx: SketchContext): Part[] {
   const { view, centre } = worldCamera(ctx, plan);
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const mmPerUnit = (p: THREE.Vector3) => TABLOID_PAGE.height / (2 * Math.max(1, eye.distanceTo(p)) * fovT);
+  const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.distanceTo(p)) * fovT);
   const rng = ctx.random('world-walls');
   const courses = Math.round(n(ctx, 'courses', 2, 1, 4));
 
@@ -215,8 +214,8 @@ export function drawWorld(ctx: SketchContext): Part[] {
   });
 
   // Clear paper round the helix and round the figure: nothing behind them comes near their lines.
-  const helixCover = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'helixClear', 1.4, 0, 4));
-  const figureCover = meshCoverage(figureMeshes, view, TABLOID_PAGE, n(ctx, 'figureClear', 1.7, 0.5, 6));
+  const helixCover = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'helixClear', 1.4, 0, 4));
+  const figureCover = meshCoverage(figureMeshes, view, PAGE, n(ctx, 'figureClear', 1.7, 0.5, 6));
 
   // Where the walls are only indicated (see below): above `quietFrom` on the sheet, fading to full
   // detail by `quietTo`.
@@ -434,7 +433,7 @@ export function drawWorld(ctx: SketchContext): Part[] {
     const yTop = pageOf(view, toWorld(centre, { x: 0, y: -(plan.wall(0) + 2 * PITCH) })).y;
     const yBot = Math.min(CARD.y1, pageOf(view, toWorld(centre, { x: 0, y: plan.wall(0) + 2 * PITCH })).y);
     for (let y = yTop, k2 = 0; y < yBot; y += n(ctx, 'shadowPitch', 0.62, 0.4, 1.5), k2++) {
-      const z = onGround(view, { x: TABLOID_PAGE.width / 2, y }).z;
+      const z = onGround(view, { x: PAGE.width / 2, y }).z;
       const spans: [number, number][] = [];
       for (const { poly, z0, z1 } of shadows) {
         if (z < z0 || z > z1) continue;

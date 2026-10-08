@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
@@ -35,8 +35,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * the throat and streaming up out of the maze into the open sky. Where the old card's sun stands, a
  * quiet flat echo of XIX's sun is the card's flat mark.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FIGURE = 24;
 const EYE = 12;
@@ -49,7 +48,7 @@ export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
     // The near plane sits just short of the nearest ground in view: depth precision is what keeps
     // the body hidden inside the suit, a few units behind the cloth.
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 3000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -86,7 +85,7 @@ const pair = (a: Cell, b: Cell) => (key(a.c, a.r) < key(b.c, b.r) ? `${key(a.c, 
 export function maze(ctx: SketchContext, view: THREE.Camera, foot: THREE.Vector3): Maze {
   const rng = ctx.random('fool-maze');
   const cells = new Map<string, Cell>();
-  const mmPerUnit = (d: number) => TABLOID_PAGE.height / (2 * d * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2)));
+  const mmPerUnit = (d: number) => PAGE.height / (2 * d * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2)));
   const axes = gridAxes(n(ctx, 'gridAngle', 45, 0, 45));
   const eyeZ = view.position.z;
   const reach = (eyeZ - foot.z) + Math.round(n(ctx, 'depth', 12, 6, 24)) * CELL;
@@ -171,7 +170,7 @@ export function walls(ctx: SketchContext, view: THREE.Camera, m: Maze): { walls:
       const age = 1 - t / Math.max(1, m.now);
       const collapse = clamp(smooth(0.55 - 0.4 * decay, 1.02 - 0.2 * decay, age), 0, 1);
       const dist = eyeZ - mz;
-      const far = TABLOID_PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < 1.6;
+      const far = PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < 1.6;
       // He keeps building: the older a wall, the more courses it has grown.
       const courses = 2 + Math.round(n(ctx, 'grow', 0.5, 0, 1) * 64 * age ** 2.4 * (0.7 + 0.6 * rng()));
       const slabs = wallSlabs(rng, mx, mz, dir, collapse, far, courses, fray);
@@ -280,7 +279,7 @@ export function drawFool(ctx: SketchContext): Part[] {
   const view = foolCamera(ctx);
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const mmPerUnit = (p: THREE.Vector3) => TABLOID_PAGE.height / (2 * Math.max(1, eye.z - p.z) * fovT);
+  const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.z - p.z) * fovT);
   // The Fool stands near the foot of the card, right of centre, walking left into the open ground.
   const foot = onGround(view, { x: CARD.x0 + (CARD.x1 - CARD.x0) * n(ctx, 'foolX', 0.6, 0.3, 0.75), y: CARD.y1 - n(ctx, 'footY', 32, 10, 80) });
   const m = maze(ctx, view, foot);
@@ -353,7 +352,7 @@ export function drawFool(ctx: SketchContext): Part[] {
   const geometries = [...allSlabs.map(slabGeometry), slabGeometry(carried), ...bodyMeshes(body, 0.8), ...bigSuitMeshes(suit), ...tie.meshes];
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const figureCover = meshCoverage([...bodyMeshes(body, 0.5), ...bigSuitMeshes(suit, 0.5), slabGeometry(carried)], view, TABLOID_PAGE, 2.5);
+    const figureCover = meshCoverage([...bodyMeshes(body, 0.5), ...bigSuitMeshes(suit, 0.5), slabGeometry(carried)], view, PAGE, 2.5);
     // The phrase, painted on the open ground in front of him and down the near corridors, staggered.
     const settings = sloganSettings(ctx);
     const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
@@ -395,7 +394,7 @@ export function drawFool(ctx: SketchContext): Part[] {
     }
     const onGlyph = glyphMask(glyphPaths, 0.8);
     const buckets = new PartBuckets(0.4);
-    const solidThings = meshCoverage(geometries, view, TABLOID_PAGE, 0.4);
+    const solidThings = meshCoverage(geometries, view, PAGE, 0.4);
     const add = (key: string, run: Point[]) => { for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(key, piece); };
     projectStrokes(strokes, { view, depth, width: W, height: H }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
@@ -415,7 +414,7 @@ export function drawFool(ctx: SketchContext): Part[] {
     });
     const shadowRows: Stroke[] = [];
     for (let y = HORIZON_Y + 0.6, k = 0; y < CARD.y1; y += 0.62 + 0.004 * (y - HORIZON_Y), k++) {
-      const z = onGround(view, { x: TABLOID_PAGE.width / 2, y }).z;
+      const z = onGround(view, { x: PAGE.width / 2, y }).z;
       const spans: [number, number][] = [];
       for (const poly of shadows) {
         const xs: number[] = [];
@@ -447,7 +446,7 @@ export function drawFool(ctx: SketchContext): Part[] {
       const c = { x: CARD.x1 - n(ctx, 'sunInset', 0.2, 0.08, 0.4) * (CARD.x1 - CARD.x0), y: CARD.y0 + n(ctx, 'sunDrop', 0.13, 0.05, 0.3) * (CARD.y1 - CARD.y0) };
       const R = n(ctx, 'sunSize', 18, 10, 40);
       const sky = { ...CARD, y1: HORIZON_Y - 6 };
-      const clearOf = meshCoverage(geometries, view, TABLOID_PAGE, 2.2);
+      const clearOf = meshCoverage(geometries, view, PAGE, 2.2);
       const clear = (p: Point) => !clearOf(p) && !onGlyph(p);
       const put = (key: string, run: Point[], keep: (p: Point, at: number) => boolean = clear) => {
         for (const inside of clipWindow(run, sky)) for (const piece of keepAlong(inside, keep, 0.12)) buckets.add(key, piece);

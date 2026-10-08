@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
+import { PAGE } from '../../kit/format.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { onGround, pageOf } from '../../kit/perspective.ts';
 import { HORIZON_Y } from '../card.ts';
@@ -91,7 +92,8 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
   const strands = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0 } }).map(flatStrand);
   // The kit spaces its laminations by how the unbent strand looks to the camera it is given: a stand-in that sees
   // the whole strand large, so every lamination and rib comes through, and the road thins them by its own width.
-  const sight = new THREE.OrthographicCamera(-139.7 / 80, 139.7 / 80, 215.9 / 80, -215.9 / 80, 0.1, 100);
+  const hx = PAGE.width / 2 / 80, hy = PAGE.height / 2 / 80;
+  const sight = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.1, 100);
   const lift = n(ctx, 'pathLift', 0.05, 0, 1) * plan.half;
   const tilt = n(ctx, 'pathTwistLift', 0.35, 0, 1);
   const minGap = n(ctx, 'pathLamination', 0.75, 0.4, 2);

@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { densify, keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -32,8 +32,7 @@ import { towerVariant, type TowerForm } from './towers.ts';
  * glance, wrong a beat later. The last two words of the phrase are cut into the tower that exists only
  * in the water.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** The eye is high over a small world: towers stand only a few eye heights tall, so the ground and the water open out below the horizon. */
 const EYE = 30;
@@ -46,11 +45,11 @@ const CALM = 0.5;
 export function moonCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 40000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
-const focalOf = (view: THREE.PerspectiveCamera) => TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+const focalOf = (view: THREE.PerspectiveCamera) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
 
 /** The waterline on the sheet: y (mm) at each x. A bank rising from near the viewer on the left to far off on the right, with a spit of land reaching toward us where the path comes out. */
 export function shoreOf(ctx: SketchContext): (x: number) => number {
@@ -471,7 +470,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // comes out as a bead of ticks: hatch shorter than `moonTick` is left out.
     const tick = n(ctx, 'moonTick', 1.2, 0.4, 3);
     // Nothing of the moon draws over a tower (a tower that rises into its sky stands in front of it).
-    const solids = meshCoverage(standGeos, viewR, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const solids = meshCoverage(standGeos, viewR, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
     const moonBySlab = new Map<number, Stroke[]>();
     for (const st of moonStrokes) moonBySlab.set(st.owner!, [...(moonBySlab.get(st.owner!) ?? []), st]);
     const blockEdges: Point[][] = [];
@@ -596,7 +595,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     }
 
     // The water ruling, knocked out where the reflection stands (and put back where the ripple breaks it).
-    const coverM = meshCoverage(waterGeos, viewM, TABLOID_PAGE, 0.5);
+    const coverM = meshCoverage(waterGeos, viewM, PAGE, 0.5);
     const pitch = n(ctx, 'waterPitch', 1.25, 0.55, 2);
     for (let y = HORIZON_Y + 1, i = 0; y < CARD.y1 - 0.3; i++) {
       const t = depthOf(y), b = bandOf(y);
@@ -615,9 +614,9 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // every other gap the sky's ruling runs on, as sky seen through the broken moon.
     const shells = shards ? moonGeos.slice(0, moonGeos.length - blockGeos.length) : [];
     const skyCover = shards ? [...frontOf(shells, eye), ...blockGeos] : moonGeos;
-    const shine = meshCoverage(skyCover, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) * (sunlit ? 1.5 : 1) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
-    const fronts = shards ? meshCoverage(skyCover, viewC, TABLOID_PAGE, 0) : () => false;
-    const anyShell = shards ? meshCoverage(shells, viewC, TABLOID_PAGE, 0) : () => false;
+    const shine = meshCoverage(skyCover, viewC, PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) * (sunlit ? 1.5 : 1) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
+    const fronts = shards ? meshCoverage(skyCover, viewC, PAGE, 0) : () => false;
+    const anyShell = shards ? meshCoverage(shells, viewC, PAGE, 0) : () => false;
     const inside = (p: Point) => anyShell(p) && !fronts(p);
     if (shards) {
       const c = pageOf(view, shards.centre), r = shards.radius * f / eye.distanceTo(shards.centre) * 1.6;
@@ -663,7 +662,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
 
     // The crescent's unlit rest of the disc: a faint dashed rim, from horn to horn the long way round.
     if (moon) {
-      const edge = meshCoverage(moonGeos, viewC, TABLOID_PAGE, 1.2);
+      const edge = meshCoverage(moonGeos, viewC, PAGE, 1.2);
       const rim: Point[] = Array.from({ length: 241 }, (_, k) => {
         const a = moon.bulge + moon.horns * 0.9 + k / 240 * (2 * Math.PI - 1.8 * moon.horns);
         return pageOf(view, rimPoint(moon, a));

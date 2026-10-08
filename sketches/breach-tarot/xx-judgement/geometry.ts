@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -24,8 +24,7 @@ import { trumpet, type Trumpet } from './trumpet.ts';
  * into the undersides of the lifted lids, a word to a lid, scattered. No figures: the dead are the
  * records. The sky is lightly ruled and knocked out round the horn.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 const SLAB_SLACK = 0.2, HELIX_SLACK = 0.5;
@@ -34,7 +33,7 @@ const LIGHT = new THREE.Vector3(-0.12, 0.7, 0.68).normalize();
 export function judgementCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 56, 36, 75), eye: [0, n(ctx, 'eye', 8, 3, 14), 0], target: [0, n(ctx, 'eye', 8, 3, 14), -100], near: 8, far: 1500,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -86,7 +85,7 @@ function gapToHorn(horn: Trumpet, p: THREE.Vector3, samples: THREE.Vector3[]): n
 export function drawJudgement(ctx: SketchContext): Part[] {
   const view = judgementCamera(ctx);
   const eye = view.position.clone();
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const depthOf = (p: THREE.Vector3) => Math.max(1, eye.z - p.z);
   const mmPerUnit = (p: THREE.Vector3) => f / depthOf(p);
 
@@ -103,10 +102,10 @@ export function drawJudgement(ctx: SketchContext): Part[] {
 
   // Fragments rise between the plain and the bell: never in front of the horn on the sheet.
   const tube = hornTube(horn);
-  const onBell = meshCoverage([tube], view, TABLOID_PAGE, 4);
+  const onBell = meshCoverage([tube], view, PAGE, 4);
   // ...and always against clear paper: a fragment that crossed a lid's outline would look pinned to it.
   const plainGeos = slabs.map(({ sl }) => slabGeometry(sl));
-  const onPlain = meshCoverage(plainGeos, view, TABLOID_PAGE, 2.5);
+  const onPlain = meshCoverage(plainGeos, view, PAGE, 2.5);
   for (const g of plainGeos) g.dispose();
   const bits = fragments(ctx, view, vaults, horn.mouth.centre, p => gapToHorn(horn, p, samples) > 3 && !onBell(pageOf(view, p)) && !onPlain(pageOf(view, p)));
   for (const sl of bits) slabs.push({ sl, group: 'fragment' });
@@ -150,9 +149,9 @@ export function drawJudgement(ctx: SketchContext): Part[] {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
     const nearP = view.near, farP = view.far;
     const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
-    const solids = meshCoverage([...geometries, tube], view, TABLOID_PAGE, n(ctx, 'knockout', 1.4, 0.3, 3));
+    const solids = meshCoverage([...geometries, tube], view, PAGE, n(ctx, 'knockout', 1.4, 0.3, 3));
     // Paper round each fragment, so what is behind it does not show through.
-    const onFragment = meshCoverage(fragmentGeos, view, TABLOID_PAGE, 0.9);
+    const onFragment = meshCoverage(fragmentGeos, view, PAGE, 0.9);
 
     // The phrase: a word to a lid, cut into the underside as it lifts.
     const settings = sloganSettings(ctx);

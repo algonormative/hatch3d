@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { clearBands, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -20,15 +20,14 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * the eight-pointed star, and two helix streams pour from it into still water. The water is the
  * card's flat mark: a band of broken ripple hatch in which everything above is reflected, row by row.
  */
-const W = 559, H = 864;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.4;
 
 export function starCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 40, 80), eye: [0, EYE, 0], target: [0, EYE, -100], far: 600,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -37,7 +36,7 @@ export interface Sky { star: Slab[]; debris: Slab[]; words: Slab[]; centre: THRE
 export function sky(ctx: SketchContext, view: THREE.PerspectiveCamera): Sky {
   const rng = ctx.random('star-sky');
   const window = HORIZON_Y - CARD.y0;
-  const centre = atPage(view, { x: TABLOID_PAGE.width / 2 + (rng() - 0.5) * 30, y: CARD.y0 + 0.36 * window }, 70);
+  const centre = atPage(view, { x: PAGE.width / 2 + (rng() - 0.5) * 30, y: CARD.y0 + 0.36 * window }, 70);
   // The star: eight slabs radiating in the picture plane, long and short in turn, each a little tipped.
   const star: Slab[] = [];
   const size = 0.45 + 0.4 * n(ctx, 'starSize', 0.5, 0, 1);
@@ -61,7 +60,7 @@ export function sky(ctx: SketchContext, view: THREE.PerspectiveCamera): Sky {
   const wordPages: Point[] = [];
   for (let i = 0; i < 6; i++) {
     const side = i % 2 ? 1 : -1;
-    const p = { x: TABLOID_PAGE.width / 2 + side * (58 + 22 * rng()), y: CARD.y0 + 18 + (i + 0.5) / 6 * (window - 40) };
+    const p = { x: PAGE.width / 2 + side * (58 + 22 * rng()), y: CARD.y0 + 18 + (i + 0.5) / 6 * (window - 40) };
     const w = atPage(view, p, 55);
     const s = solid(w.x, w.y, w.z, 5.2 + 1.6 * rng(), 1.15, 1.2, 40 + i, 'stack');
     s.rz = (rng() - 0.5) * 0.18; s.ry = (rng() - 0.5) * 0.5; s.rx = (rng() - 0.5) * 0.2;
@@ -72,7 +71,7 @@ export function sky(ctx: SketchContext, view: THREE.PerspectiveCamera): Sky {
   // Debris: the Tower's fragments, small and tumbling, scattered over the sky as stars.
   const count = Math.round(20 + 50 * n(ctx, 'constellation', 0.5, 0, 1));
   const debris: Slab[] = [];
-  const starPage = { x: TABLOID_PAGE.width / 2, y: CARD.y0 + 0.36 * window };
+  const starPage = { x: PAGE.width / 2, y: CARD.y0 + 0.36 * window };
   for (let i = 0; i < count; i++) {
     let p: Point;
     let tries = 0;
@@ -210,7 +209,7 @@ export function drawStar(ctx: SketchContext): Part[] {
     });
     // The night, knocked out with a paper halo round every shining thing and every word.
     const halo = 1.6 + 1.6 * n(ctx, 'halo', 0.5, 0, 1);
-    const shine = meshCoverage(geometries, view, TABLOID_PAGE, halo);
+    const shine = meshCoverage(geometries, view, PAGE, halo);
     const bands = [...slogans.knockouts.values()].flat().map(q => q.map(c => ({ x: c.x * MM_X, y: c.y * MM_Y })));
     const inBand = (p: Point) => bands.some(q => {
       let inside = false;

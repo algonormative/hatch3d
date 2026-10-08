@@ -3,7 +3,7 @@ import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, strandStrokes } from '../../kit/helix.ts';
 import { clamp, smooth } from '../../kit/params.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE } from '../../kit/format.ts';
 import type { Stroke } from '../../kit/types.ts';
 
 /**
@@ -159,7 +159,7 @@ export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spi
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
   const base = { ...template[which], x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: 0, depth: 1, width, swell: 0, centre: -1e3, turns: 0.001 };
   // The ribbon's width lies along -sin θ × normal + cos θ × binormal; pick the θ that shows most of it on the sheet.
-  const aspect = TABLOID_PAGE.width / TABLOID_PAGE.height;
+  const aspect = PAGE.width / PAGE.height;
   const seen = (theta: number) => {
     let least = Infinity;
     for (let i = 1; i < 12; i++) {

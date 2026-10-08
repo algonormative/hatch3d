@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
 import { horizonCamera } from '../../kit/perspective.ts';
@@ -11,14 +11,13 @@ import { HORIZON_Y } from '../card.ts';
  * level, looking level at the horizon; the peak stands far off, so its whole height rises above
  * that eye line and its foot lies just under it.
  */
-export const W = 1118, H = 1728;
-export const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+export const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 export const EYE = 6;
 
 export function hermitCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 40, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -32,11 +31,11 @@ export interface Scale {
 }
 
 export function scaleOf(view: THREE.PerspectiveCamera): Scale {
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   return {
     f,
     mmPerUnit: p => f / Math.max(1, view.position.z - p.z),
-    at: (p, d) => new THREE.Vector3((p.x - TABLOID_PAGE.width / 2) * d / f, EYE + (HORIZON_Y - p.y) * d / f, -d),
+    at: (p, d) => new THREE.Vector3((p.x - PAGE.width / 2) * d / f, EYE + (HORIZON_Y - p.y) * d / f, -d),
   };
 }
 

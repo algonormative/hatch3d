@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -75,9 +75,9 @@ export function drawHermit(ctx: SketchContext): Part[] {
     const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
 
     // Page masks: everything that stands, the mountain alone, and a pocket of clear paper round the hermit and his lantern.
-    const standing = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 0.8, 0.2, 2));
-    const peakCover = meshCoverage(slabGeos, view, TABLOID_PAGE, 0);
-    const pocket = meshCoverage([...figure.meshes, ...lanternGeos], view, TABLOID_PAGE, n(ctx, 'pocket', 1.3, 0.3, 3));
+    const standing = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 0.8, 0.2, 2));
+    const peakCover = meshCoverage(slabGeos, view, PAGE, 0);
+    const pocket = meshCoverage([...figure.meshes, ...lanternGeos], view, PAGE, n(ctx, 'pocket', 1.3, 0.3, 3));
 
     // The phrase, up the climb: each word cut into the front face of a slab, from the faint foot of the
     // mountain to the summit, the last of them inside the lit circle.

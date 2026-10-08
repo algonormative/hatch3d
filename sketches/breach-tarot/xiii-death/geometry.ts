@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { slabGeometry, slabMatrix, slabStrokes, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { clearBands, onWordBox, planSlogans, rigidWords, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -22,11 +22,10 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * bare edges, dashes, dots, and a void at the point. The helix rises straight through the point,
  * unbent and fully drawn: the one thing that passes through unchanged.
  */
-const W = 559, H = 864;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** The singularity: the vanishing point, on the shared horizon at the card's centre line. */
-export const SINGULARITY: Point = { x: TABLOID_PAGE.width / 2, y: HORIZON_Y };
+export const SINGULARITY: Point = { x: PAGE.width / 2, y: HORIZON_Y };
 const EYE = 4.2;
 
 
@@ -34,7 +33,7 @@ const EYE = 4.2;
 export function deathCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 64, 40, 90), eye: [0, EYE, 6], target: [0, EYE, -100], far: 600,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -89,7 +88,7 @@ function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
     const a = start + arm + 2.6 * f + (rng() - 0.5) * 0.5;
     const rho = 128 * Math.exp(-1.15 * f) + (rng() - 0.5) * 10;
     const page = { x: SINGULARITY.x + rho * Math.cos(a), y: SINGULARITY.y + rho * Math.sin(a) * 1.15 };
-    const ndc = new THREE.Vector3(page.x / TABLOID_PAGE.width * 2 - 1, -(page.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
+    const ndc = new THREE.Vector3(page.x / PAGE.width * 2 - 1, -(page.y / PAGE.height * 2 - 1), 0.5).unproject(view);
     const dir = ndc.sub(view.position).normalize();
     const p = view.position.clone().addScaledVector(dir, 14 + 46 * rng());
     const size = 0.35 + 1.1 * (1 - f) * rng();
@@ -181,7 +180,7 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMo
   const offset = mode === 'torn' ? -64 : 0;
   let x = 0;
   if (offset !== 0) {
-    const ndc = new THREE.Vector3((SINGULARITY.x + offset) / TABLOID_PAGE.width * 2 - 1, -(SINGULARITY.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
+    const ndc = new THREE.Vector3((SINGULARITY.x + offset) / PAGE.width * 2 - 1, -(SINGULARITY.y / PAGE.height * 2 - 1), 0.5).unproject(view);
     const dir = ndc.sub(view.position).normalize();
     x = view.position.x + dir.x * (36 / -dir.z);
   }
@@ -198,7 +197,7 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMo
 
 /** A coarse page bitmap of the helix's silhouette, so a separate helix can stand in front of all. */
 function coverage(geometries: THREE.BufferGeometry[], view: THREE.Camera): (p: Point) => boolean {
-  const res = 4, gw = Math.ceil(TABLOID_PAGE.width * res), gh = Math.ceil(TABLOID_PAGE.height * res);
+  const res = 4, gw = Math.ceil(PAGE.width * res), gh = Math.ceil(PAGE.height * res);
   const grid = new Uint8Array(gw * gh);
   const v = new THREE.Vector3();
   for (const g of geometries) {
@@ -253,7 +252,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
     // Where the helix ends lie on the page, for the torn mode's measure of how far along it a point is.
-    const ends = strands.flatMap(s => [strandPoint(s, 0, 0), strandPoint(s, 1, 0)]).map(p => (-p.clone().project(view).y * 0.5 + 0.5) * TABLOID_PAGE.height);
+    const ends = strands.flatMap(s => [strandPoint(s, 0, 0), strandPoint(s, 1, 0)]).map(p => (-p.clone().project(view).y * 0.5 + 0.5) * PAGE.height);
     const mid = (Math.min(...ends) + Math.max(...ends)) / 2, half = (Math.max(...ends) - Math.min(...ends)) / 2;
     const endness = (p: Point) => smooth(0.62, 1.05, Math.abs(p.y - mid) / half);
     // The phrase lives where the drawing still holds: on near faces, well out from the point.

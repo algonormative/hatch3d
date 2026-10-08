@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
+import { renderSketch } from '../../cli/sketch/runner.ts';
 import { TABLOID_PAGE, TALL_ART } from '../../sketches/phase-garden/poster.ts';
+import { CARD as CARD_OF_CARDS, HORIZON_Y as HORIZON_OF_CARDS } from '../../sketches/breach-tarot/card.ts';
+import { targetPage } from '../sketch/render-target.ts';
 import {
   CARD, FORMAT, FRAME, HORIZON_Y, PAGE, PITCH_SCALE, SHEET, TABLOID_FORMAT, assertFormatPage, depthRaster, fitFov, formatFor,
   halo, layoutLength, layoutX, layoutY, tolerance,
@@ -19,6 +23,8 @@ describe('Breach Tarot format', () => {
     for (const key of Object.keys(before) as (keyof typeof before)[]) expect(Object.is(CARD[key], before[key])).toBe(true);
     expect(Object.keys(CARD)).toEqual(Object.keys(before));
     expect(Object.is(HORIZON_Y, before.y0 + 0.6 * (before.y1 - before.y0))).toBe(true);
+    expect(CARD_OF_CARDS).toBe(CARD);
+    expect(HORIZON_OF_CARDS).toBe(HORIZON_Y);
     expect(FRAME).toEqual({ rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2 });
     expect(PITCH_SCALE).toBe(1);
     expect(SHEET).toEqual({ x: 1, y: 1 });
@@ -70,5 +76,34 @@ describe('Breach Tarot format', () => {
     expect(wide.pens.find(pen => pen.id === 'carbon')!.width).toBe(0.1);
     expect(() => formatFor(page, { fit: 'diagonal' })).toThrow(/fit/);
     expect(() => formatFor(page, { colour: 'red' })).toThrow(/Unknown format option/);
+  });
+
+  const star = resolve(import.meta.dirname, '../../sketches/breach-tarot/xvii-star/sketch.ts');
+
+  it('a card printed at tabloid through the tarot stack’s finishing keeps its print identity', async () => {
+    // The request finalize sends for the tarot stack (phase-garden palette); the identity is the print-queue entry's.
+    const inks = ['#22282c', '#3c49aa', '#d04b3c', '#a5a938', '#776090'];
+    const finishing = {
+      border: { style: 'double' as const, pen: 'carbon', inset: 12, contentGap: 6 },
+      page: { width: 279.4, height: 431.8, margin: 18, paper: '#f4f0e6' },
+      pens: { ...Object.fromEntries(inks.map((color, i) => [['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'][i], { color }])), lettering: { color: inks[0] } },
+    };
+    const result = await renderSketch({ entry: star, seed: 2, finishing, timeoutMs: 120_000 });
+    expect(result.identity).toBe('a39a6030f765cc28d4fc32092a862bd2b46ebea840bac97212aa8f1885649564');
+  });
+
+  it('renders a card on a 70 x 120 mm page, its frame on the format’s card rect', async () => {
+    const result = await renderSketch({ entry: star, seed: 2, finishing: { page: { width: 70, height: 120 } }, timeoutMs: 120_000 });
+    const page = targetPage(TABLOID_PAGE, { width: 70, height: 120 });
+    expect(result.metadata.page).toEqual(page);
+    expect(result.metadata.page).toMatchObject({ width: 70, height: 120, margin: 4.51 });
+    const card = formatFor(page).card;
+    const frame = result.parts.find(part => part.id === 'card-frame')!;
+    const q = (n: number) => Math.round(n * 1000) / 1000;
+    expect(frame.paths[0]).toEqual([{ x: q(card.x0), y: q(card.y0) }, { x: q(card.x1), y: q(card.y0) }]);
+    for (const part of result.parts) for (const path of part.paths) for (const p of path) {
+      expect(p.x).toBeGreaterThanOrEqual(0); expect(p.x).toBeLessThanOrEqual(70);
+      expect(p.y).toBeGreaterThanOrEqual(0); expect(p.y).toBeLessThanOrEqual(120);
+    }
   });
 });

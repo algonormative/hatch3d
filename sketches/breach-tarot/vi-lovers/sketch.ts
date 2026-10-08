@@ -1,11 +1,13 @@
 import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { assertFormatPage } from '../../kit/format.ts';
 import { sloganControls, LETTERING_PEN } from '../../kit/lettering.ts';
 import { drawLovers } from './geometry.ts';
 
 const sketch: Sketch = {
   name: 'Breach Tarot: VI The Lovers',
   page: TABLOID_PAGE,
+  pageAware: true,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -65,6 +67,7 @@ const sketch: Sketch = {
       : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.2 } : c),
   ],
   draw(ctx) {
+    assertFormatPage(ctx.page);
     return drawLovers(ctx);
   },
 };

@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -28,9 +28,9 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * streak racing up the ramp just over the paving, its head at the front edge, its body trailing back
  * down to the horizon. Below, the ramp's long shadow lies across the open ground in flat hatch.
  */
-const W = 1118, H = 1728;
-const PW = TABLOID_PAGE.width;
-const MM_X = PW / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H } = depthRaster(1118, 1728);
+const PW = PAGE.width;
+const MM_X = PW / W, MM_Y = PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** Depth bands: each gets its own bias, so a hidden-line slack is the same distance in the world near and far. */
 const BAND_EDGES = [0, 18, 24, 30, 37, 45, 55, 68, 85, 110, 160, 240, 400, Infinity];
@@ -52,7 +52,7 @@ const T_FAR = 330;
 /** Gap between slabs, world units. */
 const GAP = 0.14;
 
-const focal = (view: THREE.PerspectiveCamera) => TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+const focal = (view: THREE.PerspectiveCamera) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
 /** The world point at page position `p`, at depth `t` in front of the eye. */
 const worldAt = (view: THREE.PerspectiveCamera, p: Point, t: number) =>
   new THREE.Vector3((p.x - PW / 2) * t / focal(view), view.position.y + (HORIZON_Y - p.y) * t / focal(view), -t);
@@ -61,7 +61,7 @@ export function chariotCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 2, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -701,7 +701,7 @@ function hull(points: Point[]): Point[] {
 
 /** A page bitmap of where any of some convex page polygons (counter-clockwise) lie. */
 function polyCoverage(polys: Point[][], res = 3): (p: Point) => boolean {
-  const gw = Math.ceil(TABLOID_PAGE.width * res), gh = Math.ceil(TABLOID_PAGE.height * res);
+  const gw = Math.ceil(PAGE.width * res), gh = Math.ceil(PAGE.height * res);
   const grid = new Uint8Array(gw * gh);
   for (const poly of polys) {
     if (poly.length < 3) continue;
@@ -747,7 +747,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
   // Cells beyond the edge, as boxes: the flyers keep off them and the sky clears round them.
   const cellBoxes = build.unbuilt.map(({ ci, lane }) => slabGeometry(cellSlab(path, d, build.cells[ci].s0, build.cells[ci].s1, lane, 0)));
   const preGeos = build.pieces.map(p => slabGeometry(p.slab));
-  const blocked = meshCoverage([...preGeos, ...helix.meshes, ...cellBoxes], view, TABLOID_PAGE, 0);
+  const blocked = meshCoverage([...preGeos, ...helix.meshes, ...cellBoxes], view, PAGE, 0);
   for (const g of preGeos) g.dispose();
   addFlyers(ctx, view, path, d, build, blocked);
   const { pieces } = build;
@@ -815,11 +815,11 @@ export function drawChariot(ctx: SketchContext): Part[] {
       const dd = Math.sqrt(Math.max(lo, 8) * hi);
       return Math.max(3e-5, (slack < 0 ? groundSlack(-slack, dd) : slack) * nearP * farP / ((farP - nearP) * dd * dd));
     };
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
-    const cellsNear = meshCoverage(cellBoxes, wide, TABLOID_PAGE, 0.8);
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    const cellsNear = meshCoverage(cellBoxes, wide, PAGE, 0.8);
     // What stands over the road is cut out of it on the sheet (the ground rows are let through the depth test loosely).
     const standing = pieces.filter(p => p.kind !== 'road').map(p => slabGeometry(p.slab));
-    const overRoad = meshCoverage([...standing, ...helix.meshes], view, TABLOID_PAGE, 0.6);
+    const overRoad = meshCoverage([...standing, ...helix.meshes], view, PAGE, 0.6);
     for (const g of standing) g.dispose();
 
     // The phrase: one word to a slab, cut into a face that looks at the eye: the flying ones, the landed
@@ -887,7 +887,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
-    const nearHelix = meshCoverage(helix.meshes, view, TABLOID_PAGE, 2);
+    const nearHelix = meshCoverage(helix.meshes, view, PAGE, 2);
     const batches = new Map<string, Banded[]>();
     for (const st of strokes) {
       const key = `${st.band}:${st.slack}`;

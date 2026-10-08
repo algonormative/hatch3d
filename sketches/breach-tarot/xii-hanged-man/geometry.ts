@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -26,8 +26,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * with them. The one thing hanging still is the only true vertical on the card. The sky is a ruled
  * night knocked out round all that stands in it; the ground is open paper.
  */
-const W = 1118, H = 1728;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 8.3;
@@ -35,7 +34,7 @@ const FACET_MM_PER_UNIT = 8.3;
 export function plumbCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
@@ -62,7 +61,7 @@ export function plumbBob(top: THREE.Vector3, height: number, width: number): Sla
  */
 export function leaningCity(ctx: SketchContext, view: THREE.PerspectiveCamera, line: THREE.Vector3): Slab[] {
   const rng = ctx.random('plumb-city'), detail = ctx.random('plumb-courses');
-  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const halfW = (CARD.x1 - CARD.x0) / 2;
   const maxLean = THREE.MathUtils.degToRad(n(ctx, 'lean', 18, 3, 30));
   const out: Slab[] = [];
@@ -114,10 +113,10 @@ export function drawHangedMan(ctx: SketchContext): Part[] {
   const view = plumbCamera(ctx);
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const f = TABLOID_PAGE.height / 2 / fovT;
+  const f = PAGE.height / 2 / fovT;
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   // The line hangs down the middle of the card; its foot lands a set distance below the horizon.
-  const foot = onGround(view, { x: TABLOID_PAGE.width / 2 + n(ctx, 'lineX', 0, -0.3, 0.3) * (CARD.x1 - CARD.x0) / 2, y: HORIZON_Y + n(ctx, 'footDrop', 112, 15, 140) });
+  const foot = onGround(view, { x: PAGE.width / 2 + n(ctx, 'lineX', 0, -0.3, 0.3) * (CARD.x1 - CARD.x0) / 2, y: HORIZON_Y + n(ctx, 'footDrop', 112, 15, 140) });
   const k = 1 / mmPerUnit(foot);
   const bobH = n(ctx, 'bob', 84, 25, 130) * k, bobW = bobH * n(ctx, 'bobWidth', 0.9, 0.4, 1.3), gap = n(ctx, 'gap', 3, 0.5, 15) * k;
   const bobTop = foot.clone().setY(gap + bobH);
@@ -155,7 +154,7 @@ export function drawHangedMan(ctx: SketchContext): Part[] {
     const band = 1.5;
     const ringPaths = bandMarks(ring, band, { x0: centre.x - r - 4, x1: centre.x + r + 4, y0: centre.y - r - 4, y1: centre.y + r + 4 }, { pitch: 0.6, angle: Math.PI / 4 });
     const onRing = glyphMask([ring], band + 1.2);
-    const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
 
     // The phrase. In the towers: each word cut into a front face of a different tower, leaning with
     // it, staggered from the top of the sky down. Flat: painted on the ground with no foreshortening.
@@ -235,7 +234,7 @@ export function drawHangedMan(ctx: SketchContext): Part[] {
         p => !solids(p) && (!broken || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]));
     }
     // The ring lies on the ground: the block hangs in front of it.
-    const onBob = meshCoverage(bob.map(slabGeometry), view, TABLOID_PAGE, 0.8);
+    const onBob = meshCoverage(bob.map(slabGeometry), view, PAGE, 0.8);
     for (const path of ringPaths) for (const inside of clipWindow(path)) for (const piece of keepAlong(inside, p => !onBob(p), 0.12)) buckets.add('ring-carbon', piece);
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'city', 'bob', 'line', 'ring', 'slogan'], INKS);
