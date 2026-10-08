@@ -29,4 +29,21 @@ describe('Breach Tarot: I The Magician', () => {
     expect(figure.length).toBeGreaterThan(50);
     expect(crossing).toEqual([]);
   }, 60_000);
+
+  it('can draw the figure as a body: same height, ground and middle on the sheet as the scratch figure, and as clear of everything else', async () => {
+    const box = (result: Awaited<ReturnType<typeof renderSketch>>) => {
+      const pts = result.parts.find(p => p.id === 'figure-carbon')!.paths.flat();
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), pts };
+    };
+    const scratch = box(await renderSketch({ entry, seed: 1, params: { veil: 0 } }));
+    const bodyResult = await renderSketch({ entry, seed: 1, params: { veil: 0, figureStyle: 'body' } });
+    const body = box(bodyResult);
+    expect(bodyResult.diagnostics).toEqual([]);
+    expect(Math.abs(body.y0 - scratch.y0)).toBeLessThan(1);
+    expect(Math.abs(body.y1 - scratch.y1)).toBeLessThan(1);
+    expect(Math.abs((body.x0 + body.x1) / 2 - (scratch.x0 + scratch.x1) / 2)).toBeLessThan(1);
+    const near = (q: { x: number; y: number }) => body.pts.some(p => Math.hypot(p.x - q.x, p.y - q.y) < 1);
+    expect(bodyResult.parts.filter(p => p.id !== 'figure-carbon').flatMap(p => p.paths.flat()).filter(near)).toEqual([]);
+  }, 60_000);
 });

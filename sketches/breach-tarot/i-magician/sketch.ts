@@ -15,6 +15,7 @@ const sketch: Sketch = {
     LETTERING_PEN,
   ],
   controls: [
+    { type: 'select', id: 'figureStyle', label: 'Figure drawn as', default: 'scratch', options: ['scratch', 'body'], optionLabels: { scratch: 'A few scratches', body: 'A body, as on the Lovers and the Devil' }, group: 'Figure' },
     { type: 'slider', id: 'figure', label: 'Figure height on the card', default: 40, min: 14, max: 100, step: 1, units: 'mm', group: 'Figure' },
     { type: 'slider', id: 'figureX', label: 'Figure across the card', default: 0, min: -0.3, max: 0.3, step: 0.01, group: 'Figure' },
     { type: 'slider', id: 'turn', label: 'Figure turned', default: 8, min: -60, max: 60, step: 1, units: '°', group: 'Figure' },

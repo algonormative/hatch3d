@@ -10,12 +10,13 @@ import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { ELONGATED, gesture } from '../../kit/mannequin/gesture.ts';
 import { POSES, poseSkeleton, withPose, type JointName, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
+import { bodyFigure, figureMeshes, figureStrokes } from './figure.ts';
 
 /**
  * I The Magician: the power, not the costume. A very small figure, a few scratches just enough to
@@ -33,6 +34,9 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 const FIGURE = 24;
 const EYE = 9;
 const FACET_MM_PER_UNIT = 8.3;
+/** Hidden-line slack on the body figure's hatch and on its outlines, in world units. */
+const FIGURE_SLACK = 0.08;
+const FIGURE_EDGE_SLACK = 1;
 
 export function magicianCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
@@ -204,6 +208,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
       for (const line of projectPolylinesClipped(lines3, view, W, H).polylines) for (const c of clipProjectedPolyline(line, W, H)) out.push(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y));
       return out;
     };
+    // The scratch figure always sets the figure's place, size and pocket, so the body (the other style) stands exactly where it stood.
     const figure = scratchFigure(s, view, ctx.random('magician-scratch'));
     // Its own ground: a pocket of paper round it, edged like a flame, where nothing else is drawn.
     const fx = figure.flat().map(p => p.x), fy = figure.flat().map(p => p.y);
@@ -263,7 +268,53 @@ export function drawMagician(ctx: SketchContext): Part[] {
     projectStrokes(field, { view, depth: depthBuffer, width: W, height: H }, {
       begin: (st, i) => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), veilLine(st, i) ? () => true : p => !inPocket(p)); },
     });
-    for (const path of figure) add('figure-carbon', path, p => !onFlameFront(p));
+    if (ctx.params.figureStyle === 'body') {
+      // The body, fitted to the scratch figure's box on the sheet (same height, same ground, same middle), hatched in carbon and
+      // hidden-line tested against itself alone: its own depth pass, fitted close, so a small figure keeps its detail.
+      const box = { x0: Math.min(...fx), x1: Math.max(...fx), y0: Math.min(...fy), y1: Math.max(...fy) };
+      const pose = chargingPose(n(ctx, 'turn', 8, -60, 60));
+      const place = base.clone();
+      let height = FIGURE;
+      let fig = bodyFigure(pose, height, place);
+      for (let pass = 0; pass < 3; pass++) {
+        const geos = figureMeshes(fig);
+        const seen = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+        const v = new THREE.Vector3();
+        for (const g of geos) {
+          const pos = g.getAttribute('position');
+          for (let i = 0; i < pos.count; i++) {
+            const q = pageOf(view, v.fromBufferAttribute(pos, i));
+            seen.x0 = Math.min(seen.x0, q.x); seen.x1 = Math.max(seen.x1, q.x); seen.y0 = Math.min(seen.y0, q.y); seen.y1 = Math.max(seen.y1, q.y);
+          }
+          g.dispose();
+        }
+        height *= (box.y1 - box.y0) / (seen.y1 - seen.y0);
+        place.x += ((box.x0 + box.x1) / 2 - (seen.x0 + seen.x1) / 2) / f * (eye.z - place.z);
+        fig = bodyFigure(pose, height, place);
+      }
+      const lit = (_p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.9 * (1 - Math.max(0, normal.dot(new THREE.Vector3(-0.5, 0.55, 0.7).normalize()))) ** 1.3 + 0.04, 0, 1);
+      const forward = new THREE.Vector3();
+      view.getWorldDirection(forward);
+      const env = { forward, density: 0.4, dark: lit, screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; } };
+      const figGeos = figureMeshes(fig);
+      const figView = view.clone();
+      try {
+        fitDepthRange(figView, figGeos);
+        const figDepth = renderDepthBufferCPU(figGeos, figView, W, H);
+        const biasAt = (tol: number) => tol * figView.far * figView.near / ((figView.far - figView.near) * (eye.z - place.z) ** 2);
+        const lines = figureStrokes(fig, env);
+        // An outline runs along the edge where the surface turns away from the eye, so its depth changes fastest there: it gets more slack than the hatch.
+        for (const edge of [false, true]) {
+          projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { view: figView, depth: figDepth, width: W, height: H, bias: biasAt(edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK) }, {
+            begin: () => runs => { for (const run of runs) add('figure-carbon', scalePoints(run, MM_X, MM_Y), p => !onFlameFront(p)); },
+          });
+        }
+      } finally {
+        for (const g of figGeos) g.dispose();
+      }
+    } else {
+      for (const path of figure) add('figure-carbon', path, p => !onFlameFront(p));
+    }
     // The ground: dark rows, the field's light pooled round its feet.
     const rows: Stroke[] = [];
     for (let y = HORIZON_Y + 0.6, i = 0; y < CARD.y1; y += 0.7, i++) {
