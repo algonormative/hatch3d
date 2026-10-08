@@ -28,6 +28,7 @@
     "cli/art-match.ts",
     "cli/baselines.ts",
     "cli/sheet.ts",
+    "cli/density.ts",
     "cli/sketch/**/*.ts",
     "src/sketch/**/*.ts",
     "src/utils/clip.ts",
