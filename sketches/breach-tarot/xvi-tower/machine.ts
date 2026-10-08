@@ -17,11 +17,12 @@ import { storm, tower, towerCamera } from './geometry.ts';
 
 /**
  * XVI The Tower, `form: 'machine'`: the tower is the supercomputer of the Machine study, square on
- * and centred. A stout C of wedge columns of thin blades after the Cray, its opening a narrow slot
- * down the front, a bench ring round its base, a row of status ticks on every blade. The helix
- * rises from the open core straight up through the slot and on up the card; the machine's top
- * floats above it, lifted off whole like a lid and tipped a little, the helix passing up through
- * it. The storm falls behind, and behind the machine the sky is struck: a forked bolt comes in at
+ * and centred. A stout C of wedge columns of thin blades after the Cray-1, open a quarter of the
+ * way round at the front so we look into its core, a bench ring round the outside of its base, a
+ * row of status ticks on every blade; inside the C the walls shade each other, so the opening reads
+ * as a hollow. The helix rises from the floor of the core, in full view, up through the opening and
+ * on up the card; the machine's top floats above it, lifted off whole like a lid and tipped a
+ * little, the helix passing up through it. The storm falls behind, and behind the machine the sky is struck: a forked bolt comes in at
  * a slant from the top corner, branching as it goes, a flat hatched band like the cantilever
  * card's, hidden wherever the machine, its lid or the helix stand in front. Where the bolt passes
  * behind the machine its status ticks go dark (`machineTicks`). There is no tear: the bolt no
@@ -37,9 +38,9 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 /** tower() pushes the ground last: the plinth, 18 × 9 paving stones and 7 pieces of debris. */
 const GROUND_COUNT = 1 + 18 * 9 + 7;
 
-/** The machine, in the Tower's frame (ground y = 0, the eye 2.2 up, 48 back): centred, its slot facing the eye. */
+/** The machine, in the Tower's frame (ground y = 0, the eye 2.2 up, 48 back): centred, its open front facing the eye. */
 const M = {
-  x: 0, z: -4, R: 9.5, inner: 0.62, height: 15.5, columns: 14, open: 0.18, plate: 0.55, gap: 0.11, tone: 0.65, pitch: 1.12,
+  x: 0, z: -4, R: 10, inner: 0.62, height: 13.5, columns: 12, open: 1.55, plate: 0.55, gap: 0.11, tone: 0.65, pitch: 1.2, hollow: 1,
   lidDepth: 2.2, lidGap: 2.8, lidClear: 1.2, helixRadius: 1.5, helixWidth: 1.2,
 };
 
@@ -58,7 +59,7 @@ function machine(ctx: SketchContext): Machine {
   let c = 0;
   const add = (s: Slab, k: Machine['kind'][number]) => { solids.push(s); kind.push(k); column.push(c); return solids.length - 1; };
   for (; c < columns; c++) {
-    // Angles from the eye-ward axis, the slot centred on it, so the columns pair off left and right.
+    // Angles from the eye-ward axis, the opening centred on it, so the columns pair off left and right.
     const a = open / 2 + (c + 0.5) * step;
     const u = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
     const chord = 2 * rm * Math.sin(step / 2) * 0.97;
@@ -249,7 +250,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   const density = n(ctx, 'hatchDensity', 0.6, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
 
-  // The helix, rising from the floor of the open core straight up through the slot and the lid, and on out of the card.
+  // The helix, rising from the floor of the open core straight up through the opening and the lid, and on out of the card.
   const core = m.core;
   const rise = helixAlong(ctx, viewB, new THREE.CatmullRomCurve3([core.clone().setY(0.4), core.clone().setY(20), core.clone().setY(44)], false, 'centripetal'),
     { radius: M.helixRadius, width: M.helixWidth, pitch: 8.5, spread: 0.2, narrow: 0.15, density, interruption });
@@ -278,8 +279,13 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
 
   // Machine strokes, each owned by its solid; the status ticks on every blade's outer face.
   const strokes: Stroke[] = [];
+  // Inside the C the walls shade each other: the further round the back a column stands, the more
+  // its light turns away from the face we see into the core, so the open front reads as a hollow.
+  const shade = new THREE.Vector3(0, 0.8, -0.6).normalize();
   m.solids.forEach((s, owner) => {
-    for (const st of facetStrokes(s, front, eye, false, M.pitch)) strokes.push({ ...st, group: 'machine', owner });
+    const back = m.kind[owner] === 'bench' || m.lid.has(owner) ? 0 : Math.max(0, -Math.cos(s.ry)) * M.hollow;
+    const lightHere = back > 0 ? front.clone().lerp(shade, back).normalize() : front;
+    for (const st of facetStrokes(s, lightHere, eye, false, M.pitch)) strokes.push({ ...st, group: 'machine', owner });
   });
   const lrng = ctx.random('tower-card-lights');
   const patterns = Array.from({ length: 8 }, () => barPattern(lrng, 0.62));
