@@ -13,6 +13,7 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { buildLantern, hermitFigure, hermitSkeleton, lanternFrame, lanternHand, lanternMeshes } from './hermit.ts';
+import { lantern as lanternLight } from './light.ts';
 import { networkRows, ruling } from './night.ts';
 import { H, MM_X, MM_Y, W, buildPeak, hermitCamera, scaleOf } from './peak.ts';
 
@@ -26,6 +27,8 @@ import { H, MM_X, MM_Y, W, buildPeak, hermitCamera, scaleOf } from './peak.ts';
  */
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
+/** How far from the lamp the mountain keeps its outline hint (full out to this and a little past, then dashes that thin): where the first pass's light ended. */
+const HINT_R = 36.8;
 
 export function drawHermit(ctx: SketchContext): Part[] {
   const view = hermitCamera(ctx);
@@ -43,9 +46,9 @@ export function drawHermit(ctx: SketchContext): Part[] {
   const lantern = buildLantern(ctx, view, sc, lanternHand(skeleton));
   const figure = hermitFigure(ctx, view, skeleton, lantern.centre, stand);
   const lamp = pageOf(view, lantern.centre);
-  // The lantern's light: a clear core, then a falloff where the ruling thins and breaks; slabs and edges keep their detail out to R.
-  const core = n(ctx, 'lit', 16, 8, 40), glow = n(ctx, 'glow', 26, 8, 60);
-  const R = core + 0.8 * glow;
+  // The lantern's light, the only light on the card: a small clear core round the flame and a pool that hangs lower, on the
+  // summit stones, with an uneven edge. Hatch keeps to the lit part; the peak's outline hint runs on as before.
+  const light = lanternLight(ctx, lamp, pageOf(view, peak.summit));
 
   // The slabs, each drawn in the raking hatch with the lantern as its light. Those far from the lamp
   // keep only their outlines.
@@ -55,10 +58,10 @@ export function drawHermit(ctx: SketchContext): Part[] {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const onPage = pageOf(view, at);
     const dist = Math.hypot(onPage.x - lamp.x, onPage.y - lamp.y);
-    sl.tone = 0.08 + 1.1 * smooth(0.4 * R, 2.2 * R, dist);
+    sl.tone = 0.08 + 1.1 * smooth(0.4 * HINT_R, 2.2 * HINT_R, dist);
     const light = lantern.centre.clone().sub(at).normalize();
     // The summit stones are plain: outlines only, a rough slab and not a moulding.
-    const outline = dist > R + 16 || Math.max(sl.w, sl.h) * sc.mmPerUnit(at) < 1.5 || sl === peak.capstone || sl === peak.chunk;
+    const outline = dist > HINT_R + 16 || Math.max(sl.w, sl.h) * sc.mmPerUnit(at) < 1.5 || sl === peak.capstone || sl === peak.chunk;
     for (const st of facetStrokes(sl, light, eye, outline, FACET_MM_PER_UNIT / sc.mmPerUnit(at))) {
       strokes.push({ ink: 'carbon', group: 'peak', family: st.family, points: st.points, owner });
     }
@@ -143,11 +146,11 @@ export function drawHermit(ctx: SketchContext): Part[] {
           for (const run of runs) add('peak-carbon', scalePoints(run, MM_X, MM_Y), (p, at) => {
             if (pocket(p)) return false;
             const r = Math.hypot(p.x - lamp.x, p.y - lamp.y);
-            if (st.family === 'hatch') return r < R * (0.9 + 0.16 * hash(id));
-            if (r < R + 6) return true;
+            if (st.family === 'hatch') return light.dark(p) < 0.5 + 0.35 * hash(id);
+            if (r < HINT_R + 6) return true;
             // Dashes shorten with distance and give out altogether before they shrink to ticks; a slab
             // with a word cut into it keeps a faint outline, so the word still sits on a face.
-            const frac = Math.max(1 - (r - R - 6) / (R * 2.4), used.has(owner) ? 0.45 : 0);
+            const frac = Math.max(1 - (r - HINT_R - 6) / (HINT_R * 2.4), used.has(owner) ? 0.45 : 0);
             return frac >= 0.3 && at % 3.6 < 3.6 * frac;
           });
         },
@@ -178,10 +181,9 @@ export function drawHermit(ctx: SketchContext): Part[] {
     const bandTop = HORIZON_Y - 1.6;
     const night = n(ctx, 'night', 1, 0.3, 1.4);
     const pitch = n(ctx, 'nightPitch', 0.65, 0.5, 1.4);
-    const fall = (p: Point) => smooth(core, core + glow, Math.hypot(p.x - lamp.x, p.y - lamp.y));
     ruling({
       angle: 0, pitch, table, emit: path => buckets.add('night-carbon', path),
-      dark: p => night * (1 - 0.92 * smooth(0.3, 1, (p.y - CARD.y0) / (HORIZON_Y - CARD.y0))) * fall(p),
+      dark: p => night * (1 - 0.92 * smooth(0.3, 1, (p.y - CARD.y0) / (HORIZON_Y - CARD.y0))) * light.dark(p),
       keep: p => p.y < bandTop && !standing(p) && !pocket(p) && !onGlyph(p),
     });
     // On the mountain the ruling turns to follow the slope, lighter near the lantern and darker toward the foot.
@@ -189,7 +191,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     const peakDark = n(ctx, 'peakRule', 0.42, 0.2, 1);
     ruling({
       angle: slope, pitch, table, emit: path => buckets.add('slope-carbon', path),
-      dark: p => smooth(0.85 * R, 1.3 * R, Math.hypot(p.x - lamp.x, p.y - lamp.y)) * (peakDark - 0.12 + 0.28 * smooth(R, 3.2 * R, Math.hypot(p.x - lamp.x, p.y - lamp.y))),
+      dark: p => light.dark(p) * (peakDark - 0.12 + 0.28 * smooth(HINT_R, 3.2 * HINT_R, Math.hypot(p.x - lamp.x, p.y - lamp.y))),
       keep: p => peakCover(p) && !pocket(p) && !onGlyph(p),
     });
     // The network the hermit left: the plain below the horizon, ruled in rows with the lit lots cut out of them,
