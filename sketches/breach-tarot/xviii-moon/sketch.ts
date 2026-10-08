@@ -1,0 +1,75 @@
+import type { Control, Sketch } from '../../../src/sketch/types.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { sloganControls, LETTERING_PEN } from '../../kit/lettering.ts';
+import { drawMoon } from './geometry.ts';
+
+const sketch: Sketch = {
+  name: 'Breach Tarot: XVIII The Moon',
+  page: TABLOID_PAGE,
+  pens: [
+    { id: 'carbon', color: '#22282c', width: 0.25 },
+    { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
+    { id: 'vermilion', color: '#d04b3c', width: 0.25 },
+    { id: 'acid', color: '#a5a938', width: 0.25 },
+    { id: 'violet', color: '#776090', width: 0.25 },
+    LETTERING_PEN,
+  ],
+  controls: [
+    { type: 'slider', id: 'nearTop', label: 'Near tower: top on the sheet', default: 163, min: 120, max: 240, step: 1, units: 'mm', group: 'Towers' },
+    { type: 'slider', id: 'nearWidth', label: 'Near tower width (eye heights)', default: 0.62, min: 0.3, max: 1.2, step: 0.01, group: 'Towers' },
+    { type: 'slider', id: 'nearX', label: 'Near tower across the card', default: 62, min: 30, max: 120, step: 1, units: 'mm', group: 'Towers' },
+    { type: 'slider', id: 'farTop', label: 'Far tower: top on the sheet', default: 189, min: 140, max: 250, step: 1, units: 'mm', group: 'Towers' },
+    { type: 'slider', id: 'farWidth', label: 'Far tower width (eye heights)', default: 0.75, min: 0.3, max: 1.2, step: 0.01, group: 'Towers' },
+    { type: 'slider', id: 'farX', label: 'Far tower across the card', default: 212, min: 170, max: 245, step: 1, units: 'mm', group: 'Towers' },
+    { type: 'slider', id: 'shoreLeft', label: 'Shore at the left edge', default: 330, min: 300, max: 365, step: 1, units: 'mm', group: 'Pool' },
+    { type: 'slider', id: 'shoreRight', label: 'Shore at the right edge', default: 286, min: 262, max: 340, step: 1, units: 'mm', group: 'Pool' },
+    { type: 'slider', id: 'spit', label: 'Spit of land at the path, reaching toward us', default: 26, min: 0, max: 40, step: 1, units: 'mm', group: 'Pool' },
+    { type: 'slider', id: 'ripple', label: 'Ripple in the reflection', default: 0.5, min: 0, max: 2.5, step: 0.05, group: 'Pool' },
+    { type: 'slider', id: 'waterPitch', label: 'Water ruling pitch', default: 1.25, min: 0.55, max: 2, step: 0.05, units: 'mm', group: 'Pool' },
+    { type: 'slider', id: 'echoFar', label: 'Far tower in the water, as a share of its height', default: 0.55, min: 0.15, max: 1, step: 0.01, group: 'False city' },
+    { type: 'slider', id: 'echoNear', label: 'Near tower in the water, as a share of its height', default: 0.3, min: 0.1, max: 1, step: 0.01, group: 'False city' },
+    { type: 'slider', id: 'extraX', label: 'Extra tower in the water, across the card', default: 121, min: 70, max: 190, step: 1, units: 'mm', group: 'False city' },
+    { type: 'slider', id: 'extraBottom', label: 'Extra tower: where its image ends, down the sheet', default: 381, min: 340, max: 389, step: 1, units: 'mm', group: 'False city' },
+    { type: 'slider', id: 'pathX', label: 'Road: where it leaves the water, across the card', default: 150, min: 110, max: 190, step: 1, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathVanish', label: 'Road: where it threads out at the horizon', default: 162, min: 110, max: 200, step: 1, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathBend', label: 'Road: swing of its S-bends at the water', default: 55, min: 0, max: 140, step: 1, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathBends', label: 'Road: how many half-bends', default: 3.5, min: 1.5, max: 6, step: 0.25, group: 'Road' },
+    { type: 'slider', id: 'pathWidth', label: 'Road: width where it leaves the water', default: 34, min: 8, max: 70, step: 1, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathTwists', label: 'Road: how many times it turns over', default: 3, min: 1, max: 4, step: 1, group: 'Road' },
+    { type: 'slider', id: 'pathTwistLength', label: 'Road: length of each turn (share of the road)', default: 0.15, min: 0.03, max: 0.25, step: 0.01, group: 'Road' },
+    { type: 'slider', id: 'pathTwistLift', label: 'Road: how far an edge lifts as it turns (half widths)', default: 0.35, min: 0, max: 1, step: 0.05, group: 'Road' },
+    { type: 'slider', id: 'pathLift', label: 'Road: height off the ground (half widths)', default: 0.05, min: 0, max: 1, step: 0.01, group: 'Road' },
+    { type: 'slider', id: 'pathUnder', label: 'Road: how far it starts under the water (share)', default: 0.08, min: 0, max: 0.3, step: 0.01, group: 'Road' },
+    { type: 'slider', id: 'pathEnd', label: 'Road: where it ends on the sheet', default: 252.5, min: 251, max: 270, step: 0.5, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathLamination', label: 'Road: closest laminations on the sheet', default: 0.75, min: 0.4, max: 2, step: 0.05, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'pathRibGap', label: 'Road: closest ribs on the sheet', default: 6, min: 0.5, max: 12, step: 0.1, units: 'mm', group: 'Road' },
+    { type: 'slider', id: 'moonX', label: 'Moon across the card', default: 178, min: 120, max: 245, step: 1, units: 'mm', group: 'Moon' },
+    { type: 'slider', id: 'moonY', label: 'Moon down the card', default: 108, min: 55, max: 160, step: 1, units: 'mm', group: 'Moon' },
+    { type: 'slider', id: 'moonSize', label: 'Moon radius', default: 50, min: 25, max: 55, step: 0.5, units: 'mm', group: 'Moon' },
+    { type: 'slider', id: 'moonPhase', label: 'Crescent thickness (share of the radius)', default: 0.42, min: 0.15, max: 0.7, step: 0.01, group: 'Moon' },
+    { type: 'slider', id: 'moonBulge', label: 'Which way the crescent bulges', default: -38, min: -180, max: 180, step: 1, units: '°', group: 'Moon' },
+    { type: 'slider', id: 'moonCourses', label: 'Courses of slabs in the crescent', default: 4, min: 1, max: 5, step: 1, group: 'Moon' },
+    { type: 'slider', id: 'moonSlabArc', label: 'Longest slab, as an arc of the disc', default: 40, min: 12, max: 60, step: 1, units: '°', group: 'Moon' },
+    { type: 'slider', id: 'moonDepth', label: 'Slab depth (share of a course)', default: 1.8, min: 0.5, max: 3, step: 0.05, group: 'Moon' },
+    { type: 'slider', id: 'moonTurn', label: 'Moon turned on its upright', default: -0.35, min: -1, max: 1, step: 0.01, units: 'rad', group: 'Moon' },
+    { type: 'slider', id: 'moonTip', label: 'Moon tipped back', default: 0.12, min: -0.6, max: 0.6, step: 0.01, units: 'rad', group: 'Moon' },
+    { type: 'slider', id: 'moonFront', label: 'Moon light from the front', default: 0.55, min: 0, max: 1.5, step: 0.05, group: 'Moon' },
+    { type: 'slider', id: 'moonTone', label: 'Moon slab tone', default: 0.6, min: 0, max: 1, step: 0.05, group: 'Moon' },
+    { type: 'slider', id: 'moonHatch', label: 'Moon hatch spacing (kit pitch multiple)', default: 1.1, min: 0.6, max: 4, step: 0.1, group: 'Moon' },
+    { type: 'slider', id: 'moonTick', label: 'Shortest moon hatch kept', default: 1.2, min: 0.4, max: 3, step: 0.1, units: 'mm', group: 'Moon' },
+    { type: 'slider', id: 'moonGrazing', label: 'Moon faces seen more edge-on than this keep no hatch', default: 0.45, min: 0, max: 0.9, step: 0.05, group: 'Moon' },
+    { type: 'slider', id: 'night', label: 'How far the dense night comes down', default: 1, min: 0, max: 1.5, step: 0.05, group: 'Sky' },
+    { type: 'slider', id: 'moonHalo', label: 'Paper round the moon', default: 2.6, min: 0.5, max: 6, step: 0.1, units: 'mm', group: 'Moon' },
+    { type: 'slider', id: 'hatch', label: 'Tower hatch spacing (kit pitch multiple)', default: 2.2, min: 1, max: 5, step: 0.1, group: 'Towers' },
+    { type: 'slider', id: 'knockout', label: 'Paper round what stands', default: 1.1, min: 0.3, max: 3, step: 0.05, units: 'mm', group: 'Towers' },
+    { type: 'slider', id: 'slabSlack', label: 'Slab hidden-line slack', default: 0.5, min: 0.1, max: 2, step: 0.05, group: 'Towers' },
+    { type: 'slider', id: 'fov', label: 'Field of view', default: 54, min: 36, max: 75, step: 1, units: '°', group: 'Camera' },
+    ...sloganControls(1).map((c): Control => c.type === 'text' && c.id === 'slogan' ? { ...c, default: 'none of this light is its own' }
+      : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.4 } : c),
+  ],
+  draw(ctx) {
+    return drawMoon(ctx);
+  },
+};
+
+export default sketch;
