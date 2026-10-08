@@ -174,7 +174,7 @@ function clipRect(ox: number, oy: number, dx: number, dy: number, a: number, b: 
  * faces stay open paper. No contour rings and no inset frame, all in carbon. `pitch` scales the spacing
  * (1 is the kit's, tuned to the Tower's depth).
  */
-function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: number, allFaces = false): FacetStroke[] {
+function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: number, allFaces = false, bright = Infinity): FacetStroke[] {
   const out: FacetStroke[] = facetStrokes(sl, light, eye, true, 1).map(st => ({ ...st, ink: 'carbon' as const }));
   const m = slabMatrix(sl);
   const rot = new THREE.Matrix4().extractRotation(m);
@@ -194,6 +194,8 @@ function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: 
     const normal = c0.clone().normalize().applyMatrix4(rot);
     const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
     if (eye.clone().sub(centre).dot(normal) <= 0) continue;
+    // A face turned to the sun by more than `bright` is bare paper (when given); otherwise paler faces stay open.
+    if (normal.dot(light) > bright) continue;
     const dark = faceDarkness(normal, light, sl.tone);
     if (dark < CALM) continue;
     const a = U0.length(), b = V0.length();
@@ -237,11 +239,15 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const light = towerForm === 'stack' ? new THREE.Vector3(0.7, 0.45, 0.05).normalize() : ((shards ?? base)?.light ?? new THREE.Vector3(-0.85, 0.3, 0).normalize());
   const lightM = new THREE.Vector3(light.x, -light.y, light.z);
   const hatch = n(ctx, 'hatch', 2.2, 1, 5);
+  // Sunlit: every face turned to the sun is bare paper, so what shines (only ever reflected sunlight) shines against the night.
+  const sunlit = ctx.params.sunlit !== false;
+  const bright = sunlit ? n(ctx, 'sunlitEdge', 0.02, -0.2, 0.4) : Infinity;
+  const towerBright = towerForm === 'stack' ? Infinity : bright;
   const strokes: Stroke[] = [];
   const standing = [...nearT, ...farT, ...set.spears];
   standing.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), towerForm !== 'stack')) {
+    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), towerForm !== 'stack', towerBright)) {
       strokes.push({ ink: st.ink, group: 'tower', family: st.family, points: st.points, owner });
     }
   });
@@ -252,7 +258,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
   inWater.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
     // The water keeps the edges and the same hatch, a little more open: a reflection is never as crisp as the thing.
-    for (const st of plainFacets(sl, lightM, eye, hatch * 1.5 * FACET_MM_PER_UNIT / mmPerUnit(pos))) {
+    for (const st of plainFacets(sl, lightM, eye, hatch * 1.5 * FACET_MM_PER_UNIT / mmPerUnit(pos), false, towerBright)) {
       echoes.push({ ink: st.ink, group: 'mirror', family: st.family, points: st.points, owner });
     }
   });
@@ -288,7 +294,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const sunlight = (base ?? shards)?.light ?? light;
   blocks.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of plainFacets(sl, sunlight, eye, blockHatch * FACET_MM_PER_UNIT / mmPerUnit(pos), true)) {
+    for (const st of plainFacets(sl, sunlight, eye, blockHatch * FACET_MM_PER_UNIT / mmPerUnit(pos), true, shards ? bright : Infinity)) {
       moonStrokes.push({ ink: st.ink, group: 'moon', family: st.family, points: st.points, owner });
     }
   });
@@ -483,8 +489,9 @@ export function drawMoon(ctx: SketchContext): Part[] {
       const clear = glyphMask(blockEdges, n(ctx, 'rockClear', 0.45, 0.2, 2));
       const rmm = shards.radius * f / eye.distanceTo(shards.centre);
       const step = n(ctx, 'brokenPitch', 0.75, 0.4, 1.5) / rmm;
-      const open = [0.62, 0.42, 0.22, 0.06];
-      const mare = n(ctx, 'rockMare', 0.32, 0, 0.8);
+      // Sunlit, the lit half carries no field lines at all: they stop at the terminator, thinning only just before it.
+      const open = sunlit ? [0.03, 0.01, -0.01, -0.04] : [0.62, 0.42, 0.22, 0.06];
+      const mare = sunlit ? 0 : n(ctx, 'rockMare', 0.32, 0, 0.8);
       const lines3: THREE.Vector3[][] = [];
       const shown = (p: THREE.Vector3, normal: THREE.Vector3) => eye.clone().sub(p).dot(normal) > 0;
       const trace = (dirs: THREE.Vector3[], keep: (dir: THREE.Vector3, normal: THREE.Vector3) => boolean, keyOf = (d: THREE.Vector3) => shards.pieceOf(d), proud = 0.004, facing = true) => {
@@ -603,7 +610,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // every other gap the sky's ruling runs on, as sky seen through the broken moon.
     const shells = shards ? moonGeos.slice(0, moonGeos.length - blockGeos.length) : [];
     const skyCover = shards ? [...frontOf(shells, eye), ...blockGeos] : moonGeos;
-    const shine = meshCoverage(skyCover, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
+    const shine = meshCoverage(skyCover, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) * (sunlit ? 1.5 : 1) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
     const fronts = shards ? meshCoverage(skyCover, viewC, TABLOID_PAGE, 0) : () => false;
     const anyShell = shards ? meshCoverage(shells, viewC, TABLOID_PAGE, 0) : () => false;
     const inside = (p: Point) => anyShell(p) && !fronts(p);
@@ -620,11 +627,31 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const cells = Array.from({ length: 64 }, () => skyRng());
     const night = n(ctx, 'night', 1, 0, 1.5);
     const reach = [0.93, 0.66, 0.42, 0.1].map((r, k) => k === 0 ? r : r * night);
+    // Sunlit, the night deepens round the broken moon and the wolf's stream (the ruling's finer tiers run on there,
+    // feathered), so their paper faces shine against it.
+    const nightRng = ctx.random('moon-sky-night');
+    const nightCells = Array.from({ length: 64 }, () => nightRng());
+    const deepen = sunlit && shards ? n(ctx, 'nightDeepen', 1, 0, 2) : 0;
+    const sources: { c: Point; r: number }[] = [];
+    if (deepen > 0 && shards) {
+      sources.push({ c: pageOf(view, shards.centre), r: 48 * deepen });
+      const seatedW = set.words?.near ?? set.near;
+      for (const sl of set.near) if (!seatedW.includes(sl)) sources.push({ c: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)), r: 16 * deepen });
+    }
+    // A smooth field (a sum of soft blobs), so the deepened night follows the stream as one shape, not a string of puffs.
+    const zone = (p: Point) => { let sum = 0; for (const src of sources) sum += Math.exp(-((p.x - src.c.x) ** 2 + (p.y - src.c.y) ** 2) / (src.r * src.r)); return Math.min(1, sum); };
     const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
     for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += 0.62) {
       const t = (y - skyTop) / (skyBottom - skyTop);
       const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
-      if (!(t < reach[tier])) continue;
+      if (!(t < reach[tier])) {
+        if (!sources.length || tier === 0) continue;
+        const need = tier === 1 ? 0.3 : tier === 2 ? 0.55 : Infinity;
+        const shiftN = Math.floor(nightRng() * 64);
+        addTo(tier === 1 ? 'sky-ultramarine' : 'sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }],
+          p => !solids(p) && !shine(p) && !inside(p) && zone(p) > need + 0.12 * nightCells[(Math.floor((p.x - CARD.x0) / 4.6) + shiftN) % 64]);
+        continue;
+      }
       // Below the solid ruling each line is cut in cells of seeded length, fewer kept the nearer the horizon.
       const keep = t < 0.64 ? 1 : 0.92 - 0.6 * (t - 0.64) / 0.3;
       const shift = Math.floor(skyRng() * 64);
