@@ -90,89 +90,99 @@ function spear(through: THREE.Vector3, dir: THREE.Vector3, before: number, after
  *   into the ground like stakes. Its courses strain upward against them, lifted a little and cracked where struck,
  *   but it holds.
  */
+/** How many draws the second pass's wolf took from the howl stream at seed 1; the dog replays from there. */
+const HOWL2_WOLF_DRAWS = 330;
+
 function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], far: Slab[], moon: MoonMark): TowerSet {
   const rng = ctx.random('moon-howl');
   const eye = view.position;
-  // The wolf.
+  // The wolf: its seated courses stay; above them the tower carries on as a column of its own courses tearing loose.
   const seat = Math.round(n(ctx, 'wolfSeat', 4, 2, 7));
   const seated = near.slice(0, seat);
   const W = near[0].w;
   const top = Math.max(...seated.map(s => s.y + halfHeight(s)));
-  const start = new THREE.Vector3(near[0].x, top + W * 0.25, near[0].z);
+  const start = new THREE.Vector3(near[0].x, top, near[0].z);
   const startPage = pageOf(view, start);
-  const reach = n(ctx, 'wolfReach', 0.72, 0.3, 0.95);
+  const reach = n(ctx, 'wolfReach', 0.88, 0.3, 0.95);
   const endPage = { x: startPage.x + (moon.page.x - startPage.x) * reach, y: startPage.y + (moon.page.y - startPage.y) * reach };
-  // The stream's course is laid on the sheet: an arc that rises from the tower's throat and bends over toward the
-  // moon, receding as it goes (from the tower's distance to `wolfAway` times it).
-  const d0 = start.distanceTo(eye), away = n(ctx, 'wolfAway', 1.9, 1, 3);
-  const span = Math.hypot(endPage.x - startPage.x, endPage.y - startPage.y);
-  const ctrl = { x: startPage.x + (endPage.x - startPage.x) * 0.15, y: Math.min(startPage.y, endPage.y) - span * n(ctx, 'wolfRise', 0.25, 0, 1) };
+  // Its course on the sheet: one smooth curve that leaves the tower straight up, as the tower would go on, and leans
+  // over toward the moon, receding as it rises (from the tower's distance to `wolfAway` times it).
+  const d0 = start.distanceTo(eye), away = n(ctx, 'wolfAway', 2, 1, 3);
+  const rise = n(ctx, 'wolfRise', 0.7, 0.2, 1);
+  const ctrl = { x: startPage.x + (endPage.x - startPage.x) * 0.08, y: startPage.y + (endPage.y - startPage.y) * rise };
   const pageAt = (u: number) => ({
     x: (1 - u) ** 2 * startPage.x + 2 * u * (1 - u) * ctrl.x + u * u * endPage.x,
     y: (1 - u) ** 2 * startPage.y + 2 * u * (1 - u) * ctrl.y + u * u * endPage.y,
   });
-  const path = {
-    getPointAt: (u: number) => atPage(view, pageAt(u), d0 * (1 + (away - 1) * u)),
-    getTangentAt: (u: number) => atPage(view, pageAt(Math.min(1, u + 0.01)), d0 * (1 + (away - 1) * Math.min(1, u + 0.01))).sub(atPage(view, pageAt(Math.max(0, u - 0.01)), d0 * (1 + (away - 1) * Math.max(0, u - 0.01)))).normalize(),
-  };
-  // The stream is laid out by length on the sheet, not in the world: it recedes as it rises, and spacing by world
-  // length would bunch it up where it goes back. Spacing grows steadily with height, as its spread does.
-  const SAMPLES = 240;
+  // Arc length on the sheet, so spacing is even where the course recedes.
+  const SAMPLES = 400;
   const along: number[] = [0];
-  let prev = startPage;
   for (let i = 1; i <= SAMPLES; i++) {
-    const q = pageOf(view, path.getPointAt(i / SAMPLES));
-    along.push(along[i - 1] + Math.hypot(q.x - prev.x, q.y - prev.y));
-    prev = q;
+    const p0 = pageAt((i - 1) / SAMPLES), p1 = pageAt(i / SAMPLES);
+    along.push(along[i - 1] + Math.hypot(p1.x - p0.x, p1.y - p0.y));
   }
-  const uAt = (share: number) => {
-    const want = share * along[SAMPLES];
+  const L = along[SAMPLES];
+  const uAt = (len: number) => {
     let i = 1;
-    while (i < SAMPLES && along[i] < want) i++;
+    while (i < SAMPLES && along[i] < len) i++;
     const span = along[i] - along[i - 1] || 1;
-    return (i - 1 + (want - along[i - 1]) / span) / SAMPLES;
+    return Math.min(1, (i - 1 + (len - along[i - 1]) / span) / SAMPLES);
   };
+  const mmPer = (p: THREE.Vector3) => { const a0 = pageOf(view, p), a1 = pageOf(view, p.clone().add(new THREE.Vector3(0, 1, 0))); return Math.hypot(a1.x - a0.x, a1.y - a0.y); };
   const flyers = near.slice(seat);
-  const count = flyers.length + Math.round(n(ctx, 'wolfStream', 16, 0, 40));
-  const spread = n(ctx, 'wolfSpread', 2.2, 0, 3);
+  const extra = Math.round(n(ctx, 'wolfStream', 16, 0, 40));
+  const spread = n(ctx, 'wolfSpread', 0.35, 0, 1.5);
   const tumble = n(ctx, 'wolfTumble', 1, 0, 2.5);
-  const ease = n(ctx, 'wolfEase', 1.1, 0.6, 2.5);
+  const shrinkBy = n(ctx, 'wolfShrink', 0.5, 0, 0.8);
+  const gap0 = n(ctx, 'wolfGap0', 1.2, 0, 6), gap1 = n(ctx, 'wolfGap', 5, 0, 30);
   const placedW: Slab[] = [...seated];
-  const others = far;
   const moonClear = (s: Slab) => {
     const q = pageOf(view, new THREE.Vector3(s.x, s.y, s.z));
     return Math.hypot(q.x - moon.page.x, q.y - moon.page.y) > moon.radius + 8 && q.y > CARD.y0 + 8 && q.y < HORIZON_Y - 6 && q.x > CARD.x0 + 6 && q.x < CARD.x1 - 6;
   };
-  for (let k = 0; k < count; k++) {
+  // Courses go up one after another along the curve: the first nearly stacked, a hairline apart; then each gap a
+  // little wider than the last, each course a little smaller and turned a little further, with only a small slip
+  // to one side. The tower's own loose courses go first, then more of its slabs and shards.
+  let at = 0;
+  for (let k = 0; k < flyers.length + extra; k++) {
     const draws = Array.from({ length: 9 }, () => rng());
+    const share = Math.min(1, at / L);
     const course = flyers[k] ?? near[1 + Math.floor(draws[0] * (near.length - 1))];
-    const shard = k >= flyers.length && draws[1] < 0.4;
-    // A slab that would touch one already flying is tried again near the same place along the stream, at a new offset,
-    // so the stream stays evenly filled instead of piling up further along.
-    for (let attempt = 0; attempt < 12; attempt++) {
-      if (attempt > 0) { draws[2] = rng(); draws[3] = rng(); }
-      const share = Math.min(1, ((k + 0.6 + (attempt > 0 ? (rng() - 0.5) * 0.8 : 0)) / count) ** ease);
-      const u = uAt(share);
-      const at = path.getPointAt(u);
-      const tangent = path.getTangentAt(u);
-      const side = tangent.clone().cross(new THREE.Vector3(0, 0, 1)).normalize();
-      // Spread in world units scaled by distance, so on the sheet it widens steadily with height.
-      const sigma = W * (0.12 + spread * share) * at.distanceTo(eye) / d0;
-      at.addScaledVector(side, sigma * (draws[2] - 0.5) * 2).addScaledVector(new THREE.Vector3(0, 0, 1), sigma * 0.6 * (draws[3] - 0.5) * 2);
-      const shrink = (k < flyers.length ? 1 : 0.55 + 0.4 * draws[4]) * (1 - n(ctx, 'wolfShrink', 0.5, 0, 0.8) * share);
+    const shard = k >= flyers.length && draws[1] < 0.35;
+    const shrink = (k < flyers.length ? 1 : 0.6 + 0.3 * draws[4]) * (1 - shrinkBy * share);
+    const turn = tumble * share ** 1.3;
+    let placedOne = false;
+    for (let attempt = 0; attempt < 10 && !placedOne; attempt++) {
+      const u = uAt(at);
+      const dist = d0 * (1 + (away - 1) * u);
+      const pc = pageAt(u);
+      const p1 = pageAt(Math.min(1, u + 0.002)), p0 = pageAt(Math.max(0, u - 0.002));
+      const tx = p1.x - p0.x, ty = p1.y - p0.y, tl = Math.hypot(tx, ty) || 1;
+      // A small slip to one side of the curve, growing with height (on the sheet, in millimetres).
+      const slip = W * mmPer(start) * (0.04 + spread * share) * (draws[2] - 0.5) * 2;
+      const centre = atPage(view, { x: pc.x - ty / tl * slip, y: pc.y + tx / tl * slip }, dist);
       const body = shard
-        ? solid(at.x, at.y, at.z, W * (0.7 + 0.6 * draws[4]) * (1 - 0.4 * share), W * 0.06, W * (0.14 + 0.1 * draws[5]), 800 + k, 'stack')
-        : { ...course, x: at.x, y: at.y, z: at.z, w: course.w * shrink, h: course.h * shrink, d: course.d * shrink };
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((draws[6] - 0.5) * 1.6 * share * tumble, (draws[7] - 0.5) * 2.2 * share * tumble, (draws[8] - 0.5) * 1.4 * share * tumble + (shard ? (draws[5] - 0.5) * 2 : 0)));
-      const slab = turned({ ...body, ry: shard ? 0 : course.ry, rx: 0, rz: 0 }, q);
-      if (!moonClear(slab)) continue;
-      if (placedW.some(o => touches(slab, o, W * 0.05)) || others.some(o => touches(slab, o, W * 0.1))) continue;
+        ? solid(centre.x, centre.y, centre.z, W * (0.6 + 0.5 * draws[4]) * shrink, W * 0.06, W * (0.14 + 0.1 * draws[5]), 800 + k, 'stack')
+        : { ...course, x: centre.x, y: centre.y, z: centre.z, w: course.w * shrink, h: course.h * shrink, d: course.d * shrink };
+      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((draws[6] - 0.5) * 1.4 * turn, (draws[7] - 0.5) * 1.8 * turn, (draws[8] - 0.5) * 1.6 * turn + (shard ? (draws[5] - 0.5) * 1.6 : 0)));
+      const slab = turned({ ...body, ry: shard ? course.ry + (draws[5] - 0.5) : course.ry, rx: 0, rz: 0 }, q);
+      // Its own thickness on the sheet, so the next one starts above it (a turned slab that would still touch is
+      // nudged on along the curve by the retry).
+      const extent = body.h * mmPer(centre);
+      if (k === 0 && attempt === 0) { at = extent / 2 + gap0; continue; }
+      if (!moonClear(slab)) { at = Infinity; break; }
+      if (placedW.some(o => touches(slab, o, W * 0.03)) || far.some(o => touches(slab, o, W * 0.1))) { at += 0.8; continue; }
       placedW.push(slab);
-      break;
+      placedOne = true;
+      at += extent + gap0 + gap1 * Math.min(1, at / L);
     }
+    if (!Number.isFinite(at) || at > L) break;
   }
 
-  // The dog: lifted a little course by course as it strains, then staked.
+  // The dog: lifted a little course by course as it strains, then staked. It keeps the draws it had when the owner
+  // approved it (seed 1, the second howl pass): the howl stream after the 330 its wolf took there.
+  const dogRng = ctx.random('moon-howl');
+  for (let i = 0; i < HOWL2_WOLF_DRAWS; i++) dogRng();
   const Wd = far[0].w;
   const strain = (i: number) => Wd * 0.012 + far[0].h * n(ctx, 'dogStrain', 0.05, 0, 0.3) * (i / far.length);
   const lifted = restack(far, strain);
@@ -200,7 +210,7 @@ function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], f
   const heights = Array.from({ length: stakeCount }, (_, i) => stakeCount === 1 ? high : low + (high - low) * i / (stakeCount - 1));
   const bury = Wd * 0.3;
   for (const [i, frac] of heights.entries()) {
-    const cross = footD.clone().setY(heightD * frac).add(new THREE.Vector3((n(ctx, 'stakeShift', 0.3, -0.5, 0.5) + (rng() - 0.5) * 0.2) * Wd, 0, (rng() - 0.5) * 0.25 * Wd));
+    const cross = footD.clone().setY(heightD * frac).add(new THREE.Vector3((n(ctx, 'stakeShift', 0.3, -0.5, 0.5) + (dogRng() - 0.5) * 0.2) * Wd, 0, (dogRng() - 0.5) * 0.25 * Wd));
     const cp = pageOf(view, cross);
     // The world direction, down and to the left in the plane facing the eye, whose line on the sheet has the volley's slope.
     let best = new THREE.Vector3(-1, -1, 0).normalize(), err = Infinity;
@@ -216,8 +226,8 @@ function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], f
     let up = Wd * n(ctx, 'stakeReach', 3, 0.8, 6);
     const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x < CARD.x1 - 6 && q.y > CARD.y0 + 8; };
     while (up > Wd * 0.6 && !inCard(cross.clone().addScaledVector(best, -up))) up -= Wd * 0.04;
-    const w = Wd * (0.09 + 0.03 * rng()), t = w * 0.5;
-    const stake = spear(cross.clone().addScaledVector(best, -up), best, 0, up + down, w, t, (rng() - 0.5) * 0.4, 900 + i);
+    const w = Wd * (0.09 + 0.03 * dogRng()), t = w * 0.5;
+    const stake = spear(cross.clone().addScaledVector(best, -up), best, 0, up + down, w, t, (dogRng() - 0.5) * 0.4, 900 + i);
     if (stakes.some(o => touches(stake, o, Wd * 0.04)) || placedW.some(o => touches(stake, o, Wd * 0.05))) continue;
     stakes.push(stake);
   }
@@ -251,8 +261,8 @@ function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], f
       const mid = (edges[k] + edges[k + 1]) / 2;
       const piece = { ...course, w: len, x: course.x + x.x * mid, y: course.y + x.y * mid, z: course.z + x.z * mid };
       // End pieces kink up at their far ends; a piece between two stakes is held at both and only twists a little.
-      const angle = k === 0 ? -kink : k === edges.length - 2 ? kink : (rng() - 0.5) * kink * 0.6;
-      bits.push(turned(piece, new THREE.Quaternion().setFromAxisAngle(z, angle * (0.8 + 0.4 * rng()))));
+      const angle = k === 0 ? -kink : k === edges.length - 2 ? kink : (dogRng() - 0.5) * kink * 0.6;
+      bits.push(turned(piece, new THREE.Quaternion().setFromAxisAngle(z, angle * (0.8 + 0.4 * dogRng()))));
     }
     return bits;
   });

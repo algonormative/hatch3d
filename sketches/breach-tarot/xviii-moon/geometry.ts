@@ -627,18 +627,15 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const cells = Array.from({ length: 64 }, () => skyRng());
     const night = n(ctx, 'night', 1, 0, 1.5);
     const reach = [0.93, 0.66, 0.42, 0.1].map((r, k) => k === 0 ? r : r * night);
-    // Sunlit, the night deepens round the broken moon and the wolf's stream (the ruling's finer tiers run on there,
-    // feathered), so their paper faces shine against it.
+    // Sunlit, the night deepens round the broken moon (the ruling's finer tiers run on there, feathered), so its
+    // paper face shines against it.
     const nightRng = ctx.random('moon-sky-night');
     const nightCells = Array.from({ length: 64 }, () => nightRng());
     const deepen = sunlit && shards ? n(ctx, 'nightDeepen', 1, 0, 2) : 0;
     const sources: { c: Point; r: number }[] = [];
     if (deepen > 0 && shards) {
       sources.push({ c: pageOf(view, shards.centre), r: 48 * deepen });
-      const seatedW = set.words?.near ?? set.near;
-      for (const sl of set.near) if (!seatedW.includes(sl)) sources.push({ c: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)), r: 16 * deepen });
     }
-    // A smooth field (a sum of soft blobs), so the deepened night follows the stream as one shape, not a string of puffs.
     const zone = (p: Point) => { let sum = 0; for (const src of sources) sum += Math.exp(-((p.x - src.c.x) ** 2 + (p.y - src.c.y) ** 2) / (src.r * src.r)); return Math.min(1, sum); };
     const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
     for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += 0.62) {
