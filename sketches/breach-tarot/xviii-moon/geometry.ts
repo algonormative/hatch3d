@@ -16,6 +16,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { roadPlan, roadStrokes } from './road.ts';
 import { crescent, rimPoint } from './crescent.ts';
 import { onRock, rockMesh, station } from './station.ts';
+import { broken, brokenMeshes, brokenNormal, brokenPoint } from './broken.ts';
 
 /**
  * XVIII The Moon: none of this light is its own. Two squat towers of long slabs stand either side of
@@ -219,10 +220,11 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const { shore } = land;
   const inPool = (p: Point) => p.y > shore(p.x) + 0.6;
   const road = roadStrokes(ctx, view, roadPlan(ctx, view, shore, EYE));
-  // The moon is a station built into a moon (the default) or, as first drawn, a crescent of slabs.
-  const crescentForm = ctx.params.moonForm === 'crescent';
-  const moon = crescentForm ? crescent(ctx, view, f) : null;
-  const base = crescentForm ? null : station(ctx, view, f);
+  // The moon: broken and pierced (the default), a station built into a moon, or, as first drawn, a crescent of slabs.
+  const form = ctx.params.moonForm === 'crescent' || ctx.params.moonForm === 'station' ? ctx.params.moonForm : 'broken';
+  const moon = form === 'crescent' ? crescent(ctx, view, f) : null;
+  const base = form === 'station' ? station(ctx, view, f) : null;
+  const shards = form === 'broken' ? broken(ctx, view, f) : null;
 
   // The light on the towers: from the moon, high on the right and a little behind, so the faces turned right stay pale and the faces turned to us fall dark.
   const light = new THREE.Vector3(0.7, 0.45, 0.05).normalize();
@@ -273,15 +275,18 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const standGeos = standing.map(slabGeometry);
   const waterGeos = inWater.map(slabGeometry);
   // The station's blocks, hatched by its sun like the towers (at the towers' spacing on the sheet), and the rock they are built into.
-  const blocks = base ? [...base.spine, ...base.collar, ...base.dock, ...base.scatter] : [];
+  const blocks = base ? [...base.spine, ...base.collar, ...base.dock, ...base.scatter] : shards ? [...shards.piercers, ...shards.debris] : [];
+  // The broken moon is further off: its hatch a little more open than the towers'.
+  const blockHatch = shards ? hatch * n(ctx, 'brokenHatch', 1.25, 0.8, 2.5) : hatch;
+  const sunlight = (base ?? shards)?.light ?? light;
   blocks.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of plainFacets(sl, base!.light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), true)) {
+    for (const st of plainFacets(sl, sunlight, eye, blockHatch * FACET_MM_PER_UNIT / mmPerUnit(pos), true)) {
       moonStrokes.push({ ink: st.ink, group: 'moon', family: st.family, points: st.points, owner });
     }
   });
   const blockGeos = blocks.map(slabGeometry);
-  const moonGeos = moon ? moon.slabs.map(slabGeometry) : [rockMesh(base!), ...blockGeos];
+  const moonGeos = moon ? moon.slabs.map(slabGeometry) : base ? [rockMesh(base), ...blockGeos] : [...brokenMeshes(shards!), ...blockGeos];
   // Each picture has its own depth range: the standing city, the city in the water, and the moon.
   const viewR = view.clone() as THREE.PerspectiveCamera;
   const viewM = view.clone() as THREE.PerspectiveCamera;
@@ -461,6 +466,60 @@ export function drawMoon(ctx: SketchContext): Part[] {
         },
       });
     }
+    if (shards) {
+      // The broken rock: field lines square to the first slab, evenly spaced on the sheet, every line over the night
+      // side and dropping out by halves across the lit side. Each piece carries its own lines, turned and drifted with
+      // it, so a line breaks where it crosses a crack. Each crack's rim is drawn on both its pieces, and the limb.
+      const clear = glyphMask(blockEdges, n(ctx, 'rockClear', 0.45, 0.2, 2));
+      const rmm = shards.radius * f / eye.distanceTo(shards.centre);
+      const step = n(ctx, 'brokenPitch', 0.75, 0.4, 1.5) / rmm;
+      const open = [0.62, 0.42, 0.22, 0.06];
+      const mare = n(ctx, 'rockMare', 0.32, 0, 0.8);
+      const lines3: THREE.Vector3[][] = [];
+      const shown = (p: THREE.Vector3, normal: THREE.Vector3) => eye.clone().sub(p).dot(normal) > 0;
+      const trace = (dirs: THREE.Vector3[], keep: (dir: THREE.Vector3, normal: THREE.Vector3) => boolean, keyOf = (d: THREE.Vector3) => shards.pieceOf(d), proud = 0.004, facing = true) => {
+        let run: THREE.Vector3[] = [], last = -1;
+        const flush = () => { if (run.length > 1) lines3.push(run); run = []; };
+        for (const dir of dirs) {
+          const key = keyOf(dir);
+          if (key !== last) { flush(); last = key; }
+          const normal = brokenNormal(shards, dir, key), p = brokenPoint(shards, dir, proud, key);
+          if ((facing && !shown(p, normal)) || !keep(dir, normal)) { flush(); continue; }
+          run.push(p);
+        }
+        flush();
+      };
+      let k = 0;
+      for (let sv = -1 + step / 2; sv < 1; sv += step, k++) {
+        const c = Math.sqrt(1 - sv * sv);
+        const tier = k % 8 === 0 ? 0 : k % 4 === 0 ? 1 : k % 2 === 0 ? 2 : 3;
+        const dirs = Array.from({ length: 541 }, (_, i) => {
+          const th = i / 540 * Math.PI * 2;
+          return shards.axis.clone().multiplyScalar(sv).addScaledVector(shards.b1, c * Math.cos(th)).addScaledVector(shards.b2, c * Math.sin(th));
+        });
+        trace(dirs, (dir, normal) => normal.dot(shards.light) <= open[tier] + mare * shards.ground(dir));
+      }
+      // The limb, and each crack's rim on either side of it.
+      const zc = shards.toEye, xc = new THREE.Vector3(0, 1, 0).cross(zc).normalize(), yc = zc.clone().cross(xc);
+      // The limb is where the eye's rays graze the rock: a little toward the eye of the rock's middle.
+      const graze = shards.radius / eye.distanceTo(shards.centre);
+      trace(Array.from({ length: 721 }, (_, i) => zc.clone().multiplyScalar(graze).addScaledVector(xc, Math.sqrt(1 - graze * graze) * Math.cos(i / 720 * Math.PI * 2)).addScaledVector(yc, Math.sqrt(1 - graze * graze) * Math.sin(i / 720 * Math.PI * 2))), () => true, undefined, 0.001, false);
+      for (const crack of shards.cracks) {
+        const e1 = crack.m.clone().cross(zc).normalize(), e2 = crack.m.clone().cross(e1).normalize();
+        const r = Math.sqrt(Math.max(0, shards.radius ** 2 - crack.o ** 2));
+        const ring = Array.from({ length: 721 }, (_, i) => {
+          const th = i / 720 * Math.PI * 2;
+          return crack.m.clone().multiplyScalar(crack.o).addScaledVector(e1, r * Math.cos(th)).addScaledVector(e2, r * Math.sin(th));
+        });
+        for (const side of [1, -1]) {
+          const nudge = crack.m.clone().multiplyScalar(side * 0.02 * shards.radius);
+          trace(ring.map(q => q.clone().normalize()), () => true, d => shards.pieceOf(d.clone().multiplyScalar(shards.surface(d)).add(nudge).normalize()), 0.002);
+        }
+      }
+      projectStrokes(lines3.map(points => ({ points })), { view: viewC, depth: depthC, width: W, height: H, bias: biasOf(viewC, 0.02 * shards.radius, eye.distanceTo(shards.centre)) }, {
+        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p)); },
+      });
+    }
     if (base) {
       // The rock: field lines wrapping it square to the spine, evenly spaced on the sheet. Over the night side every
       // line runs; across the lit side they drop out by halves as the sun climbs, so the lit limb is open paper.
@@ -530,7 +589,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // The night: a ruling, full lines at the top, opening by halves as it comes down and breaking into dashes low in
     // the sky, which thin toward the horizon; knocked out round the towers, and with a halo of paper round the moon.
     const solids = meshCoverage(standGeos, viewR, TABLOID_PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const shine = meshCoverage(moonGeos, viewC, TABLOID_PAGE, n(ctx, 'moonHalo', 2.6, 0.5, 6));
+    const shine = meshCoverage(moonGeos, viewC, TABLOID_PAGE, shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) : n(ctx, 'moonHalo', 2.6, 0.5, 6));
     const skyRng = ctx.random('moon-sky');
     const cells = Array.from({ length: 64 }, () => skyRng());
     const night = n(ctx, 'night', 1, 0, 1.5);
