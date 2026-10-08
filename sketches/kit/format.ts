@@ -45,7 +45,8 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  *   - a feature smaller than `MIN_FEATURE` millimetres on paper: draw it as an outline or a single line, or drop it;
  *   - a page length fed to a gradient tuned on tabloid: back in tabloid millimetres as `length / S`.
  * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`.
- * Check the result with the density probe (`kit/density.ts`, `npm run density`).
+ * Check the result against the card's tabloid print with the density probe: `denserThan` in `kit/density.ts`, or
+ * `npm run -s density -- small/result.json --against tabloid/result.json`. The Fool is the worked example.
  */
 
 export type Fit = 'height' | 'width';

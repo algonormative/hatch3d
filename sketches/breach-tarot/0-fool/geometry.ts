@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, depthRaster, halo, layoutLength, layoutX, layoutY, scaledCount } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
@@ -42,6 +42,9 @@ const EYE = 12;
 const CELL = 20, THICK = 2.2, COURSE = 2.5, COPING = 0.7;
 /** Page millimetres per world unit at the Tower's slab depth, where the facet hatch is tuned. */
 const FACET_MM_PER_UNIT = 8.3;
+/** The fewest loose blocks (fallen, or in the air) a smaller card keeps, so the collapse still reads. */
+const LOOSE_FLOOR = 60;
+const GOLDEN = 0.6180339887498949;
 
 export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
@@ -92,10 +95,11 @@ export function maze(ctx: SketchContext, view: THREE.Camera, foot: THREE.Vector3
   for (let r = -6; r <= 60; r++) for (let c = -60; c <= 60; c++) {
     const at = foot.clone().addScaledVector(axes.u, c * CELL).addScaledVector(axes.v, r * CELL).setY(0);
     const dist = eyeZ - at.z;
-    // In front of the eye, inside the card's width, near enough to draw, and big enough to plot.
-    if (dist < 14 || dist > reach || mmPerUnit(dist) * CELL < 3.5) continue;
+    // In front of the eye, inside the card's width, near enough to draw, and big enough to plot: all in
+    // tabloid's terms, so the walk carves the same maze at every size.
+    if (dist < 14 || dist > reach || mmPerUnit(dist) * CELL < layoutLength(3.5)) continue;
     const p = pageOf(view, at);
-    if (p.x < CARD.x0 - 40 || p.x > CARD.x1 + 40) continue;
+    if (p.x < layoutX(TABLOID_CARD.x0 - 40) || p.x > layoutX(TABLOID_CARD.x1 + 40)) continue;
     // Ground nearer the eye than the Fool is still to come: the walk has not been there.
     cells.set(key(c, r), { c, r, x: at.x, z: at.z, t: at.z > foot.z + CELL * 0.3 ? Infinity : -1 });
   }
@@ -170,7 +174,8 @@ export function walls(ctx: SketchContext, view: THREE.Camera, m: Maze): { walls:
       const age = 1 - t / Math.max(1, m.now);
       const collapse = clamp(smooth(0.55 - 0.4 * decay, 1.02 - 0.2 * decay, age), 0, 1);
       const dist = eyeZ - mz;
-      const far = PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < 1.6;
+      // Too far to show its courses: one pier (in tabloid's terms, so the collapse is the same at every size).
+      const far = PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < layoutLength(1.6);
       // He keeps building: the older a wall, the more courses it has grown.
       const courses = 2 + Math.round(n(ctx, 'grow', 0.5, 0, 1) * 64 * age ** 2.4 * (0.7 + 0.6 * rng()));
       const slabs = wallSlabs(rng, mx, mz, dir, collapse, far, courses, fray);
@@ -281,7 +286,11 @@ export function drawFool(ctx: SketchContext): Part[] {
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.z - p.z) * fovT);
   // The Fool stands near the foot of the card, right of centre, walking left into the open ground.
-  const foot = onGround(view, { x: CARD.x0 + (CARD.x1 - CARD.x0) * n(ctx, 'foolX', 0.6, 0.3, 0.75), y: CARD.y1 - n(ctx, 'footY', 32, 10, 80) });
+  // (Placed in tabloid's frame and carried to the format's, so he stands on the same ground at every size.)
+  const foot = onGround(view, {
+    x: layoutX(TABLOID_CARD.x0 + (TABLOID_CARD.x1 - TABLOID_CARD.x0) * n(ctx, 'foolX', 0.6, 0.3, 0.75)),
+    y: layoutY(TABLOID_CARD.y1 - n(ctx, 'footY', 32, 10, 80)),
+  });
   const m = maze(ctx, view, foot);
   const { walls: built, undecided } = walls(ctx, view, m);
   const light = new THREE.Vector3(-0.6, 0.42 + 0.5 * n(ctx, 'lightAngle', 0.3, 0, 1), 0.6).normalize();
@@ -336,7 +345,15 @@ export function drawFool(ctx: SketchContext): Part[] {
   strokes.push(...facetStrokes(carried, light, eye, false, FACET_MM_PER_UNIT / mmPerUnit(new THREE.Vector3(carried.x, carried.y, carried.z)))
     .map(st => ({ ink: st.ink, group: 'figure', family: st.family, points: st.points })));
   const allSlabs: Slab[] = [];
+  // Loose blocks, fallen or in the air, are a density. Each one's ink shrinks only with its outline, so a smaller
+  // card keeps them in proportion to its scale (by area they thinned to a few and the rising cloud was lost),
+  // never under a floor, as an even spread through the collapse; the maze and its walls are untouched.
+  const isLoose = (sl: Slab) => sl.role === 'fallen' || sl.role === 'debris';
+  const looseCount = built.reduce((sum, w) => sum + w.slabs.filter(isLoose).length, 0);
+  const keepLoose = looseCount ? scaledCount(looseCount, LOOSE_FLOOR, 'length') / looseCount : 1;
+  let loose = 0;
   for (const w of built) for (const sl of w.slabs) {
+    if (keepLoose < 1 && isLoose(sl) && (loose++ * GOLDEN) % 1 >= keepLoose) continue;
     allSlabs.push(sl);
     const scale = FACET_MM_PER_UNIT / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
     const pageSize = Math.max(sl.w, sl.h) * mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
@@ -352,15 +369,16 @@ export function drawFool(ctx: SketchContext): Part[] {
   const geometries = [...allSlabs.map(slabGeometry), slabGeometry(carried), ...bodyMeshes(body, 0.8), ...bigSuitMeshes(suit), ...tie.meshes];
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const figureCover = meshCoverage([...bodyMeshes(body, 0.5), ...bigSuitMeshes(suit, 0.5), slabGeometry(carried)], view, PAGE, 2.5);
-    // The phrase, painted on the open ground in front of him and down the near corridors, staggered.
+    const figureCover = meshCoverage([...bodyMeshes(body, 0.5), ...bigSuitMeshes(suit, 0.5), slabGeometry(carried)], view, PAGE, halo(2.5));
+    // The phrase, painted on the open ground in front of him and down the near corridors, staggered; or, where
+    // the format sets it in the band, under the card's name instead.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const style = { face: settings.face, height: settings.size + 0.4 };
     const wrng = ctx.random('fool-words');
     const textStrokes: THREE.Vector3[][] = [];
     const taken: { x0: number; x1: number; y0: number; y1: number }[] = [];
-    const top = HORIZON_Y + 22, bottom = CARD.y1 - 6;
+    const top = HORIZON_Y + layoutLength(22), bottom = CARD.y1 - layoutLength(6);
     let side = wrng() < 0.5 ? -1 : 1;
     let lastY = top - 8;
     words.forEach((word, i) => {
@@ -368,7 +386,7 @@ export function drawFool(ctx: SketchContext): Part[] {
       for (let attempt = 0; attempt < 160; attempt++) {
         const yy = top + (bottom - top) * clamp((i + 0.5) / words.length + (wrng() - 0.5) * 0.25 * (1 + attempt / 20), 0, 1);
         if (yy < lastY + 4) continue;
-        const xx = clamp((CARD.x0 + CARD.x1) / 2 + side * (10 + 90 * wrng()), CARD.x0 + half + 2, CARD.x1 - half - 2);
+        const xx = clamp((CARD.x0 + CARD.x1) / 2 + side * layoutLength(10 + 90 * wrng()), CARD.x0 + half + 2, CARD.x1 - half - 2);
         const box = { x0: xx - half - 3, x1: xx + half + 3, y0: yy - 6, y1: yy + 6 };
         if (taken.some(b => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1)) continue;
         const word3 = groundWord(view, word, { x: xx, y: yy }, style);
@@ -392,9 +410,9 @@ export function drawFool(ctx: SketchContext): Part[] {
     for (const line of lettering.polylines) for (const c of clipProjectedPolyline(line, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.8);
+    const onGlyph = glyphMask(glyphPaths, halo(0.8));
     const buckets = new PartBuckets(0.4);
-    const solidThings = meshCoverage(geometries, view, PAGE, 0.4);
+    const solidThings = meshCoverage(geometries, view, PAGE, halo(0.4));
     const add = (key: string, run: Point[]) => { for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(key, piece); };
     projectStrokes(strokes, { view, depth, width: W, height: H }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
@@ -413,7 +431,8 @@ export function drawFool(ctx: SketchContext): Part[] {
       return hull(pts);
     });
     const shadowRows: Stroke[] = [];
-    for (let y = HORIZON_Y + 0.6, k = 0; y < CARD.y1; y += 0.62 + 0.004 * (y - HORIZON_Y), k++) {
+    // Rows 0.62 mm apart on paper at the horizon, opening toward the foot as they did on tabloid.
+    for (let y = HORIZON_Y + 0.6, k = 0; y < CARD.y1; y += 0.62 + 0.004 * (y - HORIZON_Y) / S, k++) {
       const z = onGround(view, { x: PAGE.width / 2, y }).z;
       const spans: [number, number][] = [];
       for (const poly of shadows) {
@@ -444,9 +463,9 @@ export function drawFool(ctx: SketchContext): Part[] {
     // rhythm. Drawn flat, all in the lightest pen, kept clear of everything in front of it.
     if (ctx.params.sun !== false) {
       const c = { x: CARD.x1 - n(ctx, 'sunInset', 0.2, 0.08, 0.4) * (CARD.x1 - CARD.x0), y: CARD.y0 + n(ctx, 'sunDrop', 0.13, 0.05, 0.3) * (CARD.y1 - CARD.y0) };
-      const R = n(ctx, 'sunSize', 18, 10, 40);
-      const sky = { ...CARD, y1: HORIZON_Y - 6 };
-      const clearOf = meshCoverage(geometries, view, PAGE, 2.2);
+      const R = layoutLength(n(ctx, 'sunSize', 18, 10, 40));
+      const sky = { ...CARD, y1: HORIZON_Y - layoutLength(6) };
+      const clearOf = meshCoverage(geometries, view, PAGE, halo(2.2));
       const clear = (p: Point) => !clearOf(p) && !onGlyph(p);
       const put = (key: string, run: Point[], keep: (p: Point, at: number) => boolean = clear) => {
         for (const inside of clipWindow(run, sky)) for (const piece of keepAlong(inside, keep, 0.12)) buckets.add(key, piece);
@@ -455,6 +474,8 @@ export function drawFool(ctx: SketchContext): Part[] {
       for (const r of [R, R - 0.9]) put('sun-acid', Array.from({ length: 241 }, (_, i) => at(i / 240 * Math.PI * 2, r)));
       const srng = ctx.random('fool-sun');
       const count = 12, spin = srng() * Math.PI / count;
+      // A ray narrower than the smallest feature (about 0.13 R across, halfway out) is drawn as one line.
+      const thin = 0.13 * R < MIN_FEATURE;
       for (let k = 0; k < count; k++) {
         const a = spin + k * Math.PI * 2 / count;
         const r0 = R * 1.12, r1 = R * (k % 4 === 0 ? 2.5 : k % 2 === 0 ? 2.0 : 2.25);
@@ -463,10 +484,10 @@ export function drawFool(ctx: SketchContext): Part[] {
         if (k % 2 === 0) {
           // Straight: a long thin slab seen flat, narrowing to its tip.
           const w0 = R * 0.09, w1 = R * 0.035;
-          put('sun-acid', [side(r0, -w0), side(r1, -w1), side(r1, w1), side(r0, w0), side(r0, -w0)]);
+          put('sun-acid', thin ? [side(r0, 0), side(r1, 0)] : [side(r0, -w0), side(r1, -w1), side(r1, w1), side(r0, w0), side(r0, -w0)]);
         } else {
-          // Twisting: two strands crossing as the helix's do, narrowing to the tip.
-          for (const sgn of [-1, 1]) put('sun-acid', Array.from({ length: 80 }, (_, i) => {
+          // Twisting: two strands crossing as the helix's do, narrowing to the tip; one strand when thin.
+          for (const sgn of thin ? [1] : [-1, 1]) put('sun-acid', Array.from({ length: 80 }, (_, i) => {
             const f = i / 79, r = r0 + (r1 - r0) * f;
             return side(r, sgn * R * 0.1 * (1 - 0.6 * f) * Math.sin(f * Math.PI * 2 * 2.2 + k));
           }));
@@ -474,7 +495,8 @@ export function drawFool(ctx: SketchContext): Part[] {
       }
       // Fine rays over the sky beyond the rays, broken into the rhythm, thinning with distance.
       const pattern = barPattern(srng, 0.7);
-      const fine = Math.round(48 + 64 * n(ctx, 'radiance', 0.5, 0, 1));
+      // As many as keep their spacing round a sun that scales with the card.
+      const fine = scaledCount(Math.round(48 + 64 * n(ctx, 'radiance', 0.5, 0, 1)), 16, 'length');
       for (let k = 0; k < fine; k++) {
         const a = (k + 0.5) / fine * Math.PI * 2;
         if (k % 3 === 1) continue;
@@ -486,8 +508,10 @@ export function drawFool(ctx: SketchContext): Part[] {
     }
     for (const path2 of glyphPaths) buckets.add('slogan-lettering', path2, true);
     const parts = buckets.toParts(['maze', 'collapse', 'shadow', 'undecided', 'figure', 'figure-edge', 'helix', 'sun', 'slogan'], INKS);
-    parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidThings(p), 0.3) });
-    parts.push(...cardFrame('0', 'THE FOOL'));
+    // What shows of the horizon between the walls (on a small card, often nothing: no empty part then).
+    const horizon = keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidThings(p), 0.3);
+    if (horizon.length) parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: horizon });
+    parts.push(...cardFrame('0', 'THE FOOL', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
