@@ -33,12 +33,15 @@ export interface FrameOptions {
 
 /** Room either side of the band phrase, as a fraction of the card's width. */
 const PHRASE_INSET = 0.06;
+/** Paper kept above the name and below the phrase's descenders, in millimetres. */
+const BAND_CLEAR = 0.2;
 
 /**
  * Numeral above, name below, each between a pair of fine rules. When the format puts the phrase in the band
  * (`PHRASE` is `band`) and the card passes one, the name moves up and the phrase is set once beneath it, centred,
  * in the lettering pen at `FRAME.phraseHeight`, as its own part (`card-phrase`). A phrase too long for the card at
- * that height is tracked tighter, then set smaller to fit.
+ * that height is tracked tighter, then set smaller to fit; a band too shallow for both lines sets them closer, then
+ * smaller.
  */
 export function cardFrame(numeral: string, name: string, options: FrameOptions = {}): Part[] {
   const pen = options.pen ?? 'carbon';
@@ -63,11 +66,19 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
     const width = measureStrokeText(phrase, tight);
     style = width > room ? { ...tight, height: phraseHeight * room / width } : tight;
   }
-  // Name above, phrase below; the pair, from the name's cap line to the phrase's descenders, centred in the band.
-  const lead = 0.5 * style.height, descender = 3 / 8 * style.height;
-  const block = below.height + lead + style.height + descender;
-  const top = (CARD.y1 + gap + CARD.bottom) / 2 - block / 2;
-  paths.push(...centred(name, top + below.height / 2, below.height, below.tracking));
+  // Name above, phrase below; the pair, from the name's cap line to the phrase's descenders (3/8 of its height),
+  // centred in the band with a little paper above and below. A band too shallow for both (a card wider than
+  // tabloid's proportions) closes the lead, then sets both smaller.
+  const depth = CARD.bottom - (CARD.y1 + gap) - 2 * BAND_CLEAR;
+  let nameHeight = below.height, lead = 0.5 * style.height;
+  const block = () => nameHeight + lead + style.height * 11 / 8;
+  if (block() > depth) lead = 0.25 * style.height;
+  if (block() > depth) {
+    const k = depth / block();
+    nameHeight *= k; lead *= k; style = { ...style, height: style.height * k };
+  }
+  const top = (CARD.y1 + gap + CARD.bottom) / 2 - block() / 2;
+  paths.push(...centred(name, top + nameHeight / 2, nameHeight, below.tracking));
   const width = measureStrokeText(phrase, style);
   const set = strokeText(phrase, (CARD.x0 + CARD.x1) / 2 - width / 2, top + below.height + lead, style);
   return [{ id: 'card-frame', pen, paths }, { id: 'card-phrase', pen: options.phrase!.pen ?? 'lettering', paths: set }];
