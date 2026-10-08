@@ -149,10 +149,11 @@ describe('Breach Tarot format', () => {
     const frame = result.parts.find(part => part.id === 'card-frame')!;
     const q = (n: number) => Math.round(n * 1000) / 1000;
     expect(frame.paths[0]).toEqual([{ x: q(card.x0), y: q(card.y0) }, { x: q(card.x1), y: q(card.y0) }]);
-    // The scene lands in the window: the star, the falling pieces and the helix all survive the window's clip.
+    // The scene lands in the window: the star, the falling pieces and the helix all survive the window's clip. (The
+    // Star reads the format: its fragments are a density, thinned on a small card; see breach-tarot-star.test.ts.)
     const count = (prefix: string) => result.parts.filter(part => part.id.startsWith(prefix)).reduce((n, part) => n + part.paths.length, 0);
     expect(count('star-')).toBeGreaterThan(40);
-    expect(count('pieces-')).toBeGreaterThan(150);
+    expect(count('pieces-')).toBeGreaterThan(80);
     expect(count('helix-')).toBeGreaterThan(60);
     expect(result.parts.filter(part => part.id !== 'card-frame').reduce((n, part) => n + part.paths.length, 0)).toBeGreaterThan(500);
   });
