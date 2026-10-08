@@ -38,7 +38,8 @@ export function buildDoor(ctx: SketchContext, side: -1 | 1, base: THREE.Vector3)
   put('sill', 0, sillH / 2, 0, Wd, sillH, lintelD * 0.9);
   // The leaf: hinged at the outer jamb (local -x), its free end swung `open` radians from the frame's plane toward +z, the
   // eye's side, so it stands out in front of the frame, past square.
-  const Wl = Wd - 0.3, Hl = Hd - sillH - 0.08;
+  // The leaf stands a little short of the lintel, so it swings clear of it and of the word cut there.
+  const Wl = Wd - 0.3, Hl = Hd - sillH - 0.6;
   const hinge = -Wd / 2 + 0.1;
   const cx = hinge + (Wl / 2) * Math.cos(open), cz = (Wl / 2) * Math.sin(open);
   put('leaf', cx, sillH + 0.04 + Hl / 2, cz, Wl, Hl, 0.1, -open);

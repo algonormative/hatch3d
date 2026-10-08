@@ -17,6 +17,7 @@ const sketch: Sketch = {
   ],
   controls: [
     ...paramControls(),
+    { type: 'toggle', id: 'echo', label: 'Echo of the pillar in the sky', default: true, group: 'Look' },
     ...sloganControls(1).map((c): Control => c.type === 'text' && c.id === 'slogan' ? { ...c, default: 'you can leave at any time' }
       : c.type === 'slider' && c.id === 'sloganSize' ? { ...c, default: 2.2 } : c),
   ],
