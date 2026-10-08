@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { PAGE, depthRaster, scaledCount } from '../../kit/format.ts';
 import { towerSlabs } from '../../breach-cathedral-tower/geometry.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -87,10 +87,16 @@ function pour(ctx: SketchContext): Strand[] {
   }));
 }
 
+/** The fewest raindrops (of the whole fall, most of it hidden or off the card) a smaller card keeps, so it still storms. */
+const RAIN_FLOOR = 300;
+const GOLDEN = 0.6180339887498949;
+
 /**
  * The storm: slanted rain on a backdrop plane behind the tower, so the depth pass keeps it behind
  * everything. Dashes thicken toward the top of the sky into a cloud bank and thin out to the horizon;
- * a fixed 64-step rhythm breaks each fall.
+ * a fixed 64-step rhythm breaks each fall. The drops are a density: a smaller card keeps fewer of the
+ * same fall, as an even spread through it. Each dash shrinks with the card, so the count goes with the
+ * scale rather than the area: that keeps the rain's tone on paper (by area it all but vanished).
  */
 export function storm(ctx: SketchContext): Stroke[] {
   const amount = n(ctx, 'storm', 0.5, 0, 1);
@@ -113,7 +119,8 @@ export function storm(ctx: SketchContext): Stroke[] {
       y += dash + gap;
     }
   }
-  return out;
+  const keep = out.length ? scaledCount(out.length, RAIN_FLOOR, 'length') / out.length : 1;
+  return keep >= 1 ? out : out.filter((_, i) => (i * GOLDEN) % 1 < keep);
 }
 
 /**

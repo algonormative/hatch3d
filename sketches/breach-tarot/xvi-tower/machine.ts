@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { PAGE, PITCH_SCALE, depthRaster } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { clearBands, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -35,6 +35,12 @@ const { W, H, MM_X, MM_Y } = depthRaster(559, 864, 2);
 const W2 = 2 * W, H2 = 2 * H;
 const MM2_X = PAGE.width / W2, MM2_Y = PAGE.height / H2;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
+/**
+ * The smallest feature this format draws as a shape, in millimetres on paper: a flat band narrower than this is
+ * drawn as its centreline, a paving stone shallower than this is left out. Tabloid is the authored format: its
+ * print keeps everything it has.
+ */
+const FEATURE = FORMAT.tabloid ? 0 : MIN_FEATURE;
 /** tower() pushes the ground last: the plinth, 18 × 9 paving stones and 7 pieces of debris. */
 const GROUND_COUNT = 1 + 18 * 9 + 7;
 
@@ -46,11 +52,26 @@ const M = {
 
 type Machine = { solids: Slab[]; kind: ('blade' | 'panel' | 'bench')[]; column: number[]; lid: Set<number>; core: THREE.Vector3; lidCentre: THREE.Vector3 };
 
+/**
+ * The machine's blades as the format draws them: tabloid's plate and gap; or, where the gap between two blades
+ * would print closer than the pens hold at the back of the C, the gap held at that floor and the blades merged
+ * into courses of as many as keep the plate's proportion to it. Fewer blades, the same tone.
+ */
+export function blades(view: THREE.PerspectiveCamera): { plate: number; gap: number; merged: number } {
+  const far = view.position.z - (M.z - M.R);
+  const paper = M.gap * PAGE.height / (2 * far * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
+  // (The ratio first: at tabloid `tolerance` returns `paper` itself, so the gap is exactly M.gap.)
+  const gap = M.gap * (tolerance(paper) / paper);
+  const merged = Math.max(1, Math.floor(gap / M.gap));
+  return { plate: merged * M.plate + (merged - 1) * M.gap, gap, merged };
+}
+
 /** The supercomputer: wedge columns of blades in a C, a few double blades for panels, the bench ring, and the top lifted off as one lid. */
-function machine(ctx: SketchContext): Machine {
+function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Machine {
   const rng = ctx.random('tower-card-machine');
   const lidAmount = n(ctx, 'lid', 0.5, 0, 1);
-  const { R, height, columns, plate, gap } = M;
+  const { R, height, columns } = M;
+  const { plate, gap } = blades(view);
   // The opening of the C at the front, in radians of the ring: about a quarter, as on the Cray-1.
   const open = n(ctx, 'machineOpen', 1.55, 0.1, 2.4);
   const inner = R * M.inner, rm = (R + inner) / 2;
@@ -116,8 +137,8 @@ function machine(ctx: SketchContext): Machine {
   return { solids, kind, column, lid, core: base, lidCentre };
 }
 
-/** A channel of the bolt on the page: its centreline, its half-width at the start and the end, and the channel it forks from. */
-type Channel = { path: Point[]; h0: number; h1: number; parent: number };
+/** A channel of the bolt on the page: its centreline, its half-width at the start and the end, the channel it forks from, and its order (0 the main channel, 1 a branch off it, 2 a branch off that, ...). */
+type Channel = { path: Point[]; h0: number; h1: number; parent: number; order: number };
 
 /** A run from a to b broken into seeded jags about every `step` mm, `amp` mm either side: lightning, not a staircase. */
 function jagged(rng: () => number, a: Point, b: Point, step: number, amp: number): Point[] {
@@ -167,21 +188,24 @@ const rotate = (d: Point, a: number): Point => ({ x: d.x * Math.cos(a) - d.y * M
 /**
  * The forked bolt, in page millimetres: a main channel in at a slant from the top right corner,
  * running down behind the machine, with branches forking off it to either side and sub-branches
- * off those, each tapering to a point.
+ * off those, each tapering to a point. `half` is the main channel's half-width on tabloid. The bolt
+ * is laid out in tabloid's frame and carried to the format's (its places through `layoutX` and
+ * `layoutY`, its widths through `layoutLength`), so every size and fit strikes with the same seeded
+ * bolt, in the same place against the machine.
  */
 function forkedBolt(ctx: SketchContext, half: number): Channel[] {
   const rng = ctx.random('tower-front-bolt');
-  const start = { x: CARD.x1 + 3, y: CARD.y0 - 3 };
+  const start = { x: TABLOID_CARD.x1 + 3, y: TABLOID_CARD.y0 - 3 };
   // It leaves through the far edge above the horizon, so the shared horizon stays open below it.
-  const end = { x: CARD.x0 - 6, y: HORIZON_Y - 40 - 35 * rng() };
-  const channels: Channel[] = [{ path: jagged(rng, start, end, 15, 6.5), h0: half, h1: half * 0.6, parent: -1 }];
+  const end = { x: TABLOID_CARD.x0 - 6, y: TABLOID_HORIZON_Y - 40 - 35 * rng() };
+  const channels: Channel[] = [{ path: jagged(rng, start, end, 15, 6.5), h0: half, h1: half * 0.6, parent: -1, order: 0 }];
   const fork = (parent: number, t: number, side: number, spread: [number, number], length: number, level: number) => {
     const from = channels[parent], { p, dir } = along(from.path, t);
     const at = from.h0 + (from.h1 - from.h0) * t;
     const d = rotate(dir, side * (spread[0] + (spread[1] - spread[0]) * rng()));
     const tip = { x: p.x + d.x * length, y: p.y + d.y * length };
     const path = jagged(rng, p, tip, level === 1 ? 10 : 6, level === 1 ? 3.5 : 2);
-    channels.push({ path, h0: Math.max(0.4, at * (level === 1 ? 0.55 : 0.65)), h1: 0.2, parent });
+    channels.push({ path, h0: Math.max(0.4, at * (level === 1 ? 0.55 : 0.65)), h1: 0.2, parent, order: from.order + 1 });
     return channels.length - 1;
   };
   // Branches all down the main channel, alternating sides, longest near the top; each splits again.
@@ -196,12 +220,53 @@ function forkedBolt(ctx: SketchContext, half: number): Channel[] {
       if (rng() < 0.5) fork(sk, 0.35 + 0.45 * rng(), rng() < 0.5 ? 1 : -1, [0.2, 0.6], 6 + 12 * rng(), 2);
     }
   }
-  return channels;
+  return channels.map(ch => ({ ...ch, path: ch.path.map(p => ({ x: layoutX(p.x), y: layoutY(p.y) })), h0: layoutLength(ch.h0), h1: layoutLength(ch.h1) }));
 }
 
-/** A tapering flat band round a channel: two outline rules meeting at the tip, and a hatch inside where it is wide enough. */
-function channelMarks(ch: Channel, area: Rect, pitch = 0.6, angle = Math.PI / 6, margin = 0.5): Point[][] {
+/** The fewest branches a smaller card keeps off the bolt's main channel, so it still forks. */
+const BRANCH_FLOOR = 4;
+const GOLDEN = 0.6180339887498949;
+
+/**
+ * Which of the bolt's channels a card draws. Branching is a density: the branches off each channel are
+ * spaced along it, so they are thinned in proportion to the scale, as an even spread, never under
+ * `BRANCH_FLOOR` off the main channel; a branch goes with the channel it forks from. All of them at tabloid.
+ */
+function boltShown(bolt: Channel[]): boolean[] {
+  const forks = new Map<number, number[]>();
+  bolt.forEach((ch, k) => { if (ch.parent >= 0) forks.set(ch.parent, [...(forks.get(ch.parent) ?? []), k]); });
+  const shown = bolt.map(ch => ch.parent < 0);
+  // A channel forks off one listed before it, so its parent is decided first.
+  bolt.forEach((ch, k) => {
+    const off = forks.get(k) ?? [];
+    const keep = off.length ? scaledCount(off.length, ch.order === 0 ? BRANCH_FLOOR : 0, 'length') / off.length : 1;
+    off.forEach((c, i) => { shown[c] = shown[k] && (keep >= 1 || (i * GOLDEN) % 1 < keep); });
+  });
+  return shown;
+}
+
+/** A path cut at arc length `s`: the part before and the part after, sharing the point there. */
+function splitAt(path: Point[], ls: number[], s: number): { head: Point[]; tail: Point[] } {
+  let i = 1;
+  while (i < path.length - 1 && ls[i] < s) i++;
+  const a = path[i - 1], b = path[i], f = Math.min(1, (s - ls[i - 1]) / Math.max(1e-9, ls[i] - ls[i - 1]));
+  const p = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+  return { head: [...path.slice(0, i), p], tail: [p, ...path.slice(i)] };
+}
+
+/**
+ * A tapering flat band round a channel: two outline rules meeting at the tip, and a hatch inside where it is
+ * wide enough. Where it tapers under `narrow` millimetres across, the rules meet there and the channel runs on
+ * to its tip as a single line (all of it, when it starts that narrow).
+ */
+function channelMarks(ch: Channel, area: Rect, pitch = 0.6, angle = Math.PI / 6, margin = 0.5, narrow = 0): Point[][] {
   const ls = lengths(ch.path), total = ls.at(-1)!;
+  if (2 * ch.h1 < narrow) {
+    const end = total * (ch.h0 - narrow / 2) / (ch.h0 - ch.h1);
+    if (!(end > 0)) return clipToRect(ch.path, area);
+    const { head, tail } = splitAt(ch.path, ls, end);
+    return [...channelMarks({ ...ch, path: head, h1: narrow / 2 }, area, pitch, angle, margin), ...clipToRect(tail, area)];
+  }
   const halfAt = (s: number) => ch.h0 + (ch.h1 - ch.h0) * s / total;
   const side = (sign: number): Point[] => ch.path.map((p, i) => {
     const a = ch.path[Math.max(0, i - 1)], b = ch.path[Math.min(ch.path.length - 1, i + 1)];
@@ -244,8 +309,12 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   if (all[all.length - GROUND_COUNT].role !== 'pier') throw new Error('xvi-tower machine: tower() no longer ends with plinth, paving and debris');
   // The ground as the cantilever card has it, less any debris that would sit inside the machine's footprint.
   const footprint = M.R + 2.4;
-  const ground = all.slice(all.length - GROUND_COUNT).filter(s => s.role !== 'debris' || Math.hypot(s.x - M.x, s.z - M.z) > footprint + Math.max(s.w, s.d) / 2);
-  const m = machine(ctx);
+  // A paving stone whose top shows less than the smallest feature deep on paper, toward the horizon, is left out:
+  // the paving runs on as far as it can be drawn, and the ground beyond is open to the horizon line.
+  const deep = (s: Slab) => pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z + s.d / 2)).y - pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z - s.d / 2)).y;
+  const ground = all.slice(all.length - GROUND_COUNT).filter(s => (s.role !== 'debris' || Math.hypot(s.x - M.x, s.z - M.z) > footprint + Math.max(s.w, s.d) / 2)
+    && (s.role !== 'stub' || FEATURE === 0 || deep(s) >= FEATURE));
+  const m = machine(ctx, view);
   const light = rakingLight(ctx);
   // The machine takes the Machine study's light, high and from the front left, so its faces read square on.
   const front = new THREE.Vector3(-0.35, 0.8, 0.6).normalize();
@@ -258,8 +327,8 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     { radius: M.helixRadius, width: M.helixWidth, pitch: 8.5, spread: 0.2, narrow: 0.15, density, interruption });
 
   // The bolt, behind everything standing.
-  const half = 3.5 + 3 * n(ctx, 'bolt', 0.5, 0, 1);
-  const bolt = forkedBolt(ctx, half);
+  const bolt = forkedBolt(ctx, 3.5 + 3 * n(ctx, 'bolt', 0.5, 0, 1));
+  const shown = boltShown(bolt);
   const reach = bolt.map(ch => ({
     ls: lengths(ch.path),
     xs: [Math.min(...ch.path.map(p => p.x)) - ch.h0, Math.max(...ch.path.map(p => p.x)) + ch.h0],
@@ -272,7 +341,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     const near = nearest(ch.path, r.ls, p);
     return near.dist < ch.h0 + (ch.h1 - ch.h0) * near.t + pad;
   };
-  const inBolt = (p: Point, pad = 0) => bolt.some((_, k) => inChannel(k, p, pad));
+  const inBolt = (p: Point, pad = 0) => bolt.some((_, k) => shown[k] && inChannel(k, p, pad));
 
   // Ground strokes: the paving in outline, plinth and debris hatched, and the storm behind.
   const groundStrokes: Stroke[] = [];
@@ -291,9 +360,12 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   });
   const lrng = ctx.random('tower-card-lights');
   const patterns = Array.from({ length: 8 }, () => barPattern(lrng, 0.62));
+  // The ticks are spaced along a blade's width, which scales with the card: a smaller card lights fewer, longer
+  // ones, two at least, so each stays a mark rather than a dot.
+  const K = scaledCount(5, 2, 'length');
   m.solids.forEach((s, i) => {
     if (m.kind[i] === 'bench') return;
-    const mat = slabMatrix(s), K = 5, pattern = patterns[i % 8];
+    const mat = slabMatrix(s), pattern = patterns[i % 8];
     for (let k = 0; k < K; k++) {
       if (!pattern[(i * 5 + k) % 64]) continue;
       const x0 = -s.w / 2 + (k + 0.14) * s.w / K, x1 = -s.w / 2 + (k + 0.86) * s.w / K;
@@ -319,7 +391,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     // on whichever face of the panel sees the eye, clear of the helix, inside the card.
     type Face = SloganSurface & { col: number; y: number };
     // A face behind the helix's axis must stand clear of where the helix crosses the sheet.
-    const onHelix = meshCoverage(rise.meshes, view, PAGE, 2.5);
+    const onHelix = meshCoverage(rise.meshes, view, PAGE, halo(2.5));
     const axisDepth = eye.distanceTo(core);
     // Each panel offers whichever of its four upright faces sees the eye best: outer, inner, or the
     // radial ends at the mouth of the C; each bench base offers its outer face.
@@ -344,7 +416,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
         const p = at(0);
         const behind = eye.distanceTo(new THREE.Vector3(0, 0, d / 2).applyMatrix4(face)) > axisDepth;
         const clear = !behind || [-0.5, -0.25, 0, 0.25, 0.5].every(t => !onHelix(at(t * w)));
-        if (clear && p.x > CARD.x0 + 8 && p.x < CARD.x1 - 8) out.push({ id, matrix: face, w, h: s.h, d, col: m.column[id], y: p.y });
+        if (clear && p.x > CARD.x0 + layoutLength(8) && p.x < CARD.x1 - layoutLength(8)) out.push({ id, matrix: face, w, h: s.h, d, col: m.column[id], y: p.y });
       });
       return out;
     };
@@ -353,7 +425,8 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
       art: { x0: CARD.x0 / MM2_X, x1: CARD.x1 / MM2_X, y0: CARD.y0 / MM2_Y, y1: CARD.y1 / MM2_Y },
     };
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    // Where the format sets the phrase in the band, the machine carries no words.
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const one = (params: Record<string, unknown>): SketchContext => ({ ...ctx, params: { ...ctx.params, ...params } as SketchContext['params'] });
     const slogans = { strokes: [] as THREE.Vector3[][], titleStrokes: [] as THREE.Vector3[][], knockouts: new Map<number, Point[][]>() };
     const keep = (plan: ReturnType<typeof planSlogans>) => {
@@ -373,15 +446,16 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
       const lo = top + span * (i - 0.3) / words.length, hi = top + span * (i + 1) / words.length;
       // Dropping down a row, start it at the left, leaving the faces to the right for the words still to come.
       const roomRight = (pool: Face[]) => [...pool].sort((a, b) => xOf(a) - xOf(b)).slice(0, Math.max(1, Math.ceil(pool.length / (words.length - i))));
+      const [g6, g8, g10, g20, g30] = [6, 8, 10, 20, 30].map(layoutLength);
       const tries: [(f: Face) => boolean, boolean][] = [
-        [f => !usedCols.has(key(f)) && f.y > Math.max(prev + 8, lo) && f.y <= hi, false],
-        [f => !usedCols.has(key(f)) && f.y > prev + 8 && f.y <= top + span * (i + 1.6) / words.length, false],
+        [f => !usedCols.has(key(f)) && f.y > Math.max(prev + g8, lo) && f.y <= hi, false],
+        [f => !usedCols.has(key(f)) && f.y > prev + g8 && f.y <= top + span * (i + 1.6) / words.length, false],
         // Reading on along a row: level with the word before, further right.
-        [f => !usedCols.has(key(f)) && Math.abs(f.y - prev) < 10 && xOf(f) > prevX + 20, false],
+        [f => !usedCols.has(key(f)) && Math.abs(f.y - prev) < g10 && xOf(f) > prevX + g20, false],
         // A column may carry a second word when the two stand well apart.
-        [f => !usedIds.has(f.id) && f.y > prev + 8 && f.y <= top + span * (i + 1.6) / words.length && (colYs.get(key(f)) ?? []).every(y => Math.abs(y - f.y) > 30), false],
-        [f => !usedCols.has(key(f)) && f.y > prev + 8, true],
-        [f => !usedIds.has(f.id) && f.y > prev + 6, true],
+        [f => !usedIds.has(f.id) && f.y > prev + g8 && f.y <= top + span * (i + 1.6) / words.length && (colYs.get(key(f)) ?? []).every(y => Math.abs(y - f.y) > g30), false],
+        [f => !usedCols.has(key(f)) && f.y > prev + g8, true],
+        [f => !usedIds.has(f.id) && f.y > prev + g6, true],
       ];
       for (const [j, [test, room]] of tries.entries()) {
         const pool = room ? roomRight(offered.filter(test)) : offered.filter(test);
@@ -409,7 +483,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
 
     // The clock the machine ran on: a hatched square wave across the sky.
     const clock = ctx.params.machineClock === true;
-    const cy = CARD.y0 + 0.03 * (CARD.y1 - CARD.y0), amp = 3.5, period = 22, clockHalf = 0.8;
+    const cy = CARD.y0 + 0.03 * (CARD.y1 - CARD.y0), amp = layoutLength(3.5), period = layoutLength(22), clockHalf = layoutLength(0.8);
     const wave: Point[] = [];
     for (let x = CARD.x0 - period, k = 0; x < CARD.x1 + period; x += period / 2, k++) {
       const y = cy + (k % 2 ? amp : -amp);
@@ -426,7 +500,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
         for (const run of runs) {
           const pts = scalePoints(run, MM_X, MM_Y);
           // The bolt and the clock are flat marks over the rain: it parts round them.
-          const pieces = st.group === 'storm' ? keepAlong(pts, p => !inBolt(p, 0.6) && !(clock && sideOf(wave, p).dist < clockHalf + 1.2), 0.2) : [pts];
+          const pieces = st.group === 'storm' ? keepAlong(pts, p => !inBolt(p, halo(0.6)) && !(clock && sideOf(wave, p).dist < clockHalf + halo(1.2)), 0.2) : [pts];
           for (const piece of pieces) put(`${st.group}-${st.ink}`, piece, false);
         }
       },
@@ -439,25 +513,29 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
           const pts = scalePoints(run, MM2_X, MM2_Y);
           let key = `${st.group}-${st.ink}`;
           // Where the bolt runs behind the machine, the status ticks in front of it are dead.
-          if (st.group === 'lights' && ticks === 'dead' && pts.length && inBolt(pts[Math.floor(pts.length / 2)], 9)) key = 'lights-carbon';
+          if (st.group === 'lights' && ticks === 'dead' && pts.length && inBolt(pts[Math.floor(pts.length / 2)], layoutLength(9))) key = 'lights-carbon';
           put(key, pts, st.family === 'text');
         }
       },
     });
 
     // Everything standing (the machine, its lid, the helix) stands in front of the bolt and the clock.
-    const standing = meshCoverage(machineGeoms, view, PAGE, 1.2);
+    const standing = meshCoverage(machineGeoms, view, PAGE, halo(1.2));
     if (clock) {
-      const box = { x0: CARD.x0, x1: CARD.x1, y0: cy - amp - 4, y1: cy + amp + 4 };
-      for (const path of bandMarks(wave, clockHalf, box, { pitch: 0.8, angle: Math.PI / 4 })) {
-        for (const inside of clipWindow(path)) for (const piece of keepAlong(inside, p => !standing(p) && !inBolt(p, 0.8), 0.12)) buckets.add('clock-carbon', piece, true);
+      const box = { x0: CARD.x0, x1: CARD.x1, y0: cy - amp - layoutLength(4), y1: cy + amp + layoutLength(4) };
+      // A band narrower than the smallest feature is drawn as its centreline.
+      const marks = 2 * clockHalf < FEATURE ? [wave] : bandMarks(wave, clockHalf, box, { pitch: tolerance(0.8), angle: Math.PI / 4 });
+      for (const path of marks) {
+        for (const inside of clipWindow(path)) for (const piece of keepAlong(inside, p => !standing(p) && !inBolt(p, halo(0.8)), 0.12)) buckets.add('clock-carbon', piece, true);
       }
     }
     const parts = buckets.toParts(['storm', 'clock', 'system', 'machine', 'lights', 'helix', 'slogan', 'title'], INKS);
     // The bolt: each channel's band, cut back where it meets the channel it forks from, hidden behind
-    // everything standing. Where only a scrap of a channel would show in a gap, it is left out.
+    // everything standing. Where only a scrap of a channel would show in a gap, it is left out. Where a
+    // channel narrows under the smallest feature, it runs on as its centreline.
     const boltPaths: Point[][] = [];
     bolt.forEach((ch, k) => {
+      if (!shown[k]) return;
       const ls = reach[k].ls, total = ls.at(-1)!;
       const spans: [number, number][] = [];
       let open = -1;
@@ -470,16 +548,18 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
         if (!seen && open >= 0) { spans.push([open, s]); open = -1; }
       }
       if (open >= 0) spans.push([open, total]);
-      const kept = spans.filter(([a, b]) => b - a >= (ch.parent < 0 ? 12 : 5));
-      const onSpan = (q: Point) => { const s = nearest(ch.path, ls, q).t * total; return kept.some(([a, b]) => s > a - 1.5 && s < b + 1.5); };
-      for (const path of channelMarks(ch, CARD)) {
-        for (const piece of keepAlong(path, p => !standing(p) && onSpan(p) && (ch.parent < 0 || !inChannel(ch.parent, p, 0.3)), 0.15)) if (piece.length > 1) boltPaths.push(piece);
+      const kept = spans.filter(([a, b]) => b - a >= layoutLength(ch.parent < 0 ? 12 : 5));
+      const slack = layoutLength(1.5);
+      const onSpan = (q: Point) => { const s = nearest(ch.path, ls, q).t * total; return kept.some(([a, b]) => s > a - slack && s < b + slack); };
+      for (const path of channelMarks(ch, CARD, tolerance(0.6), Math.PI / 6, tolerance(0.5), FEATURE)) {
+        for (const piece of keepAlong(path, p => !standing(p) && onSpan(p) && (ch.parent < 0 || !inChannel(ch.parent, p, halo(0.3))), 0.15)) if (piece.length > 1) boltPaths.push(piece);
       }
     });
     parts.push({ id: 'bolt-carbon', pen: 'carbon', paths: boltPaths });
     // The shared horizon, hidden behind the machine and the bolt.
-    parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !standing(p) && !inBolt(p, 0.6), 0.3) });
-    parts.push(...cardFrame('XVI', 'THE TOWER'));
+    parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !standing(p) && !inBolt(p, halo(0.6)), 0.3) });
+    // Where the format sets the phrase in the bottom band, the frame sets it there, under the name.
+    parts.push(...cardFrame('XVI', 'THE TOWER', { phrase: settings }));
     return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();
