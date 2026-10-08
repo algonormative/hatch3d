@@ -30,6 +30,22 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  *   - tolerance (what a pen can hold) stays in real millimetres, but never below the pen floor: `tolerance`;
  *   - knockout halos are layout with a floor: `halo` is `max(0.5, s × halo)`.
  * World-unit pitches tuned on tabloid are multiplied by `PITCH_SCALE` (`1 / s`) to hold their on-paper pitch.
+ *
+ * **Porting a card.** Every helper is the identity at tabloid (`S` is 1 there too), so a ported card's tabloid
+ * render stays byte-identical. Write each tabloid literal through the rule for its kind:
+ *   - a place in the scene (a 3D anchor picked on the page, a cull bound): the tabloid page position through
+ *     `layoutX` / `layoutY`, e.g. `layoutY(TABLOID_CARD.y1 - 32)`, `layoutX(TABLOID_CARD.x0 - 40)`. The scene then
+ *     keeps its world (same anchors, same seeded layout) and scales by `S`; `fit: 'height'` crops its sides;
+ *   - an offset from the horizon or a band edge: `HORIZON_Y + layoutLength(22)`, `CARD.y1 - layoutLength(6)`;
+ *   - a flat mark placed in the window: fractions of `CARD`, as before; its size `layoutLength(18)`;
+ *   - a pitch, gap, dash or minimum length, a lettering size: real millimetres, `tolerance(0.62)` where it could
+ *     fall under the pen floor; a knockout halo: `halo(2.2)`;
+ *   - a count that is really density: `scaledCount(80, 24)` (by the window's area), `scaledCount(80, 24, 'length')`
+ *     (by `S`, for things spaced along a length that scales with the card, like rays round a sun);
+ *   - a feature smaller than `MIN_FEATURE` millimetres on paper: draw it as an outline or a single line, or drop it;
+ *   - a page length fed to a gradient tuned on tabloid: back in tabloid millimetres as `length / S`.
+ * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`.
+ * Check the result with the density probe (`kit/density.ts`, `npm run density`).
  */
 
 export type Fit = 'height' | 'width';
@@ -66,14 +82,16 @@ export interface Format {
 
 /** Smallest cap height the lettering pen keeps legible, in millimetres. */
 export const LEGIBLE_MM = 1.6;
+/** Smallest feature drawn as a shape, in millimetres on paper: anything smaller is drawn as an outline or a single line, or dropped. */
+export const MIN_FEATURE = 1;
 /** The finest depth raster any format uses, in millimetres per pixel. */
 const RASTER_MM = 0.25;
 /** The CPU depth buffer's pixel budget (`MAX_PIXELS` in src/sketch/depth-buffer.ts). */
 const RASTER_BUDGET = 4_194_304;
 const ART_PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'] as const;
 
-/** Tabloid's card: one card per 11 × 17 sheet, bands 24 mm deep above and below the art window. */
-const TABLOID_CARD: CardRect = {
+/** Tabloid's card: one card per 11 × 17 sheet, bands 24 mm deep above and below the art window. Tabloid literals are authored in its frame. */
+export const TABLOID_CARD: CardRect = {
   x0: TALL_ART.x, x1: TALL_ART.x + TALL_ART.width,
   top: TALL_ART.y, bottom: TALL_ART.y + TALL_ART.height,
   y0: TALL_ART.y + 24, y1: TALL_ART.y + TALL_ART.height - 24,
@@ -130,15 +148,14 @@ export function formatFor(page: Page, options: FormatOptions = {}): Format {
   if (!(card.x1 > card.x0 && card.y1 > card.y0)) {
     throw new Error(`A ${page.width} × ${page.height} mm page with a ${m} mm margin leaves no room for the card's ${band.toFixed(2)} mm bands and an art window`);
   }
-  const sized = (base: Lettering): Lettering => {
-    const height = Math.max(LEGIBLE_MM, base.height * s);
-    return { height, tracking: base.tracking * height / base.height };
-  };
+  // Tracking is in the face's grid units, which already scale with the cap height.
+  const sized = (base: Lettering): Lettering => ({ height: Math.max(LEGIBLE_MM, base.height * s), tracking: base.tracking });
   const frame = TABLOID_FORMAT.frame;
   return {
     name: `${page.width}x${page.height}`, tabloid: false, page, fit, s, pitchScale: 1 / s, sheet: { x: sw, y: sh },
     card, horizonY: card.y0 + 0.6 * (card.y1 - card.y0),
-    frame: { rule: frame.rule * s, numeral: sized(frame.numeral), name: sized(frame.name), phraseHeight: LEGIBLE_MM },
+    // The band's double rule scales with the card, but stays far enough apart to print as two lines.
+    frame: { rule: Math.max(frame.rule * s, 1.5 * minSpacing), numeral: sized(frame.numeral), name: sized(frame.name), phraseHeight: LEGIBLE_MM },
     pens, minSpacing, phrase,
   };
 }
@@ -173,9 +190,16 @@ export function rasterFor(format: Format, tabloidW: number, tabloidH: number, ov
   if (format.tabloid) return { W: tabloidW, H: tabloidH, MM_X: page.width / tabloidW, MM_Y: page.height / tabloidH };
   const finest = Math.max(1 / RASTER_MM, tabloidH / TABLOID_PAGE.height);
   const budget = Math.sqrt(RASTER_BUDGET / (page.width * page.height)) / oversample;
+  const aspect = page.width / page.height;
+  const fits = (h: number) => (Math.round(h * aspect) * oversample) * (h * oversample) <= RASTER_BUDGET;
+  const skew = (h: number) => Math.abs(Math.round(h * aspect) / h - aspect);
   let H = Math.ceil(page.height * Math.min(finest, budget));
-  let W = Math.round(H * page.width / page.height);
-  while ((W * oversample) * (H * oversample) > RASTER_BUDGET) { H--; W = Math.round(H * page.width / page.height); }
+  while (!fits(H)) H--;
+  // The camera's aspect is the raster's, so take the height (up to 5% finer, within budget) whose width keeps the
+  // page's aspect most nearly: page x then matches `layoutX`, and a cull tested on the page keeps tabloid's choices.
+  const first = H;
+  for (let h = first + 1; skew(H) > 0 && h <= first * 1.05 && fits(h); h++) if (skew(h) < skew(H)) H = h;
+  const W = Math.round(H * aspect);
   return { W, H, MM_X: page.width / W, MM_Y: page.height / H };
 }
 
@@ -184,6 +208,11 @@ export const depthRaster = (tabloidW: number, tabloidH: number, oversample = 1):
 
 const identity = FORMAT.tabloid;
 const TABLOID_CENTRE_X = TABLOID_PAGE.width / 2;
+/** Tabloid's horizon, in tabloid page millimetres: the line `layoutY` measures from. */
+export const TABLOID_HORIZON_Y: number = TABLOID_FORMAT.horizonY;
+const windowArea = (card: CardRect) => (card.x1 - card.x0) * (card.y1 - card.y0);
+/** The art window's area against tabloid's (1 at tabloid). */
+export const AREA: number = identity ? 1 : windowArea(CARD) / windowArea(TABLOID_CARD);
 /** A layout length authored in tabloid millimetres. */
 export const layoutLength = (mm: number): number => identity ? mm : mm * S;
 /** A page x authored on tabloid, measured from the art window's centre line. */
@@ -194,6 +223,14 @@ export const layoutY = (y: number): number => identity ? y : HORIZON_Y + (y - TA
 export const tolerance = (mm: number, floor = MIN_SPACING): number => identity ? mm : Math.max(mm, floor);
 /** A knockout halo authored in tabloid millimetres: scaled with the card, never under 0.5 mm. */
 export const halo = (mm: number): number => identity ? mm : Math.max(0.5, S * mm);
+/**
+ * A count tuned on tabloid that is really a density (stars, fragments, ticks, rays): scaled by the art window's
+ * area (`per: 'area'`), or by `S` for things spaced along a length that scales with the card (`per: 'length'`,
+ * e.g. rays round a sun), rounded, and never under `floor`, which keeps the card's character. `n` itself at tabloid.
+ */
+export function scaledCount(n: number, floor: number, per: 'area' | 'length' = 'area'): number {
+  return identity ? n : Math.max(floor, Math.round(n * (per === 'area' ? AREA : S)));
+}
 /** A vertical field of view, in degrees, under the format's fit: unchanged for `height`, widened for `width` so tabloid's width still fits. */
 export function fitFov(deg: number): number {
   if (identity || FIT === 'height') return deg;

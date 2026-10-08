@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import { TABLOID_PAGE, TALL_ART } from '../../sketches/phase-garden/poster.ts';
-import { CARD as CARD_OF_CARDS, HORIZON_Y as HORIZON_OF_CARDS } from '../../sketches/breach-tarot/card.ts';
+import { CARD as CARD_OF_CARDS, HORIZON_Y as HORIZON_OF_CARDS, cardFrame } from '../../sketches/breach-tarot/card.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import {
-  CARD, FORMAT, FRAME, HORIZON_Y, PAGE, PITCH_SCALE, SHEET, TABLOID_FORMAT, assertFormatPage, depthRaster, fitFov, formatFor,
-  halo, layoutLength, layoutX, layoutY, rasterFor, tolerance,
+  AREA, CARD, FORMAT, FRAME, HORIZON_Y, MIN_FEATURE, PAGE, PITCH_SCALE, SHEET, TABLOID_CARD, TABLOID_FORMAT, TABLOID_HORIZON_Y,
+  assertFormatPage, depthRaster, fitFov, formatFor, halo, layoutLength, layoutX, layoutY, rasterFor, scaledCount, tolerance,
 } from '../../sketches/kit/format.ts';
 
 let dir: string | undefined;
@@ -48,6 +48,14 @@ describe('Breach Tarot format', () => {
       expect(tolerance(v)).toBe(v);
     }
     expect(fitFov(54)).toBe(54);
+    expect(TABLOID_CARD).toBe(CARD);
+    expect(TABLOID_HORIZON_Y).toBe(HORIZON_Y);
+    expect(AREA).toBe(1);
+    expect(MIN_FEATURE).toBe(1);
+    for (const v of [0, 7, 80, 112.5]) expect(scaledCount(v, 16)).toBe(v);
+    expect(scaledCount(80, 16, 'length')).toBe(80);
+    // The phrase stays in the art at tabloid: the frame ignores one passed to it.
+    expect(cardFrame('0', 'THE FOOL', { phrase: { text: 'nothing here has been decided yet' } })).toEqual(cardFrame('0', 'THE FOOL'));
     expect(() => assertFormatPage(undefined)).not.toThrow();
     expect(() => assertFormatPage({ width: 279.4, height: 431.8 })).not.toThrow();
     expect(() => assertFormatPage({ width: 70, height: 120 })).toThrow(/70 × 120/);
@@ -77,6 +85,10 @@ describe('Breach Tarot format', () => {
     expect(f.frame.numeral.height).toBeCloseTo(8 * s, 12);
     expect(f.frame.name.height).toBeCloseTo(6.5 * s, 12);
     expect(f.frame.phraseHeight).toBe(1.6);
+    // Tracking is in grid units, which scale with the lettering already; the band's rules print as two lines.
+    expect(f.frame.numeral.tracking).toBe(2.2);
+    expect(f.frame.name.tracking).toBe(3.2);
+    expect(f.frame.rule).toBe(0.75);
     const wide = formatFor(page, { fit: 'width', pen: 0.1 });
     expect(wide.s).toBeCloseTo(70 / 279.4, 12);
     expect(wide.minSpacing).toBeCloseTo(0.2, 12);
@@ -102,7 +114,8 @@ describe('Breach Tarot format', () => {
     expect(rasterFor(TABLOID_FORMAT, 559, 864, 2)).toEqual({ W: 559, H: 864, MM_X: 279.4 / 559, MM_Y: 431.8 / 864 });
     const card = rasterFor(formatFor({ width: 70, height: 120 }), 1118, 1728);
     expect(card.MM_Y).toBeLessThanOrEqual(0.25);
-    expect(card.W / card.H).toBeCloseTo(70 / 120, 2);
+    // The camera's aspect is the raster's: on a 70 x 120 card it is the page's exactly.
+    expect(card.W * 120).toBe(card.H * 70);
     for (const page of [{ width: 304.8, height: 457.2 }, { width: 609.6, height: 914.4 }]) {
       const f = formatFor(page);
       for (const [w, h, o] of [[559, 864, 2], [1118, 1728, 1]]) {
@@ -169,6 +182,40 @@ describe('Breach Tarot format', () => {
     expect(end(height).y).toBeCloseTo(35, 3);
     expect(end(width).x).toBeCloseTo(10 + 10 * 70 / 279.4, 3);
     expect(end(width).y).toBeCloseTo(20, 3);
+  });
+
+  it('scales density counts with the card, and sets the phrase in the band under the name', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
+    const entry = join(dir, 'probe.ts');
+    const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches', path));
+    // A page-aware probe: its frame with a phrase, and a line whose end encodes two scaled counts.
+    await writeFile(entry, `import { scaledCount } from ${kit('kit/format.ts')};
+      import { cardFrame } from ${kit('breach-tarot/card.ts')};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'carbon', color: '#111111', width: 0.25 }, { id: 'lettering', color: '#111111', width: 0.13 }], controls: [],
+        draw() { return [{ id: 'counts', pen: 'carbon', paths: [[{ x: 1, y: 1 }, { x: scaledCount(1000, 10) / 10, y: scaledCount(1000, 10, 'length') / 10 }]] },
+          ...cardFrame('0', 'THE FOOL', { phrase: { text: 'nothing here has been decided yet' } })]; } };`);
+    const page = { width: 70, height: 120 };
+    const f = formatFor(targetPage(TABLOID_PAGE, page));
+    const result = await renderSketch({ entry, finishing: { page } });
+    const counts = result.parts.find(part => part.id === 'counts')!.paths[0][1];
+    const area = (c: typeof f.card) => (c.x1 - c.x0) * (c.y1 - c.y0);
+    expect(counts.x).toBeCloseTo(Math.round(1000 * area(f.card) / area(TABLOID_FORMAT.card)) / 10, 2);
+    expect(counts.x).toBeLessThan(10);
+    expect(counts.y).toBeCloseTo(Math.round(1000 * f.s) / 10, 2);
+    const phrase = result.parts.find(part => part.id === 'card-phrase')!;
+    expect(phrase.pen).toBe('lettering');
+    const points = phrase.paths.flat(), ys = points.map(p => p.y), xs = points.map(p => p.x);
+    // Under the second rule and on the card, centred, about 1.6 mm from cap line to baseline (ascenders to descenders 11/8 of it).
+    expect(Math.min(...ys)).toBeGreaterThan(f.card.y1 + f.frame.rule);
+    expect(Math.max(...ys)).toBeLessThan(f.card.bottom);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(1.6 * 11 / 8, 1);
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(35, 0);
+    // The name sits above it, inside the band.
+    const frame = result.parts.find(part => part.id === 'card-frame')!;
+    const name = frame.paths.flat().filter(p => p.y > f.card.y1 + f.frame.rule + 0.01);
+    expect(Math.min(...name.map(p => p.y))).toBeGreaterThan(f.card.y1 + f.frame.rule);
+    expect(Math.max(...name.map(p => p.y))).toBeLessThan(Math.min(...ys));
   });
 
   it('renders the Tower, with its double-resolution machine pass, on a 12 x 18 in page', async () => {
