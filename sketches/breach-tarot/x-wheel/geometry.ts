@@ -7,9 +7,9 @@ import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { densify, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -39,6 +39,12 @@ const R_OUT = 94;
 const TB = 12, PD = 16, TD = 10, HD = 14;
 /** Rim segments per tower (a segment sits under each tower, with one either side). */
 const SEG = 3;
+/**
+ * How tall, in the others' heights, the top tower stood when the wheel's size and place on the sheet
+ * were settled (the owner approved that layout). The wheel is still sized as if the top tower reached
+ * that height, so the rim does not move when the tower itself is brought down.
+ */
+const FRAME_PROUD = 2.8;
 /** Hidden-line slack, in world units: slabs, and the helix's membrane. */
 const SLAB_SLACK = 0.45, HELIX_SLACK = 0.5;
 /** Faces turned further than this from the eye (cosine) get no hatch; edges only count a face as turned toward the eye past the smaller one. */
@@ -55,17 +61,17 @@ type Kind = 'rim' | 'tower' | 'spoke' | 'hub' | 'paver';
 type WSlab = Slab & { kind: Kind; psi: number; tower: number };
 
 /**
- * Where the eye stands. The top tower's tip lands at `topY` on the sheet and the ground under the
- * hub at `groundY`; those two heights, and the wheel's own height, fix its scale on the sheet, the
- * eye's height above the plain and the wheel's distance.
+ * Where the eye stands. The tip of a tower FRAME_PROUD times the others' height lands at `topY` on
+ * the sheet and the ground under the hub at `groundY`; those two heights, and the wheel's own height,
+ * fix its scale on the sheet, the eye's height above the plain and the wheel's distance.
  */
 function placement(ctx: SketchContext) {
   const fov = n(ctx, 'fov', 60, 36, 75);
   const f = TABLOID_PAGE.height / 2 / Math.tan(rad(fov / 2));
-  const towerH = n(ctx, 'towerH', 24, 12, 40), proud = n(ctx, 'proud', 2.8, 1, 3.4);
+  const towerH = n(ctx, 'towerH', 24, 12, 40);
   const ringOuter = R_OUT - towerH;
   const hubY = n(ctx, 'sink', 0.38, 0.1, 0.5) * ringOuter;
-  const topTip = hubY + ringOuter + towerH * proud;
+  const topTip = hubY + ringOuter + towerH * FRAME_PROUD;
   const scale = (n(ctx, 'groundY', 330, 290, 370) - n(ctx, 'topY', 107, 60, 200)) / topTip;
   const eyeH = (n(ctx, 'groundY', 330, 290, 370) - HORIZON_Y) / scale;
   const D = f / scale;
@@ -154,38 +160,50 @@ function rim(ctx: SketchContext, L: Layout): WSlab[] {
  * from the rising side: a short stub, then taller, the proud upright one at the top, then lower
  * again on the way down, and the last the longest, lying out nearly level and buried by the ground.
  * Pale on the way up, dark on the way down.
+ *
+ * The top tower is built from its own random stream. Its old, much taller stack (FRAME_PROUD) is
+ * still built from the shared stream and kept as `ghost`, so the draws every other tower takes, and
+ * the way the phrase picks its faces, stay exactly as they were.
  */
-function towers(ctx: SketchContext, L: Layout): WSlab[] {
+function towers(ctx: SketchContext, L: Layout): { slabs: WSlab[]; ghost: WSlab[] } {
   const f = L.frame;
   const N = Math.round(n(ctx, 'towers', 10, 8, 12));
-  const towerH = n(ctx, 'towerH', 24, 12, 40), proud = n(ctx, 'proud', 2.8, 1, 3.4);
-  const rng = ctx.random('wheel-courses');
+  const towerH = n(ctx, 'towerH', 24, 12, 40), proud = n(ctx, 'proud', 1.5, 1, 3.4);
+  const rng = ctx.random('wheel-courses'), topRng = ctx.random('wheel-top');
   const Rb = L.ringOuter;
-  const out: WSlab[] = [];
-  for (let i = 0; i < N; i++) {
-    const psi = ringAngle(i, N);
-    const deg = psi * 180 / Math.PI;
-    const top = i === 0;
-    const baseTone = top ? 0.8 : 0.5 + 1.0 * smooth(-100, 105, deg);
-    const len = towerH * (top ? proud : deg < 0 ? 0.45 + 0.45 * smooth(-112, -30, deg) : 1 - 0.3 * smooth(10, 80, deg) + 0.45 * smooth(80, 112, deg));
-    const disorder = 0.2 + 0.8 * smooth(10, 105, deg);
+  const out: WSlab[] = [], ghost: WSlab[] = [];
+  const stack = (into: WSlab[], draw: () => number, i: number, psi: number, len: number, baseTone: number, disorder: number, top: boolean) => {
     const baseW = 0.4 * 2 * Rb * Math.sin(Math.PI / N) * (top ? 1.1 : 1);
     const d = f.dir(psi);
     const cur = f.C.clone().addScaledVector(d, Rb - 0.2);
     let y = 0, w = baseW;
     while (y < len - 2.5) {
-      let h = 5 + 3 * rng();
+      let h = 5 + 3 * draw();
       if (y + h > len - 2.5) h = Math.max(3, len - y);
-      if (rng() < 0.22) w = clamp(w + (rng() - 0.5) * 0.3 * baseW, 0.8 * baseW, 1.12 * baseW);
+      if (draw() < 0.22) w = clamp(w + (draw() - 0.5) * 0.3 * baseW, 0.8 * baseW, 1.12 * baseW);
       const last = y + h >= len - 2.5;
       const cw = top && last ? w * 1.2 : w;
-      const c = cur.clone().addScaledVector(d, h / 2).addScaledVector(f.tangent(psi), (rng() - 0.5) * disorder);
-      out.push(wheelSlab(f, c, psi, cw, h - 0.15, TD, 'tower', i, clamp(baseTone * (0.85 + 0.3 * rng()), 0.35, 1.45), out.length));
+      const c = cur.clone().addScaledVector(d, h / 2).addScaledVector(f.tangent(psi), (draw() - 0.5) * disorder);
+      into.push(wheelSlab(f, c, psi, cw, h - 0.15, TD, 'tower', i, clamp(baseTone * (0.85 + 0.3 * draw()), 0.35, 1.45), into.length));
       cur.addScaledVector(d, h);
       y += h;
     }
+  };
+  for (let i = 0; i < N; i++) {
+    const psi = ringAngle(i, N);
+    const deg = psi * 180 / Math.PI;
+    const top = i === 0;
+    const baseTone = top ? 0.8 : 0.5 + 1.0 * smooth(-100, 105, deg);
+    const disorder = 0.2 + 0.8 * smooth(10, 105, deg);
+    if (top) {
+      stack(ghost, rng, i, psi, towerH * FRAME_PROUD, baseTone, disorder, true);
+      stack(out, topRng, i, psi, towerH * proud, baseTone, disorder, true);
+    } else {
+      const len = towerH * (deg < 0 ? 0.45 + 0.45 * smooth(-112, -30, deg) : 1 - 0.3 * smooth(10, 80, deg) + 0.45 * smooth(80, 112, deg));
+      stack(out, rng, i, psi, len, baseTone, disorder, false);
+    }
   }
-  return out;
+  return { slabs: out, ghost };
 }
 
 /** The hub: a round drum, a ring of slabs round the bore, and a few thin spokes to the rim. */
@@ -370,6 +388,19 @@ function chunk(points: THREE.Vector3[], max = 20): THREE.Vector3[][] {
   return out;
 }
 
+/** Where, on the sheet, the rim meets the ground: the lowest page y of the rim's section at the ground, each side of the wheel. */
+export function crossingRows(ctx: SketchContext): { left: number; right: number } {
+  const view = wheelCamera(ctx);
+  const rows = { left: -Infinity, right: -Infinity };
+  for (const sl of rim(ctx, layout(ctx))) {
+    const section = groundSection(sl);
+    if (!section) continue;
+    const side = sl.psi < 0 ? 'left' : 'right';
+    rows[side] = Math.max(rows[side], ...section.map(q => pageOf(view, q).y));
+  }
+  return rows;
+}
+
 /** The solid parts of the card and where the axle runs: everything before the helix is built. */
 export function scene(ctx: SketchContext) {
   const view = wheelCamera(ctx);
@@ -425,13 +456,14 @@ export function scene(ctx: SketchContext) {
 
   // Paving blocks keep clear of the axle on the sheet.
   const nearHelix = meshCoverage(helix.full, view, TABLOID_PAGE, 1);
-  const wheel: WSlab[] = [...rim(ctx, L), ...towers(ctx, L), ...hubAndSpokes(ctx, L, bore)];
+  const tw = towers(ctx, L);
+  const wheel: WSlab[] = [...rim(ctx, L), ...tw.slabs, ...hubAndSpokes(ctx, L, bore)];
   const slabs: WSlab[] = [...wheel, ...pavers(ctx, L, view, nearHelix, wheel)].filter(s => Math.max(...corners(s).map(q => q.y)) > 0.02);
-  return { view, f, L, tNear, tFar, r0, taper, flare, bore, slabs, helix };
+  return { view, f, L, tNear, tFar, r0, taper, flare, bore, slabs, ghost: tw.ghost, helix };
 }
 
 export function drawWheel(ctx: SketchContext): Part[] {
-  const { view, f, slabs, helix } = scene(ctx);
+  const { view, f, L, slabs, ghost, helix } = scene(ctx);
   const eye = view.position.clone();
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const depthOf = (p: THREE.Vector3) => Math.max(1, eye.z - p.z);
@@ -440,7 +472,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
   const strokes: (Stroke & { soft?: boolean })[] = [];
   for (const sl of slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
-    const group = sl.kind === 'paver' ? 'ground' : 'wheel';
+    const group = sl.kind === 'paver' ? 'ground' : sl.kind === 'rim' ? 'rim' : sl.kind === 'tower' ? 'tower' : 'hub';
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
     for (const st of visibleEdges(sl, eye, dropGrazing(sl, eye, facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at)), GRAZING))) {
       for (const piece of aboveGround(st.points)) strokes.push({ ink: st.ink, group, family: st.family, points: piece, soft: st.soft });
@@ -462,6 +494,8 @@ export function drawWheel(ctx: SketchContext): Part[] {
     const nearP = view.near, farP = view.far;
     const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
     const solids = meshCoverage(geometries, view, TABLOID_PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    // The axle's far end coils too tight to read once it comes out behind the last tower, so it is cut off there.
+    const axleEnd = n(ctx, 'axleEnd', 236, 200, 262);
 
     // The phrase: one word to a tower round the rim, in order from the rising side over the top and down.
     const settings = sloganSettings(ctx);
@@ -478,7 +512,11 @@ export function drawWheel(ctx: SketchContext): Part[] {
       count(true, k => { seen += k; });
       return total > 0 && seen >= total * 0.97;
     };
-    const cands = slabs.filter(s => s.kind === 'tower').map(sl => ({ sl, at: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)), low: Math.min(...corners(sl).map(q => q.y)) }))
+    // The words choose their faces among the towers as they were before the top tower came down (the ghost stack stands in
+    // for it), so every other word keeps its place; a word that lands on the ghost is carried to the same place on the real one.
+    const wordSlabs = [...ghost, ...slabs.filter(s => !(s.kind === 'tower' && s.tower === 0))];
+    const realTop = slabs.filter(s => s.kind === 'tower' && s.tower === 0);
+    const cands = wordSlabs.filter(s => s.kind === 'tower').map(sl => ({ sl, at: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)), low: Math.min(...corners(sl).map(q => q.y)) }))
       .filter(({ at, low }) => low > 0.6 && at.x > CARD.x0 + 6 && at.x < CARD.x1 - 6 && at.y > CARD.y0 + 6 && at.y < CARD.y1 - 6);
     const used = new Set<number>();
     words.forEach((word, i) => {
@@ -492,15 +530,28 @@ export function drawWheel(ctx: SketchContext): Part[] {
         })
         .map(c => ({ c, k: Math.abs(c.sl.psi * 180 / Math.PI - target) + 3 * wrng() }))
         .sort((p, q) => p.k - q.k).map(x => x.c);
-      for (const { sl } of ranked) {
+      /** The word laid in a slab's front face, `fx` and `fy` (-0.5..0.5) of the way across the room it has. */
+      const lay = (sl: WSlab, fx: number, fy: number) => {
         const at = new THREE.Vector3(sl.x, sl.y, sl.z);
         const m = slabMatrix(sl);
         const unit = 1 / mmPerUnit(at);
         const ww = wmm * unit, hh = style.height * unit;
-        const x0 = -ww / 2 + (wrng() - 0.5) * (sl.w - ww) * 0.6, y0 = hh / 2 + (wrng() - 0.5) * (sl.h - hh) * 0.5;
+        const x0 = -ww / 2 + fx * (sl.w - ww) * 0.6, y0 = hh / 2 + fy * (sl.h - hh) * 0.5;
         const word3 = strokeText(word, 0, 0, style).map(path => path.map(q => new THREE.Vector3(x0 + q.x * unit, y0 - q.y * unit, sl.d / 2 + 0.03).applyMatrix4(m)));
-        if (!visible(word3, biasAt(depthOf(at), SLAB_SLACK))) continue;
-        textStrokes.push(...word3);
+        return { word3, bias: biasAt(depthOf(at), SLAB_SLACK) };
+      };
+      for (const { sl } of ranked) {
+        const fx = wrng() - 0.5, fy = wrng() - 0.5;
+        const first = lay(sl, fx, fy);
+        if (!visible(first.word3, first.bias)) continue;
+        if (!ghost.includes(sl)) { textStrokes.push(...first.word3); used.add(sl.tower); break; }
+        // On the ghost: the same course, by share of the way up, of the real top tower, then the others in turn.
+        const want = Math.round(ghost.indexOf(sl) * (realTop.length - 1) / Math.max(1, ghost.length - 1));
+        const order = realTop.map((_, j) => j).sort((p, q) => Math.abs(p - want) - Math.abs(q - want));
+        const spot = order.map(j => realTop[j]).filter(c => wmm < c.w * mmPerUnit(new THREE.Vector3(c.x, c.y, c.z)) * 0.88 && style.height < (c.h - 0.3) * mmPerUnit(new THREE.Vector3(c.x, c.y, c.z)) * 0.8)
+          .map(c => ({ c, ...lay(c, fx, fy) })).find(t => visible(t.word3, t.bias));
+        if (!spot) continue;
+        textStrokes.push(...spot.word3);
         used.add(sl.tower);
         break;
       }
@@ -511,8 +562,8 @@ export function drawWheel(ctx: SketchContext): Part[] {
     }
     const onGlyph = glyphMask(glyphPaths, 0.7);
     const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
+    const add = (key: string, run: Point[], extra: (p: Point, at: number) => boolean = () => true) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, (p, at) => !onGlyph(p) && extra(p, at), 0.15)) buckets.add(key, piece);
     };
     // Each stroke is tested at its own depth: strokes are split into pieces and banded by distance.
     const bands = new Map<string, { list: Stroke[]; d: number; slack: number }>();
@@ -525,7 +576,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
     }
     for (const { list, d, slack } of bands.values()) {
       projectStrokes(list, { view, depth: list[0].group === 'helix' ? slimBuffer : depthBuffer, width: W, height: H, bias: biasAt(d, slack) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), st.group === 'helix' ? p => p.x < axleEnd : undefined); },
       });
     }
 
@@ -540,8 +591,25 @@ export function drawWheel(ctx: SketchContext): Part[] {
         p => !solids(p) && (!broken || pattern[Math.floor((p.x - CARD.x0) / 3.2 + row) % 64]));
       y += pitch * (1 + 3.2 * t * t);
     }
+    // The foreground: a few paving joints on the plain in front of the wheel, ruled in the wheel's own directions (a set
+    // running with the axle, a set across it), broken in the 64-step rhythm. They keep to the band of paper below
+    // everything drawn, and leave room round what stands in it.
+    const joints = Math.round(n(ctx, 'joints', 4, 0, 8));
+    if (joints > 0) {
+      const jr = ctx.random('wheel-joints');
+      const rhythm = barPattern(jr, 0.62);
+      let floor = 0;
+      for (const sl of slabs) for (const q of corners(sl)) if (q.y >= 0) floor = Math.max(floor, pageOf(view, q).y);
+      const band = { x0: CARD.x0, x1: CARD.x1, y0: floor + 3, y1: CARD.y1 - 4 };
+      const along = (g: THREE.Vector3, dir: THREE.Vector3) => Array.from({ length: 60 }, (_, i) => pageOf(view, g.clone().addScaledVector(dir, (i - 20) * 12)));
+      const rule = (key: string, g: THREE.Vector3, dir: THREE.Vector3, row: number) => {
+        for (const run of clipWindow(densify(along(g, dir), 1.5), band)) add(key, run, (p, at) => !solids(p) && rhythm[(Math.floor(at / 4.5) + row * 11) % 64]);
+      };
+      for (let k = 0; k < joints; k++) rule('joints-carbon', onGround(view, { x: CARD.x0 + (k + 0.5) / joints * (CARD.x1 - CARD.x0), y: CARD.y1 }), L.frame.a, k);
+      if (joints > 1) rule('joints-carbon', onGround(view, { x: (CARD.x0 + CARD.x1) / 2, y: band.y0 + 0.45 * (band.y1 - band.y0) }), L.frame.u, joints);
+    }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'ground', 'wheel', 'helix', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'joints', 'ground', 'rim', 'tower', 'hub', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
     parts.push(...cardFrame('X', 'WHEEL OF FORTUNE'));
     return parts;
