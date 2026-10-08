@@ -30,6 +30,10 @@
     { "name": "vii-chariot", "title": "Breach Tarot: VII The Chariot", "sketch": "sketches/breach-tarot/vii-chariot/sketch.ts", "seed": 2 },
     { "name": "viii-strength", "title": "Breach Tarot: VIII Strength", "sketch": "sketches/breach-tarot/viii-strength/sketch.ts", "seed": 2 },
     { "name": "x-wheel", "title": "Breach Tarot: X Wheel of Fortune", "sketch": "sketches/breach-tarot/x-wheel/sketch.ts", "seed": 2 },
-    { "name": "xi-justice", "title": "Breach Tarot: XI Justice", "sketch": "sketches/breach-tarot/xi-justice/sketch.ts", "seed": 3 }
+    { "name": "xi-justice", "title": "Breach Tarot: XI Justice", "sketch": "sketches/breach-tarot/xi-justice/sketch.ts", "seed": 3 },
+    { "name": "ix-hermit", "title": "Breach Tarot: IX The Hermit", "sketch": "sketches/breach-tarot/ix-hermit/sketch.ts", "seed": 1 },
+    { "name": "xiv-temperance", "title": "Breach Tarot: XIV Temperance", "sketch": "sketches/breach-tarot/xiv-temperance/sketch.ts", "seed": 1 },
+    { "name": "xv-devil", "title": "Breach Tarot: XV The Devil", "sketch": "sketches/breach-tarot/xv-devil/sketch.ts", "seed": 1 },
+    { "name": "xx-judgement", "title": "Breach Tarot: XX Judgement", "sketch": "sketches/breach-tarot/xx-judgement/sketch.ts", "seed": 1 }
   ]
 }
