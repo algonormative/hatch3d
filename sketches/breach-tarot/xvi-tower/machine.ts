@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { PAGE, PITCH_SCALE, depthRaster } from '../../kit/format.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { clearBands, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -29,7 +29,8 @@ import { storm, tower, towerCamera } from './geometry.ts';
  * longer crosses anything that could slip. The clock the machine ran on, a hatched square wave
  * across the sky, can come too (`machineClock`).
  */
-const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
+/** The card's depth raster, within budget for the machine's pass at twice its size. */
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864, 2);
 /** The machine's own depth pass: the same projection at twice the resolution, its range fitted. */
 const W2 = 2 * W, H2 = 2 * H;
 const MM2_X = PAGE.width / W2, MM2_Y = PAGE.height / H2;
@@ -286,7 +287,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   m.solids.forEach((s, owner) => {
     const back = m.kind[owner] === 'bench' || m.lid.has(owner) ? 0 : Math.max(0, -Math.cos(s.ry)) * M.hollow;
     const lightHere = back > 0 ? front.clone().lerp(shade, back).normalize() : front;
-    for (const st of facetStrokes(s, lightHere, eye, false, M.pitch)) strokes.push({ ...st, group: 'machine', owner });
+    for (const st of facetStrokes(s, lightHere, eye, false, M.pitch * PITCH_SCALE)) strokes.push({ ...st, group: 'machine', owner });
   });
   const lrng = ctx.random('tower-card-lights');
   const patterns = Array.from({ length: 8 }, () => barPattern(lrng, 0.62));

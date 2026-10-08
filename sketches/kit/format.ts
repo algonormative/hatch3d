@@ -17,12 +17,14 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  *
  * **Tabloid is the authored format.** Its preset holds the existing constant objects (`TABLOID_PAGE`, the
  * card rect, the horizon), and every helper below returns its input unchanged there, so tabloid renders stay
- * byte-identical.
+ * byte-identical. That holds for tabloid with its 18 mm margin, which every print uses: a tabloid page with
+ * another margin lays the card out from that margin, like any other page, and makes no byte-identity promise.
  *
  * **Other pages** follow tabloid's proportions under one scale `s`. `fit: 'height'` (the default) keeps the
  * vertical framing and crops the sides, so `s` is the page height ratio; `fit: 'width'` keeps the whole width,
- * so `s` is the width ratio and the camera's field of view widens. The card's outer margin is tabloid's 18 mm
- * scaled by the smaller ratio, the bands by `s`. Three kinds of millimetre follow three rules:
+ * so `s` is the width ratio and the camera's field of view widens. The card's outer edge sits on the page
+ * margin (as tabloid's does at 18 mm; without one, tabloid's 18 mm scaled by the smaller ratio), and the bands
+ * scale by `s`. Three kinds of millimetre follow three rules:
  *   - layout (positions and sizes) scales with the card: `layoutX`, `layoutY` (measured from the art window's
  *     centre line and the horizon), `layoutLength`;
  *   - tolerance (what a pen can hold) stays in real millimetres, but never below the pen floor: `tolerance`;
@@ -66,6 +68,8 @@ export interface Format {
 export const LEGIBLE_MM = 1.6;
 /** The finest depth raster any format uses, in millimetres per pixel. */
 const RASTER_MM = 0.25;
+/** The CPU depth buffer's pixel budget (`MAX_PIXELS` in src/sketch/depth-buffer.ts). */
+const RASTER_BUDGET = 4_194_304;
 const ART_PENS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'] as const;
 
 /** Tabloid's card: one card per 11 × 17 sheet, bands 24 mm deep above and below the art window. */
@@ -102,12 +106,12 @@ function width(options: FormatOptions, key: string): number | undefined {
 
 /**
  * The format for a page and options. Options: `fit` (`height` | `width`), `phrase` (`art` | `band` | `none`),
- * `pen` (art pen width, mm) and `letteringPen` (mm). A tabloid-sized page with no option that changes anything
- * returns `TABLOID_FORMAT` itself.
+ * `pen` (art pen width, mm) and `letteringPen` (mm). A tabloid page with its 18 mm margin (or none) and no
+ * option that changes anything returns `TABLOID_FORMAT` itself. The card's outer edge sits on the page margin.
  */
 export function formatFor(page: Page, options: FormatOptions = {}): Format {
   for (const key of Object.keys(options)) if (!['fit', 'phrase', 'pen', 'letteringPen'].includes(key)) throw new Error(`Unknown format option: ${key}`);
-  const tabloid = sameSize(page, TABLOID_PAGE);
+  const tabloid = sameSize(page, TABLOID_PAGE) && (page.margin === undefined || page.margin === TABLOID_PAGE.margin);
   const fit = choice(options, 'fit', ['height', 'width'] as const) ?? 'height';
   const phrase = choice(options, 'phrase', ['art', 'band', 'none'] as const) ?? (tabloid ? 'art' : 'band');
   const artPen = width(options, 'pen') ?? 0.25;
@@ -120,10 +124,12 @@ export function formatFor(page: Page, options: FormatOptions = {}): Format {
   }
   const sw = page.width / TABLOID_PAGE.width, sh = page.height / TABLOID_PAGE.height;
   const s = fit === 'width' ? sw : sh;
-  const m = TABLOID_CARD.x0 * Math.min(sw, sh);
+  const m = page.margin ?? TABLOID_CARD.x0 * Math.min(sw, sh);
   const band = (TABLOID_CARD.y0 - TABLOID_CARD.top) * s;
   const card: CardRect = { x0: m, x1: page.width - m, top: m, bottom: page.height - m, y0: m + band, y1: page.height - m - band };
-  if (!(card.x1 > card.x0 && card.y1 > card.y0)) throw new Error(`Page ${page.width} × ${page.height} mm leaves no art window`);
+  if (!(card.x1 > card.x0 && card.y1 > card.y0)) {
+    throw new Error(`A ${page.width} × ${page.height} mm page with a ${m} mm margin leaves no room for the card's ${band.toFixed(2)} mm bands and an art window`);
+  }
   const sized = (base: Lettering): Lettering => {
     const height = Math.max(LEGIBLE_MM, base.height * s);
     return { height, tracking: base.tracking * height / base.height };
@@ -155,17 +161,26 @@ export const PENS: readonly FormatPen[] = FORMAT.pens;
 export const MIN_SPACING: number = FORMAT.minSpacing;
 export const PHRASE: PhrasePlacement = FORMAT.phrase;
 
+export interface Raster { W: number; H: number; MM_X: number; MM_Y: number }
+
 /**
- * A card's depth raster. Tabloid keeps the card's own size exactly; any other page is held at 0.25 mm per
- * pixel, or the card's own finer pitch, with the page's aspect.
+ * A card's depth raster on a format's page. Tabloid keeps the card's own size exactly. Any other page is held at
+ * 0.25 mm per pixel, or the card's own finer pitch, with the page's aspect, but never so fine that the largest
+ * raster the card builds from it (`oversample` times each side) passes the depth buffer's pixel budget.
  */
-export function depthRaster(tabloidW: number, tabloidH: number): { W: number; H: number; MM_X: number; MM_Y: number } {
-  if (FORMAT.tabloid) return { W: tabloidW, H: tabloidH, MM_X: PAGE.width / tabloidW, MM_Y: PAGE.height / tabloidH };
-  const perMm = Math.max(1 / RASTER_MM, tabloidH / TABLOID_PAGE.height);
-  const H = Math.ceil(PAGE.height * perMm);
-  const W = Math.round(H * PAGE.width / PAGE.height);
-  return { W, H, MM_X: PAGE.width / W, MM_Y: PAGE.height / H };
+export function rasterFor(format: Format, tabloidW: number, tabloidH: number, oversample = 1): Raster {
+  const page = format.page;
+  if (format.tabloid) return { W: tabloidW, H: tabloidH, MM_X: page.width / tabloidW, MM_Y: page.height / tabloidH };
+  const finest = Math.max(1 / RASTER_MM, tabloidH / TABLOID_PAGE.height);
+  const budget = Math.sqrt(RASTER_BUDGET / (page.width * page.height)) / oversample;
+  let H = Math.ceil(page.height * Math.min(finest, budget));
+  let W = Math.round(H * page.width / page.height);
+  while ((W * oversample) * (H * oversample) > RASTER_BUDGET) { H--; W = Math.round(H * page.width / page.height); }
+  return { W, H, MM_X: page.width / W, MM_Y: page.height / H };
 }
+
+/** This process's depth raster for a card whose tabloid raster is `tabloidW × tabloidH` (see `rasterFor`). */
+export const depthRaster = (tabloidW: number, tabloidH: number, oversample = 1): Raster => rasterFor(FORMAT, tabloidW, tabloidH, oversample);
 
 const identity = FORMAT.tabloid;
 const TABLOID_CENTRE_X = TABLOID_PAGE.width / 2;
