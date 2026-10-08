@@ -29,7 +29,8 @@ export const POSTER_MM_PER_UNIT = TABLOID_PAGE.height / (2 * POSTER_HALF_H);
 // World-unit pitches below are tuned on tabloid; the format's pitch scale (1 at tabloid) holds them on paper.
 // Slanted front hatch loses ~7% to its slant; keep the perpendicular gap at 0.5 mm or more.
 export const SLAB_MIN_PITCH = 0.56 / POSTER_MM_PER_UNIT * PITCH_SCALE;
-const FACET_MIN_PITCH = 0.072 * PITCH_SCALE; // world units: about 0.6 mm on the sheet at the tower's depth
+// The facet floor is relative to facetStrokes' `pitch`, so it scales with it, together with the tone spacings.
+const FACET_MIN_PITCH = 0.072; // world units at pitch 1: about 0.6 mm on the sheet at the tower's depth
 
 /** A 0..1 density level: `sparse` at 0, `neutral` at 0.55, `dense` at 1. For counts and other unitless amounts. */
 export function densityLevel(density: number, sparse: number, neutral: number, dense: number): number {
@@ -152,10 +153,11 @@ export type FacetStroke = { ink: Ink; group: 'system'; family: 'edge' | 'hatch';
  * A slab drawn in the raking-light hatch: twelve outline edges; then on each face that sees the
  * eye, contour rings that follow its outline inward, as many as the face is dark; and inside them a
  * field of diagonal hatch, crossed by a second family on the darkest faces, for body. `pitch` scales
- * the hatch spacing (1 = the Tower's, tuned to its depth), so slabs nearer or farther keep the same
- * spacing on the sheet.
+ * the hatch spacing, floor included (1 = the Tower's on tabloid, tuned to its depth), so slabs nearer or
+ * farther keep the same spacing on the sheet. It defaults to the format's pitch scale, which holds the
+ * Tower's spacing on any page; a caller that derives `pitch` from on-sheet millimetres already has it.
  */
-export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch = 1): FacetStroke[] {
+export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch = PITCH_SCALE): FacetStroke[] {
   const out: FacetStroke[] = [];
   const m = slabMatrix(s);
   const rot = new THREE.Matrix4().extractRotation(m);
