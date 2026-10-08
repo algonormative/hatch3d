@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
+import { targetPage } from '../src/sketch/render-target.ts';
 import type { Control, Page, Pen } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +35,8 @@ export interface FinalizeOptions {
 }
 export interface Stack {
   title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string };
+  /** The sheet every piece prints on (mm). A page-aware sketch draws on it; any other is fitted onto it. Default: each sketch's own page. */
+  page?: { width: number; height: number; margin?: number };
   /** Params every piece shares (e.g. slogan and scratch settings); a piece's own params win. */
   params?: Record<string, unknown>;
   /** Print-run number; `run --bump` increments it. */
@@ -89,11 +92,22 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 
 function fail(message: string): never { throw new Error(message); }
 
-async function loadSketch(entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
+/**
+ * The one page a piece prints on: the stack's page when it sets one, else the sketch's own. A page-aware sketch
+ * gets the page the render will draw it on (a margin the stack leaves out scales with the page, as in the render);
+ * any other sketch gets the stack's page over its own, as finishing fits it.
+ */
+export function pageFor(stack: Pick<Stack, 'page'>, sketch: { page: Page; pageAware?: boolean }): Page {
+  if (!stack.page) return sketch.page;
+  return sketch.pageAware ? targetPage(sketch.page, stack.page) : { ...sketch.page, ...stack.page };
+}
+
+/** The piece's page (`pageFor`), pens and controls. */
+async function loadSketch(stack: Stack, entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
   const sketch = mod.default;
   if (!sketch?.page || !Array.isArray(sketch.pens)) fail(`${entry} does not export a sketch with page and pens`);
-  return { page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [] };
+  return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [] };
 }
 
 /** Overrides may only name controls the sketch declares, so a typo can't silently do nothing. */
@@ -121,7 +135,7 @@ async function renderSource(piece: Piece, request: object, dir: string): Promise
 
 /** Render only (no vpype), for previews: the page recolors layers itself. */
 export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
-  const { page, pens, controls } = await loadSketch(piece.sketch);
+  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
   const auto = titleOverrides(stack, controls, buildVersion(stack.edition));
   const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
@@ -264,7 +278,7 @@ export interface PieceReport {
 }
 
 export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
-  const { page, pens, controls } = await loadSketch(piece.sketch);
+  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
   const inked = pens.filter(p => p.id !== 'lettering').length;
   if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
@@ -348,6 +362,10 @@ export function resolveOptions(stack: Stack, override: Partial<Omit<FinalizeOpti
 function loadStack(path: string): Stack {
   const stack = JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')) as Stack;
   if (!stack.out || !Array.isArray(stack.pieces) || !stack.pieces.length) fail('Stack needs out and pieces');
+  const sheet = stack.page as Record<string, unknown> | undefined;
+  const mm = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (sheet !== undefined && (typeof sheet !== 'object' || sheet === null || !mm(sheet.width) || !mm(sheet.height) || (sheet.margin !== undefined && !(mm(sheet.margin) || sheet.margin === 0))
+    || Object.keys(sheet).some(k => !['width', 'height', 'margin'].includes(k)))) fail('Stack page must be { width, height, margin? } in millimetres');
   const names = new Set<string>();
   for (const p of stack.pieces) {
     if (!p.name || !p.sketch || !Number.isSafeInteger(p.seed)) fail('Each piece needs name, sketch and an integer seed');
@@ -366,7 +384,7 @@ async function serve(stackPath: string, port: number) {
   // Preview renders in the default palette; the page recolors layers live. Variants are keyed by their overrides.
   const basePalette = resolveOptions(stack).palette;
   const pieceInfo = new Map<string, { pens: Pen[]; controls: Control[] }>();
-  for (const piece of stack.pieces) pieceInfo.set(slug(piece.name), await loadSketch(piece.sketch));
+  for (const piece of stack.pieces) pieceInfo.set(slug(piece.name), await loadSketch(stack, piece.sketch));
   const variants = new Map<string, Map<string, string>>();
   const variantKey = (overrides: Record<string, unknown>) => sha256(JSON.stringify(Object.keys(overrides).sort().map(k => [k, overrides[k]]))).slice(0, 12);
   async function renderVariant(overrides: Record<string, unknown>, slugs: string[]): Promise<{ key: string; svgs: Record<string, string> }> {

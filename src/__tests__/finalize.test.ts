@@ -3,12 +3,25 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVersion, finalizePiece, parseStat, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
+import { buildVersion, finalizePiece, pageFor, parseStat, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
 
 const page = { width: 279.4, height: 431.8, margin: 18 };
 const border = { style: 'double', pen: 'carbon', inset: 12, contentGap: 6 };
 const svg = (layers: [string, string, string][]) => `<svg>${layers.map(([label, stroke, d]) =>
   `<g inkscape:groupmode="layer" inkscape:label="${label}" data-pen-id="${label.replace(/^\d+-/, '')}" data-passes="1" stroke="${stroke}"><path d="${d}"/></g>`).join('')}</svg>`;
+
+describe('finalize page', () => {
+  it('reads the page from one place: the sketch’s own unless the stack sets one', () => {
+    const tabloid = { ...page, paper: '#f4f0e6' };
+    expect(pageFor({}, { page: tabloid, pageAware: true })).toBe(tabloid);
+    expect(pageFor({ page: { width: 70, height: 120 } }, { page: tabloid, pageAware: true })).toEqual({ width: 70, height: 120, margin: 4.51, paper: '#f4f0e6' });
+    expect(pageFor({ page: { width: 70, height: 120, margin: 3 } }, { page: tabloid, pageAware: true })).toEqual({ width: 70, height: 120, margin: 3, paper: '#f4f0e6' });
+    // A sketch that is not page-aware is fitted onto the stack's page and keeps its own margin, as finishing does.
+    expect(pageFor({ page: { width: 70, height: 120 } }, { page: tabloid })).toEqual({ width: 70, height: 120, margin: 18, paper: '#f4f0e6' });
+    const area = placementOffset([], { width: 70, height: 120, margin: 4.51 }, { out: '', pieces: [] } as Stack, 'vertical').area;
+    expect(area).toEqual({ x0: 4.51, y0: 4.51, x1: 70 - 4.51, y1: 120 - 4.51 });
+  });
+});
 
 describe('finalize placement and pen plan', () => {
   it('centers art inside the border content area and ignores the border itself', () => {
