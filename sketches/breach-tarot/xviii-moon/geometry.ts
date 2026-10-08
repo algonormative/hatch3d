@@ -229,25 +229,30 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const base = form === 'station' ? station(ctx, view, f) : null;
   const shards = form === 'broken' ? broken(ctx, view, f) : null;
 
-  // The towers as they stand, or the howl (the wolf torn toward the broken moon, the dog staked by its volley), lit by the moon's own sun.
-  const towerForm: TowerForm = ctx.params.towerForm === 'howl' ? 'howl' : 'stack';
+  // The towers as they stand, the howl (the wolf torn toward the broken moon, the dog staked by its volley) or the
+  // column (its later reading), the last two lit by the moon's own sun.
+  const towerForm: TowerForm = ctx.params.towerForm === 'stack' ? 'stack' : ctx.params.towerForm === 'column' ? 'column' : 'howl';
   const moonMark = shards ? { page: pageOf(view, shards.centre), radius: shards.radius * f / eye.distanceTo(shards.centre) * 1.3, volley: shards.piercers } : undefined;
   const set = towerVariant(ctx, towerForm, land.near, land.far, view, moonMark);
   const nearT = set.near, farT = set.far;
   // The light on the towers as they stand: from the moon, high on the right and a little behind, so the faces turned
-  // right stay pale and the faces turned to us fall dark. The howl takes the moon's sun instead.
+  // right stay pale and the faces turned to us fall dark. The howl and the column take the moon's sun instead.
   const light = towerForm === 'stack' ? new THREE.Vector3(0.7, 0.45, 0.05).normalize() : ((shards ?? base)?.light ?? new THREE.Vector3(-0.85, 0.3, 0).normalize());
   const lightM = new THREE.Vector3(light.x, -light.y, light.z);
   const hatch = n(ctx, 'hatch', 2.2, 1, 5);
   // Sunlit: every face turned to the sun is bare paper, so what shines (only ever reflected sunlight) shines against the night.
   const sunlit = ctx.params.sunlit !== false;
   const bright = sunlit ? n(ctx, 'sunlitEdge', 0.02, -0.2, 0.4) : Infinity;
-  const towerBright = towerForm === 'stack' ? Infinity : bright;
+  // Which towers shine: the column, all of them and their reflections; the howl, only the dog and its stakes (the
+  // wolf keeps the hatch it was approved with); the stacks, none.
+  const towerBright = towerForm === 'column' ? bright : Infinity;
+  const dogBright = towerForm === 'stack' ? Infinity : bright;
   const strokes: Stroke[] = [];
   const standing = [...nearT, ...farT, ...set.spears];
+  const isDog = new Set<Slab>([...farT, ...set.spears]);
   standing.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), towerForm !== 'stack', towerBright)) {
+    for (const st of plainFacets(sl, light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), towerForm !== 'stack', isDog.has(sl) ? dogBright : towerBright)) {
       strokes.push({ ink: st.ink, group: 'tower', family: st.family, points: st.points, owner });
     }
   });
