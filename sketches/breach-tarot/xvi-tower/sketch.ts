@@ -2,6 +2,7 @@ import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { sloganControls, titleControls, LETTERING_PEN } from '../../kit/lettering.ts';
 import { drawTower } from './geometry.ts';
+import { drawMachineTower } from './machine.ts';
 
 const sketch: Sketch = {
   name: 'Breach Tarot: XVI The Tower',
@@ -15,6 +16,11 @@ const sketch: Sketch = {
     LETTERING_PEN,
   ],
   controls: [
+    { type: 'select', id: 'form', label: 'The tower', default: 'cantilever', options: ['cantilever', 'machine'],
+      optionLabels: { cantilever: 'Cantilevered stack (approved)', machine: 'The supercomputer, after the Machine study' }, group: 'Tower' },
+    { type: 'select', id: 'machineTicks', label: 'Status ticks past the tear', default: 'dead', options: ['dead', 'lit'],
+      optionLabels: { dead: 'Dead on the slipped side', lit: 'Lit everywhere' }, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
+    { type: 'toggle', id: 'machineClock', label: 'Clock torn across the sky', default: false, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
     { type: 'slider', id: 'bolt', label: 'Bolt width', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
     { type: 'slider', id: 'slip', label: 'Slip along the tear', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
     { type: 'slider', id: 'storm', label: 'Storm', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
@@ -34,7 +40,7 @@ const sketch: Sketch = {
     ...titleControls(),
   ],
   draw(ctx) {
-    return drawTower(ctx);
+    return ctx.params.form === 'machine' ? drawMachineTower(ctx) : drawTower(ctx);
   },
 };
 

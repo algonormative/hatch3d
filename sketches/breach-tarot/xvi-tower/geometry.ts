@@ -41,7 +41,7 @@ export function towerCamera(ctx: SketchContext): THREE.PerspectiveCamera {
 }
 
 /** The cathedral tower on the ground, its crown slabs lifted off and turned like a lid. */
-function tower(ctx: SketchContext): Slab[] {
+export function tower(ctx: SketchContext): Slab[] {
   const rng = ctx.random('tower-card-lid');
   const lid = n(ctx, 'lid', 0.5, 0, 1);
   const scene: SketchContext = { ...ctx, params: { collapse: 0, debris: 0, cantilever: 0.85, levels: 19, ...ctx.params } };
@@ -93,7 +93,7 @@ function pour(ctx: SketchContext): Strand[] {
  * everything. Dashes thicken toward the top of the sky into a cloud bank and thin out to the horizon;
  * a fixed 64-step rhythm breaks each fall.
  */
-function storm(ctx: SketchContext): Stroke[] {
+export function storm(ctx: SketchContext): Stroke[] {
   const amount = n(ctx, 'storm', 0.5, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('tower-card-storm');
