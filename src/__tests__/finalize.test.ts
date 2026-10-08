@@ -3,7 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVersion, finalizePiece, pageFor, parseStat, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
+import { buildVersion, finalizePiece, pageFor, parseStat, plainFinishing, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
+import { plainRender } from '../../cli/print-queue.ts';
+import { artMatch } from '../../cli/art-match.ts';
 
 const page = { width: 279.4, height: 431.8, margin: 18 };
 const border = { style: 'double', pen: 'carbon', inset: 12, contentGap: 6 };
@@ -20,6 +22,13 @@ describe('finalize page', () => {
     expect(pageFor({ page: { width: 70, height: 120 } }, { page: tabloid })).toEqual({ width: 70, height: 120, margin: 18, paper: '#f4f0e6' });
     const area = placementOffset([], { width: 70, height: 120, margin: 4.51 }, { out: '', pieces: [] } as Stack, 'vertical').area;
     expect(area).toEqual({ x0: 4.51, y0: 4.51, x1: 70 - 4.51, y1: 120 - 4.51 });
+  });
+
+  it('renders the art match’s plain render on the stack’s page only for a page-aware sketch', () => {
+    const tabloid = { ...page, paper: '#f4f0e6' };
+    expect(plainFinishing({}, { page: tabloid, pageAware: true })).toBeUndefined();
+    expect(plainFinishing({ page: { width: 70, height: 120 } }, { page: tabloid })).toBeUndefined();
+    expect(plainFinishing({ page: { width: 70, height: 120 } }, { page: tabloid, pageAware: true })).toEqual({ page: { width: 70, height: 120, margin: 4.51 } });
   });
 });
 
@@ -123,5 +132,21 @@ describe.skipIf(!hasVpype)('finalize end to end (local vpype)', () => {
     const preparedInk = report.layers.reduce((t, l) => t + l.drawMm, 0);
     expect(preparedInk / sourceInk).toBeGreaterThan(0.995);
     expect(preparedInk / sourceInk).toBeLessThan(1.02);
+  }, 60_000);
+
+  it('prints a page-aware card on the stack’s page, and its art matches the plain render on that page', async () => {
+    const piece = { name: 'star', sketch: 'sketches/breach-tarot/xvii-star/sketch.ts', seed: 2 };
+    const stack: Stack = { out: mkdtempSync(join(tmpdir(), 'finalize-')), page: { width: 70, height: 120 },
+      border: { style: 'simple', pen: 'carbon', inset: 2.5, contentGap: 1 }, defaults: { center: 'none', mergeSameColor: false }, pieces: [piece] };
+    const report = await finalizePiece(stack, piece, resolveOptions(stack));
+    const config = JSON.parse(readFileSync(join(stack.out, 'star', 'config.json'), 'utf8')) as { page: unknown };
+    expect(config.page).toEqual({ width: 70, height: 120, margin: 4.51, paper: '#f4f0e6' });
+    expect(readFileSync(join(process.cwd(), report.files.prepared), 'utf8')).toMatch(/^<svg[^>]*width="70mm" height="120mm" viewBox="0 0 70 120"/);
+    const print = readFileSync(join(process.cwd(), report.files.source), 'utf8');
+    const onPage = artMatch((await plainRender(stack, piece)).svg, print);
+    expect(onPage.ok, `${onPage.matched}/${onPage.total}`).toBe(true);
+    // Without the stack's page the plain render is the tabloid card, which the print cannot match.
+    const { page: _page, ...tabloidStack } = stack;
+    expect(artMatch((await plainRender(tabloidStack, piece)).svg, print).ok).toBe(false);
   }, 60_000);
 });

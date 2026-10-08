@@ -20,10 +20,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { artMatch, type ArtMatch } from './art-match.ts';
 import { checkPiece, loadPenPlan } from './plotter-check.ts';
 import { renderSketch } from './sketch/runner.ts';
-import type { Piece, Stack } from './finalize.ts';
-import type { Params } from '../src/sketch/types.ts';
+import { plainFinishing, type Piece, type Stack } from './finalize.ts';
+import type { Page, Params } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The sketch's own render that a print's art is matched against: on the stack's page when the sketch is page-aware and the stack sets one. */
+export async function plainRender(stack: Stack, piece: Piece) {
+  const entry = resolve(ROOT, piece.sketch);
+  const sketch = (await import(pathToFileURL(entry).href)).default as { page: Page; pageAware?: boolean };
+  const finishing = plainFinishing(stack, sketch);
+  return renderSketch({ entry, seed: piece.seed, params: { ...(stack.params ?? {}), ...(piece.params ?? {}) } as Params, ...(finishing ? { finishing } : {}) });
+}
 
 interface LayerStat { layer: number; paths: number; drawMm: number; travelMm: number; label: string; color: string; passes: number; minutes: number }
 interface Report {
@@ -128,7 +136,7 @@ async function main(argv: string[]): Promise<number> {
     if (existsSync(target) && !force) { console.log(`KEEP  ${piece.name}: ${target} exists (--force to replace)`); continue; }
     const check = checkPiece(dir, plan);
     if (!check.ok) { failed++; console.log(`FAIL  ${piece.name}: ${check.error}`); continue; }
-    const plain = await renderSketch({ entry: resolve(ROOT, piece.sketch), seed: piece.seed, params: { ...(stack.params ?? {}), ...(piece.params ?? {}) } as Params });
+    const plain = await plainRender(stack, piece);
     const match = artMatch(plain.svg, readFileSync(join(dir, 'source', 'render.svg'), 'utf8'));
     if (!match.ok) { failed++; console.log(`FAIL  ${piece.name}: only ${match.matched}/${match.total} art paths match the sketch's own render`); continue; }
     const report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8')) as Report;

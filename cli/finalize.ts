@@ -102,6 +102,16 @@ export function pageFor(stack: Pick<Stack, 'page'>, sketch: { page: Page; pageAw
   return sketch.pageAware ? targetPage(sketch.page, stack.page) : { ...sketch.page, ...stack.page };
 }
 
+/**
+ * The finishing for the art match's plain render: the piece's page for a page-aware sketch when the stack sets
+ * one, since such a sketch draws differently on it. Otherwise none: the match fits the sketch's own render.
+ */
+export function plainFinishing(stack: Pick<Stack, 'page'>, sketch: { page: Page; pageAware?: boolean }): { page: Page } | undefined {
+  if (!stack.page || !sketch.pageAware) return undefined;
+  const { width, height, margin } = pageFor(stack, sketch);
+  return { page: { width, height, ...(margin === undefined ? {} : { margin }) } };
+}
+
 /** The piece's page (`pageFor`), pens and controls. */
 async function loadSketch(stack: Stack, entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
