@@ -19,6 +19,8 @@ export interface Figure { skeleton: Skeleton; body: Body; tip: THREE.Vector3 }
 export const FIGURE_LOOK: Look = { ...LOOK, cloth: 'carbon', accent: 'carbon', edge: 'carbon', crease: 'carbon', detail: 'carbon', figure: 'figure', contour: 'figure-edge', family: 'hatch' };
 
 const PROPORTIONS = { ...ELONGATED, head: 0.95, neck: 1.35 };
+/** How much fuller than the canon the limbs and trunk are built: mass enough to read as a body, not a ribbon. */
+const BUILD = 1.3;
 
 /**
  * One lover drifting in the air, facing along `yaw`, the arm on `side` reaching `reach` degrees from
@@ -31,8 +33,8 @@ function floatingPose(side: Side, reach: number, yaw: number, lean: number): Pos
     // The body leans toward the other from the hips (the legs, hung from the pelvis, swing back with it, so the hips bring
     // them forward again); they hang below and a little back, knees softly bent, feet pointing down.
     pelvis: { flex: lean },
-    [`hip_${side}`]: { flex: lean - 4, abduct: 3 }, [`knee_${side}`]: { flex: 12 }, [`ankle_${side}`]: { flex: -52 },
-    [`hip_${other}`]: { flex: lean - 10, abduct: 4 }, [`knee_${other}`]: { flex: 20 }, [`ankle_${other}`]: { flex: -58 },
+    [`hip_${side}`]: { flex: lean - 4, abduct: 5 }, [`knee_${side}`]: { flex: 26 }, [`ankle_${side}`]: { flex: -30 },
+    [`hip_${other}`]: { flex: lean - 14, abduct: 7 }, [`knee_${other}`]: { flex: 40 }, [`ankle_${other}`]: { flex: -34 },
     // One arm reaches at about shoulder height, the other hangs loose; the head inclines toward the other.
     [`shoulder_${side}`]: { flex: reach, abduct: 6 }, [`elbow_${side}`]: { flex: 14 }, [`wrist_${side}`]: { flex: -6 },
     [`shoulder_${other}`]: { flex: 6, abduct: 20 }, [`elbow_${other}`]: { flex: 24 },
@@ -86,8 +88,8 @@ export function meeting(o: MeetingOptions): { left: Figure; right: Figure } {
   const dx = o.centre.x - rx / 2, dz = o.centre.z - rz / 2;
   const left = float('r', o.reach, yl, o.lean, hl, dx, leftY, dz), right = float('l', o.reach, yr, o.lean, hr, rx + dx, ry, rz + dz);
   return {
-    left: { skeleton: left, body: flowBody(left), tip: tipOf(left, 'r') },
-    right: { skeleton: right, body: flowBody(right), tip: tipOf(right, 'l') },
+    left: { skeleton: left, body: flowBody(left, { build: BUILD }), tip: tipOf(left, 'r') },
+    right: { skeleton: right, body: flowBody(right, { build: BUILD }), tip: tipOf(right, 'l') },
   };
 }
 

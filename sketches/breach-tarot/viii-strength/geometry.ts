@@ -355,6 +355,22 @@ export function sleepingHelix(ctx: SketchContext, view: THREE.PerspectiveCamera,
       g.computeBoundingSphere();
     }
   }
+  // The turn over the top. The strands are traced coarsely, so where the neck stands high and its turns
+  // are seen end-on they show as polygons and tangle. There, each trace is subdivided along a smooth
+  // curve through the same samples; the rest of the helix is left exactly as it was.
+  const apexUp = Math.max(...neck.map(q => q.y));
+  const zoneY = BIG * (topY + 0.55 * (apexUp - topY));
+  const smoothed = (pts: THREE.Vector3[]): THREE.Vector3[] => {
+    if (pts.length < 4 || !pts.some(q => q.y > zoneY)) return pts;
+    const spline = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+    const out = [pts[0]];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      if (pts[i].y > zoneY && pts[i + 1].y > zoneY) for (let k = 1; k < 4; k++) out.push(spline.getPoint((i + k / 4) / (pts.length - 1)));
+      out.push(pts[i + 1]);
+    }
+    return out;
+  };
+  for (const h of made.strokes) h.points = smoothed(h.points);
   return {
     curve, centre,
     strokes: made.strokes.map(h => ({ ...h, points: h.points.map(q => q.clone().multiplyScalar(1 / BIG)) })),
@@ -491,8 +507,8 @@ export function drawStrength(ctx: SketchContext): Part[] {
     const onGlyph = glyphMask(glyphPaths, 0.6);
 
     const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], keep: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) buckets.add(key, piece);
+    const add = (key: string, run: Point[], keep: (p: Point) => boolean = () => true, min?: number) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) buckets.add(key, piece, false, min);
     };
 
     // The wall, a slab at a time, each with slack in world units at its own distance.
@@ -517,7 +533,8 @@ export function drawStrength(ctx: SketchContext): Part[] {
     }
     for (const [band, mine] of bands) {
       projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(helixSlack, band * 60 + 30) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+        // Up in the turn over the top, scraps under a millimetre and a half (what the hidden-line cuts leave) are dropped.
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, run[0].y * MM_Y < CARD.y0 + 116 ? 1.5 : undefined); },
       });
     }
     // The person: tube lines with the slack the figure cards use.
@@ -551,8 +568,30 @@ export function drawStrength(ctx: SketchContext): Part[] {
         });
       }
     }
+    // The sky: the deck's light ruling, full lines at the top that thin and break as they come down to the
+    // horizon, knocked out well clear of the neck and head. Its own stream, so nothing else moves.
+    const reachSky = n(ctx, 'sky', 0.45, 0, 1);
+    if (reachSky > 0) {
+      const skyPattern = barPattern(ctx.random('strength-sky'), 0.86);
+      const skyClear = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
+      const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
+      for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += n(ctx, 'skyPitch', 1.3, 0.8, 2.5)) {
+        const t = (y - skyTop) / (skyBottom - skyTop);
+        const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
+        // Every other of the longest rules runs on down to the horizon, broken more as it goes; the rest stop short.
+        const deep = i % 16 === 0;
+        const limit = [deep ? 1 / reachSky : 0.95, 0.72, 0.5, 0.28][tier];
+        if (t > limit * reachSky) continue;
+        const broken = t > 0.3 * Math.min(limit, 0.95) * reachSky;
+        const thinner = deep && t > 0.95 * reachSky;
+        add('sky-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => {
+          const step = Math.floor((p.x - CARD.x0) / 3.2 + i);
+          return !skyClear(p) && (!broken || skyPattern[step % 64]) && (!thinner || skyPattern[(step * 3 + 17) % 64]);
+        });
+      }
+    }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['lake', 'dam', 'gorge', 'parapet', 'helix', 'figure', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'lake', 'dam', 'gorge', 'parapet', 'helix', 'figure', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !damCover(p) && !helixCover(p), 0.3) });
     parts.push(...cardFrame('VIII', 'STRENGTH'));
     return parts;

@@ -25,7 +25,7 @@ function headOverPerson(parts: Parts) {
 }
 
 describe('Breach Tarot: VIII Strength', () => {
-  it('replays, stays inside the card, and draws the lake, the dam, the helix, the person, the phrase and the frame', async () => {
+  it('replays, stays inside the card, and draws the sky, the lake, the dam, the helix, the person, the phrase and the frame', async () => {
     const first = await renderSketch({ entry, seed: 2 });
     const replay = await renderSketch({ entry, seed: 2 });
     expect(replay.identity).toBe(first.identity);
@@ -38,7 +38,7 @@ describe('Breach Tarot: VIII Strength', () => {
       expect(p.y).toBeLessThanOrEqual(CARD.bottom + 0.01);
     }
     const ids = first.parts.map(p => p.id);
-    for (const id of ['lake-carbon', 'dam-carbon', 'gorge-carbon', 'parapet-carbon', 'figure-carbon', 'slogan-lettering', 'horizon-carbon', 'card-frame']) expect(ids).toContain(id);
+    for (const id of ['sky-carbon', 'lake-carbon', 'dam-carbon', 'gorge-carbon', 'parapet-carbon', 'figure-carbon', 'slogan-lettering', 'horizon-carbon', 'card-frame']) expect(ids).toContain(id);
     expect(ids.some(id => id.startsWith('helix-'))).toBe(true);
   }, 60_000);
 

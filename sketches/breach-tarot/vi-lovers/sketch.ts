@@ -36,6 +36,7 @@ const sketch: Sketch = {
     { type: 'slider', id: 'open', label: 'Length over which the strand grows from the roof', default: 2.0, min: 0.5, max: 12, step: 0.1, group: 'Lovers' },
     { type: 'slider', id: 'flare', label: 'Length over which the helix opens past the meeting', default: 2.0, min: 0.5, max: 12, step: 0.1, group: 'Lovers' },
     { type: 'slider', id: 'slim', label: 'Width of the leaning strands (share of the helix)', default: 0, min: 0, max: 1, step: 0.005, group: 'Lovers' },
+    { type: 'slider', id: 'leadWidth', label: 'Half-width of the ribbon each strand rises on from its tower', default: 0.1, min: 0.02, max: 0.4, step: 0.01, group: 'Lovers' },
     { type: 'slider', id: 'helixScale', label: 'Build the helix this many times larger, then scale back', default: 8, min: 4, max: 40, step: 1, group: 'Lovers' },
     { type: 'slider', id: 'figX', label: 'The pair, across the page (midway between them)', default: 144, min: 90, max: 190, step: 1, units: 'mm', group: 'Lovers (figures)' },
     { type: 'slider', id: 'figDepth', label: 'Distance of the pair from the eye', default: 26, min: 18, max: 45, step: 0.5, group: 'Lovers (figures)' },

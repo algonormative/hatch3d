@@ -3,6 +3,7 @@ import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, strandStrokes } from '../../kit/helix.ts';
 import { clamp, smooth } from '../../kit/params.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import type { Stroke } from '../../kit/types.ts';
 
 /**
@@ -18,7 +19,8 @@ const SPINE_STEP = 0.05;
 /**
  * A strand's centre line: a lead-in from a tower top, then the tail the two lead-ins share. Sampled
  * evenly in arc length, with parallel-transport frames carried back from the end of the tail so both
- * strands see the same frame wherever their paths coincide. `scale` builds it larger, to be scaled back.
+ * strands see the same frame wherever their paths coincide. Without a tail it is the lead-in alone. `scale`
+ * builds it larger, to be scaled back.
  */
 export class Spine {
   readonly pts: THREE.Vector3[];
@@ -28,9 +30,9 @@ export class Spine {
   readonly length: number;
   /** Arc length at which the lead-in ends and the shared tail begins. */
   readonly join: number;
-  constructor(leadCurve: THREE.Curve<THREE.Vector3>, tailCurve: THREE.Curve<THREE.Vector3>, scale: number) {
+  constructor(leadCurve: THREE.Curve<THREE.Vector3>, tailCurve: THREE.Curve<THREE.Vector3> | null, scale: number) {
     const a = leadCurve.getSpacedPoints(Math.ceil(leadCurve.getLength() / SPINE_STEP));
-    const b = tailCurve.getSpacedPoints(Math.ceil(tailCurve.getLength() / SPINE_STEP));
+    const b = tailCurve ? tailCurve.getSpacedPoints(Math.ceil(tailCurve.getLength() / SPINE_STEP)) : [a[a.length - 1]];
     this.pts = [...a, ...b.slice(1)].map(p => p.multiplyScalar(scale));
     this.arc = [0];
     for (let i = 1; i < this.pts.length; i++) this.arc.push(this.arc[i - 1] + this.pts[i].distanceTo(this.pts[i - 1]));
@@ -129,8 +131,56 @@ export function strand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, 
     const k = w.grow(s);
     return spine.at(s).addScaledVector(fr.normal, (p.x - start.x) * k).addScaledVector(fr.binormal, (p.z - start.z - 0.25) * k);
   };
+  // Only the wound part is kept: from the meeting point on, where the two strands wind as one helix. Before it, the
+  // strand is a thread along the lead-in, and the lead-in is drawn by `leadStrand` as a ribbon.
+  const arcOf = (p: THREE.Vector3) => w.curveAt(clamp((p.y - start.y) / length, 0, 1)) * length;
   const strokes: Stroke[] = [];
-  for (const h of strandStrokes(st, 0.8, 0.12, ctx, bigView)) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points.map(p => bend(p).multiplyScalar(1 / scale)) });
-  const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 640, 8).scale(1 / scale, 1 / scale, 1 / scale);
+  for (const h of strandStrokes(st, 0.8, 0.12, ctx, bigView)) {
+    let run: THREE.Vector3[] = [];
+    const flush = () => { if (run.length > 1) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: run }); run = []; };
+    for (const p of h.points) { if (arcOf(p) >= spine.join) run.push(bend(p).multiplyScalar(1 / scale)); else flush(); }
+    flush();
+  }
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (w.curveAt(mid) * length < spine.join) lo = mid; else hi = mid; }
+  const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, Math.ceil(640 * (1 - hi)), 8, [hi, 1]).scale(1 / scale, 1 / scale, 1 / scale);
+  return { strokes, mesh };
+}
+
+/**
+ * The lead-in of one lover: a thin flat ribbon along its own smooth arc, from the tower top to the meeting
+ * point, in the strand's native inks. It is the same strand of the kit's twin helix, laid on the arc
+ * unwound (no turns) with no radius, so it keeps its width and does not coil. It narrows at both ends, and
+ * is turned about the arc to show the most of its width to the eye.
+ */
+export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, width: number, scale: number): Strand {
+  const start = spine.pts[0];
+  const length = spine.length;
+  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
+  const base = { ...template[which], x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: 0, depth: 1, width, swell: 0, centre: -1e3, turns: 0.001 };
+  // The ribbon's width lies along -sin θ × normal + cos θ × binormal; pick the θ that shows most of it on the sheet.
+  const aspect = TABLOID_PAGE.width / TABLOID_PAGE.height;
+  const seen = (theta: number) => {
+    let least = Infinity;
+    for (let i = 1; i < 12; i++) {
+      const s = length * i / 12, fr = spine.frame(s);
+      const wv = fr.normal.clone().multiplyScalar(-Math.sin(theta)).addScaledVector(fr.binormal, Math.cos(theta)).multiplyScalar(0.1 * scale);
+      const at = (q: THREE.Vector3) => { const r = q.clone().project(bigView); return { x: r.x * aspect, y: r.y }; };
+      const c = spine.at(s), a = at(c.clone().add(wv)), b = at(c.clone().sub(wv)), t0 = at(spine.at(s - 0.01 * length)), t1 = at(spine.at(s + 0.01 * length));
+      const tx = t1.x - t0.x, ty = t1.y - t0.y;
+      least = Math.min(least, Math.abs((b.x - a.x) * ty - (b.y - a.y) * tx) / (Math.hypot(tx, ty) || 1));
+    }
+    return least;
+  };
+  let theta = 0, best = -1;
+  for (let i = 0; i < 24; i++) { const th = i / 24 * Math.PI * 2, v = seen(th); if (v > best) { best = v; theta = th; } }
+  const st = { ...base, theta0: theta };
+  const bend = (p: THREE.Vector3): THREE.Vector3 => {
+    const s = clamp((p.y - start.y) / length, 0, 1) * length;
+    const fr = spine.frame(s);
+    return spine.at(s).addScaledVector(fr.normal, p.x - start.x).addScaledVector(fr.binormal, p.z - start.z - 0.25);
+  };
+  const strokes: Stroke[] = strandStrokes(st, 0.8, 0.12, ctx, bigView).map(h => ({ ink: h.ink, group: 'helix', family: 'membrane' as const, points: h.points.map(p => bend(p).multiplyScalar(1 / scale)) }));
+  const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8).scale(1 / scale, 1 / scale, 1 / scale);
   return { strokes, mesh };
 }
