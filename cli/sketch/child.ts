@@ -67,12 +67,14 @@ async function execute(request: Request): Promise<SketchMetadata | RenderResult>
   const imported = await import(pathToFileURL(entry).href);
   const sketch = validateSketch(imported.default);
   if (!sketch.pageAware && renderTargetAdopted()) throw new WithholdTarget(`${sketch.name} is not page-aware, but modules it loads shaped themselves to the requested page`);
-  // A page-aware sketch draws on the requested page, and its finishing resolves against that page, so the page
-  // itself adds no rescale. Any other sketch draws on its declared page and finishing fits it onto the request.
-  let finishing = request.mode === 'render' && request.finishing !== undefined ? resolveFinishing(sketch.page, sketch.pens, request.finishing) : undefined;
-  const page = sketch.pageAware && finishing && request.finishing?.page ? targetPage(sketch.page, request.finishing.page) : sketch.page;
-  if (finishing && page !== sketch.page) finishing = resolveFinishing(page, sketch.pens, request.finishing);
-  const { assets, metadata: assetMetadata } = await loadRasterAssets(entry, sketch.assets ?? {}, sketch.page.paper);
+  // A page-aware sketch draws on the requested page, and its finishing resolves once, against that page, so the
+  // page itself adds no rescale. Any other sketch draws on its declared page and finishing fits it onto the request.
+  const requested = request.mode === 'render' ? request.finishing?.page : undefined;
+  const page = sketch.pageAware && object(requested) && positive(requested.width) && positive(requested.height) ? targetPage(sketch.page, requested) : sketch.page;
+  if (page !== sketch.page) assert(page.margin === undefined || (Number.isFinite(page.margin) && page.margin >= 0 && page.margin * 2 < Math.min(page.width, page.height)),
+    `Finishing page margin ${String(page.margin)} mm does not fit a ${page.width} × ${page.height} mm page`);
+  const finishing = request.mode === 'render' && request.finishing !== undefined ? resolveFinishing(page, sketch.pens, request.finishing) : undefined;
+  const { assets, metadata: assetMetadata } = await loadRasterAssets(entry, sketch.assets ?? {}, page.paper);
   const metadata: SketchMetadata = { name: sketch.name, page: { ...sketch.page }, pens: sketch.pens.map((p) => ({ ...p })), controls: sketch.controls.map((c) => ({ ...c, ...(c.showWhen ? { showWhen: { ...c.showWhen } } : {}), ...(c.type === 'select' ? { options: [...c.options], ...(c.optionLabels ? { optionLabels: { ...c.optionLabels } } : {}) } : {}) })), assets: assetMetadata, ...(sketch.navigators === undefined ? {} : { navigators: sketch.navigators.map(navigator => structuredClone(navigator)) }), ...(sketch.macros === undefined ? {} : { macros: sketch.macros.map(macro => ({ ...macro, targets: macro.targets.map(target => ({ ...target })) })) }) };
   if (request.mode === 'inspect') return metadata;
   if (finishing) {

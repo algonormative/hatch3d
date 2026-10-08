@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { PNG } from 'pngjs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
@@ -66,6 +67,31 @@ describe('page-aware sketches', () => {
     expect(result.parts.find(part => part.id === 'diagonal')!.paths[0]).toEqual([{ x: 7, y: 7 }, { x: 63, y: 113 }]);
     // The layout module saw the requested page while loading.
     expect(result.parts.find(part => part.id === 'layout')!.paths[0]).toEqual([{ x: 7, y: 7 }, { x: 14, y: 7 }]);
+  });
+
+  it('a page narrower than twice the declared margin works: finishing resolves once, against the target page', async () => {
+    const entry = await fixture(true);
+    // The declared 10 mm margin alone would not fit 16 mm; scaled with the page it is 1.5 mm.
+    const result = await renderSketch({ entry, finishing: { page: { width: 16, height: 24 } } });
+    expect(result.metadata.page).toEqual({ width: 16, height: 24, margin: 1.5, paper: '#ffffff' });
+    expect(result.parts.find(part => part.id === 'diagonal')!.paths[0]).toEqual([{ x: 1.5, y: 1.5 }, { x: 14.5, y: 22.5 }]);
+    await expect(renderSketch({ entry, finishing: { page: { width: 16, height: 24, margin: 8 } } })).rejects.toThrow(/margin 8 mm does not fit a 16 × 24 mm page/);
+  });
+
+  it('samples raster assets against the target page’s paper', async () => {
+    dir ??= await mkdtemp(join(tmpdir(), 'hatch3d-page-aware-'));
+    const png = new PNG({ width: 1, height: 1 });
+    png.data.set([0, 0, 0, 255]);
+    await writeFile(join(dir, 'dot.png'), PNG.sync.write(png));
+    const entry = join(dir, 'asset.ts');
+    // The line's length is the brightness of the paper outside the 1 mm image, read at draw time.
+    await writeFile(entry, `export default { name: 'asset', page: { width: 40, height: 40, margin: 2, paper: '#ffffff' }, pageAware: true,
+      pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [], assets: { dot: { path: './dot.png', box: { x: 5, y: 5, width: 1, height: 1 }, fit: 'contain' } },
+      draw(ctx) { return [{ id: 'paper', pen: 'ink', paths: [[{ x: 10, y: 10 }, { x: 15 + 10 * ctx.assets.dot.sample(20, 20), y: 10 }]] }]; } };`);
+    const white = await renderSketch({ entry, finishing: { page: { width: 40, height: 40 } } });
+    const black = await renderSketch({ entry, finishing: { page: { width: 40, height: 40, paper: '#000000' } } });
+    expect(white.parts[0].paths[0][1].x).toBeCloseTo(25, 3);
+    expect(black.parts[0].paths[0][1].x).toBeCloseTo(15, 3);
   });
 
   it('at its own page, through finishing, a page-aware render matches the legacy one exactly', async () => {
