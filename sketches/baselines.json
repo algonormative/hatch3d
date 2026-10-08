@@ -125,6 +125,30 @@
       "seed": 219,
       "identity": "824aa067dbf74203b127349f10e740d0c0ce00a139272156de89b35475fbcead",
       "note": "Breach Cathedral extended print seed (phase-garden heat round)"
+    },
+    {
+      "entry": "sketches/breach-tarot/ix-hermit/sketch.ts",
+      "seed": 1,
+      "identity": "5cbbe4f495c11174afdea866bfe7d9c212f4982f2976ff792b6455a2c7e8e4e4",
+      "note": "print-queue/breach-tarot-2026-10-08-ix-hermit"
+    },
+    {
+      "entry": "sketches/breach-tarot/xiv-temperance/sketch.ts",
+      "seed": 1,
+      "identity": "689537a98de237f406bcfab255f77b073c6c9b9038aadfe0bf8993bf99375e02",
+      "note": "print-queue/breach-tarot-2026-10-08-xiv-temperance"
+    },
+    {
+      "entry": "sketches/breach-tarot/xv-devil/sketch.ts",
+      "seed": 1,
+      "identity": "c7b1b80feb80197d8aa393772cbe5cb8f36cb6b60cc621c26608259514c546ab",
+      "note": "print-queue/breach-tarot-2026-10-08-xv-devil"
+    },
+    {
+      "entry": "sketches/breach-tarot/xx-judgement/sketch.ts",
+      "seed": 1,
+      "identity": "26a45b7644be36790c1fd541084493ab5ffdf8f74989b9b6d98d3b47f23feeee",
+      "note": "print-queue/breach-tarot-2026-10-08-xx-judgement"
     }
   ]
 }
