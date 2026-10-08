@@ -34,6 +34,7 @@
     { "name": "ix-hermit", "title": "Breach Tarot: IX The Hermit", "sketch": "sketches/breach-tarot/ix-hermit/sketch.ts", "seed": 1 },
     { "name": "xiv-temperance", "title": "Breach Tarot: XIV Temperance", "sketch": "sketches/breach-tarot/xiv-temperance/sketch.ts", "seed": 1 },
     { "name": "xv-devil", "title": "Breach Tarot: XV The Devil", "sketch": "sketches/breach-tarot/xv-devil/sketch.ts", "seed": 1 },
-    { "name": "xx-judgement", "title": "Breach Tarot: XX Judgement", "sketch": "sketches/breach-tarot/xx-judgement/sketch.ts", "seed": 1 }
+    { "name": "xx-judgement", "title": "Breach Tarot: XX Judgement", "sketch": "sketches/breach-tarot/xx-judgement/sketch.ts", "seed": 1 },
+    { "name": "xviii-moon", "title": "Breach Tarot: XVIII The Moon", "sketch": "sketches/breach-tarot/xviii-moon/sketch.ts", "seed": 1 }
   ]
 }
