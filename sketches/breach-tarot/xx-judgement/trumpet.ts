@@ -87,7 +87,7 @@ function cutAt(points: THREE.Vector3[], centre: THREE.Vector3, axis: THREE.Vecto
  * the sheet (thinned by powers of two where the ribbon narrows, so surviving lines stay continuous),
  * cross ribs and leading-edge pulses, as the kit lays them.
  */
-function strandStrokes(ctx: SketchContext, s: Strand, bend: (p: THREE.Vector3) => THREE.Vector3, view: THREE.Camera, density: number, minMm: number, tMax: number): HelixStroke[] {
+function strandStrokes(ctx: SketchContext, s: Strand, bend: (p: THREE.Vector3) => THREE.Vector3, view: THREE.Camera, density: number, minMm: number, tMax: number, ribAt: (u: number) => boolean): HelixStroke[] {
   const out: HelixStroke[] = [];
   const group: HelixStroke['group'] = s.id === 'a' ? 'strand-a' : 'strand-b';
   const rng = ctx.random(`horn-${s.id}`);
@@ -144,7 +144,8 @@ function strandStrokes(ctx: SketchContext, s: Strand, bend: (p: THREE.Vector3) =
     if (u > tMax) break;
     if (rng() < 0.1 * (Math.floor(i / 8) % 2 ? 1.0 : 0.42)) continue;
     const here = at(u, 0);
-    // Across a ribbon that wide a rib is a stray chord: ribs belong to the cord.
+    // In the bell a rib is a stray tick across a narrow ribbon: ribs belong to the cord.
+    if (!ribAt(u)) continue;
     const a = at(u, -1), b = at(u, 1);
     if (Math.hypot(a.x - b.x, a.y - b.y) > 14) continue;
     if (last && Math.hypot(here.x - last.x, here.y - last.y) < 1.6) continue;
@@ -167,7 +168,7 @@ export function trumpet(ctx: SketchContext, view: THREE.PerspectiveCamera): Trum
     const d = curve.getPointAt(i / 800).distanceToSquared(mouthPoint);
     if (d < best) { best = d; mouthU = i / 800; }
   }
-  const flare = n(ctx, 'flare', 2.6, 1, 6), bell = n(ctx, 'bell', 13, 2, 20), growth = n(ctx, 'growth', 0.1, 0, 1);
+  const flare = n(ctx, 'flare', 2.6, 1, 6), bell = n(ctx, 'bell', 13, 2, 20), growth = n(ctx, 'growth', -0.2, -1, 1);
   const r0 = n(ctx, 'thread', 2.2, 0.8, 5);
   const pitch = n(ctx, 'pitch', 11, 4, 60);
   const sv = view.clone();
@@ -210,7 +211,7 @@ export function trumpet(ctx: SketchContext, view: THREE.PerspectiveCamera): Trum
   const centre = big.getPointAt(mouthU), axis = big.getTangentAt(mouthU).normalize();
   const strokes: HelixStroke[] = [];
   const minMm = n(ctx, 'laminaeMm', 1.1, 0.55, 4), density = n(ctx, 'ribs', 0.35, 0, 1);
-  for (const st of strands) for (const h of strandStrokes(ctx, st, bend, sv, density, minMm, tMax)) {
+  for (const st of strands) for (const h of strandStrokes(ctx, st, bend, sv, density, minMm, tMax, u => width(curveAt(u)) < 3)) {
     for (const run of cutAt(h.points, centre, axis)) strokes.push({ ...h, points: run.map(p => p.clone().multiplyScalar(1 / S)) });
   }
   const meshes = strands.map(st => {

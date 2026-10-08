@@ -235,8 +235,10 @@ export function drawJudgement(ctx: SketchContext): Part[] {
     }
     const onGlyph = glyphMask(glyphPaths, 0.6);
     const buckets = new PartBuckets(0.4);
+    // Short fragments of the helix's lines, where ribbons overlap and hide each other, read as stray ticks: dropped.
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
+      const shortest = key.startsWith('helix-') ? n(ctx, 'helixFragment', 5, 0.4, 12) : undefined;
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, shortest);
     };
     // Each stroke is tested at its own depth: strokes are split into pieces and banded by distance.
     const bands = new Map<string, { list: Stroke[]; d: number; slack: number }>();
