@@ -15,11 +15,13 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { roadPlan, roadStrokes } from './road.ts';
 import { crescent, rimPoint } from './crescent.ts';
+import { onRock, rockMesh, station } from './station.ts';
 
 /**
  * XVIII The Moon: none of this light is its own. Two squat towers of long slabs stand either side of
- * a path, the near one on the left, the far one on the right, under a big crescent moon built of
- * cantilevered slabs and lit from the side its sun is on. The eye is high over a small world, so the
+ * a path, the near one on the left, the far one on the right, under a big moon lit only from the side
+ * its sun is on: by default a station built into a moon (a rock body with a spine of slabs driven into
+ * it, see `station.ts`), or, as first drawn, a crescent of cantilevered slabs (`crescent.ts`). The eye is high over a small world, so the
  * ground opens out: the path is the helix, one flat ribbon road rising out of the water and winding in
  * wide S-bends back to the horizon, turning over a few times on the way so that its other side shows.
  * In front lies a pool, ruled as water, and the pool reflects a different city from the one standing
@@ -170,7 +172,7 @@ function clipRect(ox: number, oy: number, dx: number, dy: number, a: number, b: 
  * faces stay open paper. No contour rings and no inset frame, all in carbon. `pitch` scales the spacing
  * (1 is the kit's, tuned to the Tower's depth).
  */
-function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: number): FacetStroke[] {
+function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: number, allFaces = false): FacetStroke[] {
   const out: FacetStroke[] = facetStrokes(sl, light, eye, true, 1).map(st => ({ ...st, ink: 'carbon' as const }));
   const m = slabMatrix(sl);
   const rot = new THREE.Matrix4().extractRotation(m);
@@ -180,6 +182,12 @@ function plainFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: 
     [new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz), new THREE.Vector3(0, hy, 0)],
     [new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, 0, hz), new THREE.Vector3(0, hy, 0)],
   ];
+  // A block that can be turned any way (the moon's station) shows its back, top or underside too.
+  if (allFaces) faces.push(
+    [new THREE.Vector3(0, 0, -hz), new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, hy, 0)],
+    [new THREE.Vector3(0, hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz)],
+    [new THREE.Vector3(0, -hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, hz)],
+  );
   for (const [c0, U0, V0] of faces) {
     const normal = c0.clone().normalize().applyMatrix4(rot);
     const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
@@ -211,7 +219,10 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const { shore } = land;
   const inPool = (p: Point) => p.y > shore(p.x) + 0.6;
   const road = roadStrokes(ctx, view, roadPlan(ctx, view, shore, EYE));
-  const moon = crescent(ctx, view, f);
+  // The moon is a station built into a moon (the default) or, as first drawn, a crescent of slabs.
+  const crescentForm = ctx.params.moonForm === 'crescent';
+  const moon = crescentForm ? crescent(ctx, view, f) : null;
+  const base = crescentForm ? null : station(ctx, view, f);
 
   // The light on the towers: from the moon, high on the right and a little behind, so the faces turned right stay pale and the faces turned to us fall dark.
   const light = new THREE.Vector3(0.7, 0.45, 0.05).normalize();
@@ -242,7 +253,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
   const moonStrokes: Stroke[] = [];
   // A face seen nearly edge-on packs its hatch into a solid bead: those faces keep only their outline.
   const grazing = n(ctx, 'moonGrazing', 0.45, 0, 0.9);
-  moon.slabs.forEach((sl, owner) => {
+  moon?.slabs.forEach((sl, owner) => {
     const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
     const m = slabMatrix(sl), inv = m.clone().invert(), rot = new THREE.Matrix4().extractRotation(m);
     const half = [sl.w / 2, sl.h / 2, sl.d / 2];
@@ -252,7 +263,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
       const normal = new THREE.Vector3().setComponent(k, Math.sign(q[k])).applyMatrix4(rot);
       return normal.dot(eye.clone().sub(p).normalize());
     };
-    for (const st of facetStrokes(sl, moon.light, eye, false, moonHatch * FACET_MM_PER_UNIT / mmPerUnit(pos))) {
+    for (const st of facetStrokes(sl, moon!.light, eye, false, moonHatch * FACET_MM_PER_UNIT / mmPerUnit(pos))) {
       if (st.family === 'hatch' && st.points.length > 2) continue;
       if (st.family === 'hatch' && facing(st.points[0].clone().lerp(st.points[1], 0.5)) < grazing) continue;
       moonStrokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'moon', family: st.family, points: st.points, owner });
@@ -261,7 +272,16 @@ export function drawMoon(ctx: SketchContext): Part[] {
 
   const standGeos = standing.map(slabGeometry);
   const waterGeos = inWater.map(slabGeometry);
-  const moonGeos = moon.slabs.map(slabGeometry);
+  // The station's blocks, hatched by its sun like the towers (at the towers' spacing on the sheet), and the rock they are built into.
+  const blocks = base ? [...base.spine, ...base.collar, ...base.dock, ...base.scatter] : [];
+  blocks.forEach((sl, owner) => {
+    const pos = new THREE.Vector3(sl.x, sl.y, sl.z);
+    for (const st of plainFacets(sl, base!.light, eye, hatch * FACET_MM_PER_UNIT / mmPerUnit(pos), true)) {
+      moonStrokes.push({ ink: st.ink, group: 'moon', family: st.family, points: st.points, owner });
+    }
+  });
+  const blockGeos = blocks.map(slabGeometry);
+  const moonGeos = moon ? moon.slabs.map(slabGeometry) : [rockMesh(base!), ...blockGeos];
   // Each picture has its own depth range: the standing city, the city in the water, and the moon.
   const viewR = view.clone() as THREE.PerspectiveCamera;
   const viewM = view.clone() as THREE.PerspectiveCamera;
@@ -273,6 +293,8 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const depthR = renderDepthBufferCPU(standGeos, viewR, W, H);
     const depthM = renderDepthBufferCPU(waterGeos, viewM, W, H);
     const depthC = renderDepthBufferCPU(moonGeos, viewC, W, H);
+    // The rock's own lines are hidden only by the blocks built into it.
+    const depthB = base ? renderDepthBufferCPU(blockGeos, viewC, W, H) : depthC;
     const biasOf = (v: THREE.PerspectiveCamera, tol: number, d: number) => tol * v.far * v.near / ((v.far - v.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.5, 0.1, 2) * K;
 
@@ -426,14 +448,69 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const tick = n(ctx, 'moonTick', 1.2, 0.4, 3);
     const moonBySlab = new Map<number, Stroke[]>();
     for (const st of moonStrokes) moonBySlab.set(st.owner!, [...(moonBySlab.get(st.owner!) ?? []), st]);
+    const blockEdges: Point[][] = [];
     for (const [i, mine] of moonBySlab) {
-      const sl = moon.slabs[i];
-      projectStrokes(mine, { view: viewC, depth: depthC, width: W, height: H, bias: biasOf(viewC, 0.25 * sl.d, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      const sl = moon ? moon.slabs[i] : blocks[i];
+      const tol = moon ? 0.25 * sl.d : n(ctx, 'stationSlack', 0.3, 0.05, 1) * Math.min(sl.w, sl.h, sl.d);
+      projectStrokes(mine, { view: viewC, depth: depthC, width: W, height: H, bias: biasOf(viewC, tol, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         begin: st => runs => {
           for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
-            for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' ? tick : undefined);
+            if (st.family === 'edge') blockEdges.push(inside);
+            for (const piece of keepAlong(inside, p => !onGlyph(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && moon ? tick : undefined);
           }
         },
+      });
+    }
+    if (base) {
+      // The rock: field lines wrapping it square to the spine, evenly spaced on the sheet. Over the night side every
+      // line runs; across the lit side they drop out by halves as the sun climbs, so the lit limb is open paper.
+      // A hair of paper is kept round every block edge.
+      const clear = glyphMask(blockEdges, n(ctx, 'rockClear', 0.45, 0.2, 2));
+      const rmm = base.radius * f / eye.distanceTo(base.centre);
+      const step = n(ctx, 'rockPitch', 0.62, 0.4, 1.5) / rmm;
+      const open = [0.62, 0.42, 0.22, 0.06];
+      const mare = n(ctx, 'rockMare', 0.32, 0, 0.8);
+      const lines3: { pts: THREE.Vector3[] }[] = [];
+      const facingEye = (p: THREE.Vector3, dir: THREE.Vector3) => eye.clone().sub(p).dot(dir) > 0;
+      let k = 0;
+      for (let sv = -1 + step / 2; sv < 1; sv += step, k++) {
+        const c = Math.sqrt(1 - sv * sv);
+        const tier = k % 8 === 0 ? 0 : k % 4 === 0 ? 1 : k % 2 === 0 ? 2 : 3;
+        let run: THREE.Vector3[] = [];
+        const flush = () => { if (run.length > 1) lines3.push({ pts: run }); run = []; };
+        for (let i = 0; i <= 720; i++) {
+          const th = i / 720 * Math.PI * 2;
+          const dir = base.axis.clone().multiplyScalar(sv).addScaledVector(base.b1, c * Math.cos(th)).addScaledVector(base.b2, c * Math.sin(th));
+          const p = onRock(base, dir);
+          // Lines drop out as the sun climbs, later over the dark ground than the pale.
+          if (!facingEye(p, dir) || dir.dot(base.light) > open[tier] + mare * base.ground(dir) || base.craters.some(c => c.dir.angleTo(dir) < c.size)) { flush(); continue; }
+          run.push(p);
+        }
+        flush();
+      }
+      // The limb, all the way round.
+      const limb: THREE.Vector3[] = [];
+      const [lx, ly] = [new THREE.Vector3(0, 1, 0).cross(base.toEye).normalize(), base.toEye.clone().cross(new THREE.Vector3(0, 1, 0).cross(base.toEye).normalize())];
+      for (let i = 0; i <= 720; i++) {
+        const th = i / 720 * Math.PI * 2;
+        limb.push(onRock(base, lx.clone().multiplyScalar(Math.cos(th)).addScaledVector(ly, Math.sin(th)), 0.001));
+      }
+      lines3.push({ pts: limb });
+      // Each crater: its rim, and a shadow ruled across the inside of the rim nearest the sun (the bowl's sunward wall is in shade).
+      for (const c of base.craters) {
+        const [c1, c2] = [base.b1.clone().addScaledVector(c.dir, -base.b1.dot(c.dir)).normalize(), new THREE.Vector3()];
+        c2.crossVectors(c.dir, c1);
+        const rimAt = (a: number, r: number) => c.dir.clone().multiplyScalar(Math.cos(r)).addScaledVector(c1, Math.sin(r) * Math.cos(a)).addScaledVector(c2, Math.sin(r) * Math.sin(a)).normalize();
+        lines3.push({ pts: Array.from({ length: 97 }, (_, i) => onRock(base, rimAt(i / 96 * Math.PI * 2, c.size))) });
+        const sun = base.light.clone().addScaledVector(c.dir, -base.light.dot(c.dir)).normalize();
+        const sunA = Math.atan2(sun.dot(c2), sun.dot(c1));
+        for (let j = 1; j < 6; j++) {
+          const r = c.size * (1 - j * 0.16);
+          lines3.push({ pts: Array.from({ length: 25 }, (_, i) => onRock(base, rimAt(sunA - 1.1 + 2.2 * i / 24, r), 0.002)) });
+        }
+      }
+      projectStrokes(lines3.map(l => ({ points: l.pts })), { view: viewC, depth: depthB, width: W, height: H, bias: biasOf(viewC, 0.01 * base.radius, eye.distanceTo(base.centre)) }, {
+        begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, MM_X, MM_Y), p => !clear(p)); },
       });
     }
 
@@ -470,13 +547,15 @@ export function drawMoon(ctx: SketchContext): Part[] {
         p => !solids(p) && !shine(p) && (keep >= 1 || cells[(Math.floor((p.x - CARD.x0) / 4.6) + shift) % 64] < keep));
     }
 
-    // The unlit rest of the moon's disc: a faint dashed rim, from horn to horn the long way round.
-    const edge = meshCoverage(moonGeos, viewC, TABLOID_PAGE, 1.2);
-    const rim: Point[] = Array.from({ length: 241 }, (_, k) => {
-      const a = moon.bulge + moon.horns * 0.9 + k / 240 * (2 * Math.PI - 1.8 * moon.horns);
-      return pageOf(view, rimPoint(moon, a));
-    });
-    for (const piece of keepAlong(rim, (p, at) => !edge(p) && at % 3.4 < 1.3, 0.15)) buckets.add('moon-ultramarine', piece);
+    // The crescent's unlit rest of the disc: a faint dashed rim, from horn to horn the long way round.
+    if (moon) {
+      const edge = meshCoverage(moonGeos, viewC, TABLOID_PAGE, 1.2);
+      const rim: Point[] = Array.from({ length: 241 }, (_, k) => {
+        const a = moon.bulge + moon.horns * 0.9 + k / 240 * (2 * Math.PI - 1.8 * moon.horns);
+        return pageOf(view, rimPoint(moon, a));
+      });
+      for (const piece of keepAlong(rim, (p, at) => !edge(p) && at % 3.4 < 1.3, 0.15)) buckets.add('moon-ultramarine', piece);
+    }
 
     // The shore, and the horizon where nothing stands on it.
     const shoreLine: Point[] = Array.from({ length: 123 }, (_, i) => {
@@ -486,7 +565,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     buckets.add('water-carbon', shoreLine);
 
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'moon', 'tower', 'mirror', 'water', 'helix', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'rock', 'moon', 'tower', 'mirror', 'water', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
     parts.push(...cardFrame('XVIII', 'THE MOON'));
     return parts;
