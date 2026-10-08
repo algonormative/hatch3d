@@ -19,6 +19,7 @@ import { LOOK, type Look } from '../../kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton, withPose, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
+import { bodyPerson } from './figure.ts';
 
 /**
  * VIII Strength: it lets you hold it. Not a woman and a lion but a person and a system: who is
@@ -399,7 +400,8 @@ export function drawStrength(ctx: SketchContext): Part[] {
   const skeleton = poseSkeleton(personPose(), { height: figureH, position: stand, proportions: { ...ELONGATED, head: 1.0, neck: 1.3 } });
   const k = figureH / 24;
   const hand = skeleton.at('wrist_r').lerp(skeleton.at('wrist_r', true), 0.5).add(new THREE.Vector3(0, 1.5 * k, 0));
-  const figure = person(skeleton, view);
+  // `scratch` is the approved figure; `body` is the deck's current one. Same skeleton, so the hand and the head stay where they were.
+  const figure = (ctx.params.figureStyle === 'body' ? bodyPerson : person)(skeleton, view);
 
   const helix = sleepingHelix(ctx, view, spec, f, { headTop: skeleton.at('head', true), hand }, layout);
 

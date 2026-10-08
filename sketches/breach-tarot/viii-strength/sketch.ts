@@ -53,6 +53,8 @@ const sketch: Sketch = {
     { type: 'slider', id: 'variety', label: 'How far the seed moves the layout', default: 1, min: 0, max: 2, step: 0.05, group: 'Seed' },
     { type: 'slider', id: 'figureAt', label: 'Person along the dam', default: 0.72, min: 0.05, max: 0.95, step: 0.01, group: 'Person' },
     { type: 'slider', id: 'figure', label: 'Person height on the card', default: 26, min: 12, max: 50, step: 1, units: 'mm', group: 'Person' },
+    { type: 'select', id: 'figureStyle', label: 'How the person is drawn', default: 'scratch', options: ['scratch', 'body'],
+      optionLabels: { scratch: 'Scratch figure (approved)', body: 'Body, as in Lovers and Devil' }, group: 'Person' },
     { type: 'slider', id: 'pocket', label: 'Clear pocket round it', default: 1.5, min: 1, max: 3.5, step: 0.05, group: 'Person' },
     { type: 'slider', id: 'figureSlack', label: 'Hidden-line slack, person', default: 1.2, min: 0.1, max: 3, step: 0.05, group: 'Person' },
     { type: 'slider', id: 'sky', label: 'How far the sky ruling reaches down', default: 0.45, min: 0, max: 1, step: 0.01, group: 'Sky' },
