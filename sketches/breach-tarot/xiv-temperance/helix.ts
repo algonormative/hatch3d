@@ -29,6 +29,13 @@ export interface StrandPlan {
   /** Narrow the ribbon to a thread over the last stretch at the start / the end. */
   tipStart: boolean;
   tipEnd: boolean;
+  /**
+   * Re-route the end of the strand. The strand is laid out (its winding, spacing and phase) on `points`
+   * exactly as it would be without this, so nothing before `from` moves; from point `from` on, its
+   * centre line follows `points` here instead, picking up where the first left off (same place, same
+   * heading, same ribbon frame) and spread over the same share of the strand's run.
+   */
+  reroute?: { from: number; points: THREE.Vector3[] };
 }
 
 export interface TwinSpec {
@@ -118,18 +125,49 @@ export function twinHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, pla
       radius: o.radius + o.spread * plan.index, depth: 1, width: o.width - o.narrow * plan.index,
       swell: 0, centre: (7.5 / 16) * length, turns,
     };
+    // The kept stretch, as shares of the run, and how the ribbon narrows toward a tip.
+    const uA = turnsTo[k0] / total, uB = turnsTo[k1] / total;
+    const sA = k0 / STEPS, sB = k1 / STEPS;
+
+    // A re-routed end: a curve of its own from the hand-over point, with a ribbon frame carried along it
+    // from the old one (rotated minimally from one tangent to the next).
+    const TAIL = 240;
+    let tail: { curve: THREE.CatmullRomCurve3; normals: THREE.Vector3[]; binormals: THREE.Vector3[]; sFrom: number } | null = null;
+    if (plan.reroute) {
+      const kFrom = nearest(samples, core[plan.reroute.from]), sFrom = kFrom / STEPS;
+      const joint = samples[kFrom].clone(), heading = curve.getTangentAt(sFrom);
+      const curveTail = new THREE.CatmullRomCurve3([joint, joint.clone().addScaledVector(heading, 1.5 * S), ...plan.reroute.points.map(p => p.clone().multiplyScalar(S))], false, 'centripetal');
+      curveTail.arcLengthDivisions = 600;
+      const kOld = Math.min(400, Math.round(sFrom * 400));
+      const t0 = curveTail.getTangentAt(0);
+      const n0 = frames.normals[kOld].clone().addScaledVector(t0, -frames.normals[kOld].dot(t0)).normalize();
+      const normals = [n0], binormals = [new THREE.Vector3().crossVectors(t0, n0)];
+      let prev = t0;
+      for (let i = 1; i <= TAIL; i++) {
+        const ti = curveTail.getTangentAt(i / TAIL);
+        const axis = new THREE.Vector3().crossVectors(prev, ti);
+        const ni = normals[i - 1].clone();
+        if (axis.length() > 1e-9) ni.applyAxisAngle(axis.normalize(), Math.acos(clamp(prev.dot(ti), -1, 1)));
+        ni.addScaledVector(ti, -ni.dot(ti)).normalize();
+        normals.push(ni); binormals.push(new THREE.Vector3().crossVectors(ti, ni));
+        prev = ti;
+      }
+      tail = { curve: curveTail, normals, binormals, sFrom };
+    }
     const bend = (p: THREE.Vector3): THREE.Vector3 => {
       const u = clamp((p.y - start.y) / length, 0, 1);
       const s = curveAt(u), scale = scaleAtS(s);
+      if (tail && s > tail.sFrom) {
+        const q = clamp((s - tail.sFrom) / (sB - tail.sFrom), 0, 1), i = Math.round(q * TAIL);
+        return tail.curve.getPointAt(q)
+          .addScaledVector(tail.normals[i], (p.x - start.x) * scale)
+          .addScaledVector(tail.binormals[i], (p.z - start.z - 0.25) * scale);
+      }
       const k = Math.min(400, Math.round(s * 400));
       return curve.getPointAt(s)
         .addScaledVector(frames.normals[k], (p.x - start.x) * scale)
         .addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * scale);
     };
-
-    // The kept stretch, as shares of the run, and how the ribbon narrows toward a tip.
-    const uA = turnsTo[k0] / total, uB = turnsTo[k1] / total;
-    const sA = k0 / STEPS, sB = k1 / STEPS;
     const tipAt = (s: number) => o.tip * S * scaleAtS(s);
     const grip = (u: number): number => {
       const s = curveAt(u);

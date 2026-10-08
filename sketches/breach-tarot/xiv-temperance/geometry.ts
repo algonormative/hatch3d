@@ -19,12 +19,15 @@ import { buildVessel, type Vessel } from './vessel.ts';
 
 /**
  * XIV Temperance: it goes both ways. No figure, and no angel: liquidity. Two tower-vessels, built
- * of slab courses, stand at different distances, the near one on dry paved ground, the far one in
- * water; a shoreline crosses the ground on a diagonal and the water is ruled darker than the land.
- * The helix pours between them in an arc gravity would not allow: it climbs from the far vessel's
- * rim to the near one's, and its two strands flow opposite ways, each spilling over the rim it
- * arrives at while the other goes into the vessel's mouth. The sky is lightly ruled and knocked
- * out round everything in it; the phrase is cut into the vessels' courses, word by word.
+ * of slab courses, stand at different distances, the near one on dry paved ground (slabs in courses
+ * running up to the shore, which cuts them), the far one in water, which gives it back upside down
+ * as a quiet reflection broken by ripples. A shoreline crosses the ground on a diagonal and the
+ * water is ruled darker than the land. The helix pours between the vessels in an arc gravity would
+ * not allow: it climbs from the far vessel's rim to the near one's, and its two strands flow
+ * opposite ways, each spilling over the rim it arrives at (the near one down the front of its
+ * vessel, clear of the vessel's edge) while the other goes into the vessel's mouth. The sky is
+ * lightly ruled and knocked out round everything in it; the phrase is cut into the vessels'
+ * courses, word by word.
  */
 const W = 1118, H = 1728;
 const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
@@ -88,18 +91,38 @@ function layout(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
   const knots: [number, number, number][] = [
     [217, 150, 188], [206, 118, 170], [186, 92, 148], [158, 74, 128], [124, 64, 114],
   ];
-  const arc = [above(far, n(ctx, 'farLift', 5.8, 3, 12)), ...knots.map(([x, y, t]) => worldAt(view, { x: n(ctx, 'arcX', 0, -40, 40) + x, y }, t)), above(near, n(ctx, 'nearLift', 7.5, 3, 12))];
+  const arc = [above(far, n(ctx, 'farLift', 5.8, 3, 12)), ...knots.map(([x, y, t]) => worldAt(view, { x: n(ctx, 'arcX', 0, -40, 40) + x, y: y - n(ctx, 'arcLift', 0, -90, 40) }, t)), above(near, n(ctx, 'nearLift', 7.5, 3, 12))];
   // Spill: over the rim and out, falling, on the side facing the eye and away from the other vessel.
   const hN = near.lipHalf, hF = far.lipHalf;
-  const spillN = [above(near, 4.0, hN * 0.9), above(near, 2.4, hN + 3.4), above(near, -2.5, hN + 6.4), above(near, -9, hN + 8.0), above(near, -14, hN + 8.3)];
+  // The strand's winding is laid out on the spill it was first approved with (`laidOnN`), so nothing else about
+  // the helix moves; its last stretch is re-routed (`spillN`) to run down the near vessel's front face, clear of
+  // the vessel's left edge: it crosses the lip's front edge and hangs `spillOut` units in front of the face,
+  // `spillSlide` millimetres across from the face's middle.
+  const laidOnN = [above(near, 4.0, hN * 0.9), above(near, 2.4, hN + 3.4), above(near, -2.5, hN + 6.4), above(near, -9, hN + 8.0), above(near, -14, hN + 8.3)];
+  const spillOut = n(ctx, 'spillOut', 4.8, 4, 9), drop = n(ctx, 'spillDrop', 8, 4, 16);
+  const faceMiddle = pageOf(view, near.axis.clone().addScaledVector(near.front, hN).setY(near.rim)).x + n(ctx, 'spillSlide', -6, -20, 20);
+  const handAt = (s: number, up: number) => near.axis.clone().addScaledVector(near.front, hN + spillOut).addScaledVector(near.right, s).setY(near.rim + up);
+  const slide0 = pageOf(view, handAt(0, 0)).x, slide1 = pageOf(view, handAt(1, 0)).x;
+  const along = (faceMiddle - slide0) / (slide1 - slide0);
+  const spillN = [
+    near.axis.clone().addScaledVector(near.front, hN * 0.5).addScaledVector(near.right, along * 0.5).setY(near.rim + 6.0),
+    handAt(along, 3.6), handAt(along, -0.8), handAt(along, -4.5), handAt(along, -drop),
+  ];
   const spillF = [above(far, -14, hF + 6.8, far.right), above(far, -8, hF + 6.6, far.right), above(far, -2.5, hF + 5.8, far.right), above(far, 2.8, hF + 4.0, far.right), above(far, 4.8, hF * 0.6, far.right)];
   const intoF = [above(far, -3.2), above(far, -0.4), above(far, 2.2)];
   const intoN = [above(near, 2.2), above(near, -0.4), above(near, -3.2)];
-  const a = [...intoF, ...arc, ...spillN];
-  const b = [...spillF, ...arc, ...intoN];
+  // `sever` cuts the pour short of one rim (for trying the reading's invariant; `none` is the card).
+  const sever = ctx.params.sever === 'far' || ctx.params.sever === 'near' ? ctx.params.sever : 'none';
+  const arcUsed = arc.slice(sever === 'far' ? 1 : 0, sever === 'near' ? arc.length - 1 : arc.length);
+  const headA = sever === 'far' ? [] : intoF, headB = sever === 'far' ? [] : spillF;
+  const a = [...headA, ...arcUsed, ...(sever === 'near' ? [] : laidOnN)];
+  const b = [...headB, ...arcUsed, ...(sever === 'near' ? [] : intoN)];
   const plans: StrandPlan[] = [
-    { index: 0, points: a, ref: intoF.length, tipStart: false, tipEnd: true },
-    { index: 1, points: b, ref: spillF.length, tipStart: true, tipEnd: false },
+    {
+      index: 0, points: a, ref: headA.length, tipStart: sever === 'far', tipEnd: true,
+      reroute: sever === 'near' ? undefined : { from: headA.length + arcUsed.length - 1, points: [arcUsed[arcUsed.length - 1], ...spillN] },
+    },
+    { index: 1, points: b, ref: headB.length, tipStart: true, tipEnd: sever === 'near' },
   ];
   const depthK = n(ctx, 'helixDepth', 0.4, 0, 1);
   const scaleAt = (p: THREE.Vector3) => (clamp(-p.z, 40, 400) / nearDepth) ** depthK;
@@ -196,13 +219,21 @@ export function drawTemperance(ctx: SketchContext): Part[] {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) buckets.add(key, piece, false, min);
     };
 
+    const farEdges: Point[][] = [];
     // The vessels, each with hidden-line slack in world units at its own distance; the paper round the
     // helix is clear of their hatch where it hangs in front of them.
     for (const [group, v] of vessels) {
       const mine = strokes.filter(st => st.group === group);
       const d = eye.distanceTo(v.axis.clone().setY(v.rim / 2));
       projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(slack, d) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => !helixTight(p), 0.9); },
+        begin: st => runs => {
+          for (const run of runs) {
+            const page = scalePoints(run, MM_X, MM_Y);
+            // The far vessel's outlines are kept: the water gives them back upside down.
+            if (group === 'far' && st.family === 'edge') farEdges.push(page);
+            add(`${st.group}-${st.ink}`, page, p => !helixTight(p), 0.9);
+          }
+        },
       });
     }
     // The helix, in depth bands so its slack stays the same distance in the world near and far.
@@ -223,10 +254,20 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     const isWater = (p: Point) => p.x > shoreAt(p.y);
     // Water: dark ruled lines from the horizon down, close at the horizon and opening toward us,
     // broken near the horizon where it shimmers; knocked out round whatever stands in it.
-    // The far vessel stands in the water: its reflection is a paler, wavering shape in the dark field.
+    // The far vessel stands in the water, and the water gives it back: its outlines upside down below the
+    // waterline, courses and all, bent a little by the ripple and broken where the ripples cross it, fading
+    // with depth; the water ruling inside it thins to its blue lines. A quiet note.
     const waterline = pageOf(view, far.axis).y;
     const farBody = meshCoverage(farGeos, view, TABLOID_PAGE, 0);
-    const reflected = (p: Point) => farBody({ x: p.x + 1.3 * Math.sin(p.y * 1.9), y: 2 * waterline - p.y });
+    const rippleRng = ctx.random('temperance-ripples');
+    const rp1 = rippleRng() * 6.28, rp2 = rippleRng() * 6.28;
+    const rippleCut = n(ctx, 'rippleCut', 0.9, 0.2, 1.2);
+    const farTop = Math.min(...farEdges.flat().map(p => p.y));
+    const mirrorReach = Math.max(1, waterline - farTop);
+    const ripple = (y: number) => 0.6 * Math.sin(y * 1.55 + rp1) + 0.4 * Math.sin(y * 3.9 + rp2);
+    const mirrored = (y: number) => y > waterline + 0.4 && ripple(y) < rippleCut - 1.7 * Math.min(1, (y - waterline) / mirrorReach) ** 1.1;
+    const bend = (y: number) => 0.8 * Math.sin(y * 1.1);
+    const reflected = (p: Point) => mirrored(p.y) && farBody({ x: p.x - bend(p.y), y: 2 * waterline - p.y });
     const pattern = barPattern(ctx.random('temperance-water'), 0.9);
     const pitch = n(ctx, 'waterPitch', 0.62, 0.5, 1.4);
     const bottom = CARD.y1;
@@ -234,27 +275,31 @@ export function drawTemperance(ctx: SketchContext): Part[] {
       const t = (y - HORIZON_Y) / (bottom - HORIZON_Y);
       const ink = i % 4 === 0 ? 'ultramarine' : 'carbon';
       add(`water-${ink}`, [{ x: shoreAt(y) + 0.5, y }, { x: CARD.x1, y }],
-        p => !solids(p) && !helixCover(p) && (t > 0.3 || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]) && (i % 3 === 0 || !reflected(p)));
+        p => !solids(p) && !helixCover(p) && (t > 0.3 || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]) && (i % 4 === 0 || !reflected(p)));
       y += pitch * (1 + 0.55 * t ** 1.3);
     }
-    // The land is paved: flagstones in rows, the joints staggered and some of them missing (cracked), the
-    // rows ending where they would crowd under a millimetre apart so the land opens toward the horizon.
-    const prng = ctx.random('temperance-paving');
-    const rowGate = barPattern(ctx.random('temperance-rows'), 0.9);
-    const tFoot = depthAt(CARD.y1 - 0.5), tEnd = Math.sqrt(f * eye.y * 5.5 / n(ctx, 'pavingEnd', 1.1, 0.6, 3));
+    for (const run of farEdges) {
+      const flipped = run.map(p => ({ x: p.x + bend(2 * waterline - p.y), y: 2 * waterline - p.y }));
+      add('reflect-carbon', flipped, p => mirrored(p.y) && isWater(p) && !solids(p));
+    }
+    // The land is paved: slabs laid in courses across the ground, each course its own width of slab and
+    // its joints staggered against the course before, every joint running up to the shore and cut by it. The
+    // courses end where they would crowd under a millimetre apart, so the land opens toward the horizon.
+    const slabRng = ctx.random('temperance-slabs');
+    const course = n(ctx, 'courseDepth', 4, 2.5, 8);
+    const tFoot = depthAt(CARD.y1 - 0.5), tEnd = Math.sqrt(f * eye.y * course / n(ctx, 'pavingEnd', 1.1, 0.6, 3));
     const rows: number[] = [];
-    for (let t = tFoot * 1.04; t < tEnd; t += 5.5) rows.push(t);
+    for (let t = tFoot * 1.04; t < tEnd; t += course) rows.push(t);
     const yOf = (t: number) => HORIZON_Y + f * eye.y / t;
     const onLand = (p: Point) => !isWater(p) && !solids(p);
     rows.forEach((t, k) => {
       const y = yOf(t);
-      add('land-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => onLand(p) && rowGate[Math.floor((p.x - CARD.x0) / 5.5 + k * 7) % 64]);
+      add('land-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], onLand);
       if (k + 1 >= rows.length) return;
-      const t2 = rows[k + 1], y2 = yOf(t2), sp = 9, off = (k % 2) * sp / 2 + (prng() - 0.5) * 3;
-      for (let X = -30 * sp + off; X < 30 * sp; X += sp) {
-        const jx = X + (prng() - 0.5) * 1.6;
-        if (prng() < 0.22) continue;
-        add('land-carbon', [{ x: PW / 2 + f * jx / t, y }, { x: PW / 2 + f * jx / t2, y: y2 }], onLand);
+      const t2 = rows[k + 1], y2 = yOf(t2);
+      const sp = 5 + 3.5 * slabRng(), off = slabRng() * sp;
+      for (let X = -40 * sp + off; X < 40 * sp; X += sp) {
+        add('land-carbon', [{ x: PW / 2 + f * X / t, y }, { x: PW / 2 + f * X / t2, y: y2 }], onLand);
       }
     });
     // The shore: a line and its beach, down the diagonal.
@@ -283,7 +328,7 @@ export function drawTemperance(ctx: SketchContext): Part[] {
       }
     }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
-    const parts = buckets.toParts(['sky', 'water', 'land', 'shore', 'near', 'far', 'helix', 'slogan'], INKS);
+    const parts = buckets.toParts(['sky', 'water', 'reflect', 'land', 'shore', 'near', 'far', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p) && !helixCover(p), 0.3) });
     parts.push(...cardFrame('XIV', 'TEMPERANCE'));
     return parts;
