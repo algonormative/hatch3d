@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import { CARD } from '../../sketches/breach-tarot/card.ts';
 import { foolCamera, maze, walls } from '../../sketches/breach-tarot/0-fool/geometry.ts';
@@ -30,6 +32,14 @@ describe('Breach Tarot: 0 The Fool', () => {
     for (const prefix of ['maze-', 'collapse-', 'figure-', 'figure-edge-', 'helix-', 'slogan-']) expect(ids.some(id => id.startsWith(prefix))).toBe(true);
   }, 60_000);
 
+  it('keeps the print identities of configs the small-card port reached: him far left, and a maze whose way in is a tie', async () => {
+    // As recorded at 0e887c6, before the port. The first once lost its empty horizon part; at depth 7 the farthest
+    // cells tie, and the print's pick is the left one.
+    const [left, tie] = await Promise.all([renderSketch({ entry, seed: 1, params: { foolX: 0.3 } }), renderSketch({ entry, seed: 1, params: { depth: 7 } })]);
+    expect(left.identity).toBe('da7ca30bf7fbc94f78dd1d32bb5abf6d28293b700102a89eb7172fd892929612');
+    expect(tie.identity).toBe('16a4cc8e4e44b10cd2096e8affb1954cf8489254d6c91c769625e6d3965047fe');
+  }, 60_000);
+
   it('frays the grown walls without moving the maze: footprints and standing blocks stay put, only more blocks rise', () => {
     const build = (fray: number) => {
       const ctx = sketchContext(1, { fray });
@@ -55,6 +65,42 @@ describe('Breach Tarot: 0 The Fool at 70 x 120 mm', () => {
   const formatOf = (fit: Fit) => formatFor(targetPage(TABLOID_PAGE, page), { fit });
   const points = (result: RenderResult, prefix: string) => result.parts.filter(part => part.id.startsWith(prefix)).flatMap(part => part.paths.flat());
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
+  let dir: string | undefined;
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
+
+  it('builds the same seeded world at every size and fit: where he stands, the maze and every block of its walls', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-fool-'));
+    const probeEntry = join(dir, 'probe.ts');
+    // A page-aware probe: the world's digest as a path of points (two bytes each), and its counts, inside either page's margin.
+    await writeFile(probeEntry, `import { createHash } from 'node:crypto';
+      import { foolWorld } from ${JSON.stringify(resolve('sketches/breach-tarot/0-fool/geometry.ts'))};
+      export default { name: 'fool-world', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.25 }],
+        controls: [{ type: 'slider', id: 'depth', label: 'Maze rows', default: 12, min: 6, max: 24, step: 1 }],
+        draw(ctx) {
+          const w = foolWorld(ctx), h = createHash('sha256');
+          h.update([w.foot.x, w.foot.y, w.foot.z].join(','));
+          for (const c of w.maze.cells.values()) h.update([c.c, c.r, c.x, c.z, c.t, ';'].join(','));
+          for (const wall of w.walls) for (const s of wall.slabs) h.update([s.x, s.y, s.z, s.w, s.h, s.d, s.rx, s.ry, s.rz, s.role, ';'].join(','));
+          for (const f of w.undecided) for (const p of f) h.update([p.x, p.y, p.z, ';'].join(','));
+          const d = h.digest();
+          const slabs = w.walls.reduce((n, wall) => n + wall.slabs.length, 0);
+          return [{ id: 'digest', pen: 'ink', paths: [Array.from({ length: 16 }, (_, i) => ({ x: 20 + d[2 * i] / 10, y: 20 + d[2 * i + 1] / 10 }))] },
+            { id: 'counts', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 20 + w.maze.cells.size / 10, y: 20 + w.walls.length / 10 }, { x: 20 + slabs / 1000, y: 20 }]] }];
+        } };`);
+    // The default, and two depths where the farthest cells tie (the print breaks one tie each way).
+    for (const params of [{}, { depth: 7 }, { depth: 14 }] as Record<string, number>[]) {
+      const [print, ...small] = await Promise.all([
+        renderSketch({ entry: probeEntry, seed: 1, params }),
+        ...fits.map(fit => renderSketch({ entry: probeEntry, seed: 1, params, finishing: { page }, ...(fit === 'width' ? { format: { fit } } : {}) })),
+      ]);
+      const counts = print.parts.find(part => part.id === 'counts')!.paths[0];
+      expect(counts[1].x).toBeGreaterThan(20 + 20 / 10);
+      for (const result of small) for (const id of ['digest', 'counts']) {
+        expect(result.parts.find(part => part.id === id)!.paths, `${JSON.stringify(params)} ${id}`).toEqual(print.parts.find(part => part.id === id)!.paths);
+      }
+    }
+  }, 120_000);
 
   it('replays in both fits, draws the scene in the art window, no words in the art, and the phrase in the band', async () => {
     for (const fit of fits) {

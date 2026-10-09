@@ -3,7 +3,8 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, depthRaster, halo, layoutLength, layoutX, layoutY, scaledCount } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, scaledCount } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
@@ -35,7 +36,9 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * the throat and streaming up out of the maze into the open sky. Where the old card's sun stands, a
  * quiet flat echo of XIX's sun is the card's flat mark.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** The card's depth raster at tabloid; on any other page, the format's. */
+const TABLOID_RASTER = { width: 1118, height: 1728 };
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FIGURE = 24;
 const EYE = 12;
@@ -46,6 +49,7 @@ const FACET_MM_PER_UNIT = 8.3;
 const LOOSE_FLOOR = 60;
 const GOLDEN = 0.6180339887498949;
 
+/** The card's camera, on the format's page. */
 export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     // The near plane sits just short of the nearest ground in view: depth precision is what keeps
@@ -53,6 +57,32 @@ export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 3000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the Fool's world is laid out with. At tabloid it is `foolCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return horizonCamera({
+    fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 3000,
+    page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
+  });
+}
+
+/**
+ * The Fool's world: where he stands, the maze his walk has carved and its walls. It is laid out in tabloid's frame,
+ * with `worldCamera`, so every size and fit builds the same world, to the bit; each card's own camera then draws it.
+ */
+export function foolWorld(ctx: SketchContext): { camera: THREE.PerspectiveCamera; foot: THREE.Vector3; maze: Maze; walls: Wall[]; undecided: THREE.Vector3[][] } {
+  const camera = worldCamera(ctx);
+  // He stands near the foot of the card, right of centre, walking left into the open ground.
+  const foot = onGround(camera, {
+    x: TABLOID_CARD.x0 + (TABLOID_CARD.x1 - TABLOID_CARD.x0) * n(ctx, 'foolX', 0.6, 0.3, 0.75),
+    y: TABLOID_CARD.y1 - n(ctx, 'footY', 32, 10, 80),
+  }, TABLOID_PAGE);
+  const m = maze(ctx, camera, foot);
+  return { camera, foot, maze: m, ...walls(ctx, camera, m) };
 }
 
 type Cell = { c: number; r: number; x: number; z: number; t: number };
@@ -83,28 +113,29 @@ const pair = (a: Cell, b: Cell) => (key(a.c, a.r) < key(b.c, b.r) ? `${key(a.c, 
  * The maze, carved by a seeded depth-first walk from an entrance far off toward the horizon. The walk
  * leans away from the Fool's cell, so it wanders the whole field before it reaches him: he is where
  * it has got to, and everything nearer him is still to be made. The grid is turned to the view (45°
- * by default) so both directions of wall recede and the corridors read as a lattice.
+ * by default) so both directions of wall recede and the corridors read as a lattice. It is laid out in tabloid's
+ * frame: `view` is `worldCamera` (see `foolWorld`).
  */
 export function maze(ctx: SketchContext, view: THREE.Camera, foot: THREE.Vector3): Maze {
   const rng = ctx.random('fool-maze');
   const cells = new Map<string, Cell>();
-  const mmPerUnit = (d: number) => PAGE.height / (2 * d * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2)));
+  const mmPerUnit = (d: number) => TABLOID_PAGE.height / (2 * d * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2)));
   const axes = gridAxes(n(ctx, 'gridAngle', 45, 0, 45));
   const eyeZ = view.position.z;
   const reach = (eyeZ - foot.z) + Math.round(n(ctx, 'depth', 12, 6, 24)) * CELL;
   for (let r = -6; r <= 60; r++) for (let c = -60; c <= 60; c++) {
     const at = foot.clone().addScaledVector(axes.u, c * CELL).addScaledVector(axes.v, r * CELL).setY(0);
     const dist = eyeZ - at.z;
-    // In front of the eye, inside the card's width, near enough to draw, and big enough to plot: all in
-    // tabloid's terms, so the walk carves the same maze at every size.
-    if (dist < 14 || dist > reach || mmPerUnit(dist) * CELL < layoutLength(3.5)) continue;
-    const p = pageOf(view, at);
-    if (p.x < layoutX(TABLOID_CARD.x0 - 40) || p.x > layoutX(TABLOID_CARD.x1 + 40)) continue;
+    // In front of the eye, inside the card's width, near enough to draw, and big enough to plot (on the print).
+    if (dist < 14 || dist > reach || mmPerUnit(dist) * CELL < 3.5) continue;
+    const p = pageOf(view, at, TABLOID_PAGE);
+    if (p.x < TABLOID_CARD.x0 - 40 || p.x > TABLOID_CARD.x1 + 40) continue;
     // Ground nearer the eye than the Fool is still to come: the walk has not been there.
     cells.set(key(c, r), { c, r, x: at.x, z: at.z, t: at.z > foot.z + CELL * 0.3 ? Infinity : -1 });
   }
   const fool = cells.get(key(0, 0))!;
-  // The way in: the farthest cell, near the middle of the view.
+  // The way in: the farthest cell, near the middle of the view. (Two cells mirrored about him can tie; float noise
+  // picks one, the same at every size because the world is laid out in tabloid's frame.)
   const entrance = [...cells.values()].sort((a, b) => (a.z + 0.3 * Math.abs(a.x - foot.x)) - (b.z + 0.3 * Math.abs(b.x - foot.x)))[0];
   const lean = n(ctx, 'wander', 0.5, 0, 1) * 0.6;
   const open = new Set<string>();
@@ -134,7 +165,7 @@ export interface Wall { slabs: Slab[]; age: number; collapse: number; far: boole
 /**
  * The walls the walk has made, block by block, each as old as the walk that closed it, collapsing
  * with age: leaning off its base, courses slipping, blocks dropping beside it or still falling.
- * Walls the walk has not decided come back as footprints.
+ * Walls the walk has not decided come back as footprints. In tabloid's frame, like `maze`.
  */
 export function walls(ctx: SketchContext, view: THREE.Camera, m: Maze): { walls: Wall[]; undecided: THREE.Vector3[][] } {
   const rng = ctx.random('fool-walls');
@@ -174,8 +205,8 @@ export function walls(ctx: SketchContext, view: THREE.Camera, m: Maze): { walls:
       const age = 1 - t / Math.max(1, m.now);
       const collapse = clamp(smooth(0.55 - 0.4 * decay, 1.02 - 0.2 * decay, age), 0, 1);
       const dist = eyeZ - mz;
-      // Too far to show its courses: one pier (in tabloid's terms, so the collapse is the same at every size).
-      const far = PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < layoutLength(1.6);
+      // Too far to show its courses (on the print): one pier.
+      const far = TABLOID_PAGE.height / (2 * dist * Math.tan(THREE.MathUtils.degToRad((view as THREE.PerspectiveCamera).fov / 2))) * COURSE < 1.6;
       // He keeps building: the older a wall, the more courses it has grown.
       const courses = 2 + Math.round(n(ctx, 'grow', 0.5, 0, 1) * 64 * age ** 2.4 * (0.7 + 0.6 * rng()));
       const slabs = wallSlabs(rng, mx, mz, dir, collapse, far, courses, fray);
@@ -285,14 +316,8 @@ export function drawFool(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.z - p.z) * fovT);
-  // The Fool stands near the foot of the card, right of centre, walking left into the open ground.
-  // (Placed in tabloid's frame and carried to the format's, so he stands on the same ground at every size.)
-  const foot = onGround(view, {
-    x: layoutX(TABLOID_CARD.x0 + (TABLOID_CARD.x1 - TABLOID_CARD.x0) * n(ctx, 'foolX', 0.6, 0.3, 0.75)),
-    y: layoutY(TABLOID_CARD.y1 - n(ctx, 'footY', 32, 10, 80)),
-  });
-  const m = maze(ctx, view, foot);
-  const { walls: built, undecided } = walls(ctx, view, m);
+  // The world, the same at every size; this card's camera draws it.
+  const { foot, walls: built, undecided } = foolWorld(ctx);
   const light = new THREE.Vector3(-0.6, 0.42 + 0.5 * n(ctx, 'lightAngle', 0.3, 0, 1), 0.6).normalize();
 
   // The Fool: the gesture walk, the big suit, head up, the next block swinging from his hand.
@@ -508,9 +533,9 @@ export function drawFool(ctx: SketchContext): Part[] {
     }
     for (const path2 of glyphPaths) buckets.add('slogan-lettering', path2, true);
     const parts = buckets.toParts(['maze', 'collapse', 'shadow', 'undecided', 'figure', 'figure-edge', 'helix', 'sun', 'slogan'], INKS);
-    // What shows of the horizon between the walls (on a small card, often nothing: no empty part then).
+    // What shows of the horizon between the walls (off tabloid often nothing, and then no empty part; the print keeps its part).
     const horizon = keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solidThings(p), 0.3);
-    if (horizon.length) parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: horizon });
+    if (horizon.length || FORMAT.tabloid) parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: horizon });
     parts.push(...cardFrame('0', 'THE FOOL', { phrase: settings }));
     return parts;
   } finally {

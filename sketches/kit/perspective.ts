@@ -17,17 +17,22 @@ export interface HorizonCameraSpec {
   depth: { width: number; height: number };
   /** Page y, in millimetres, where the horizon (the vanishing line of the ground) falls. */
   horizonY: number;
+  /**
+   * Whether the field of view follows the format's fit (default). `false` keeps it as given: for a camera in
+   * tabloid's frame (tabloid's page, raster and horizon), which lays out a seeded world exactly as the print does.
+   */
+  fit?: boolean;
 }
 
 /**
  * A perspective camera looking level at the horizon, view-offset vertically so that horizon lands on
  * `horizonY` on the page: every card of a set built this way shares one horizon line. The field of view
- * follows the format's fit (unchanged at tabloid and for `fit: 'height'`).
+ * follows the format's fit (unchanged at tabloid and for `fit: 'height'`) unless `fit` is false.
  */
 export function horizonCamera(spec: HorizonCameraSpec): THREE.PerspectiveCamera {
   const { width: W, height: H } = spec.depth;
   const mmY = spec.page.height / H;
-  const view = new THREE.PerspectiveCamera(fitFov(spec.fov), W / H, spec.near ?? 0.5, spec.far);
+  const view = new THREE.PerspectiveCamera(spec.fit === false ? spec.fov : fitFov(spec.fov), W / H, spec.near ?? 0.5, spec.far);
   view.position.set(...spec.eye);
   view.lookAt(...spec.target);
   view.setViewOffset(W, H, 0, -(spec.horizonY - spec.page.height / 2) / mmY, W, H);
