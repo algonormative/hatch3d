@@ -76,6 +76,8 @@ export function lidLine(plate: number, gap: number): number {
   if (FORMAT.tabloid) return M.height - M.lidDepth;
   const tops: number[] = [];
   for (let y = plate / 2 + 0.05; y + plate / 2 < M.height; y += plate + gap) tops.push(y + plate / 2);
+  // Courses so thick that the machine has fewer than two: the print's line, whatever it takes.
+  if (tops.length < 2) return M.height - M.lidDepth;
   const print = 3 * M.plate + 2 * M.gap;
   let courses = 1;
   for (let k = 2; k < tops.length; k++) if (Math.abs(k * plate + (k - 1) * gap - print) < Math.abs(courses * plate + (courses - 1) * gap - print)) courses = k;
@@ -85,9 +87,10 @@ export function lidLine(plate: number, gap: number): number {
 /** Two-point strokes shorter on paper than `dash` millimetres, lengthened to it about their middle; the rest as they are. */
 export function atLeast(strokes: Stroke[], view: THREE.Camera, dash: number): Stroke[] {
   return strokes.map(st => {
+    if (st.points.length !== 2 || !(dash > 0)) return st;
     const [a, b] = st.points, pa = pageOf(view, a), pb = pageOf(view, b);
     const length = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-    if (st.points.length !== 2 || !(length < dash)) return st;
+    if (!(length < dash)) return st;
     const mid = a.clone().add(b).multiplyScalar(0.5), k = dash / length;
     return { ...st, points: [mid.clone().lerp(a, k), mid.clone().lerp(b, k)] };
   });
