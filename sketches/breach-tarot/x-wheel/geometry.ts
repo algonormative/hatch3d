@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
-import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
@@ -46,6 +46,8 @@ const RASTER = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const { W, H } = RASTER;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
+/** How far apart a small card rules a tower's dark faces, in millimetres on paper: about the print's darkest ring pitch, clear of the pens' floor. */
+const RULE_MM = 0.62;
 /** World size of the whole wheel: the tip of an ordinary tower stands this far from the hub. */
 const R_OUT = 94;
 /** Radial thickness and axial depth of a rim segment; axial depth of a tower; of the hub drum. */
@@ -391,6 +393,18 @@ function trimmedEdges(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof fa
 }
 
 /**
+ * The face of a slab a hatch stroke lies on, from the middle of its ends in the slab's frame (`inverse` is the slab's
+ * matrix inverted): the axis it lies nearest the surface across (0 x, 1 y, 2 z), and the side.
+ */
+function faceOf(s: Slab, inverse: THREE.Matrix4, points: THREE.Vector3[]): { axis: number; side: number } {
+  const q = points[0].clone().add(points[points.length - 1]).multiplyScalar(0.5).applyMatrix4(inverse);
+  const qa = [q.x, q.y, q.z], half = [s.w / 2, s.h / 2, s.d / 2];
+  let axis = 0, best = Infinity;
+  for (let i = 0; i < 3; i++) { const d = Math.abs(Math.abs(qa[i]) - half[i]); if (d < best) { best = d; axis = i; } }
+  return { axis, side: Math.sign(qa[axis]) };
+}
+
+/**
  * A face seen almost edge-on squeezes its rings into a sliver that the depth pass breaks into dashes,
  * so hatch on faces turned this far from the eye (cosine of the angle to the line of sight) is dropped.
  */
@@ -398,14 +412,10 @@ function dropGrazing(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof fac
   const m = slabMatrix(s);
   const inv = m.clone().invert();
   const rot = new THREE.Matrix4().extractRotation(m);
-  const half = [s.w / 2, s.h / 2, s.d / 2];
   return strokes.filter(st => {
     if (st.family !== 'hatch') return true;
-    const q = st.points[0].clone().add(st.points[st.points.length - 1]).multiplyScalar(0.5).applyMatrix4(inv);
-    const qa = [q.x, q.y, q.z];
-    let axis = 0, best = Infinity;
-    for (let i = 0; i < 3; i++) { const d = Math.abs(Math.abs(qa[i]) - half[i]); if (d < best) { best = d; axis = i; } }
-    const nl = new THREE.Vector3(); nl.setComponent(axis, Math.sign(qa[axis]));
+    const { axis, side } = faceOf(s, inv, st.points);
+    const nl = new THREE.Vector3(); nl.setComponent(axis, side);
     const normal = nl.applyMatrix4(rot);
     const here = st.points[0];
     return normal.dot(eye.clone().sub(here).normalize()) >= minCos;
@@ -518,7 +528,18 @@ export function drawWheel(ctx: SketchContext): Part[] {
     const group = sl.kind === 'paver' ? 'ground' : sl.kind === 'spoke' ? 'rim' : sl.kind;
     // Under 1.5 mm on this card's paper a slab is an outline; its hatch keeps its pitch on paper.
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
-    const kept = dropGrazing(sl, eye, facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at), trim), GRAZING);
+    let made = facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at), trim);
+    // Off tabloid a tower's dark faces are ruled (`ruledFaces`) in place of their rings and hatch. A course is a couple
+    // of millimetres tall on a small card, where the facet hatch fits a ring and a tick, and the towers falling dark
+    // into the ground would print as light as those rising pale out of it. The proud tower at the top keeps its hatch.
+    const ruled = trim && sl.kind === 'tower' && sl.tower !== 0 && !outline ? ruledFaces(sl, LIGHT, view, tolerance(RULE_MM) / mmPerUnit(at)) : [];
+    if (ruled.length) {
+      const inverse = slabMatrix(sl).invert();
+      const face = (points: THREE.Vector3[]) => { const f = faceOf(sl, inverse, points); return 2 * f.axis + (f.side > 0 ? 1 : 0); };
+      const faces = new Set(ruled.map(st => face(st.points)));
+      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(face(st.points))), ...ruled];
+    }
+    const kept = dropGrazing(sl, eye, made, GRAZING);
     for (const st of trim ? trimmedEdges(sl, eye, kept) : visibleEdges(sl, eye, kept)) {
       for (const piece of aboveGround(st.points)) strokes.push({ ink: st.ink, group, family: st.family, points: piece, soft: st.soft });
     }
