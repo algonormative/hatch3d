@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, maskRes, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, faceDarkness, faceWidth, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, ribbonEdges, ribbonMidline, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
@@ -437,19 +437,9 @@ interface HatchSpec {
   cross: boolean;
 }
 
-/**
- * A face's width on the card's paper: the area of its four corners (in order, on the page) over its longest side, in
- * millimetres. (kit/slabs.ts' `faceWidth`, which is private there.)
- */
+/** A face's width on the card's paper (kit/slabs.ts' `faceWidth` of its four corners, in order, on the page), in millimetres. */
 function paperWidth(view: THREE.Camera, corners: THREE.Vector3[]): number {
-  const quad = corners.map(c => pageOf(view, c));
-  let area = 0, longest = 0;
-  for (let k = 0; k < 4; k++) {
-    const p0 = quad[k], p1 = quad[(k + 1) % 4];
-    area += p0.x * p1.y - p1.x * p0.y;
-    longest = Math.max(longest, Math.hypot(p1.x - p0.x, p1.y - p0.y));
-  }
-  return Math.abs(area) / 2 / longest;
+  return faceWidth(corners.map(c => pageOf(view, c)));
 }
 
 /**

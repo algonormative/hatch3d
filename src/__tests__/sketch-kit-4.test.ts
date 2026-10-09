@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { facetStrokes, ruledFaces, solid, swapRuledFaces } from '../../sketches/kit/slabs.ts';
+import { facetStrokes, faceWidth, ruledFaces, solid, swapRuledFaces } from '../../sketches/kit/slabs.ts';
 import { horizonCamera } from '../../sketches/kit/perspective.ts';
 import { nearestDistance } from './helpers/nearest.ts';
 import { TABLOID_FORMAT, formatFor, maskRes } from '../../sketches/kit/format.ts';
@@ -112,5 +112,19 @@ describe('sketch kit: shared card helpers, batch 4', () => {
       // Points that touch have no gap.
       expect(nearestDistance([{ x: 2, y: 2 }], [{ x: 9, y: 9 }, { x: 2, y: 2 }])).toBe(0);
     });
+  });
+
+  it('measures a face\'s width on the page as its area over its longest side, whichever way it is turned', () => {
+    const rect = (w: number, h: number) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+    expect(faceWidth(rect(10, 2))).toBe(2);
+    expect(faceWidth(rect(2, 10))).toBe(2);
+    expect(faceWidth([...rect(10, 2)].reverse())).toBe(2);
+    // Turned two radians, the same face is as wide.
+    const turn = (q: { x: number; y: number }) => ({ x: q.x * Math.cos(2) - q.y * Math.sin(2), y: q.x * Math.sin(2) + q.y * Math.cos(2) });
+    expect(faceWidth(rect(10, 2).map(turn))).toBeCloseTo(2, 12);
+    // A face sheared far over keeps its area (8) but its longest side is the slant's, so it reads narrower than its 2 mm height.
+    const sheared = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 12, y: 2 }, { x: 8, y: 2 }];
+    expect(faceWidth(sheared)).toBeCloseTo(8 / Math.hypot(8, 2), 12);
+    expect(faceWidth(sheared)).toBeLessThan(1);
   });
 });

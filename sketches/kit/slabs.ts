@@ -179,7 +179,7 @@ export function pageExtent(view: THREE.Camera, s: Slab): { x: number; y: number;
 }
 
 /** A face's width on the page (its corners, in order): its area over its longest side, in millimetres. */
-function faceWidth(quad: Point[]): number {
+export function faceWidth(quad: Point[]): number {
   let area = 0, longest = 0;
   for (let k = 0; k < 4; k++) {
     const p0 = quad[k], p1 = quad[(k + 1) % 4];
