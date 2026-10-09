@@ -226,6 +226,14 @@ describe('sketch kit: flat fills', () => {
       expect(Math.abs(s)).toBeLessThanOrEqual(bar.l / 2 - 1.6 + 1e-9);
       expect(Math.abs(t)).toBeLessThanOrEqual(bar.h / 2 - 1.6 + 1e-9);
     }
+    // Narrower between its outline and its rule than `narrow`, the bar is its outline and its hatch, the rule left out.
+    const families = [[Math.PI / 3, 0.62], [-Math.PI / 3, 0.9]] as const;
+    const wide = hatchedBar(bar, tilt, families, 0.5), narrow = hatchedBar(bar, tilt, families, 0.5, 1.6, 1);
+    expect(narrow.paths).toEqual([wide.paths[0], ...wide.paths.slice(2)]);
+    expect(narrow.quad).toEqual(wide.quad);
+    // A band as wide as `narrow`, or no `narrow` (tabloid's 0), keeps its rule.
+    expect(hatchedBar(bar, tilt, families, 1, 1.6, 1)).toEqual(hatchedBar(bar, tilt, families, 1));
+    expect(hatchedBar(bar, tilt, families, 0.5, 1.6, 0)).toEqual(wide);
   });
 });
 

@@ -310,13 +310,12 @@ export function drawEmperor(ctx: SketchContext): Part[] {
 
     // The censor bar: flat on the sheet across the eyes, at an odd seeded angle, knocking out what it covers.
     // It scales with the head, its inner rule and the hatch's inset with it; the hatch keeps its pitch. On a
-    // small card the rule's band is narrower than the smallest feature, and the bar is its outline and hatch.
+    // small card the rule's band is narrower than the smallest feature, and the bar is its outline and hatch (`narrow`).
     const eyes = pageOf(view, head.centre.clone().addScaledVector(head.face, 0.9 * head.r).addScaledVector(head.axis, 0.12 * head.r));
     const headMm = 2 * head.r * mmPerUnit(head.centre);
     const rule = layoutLength(1.1);
     const bar = hatchedBar({ cx: eyes.x, cy: eyes.y, l: 1.75 * headMm, h: 0.36 * headMm }, world.tilt, [[Math.PI / 3, 0.62], [-Math.PI / 3, 0.9]],
-      rule, tolerance(layoutLength(1.6)));
-    if (rule < MIN_FEATURE) bar.paths.splice(1, 1);
+      rule, tolerance(layoutLength(1.6)), MIN_FEATURE);
     const onBar = inQuad(bar.quad, halo(1.4));
 
     // The phrase: a word at a time cut into a face of the throne or of a cube that turns toward you,
