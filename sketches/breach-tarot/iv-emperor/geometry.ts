@@ -417,7 +417,6 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], keep?: (p: Point) => boolean, min?: number) => {
       for (const piece of pieces(run, keep)) buckets.add(key, piece, false, min);
     };
-    // Off tabloid a piece of hatch shorter than the smallest feature is a speck, and is dropped (`hatchMin`).
 
     // Hidden lines: each slab with up to half a unit of slack at its own distance; the figure and the
     // helix with slack in proportion to the figure.
@@ -435,6 +434,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     // On a small card the figure's pieces wait for `thinParallel`, ranked: the outline, then the planes and seams, then the cloth.
     const figurePieces: { key: string; piece: Point[]; min?: number; rank: number }[] = [];
     const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => {
+      // Off tabloid a piece of hatch shorter than the smallest feature is a speck, and is dropped (`hatchMin`).
       const key = `${st.group}-${st.ink}`, min = hatchMin(st.family), rank = figureRank.get(st);
       for (const run of runs2) {
         const page = scalePoints(run, MM_X, MM_Y);
