@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, tolerance } from '../../kit/format.ts';
+import { MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, ribbonEdges, ribbonMidline, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
@@ -27,9 +27,10 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * the blocks of the heap and the courses of the column.
  *
  * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`justiceWorld`), and the
- * card's own camera draws it, so the beam stays level and its shadow tips by the print's angle. The hatch, the sky's
- * ruling and the shadow's keep their pitch on paper; the knockouts scale with the card; the slabs are trimmed to their
- * outlines; and the phrase moves to the bottom band.
+ * card's own camera draws it, so the beam stays level and its shadow tips by the print's angle. The hatch and the sky's
+ * ruling keep their pitch on paper; the shadow, a few millimetres deep there, is ruled closer, at the pen floor, and the
+ * beam's shadow along its tilt; the knockouts scale with the card; the slabs are trimmed to their outlines, the pans'
+ * undersides ticked as bars; and the phrase moves to the bottom band.
  */
 /** The card's depth raster at tabloid; on any other page, the format's. */
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
@@ -517,6 +518,55 @@ function faceHatch(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, mm: numbe
   return out;
 }
 
+/** The slant of a pan's underside ticks on paper, radians: the faces' hatch angle. */
+const BAR_ANGLE = 0.62;
+
+/**
+ * A pan's underside where it is narrower on the card's paper than the smallest feature, which `faceHatch` leaves to the
+ * trimmed outline. The print draws it as a dark bar (its hatch, foreshortened there, runs solid); here it is ruled across,
+ * ticks slanting from edge to edge, `pitch` mm apart on paper, a bar's tone at a spacing the pen holds. Empty at tabloid
+ * (`MIN_FEATURE` 0), where the underside is wide enough, or where it faces away from the eye. World-space polylines.
+ */
+function undersideBar(sl: Slab, eye: THREE.Vector3, view: THREE.Camera, pitch: number): THREE.Vector3[][] {
+  if (!MIN_FEATURE) return [];
+  const m = slabMatrix(sl);
+  const normal = new THREE.Vector3(0, -1, 0).applyMatrix4(new THREE.Matrix4().extractRotation(m));
+  const at = (u: number, v: number) => new THREE.Vector3(u * sl.w / 2, -sl.h / 2, v * sl.d / 2).applyMatrix4(m).addScaledVector(normal, 0.006);
+  const centre = at(0, 0);
+  if (eye.clone().sub(centre).dot(normal) <= 0) return [];
+  const corners = [at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)];
+  if (paperWidth(view, corners) >= MIN_FEATURE) return [];
+  // The face on paper, and a paper point back on the face (where the eye's ray through it meets the face's plane).
+  const quad = corners.map(c => pageOf(view, c));
+  const ccw = Math.sign(quad.reduce((sum, p, k) => sum + p.x * quad[(k + 1) % 4].y - quad[(k + 1) % 4].x * p.y, 0));
+  const onFace = (p: Point) => {
+    const dir = new THREE.Vector3(p.x / PAGE.width * 2 - 1, 1 - p.y / PAGE.height * 2, 0.5).unproject(view).sub(eye);
+    return eye.clone().addScaledVector(dir, centre.clone().sub(eye).dot(normal) / dir.dot(normal));
+  };
+  // Ticks at the faces' hatch angle on paper, `pitch` apart square to themselves, each cut to the face: at that slant a
+  // tick across a bar two thirds of a millimetre deep is still longer than the smallest feature (`hatchMin`).
+  const ux = Math.cos(BAR_ANGLE), uy = -Math.sin(BAR_ANGLE), nx = -uy, ny = ux;
+  const c = { x: quad.reduce((sum, p) => sum + p.x, 0) / 4, y: quad.reduce((sum, p) => sum + p.y, 0) / 4 };
+  const reach = Math.max(...quad.map(p => Math.hypot(p.x - c.x, p.y - c.y)));
+  const out: THREE.Vector3[][] = [];
+  for (let k = -Math.ceil(reach / pitch); k <= Math.ceil(reach / pitch); k++) {
+    const o = { x: c.x + nx * k * pitch, y: c.y + ny * k * pitch };
+    let lo = -reach, hi = reach;
+    for (let e = 0; e < 4 && lo < hi; e++) {
+      const a = quad[e], b = quad[(e + 1) % 4];
+      // Inside is the side of each edge the face winds toward: ccw * cross(b - a, p - a) >= 0, linear in t along the tick.
+      const cross = (x: number, y: number) => ccw * ((b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x));
+      const f0 = cross(o.x, o.y), df = cross(o.x + ux, o.y + uy) - f0;
+      if (Math.abs(df) < 1e-12) { if (f0 < 0) hi = lo; continue; }
+      const t = -f0 / df;
+      if (df > 0) lo = Math.max(lo, t); else hi = Math.min(hi, t);
+    }
+    if (hi - lo <= 0) continue;
+    out.push([0, 0.5, 1].map(q => onFace({ x: o.x + ux * (lo + (hi - lo) * q), y: o.y + uy * (lo + (hi - lo) * q) })));
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------------------------------ */
 /* The shadow                                                                                 */
 /* ------------------------------------------------------------------------------------------ */
@@ -611,6 +661,20 @@ function castShadow(ctx: SketchContext, view: THREE.PerspectiveCamera, L: Layout
   return build(shift + userShift);
 }
 
+/**
+ * The pitch a small card rules a tone it wants dark (the shadow, the pans' undersides), as a multiple of the pen floor
+ * (`MIN_SPACING`): a fifth over it, clear of the density probe's limit.
+ */
+const DARK_FLOOR = 1.2;
+
+/** The long axis of the beam's shadow on the sheet (its corners' principal direction), and its centre. */
+function beamAxis(pts: Point[]): { angle: number; at: Point } {
+  const at = { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length };
+  let xx = 0, xy = 0, yy = 0;
+  for (const p of pts) { const dx = p.x - at.x, dy = p.y - at.y; xx += dx * dx; xy += dx * dy; yy += dy * dy; }
+  return { angle: Math.atan2(2 * xy, xx - yy) / 2, at };
+}
+
 /** The card's world: the layout, the balance, the cords' routes and the shadow on the ground. */
 export interface JusticeWorld { L: Layout; bal: Balance; cords: ReturnType<typeof cordRoutes>; shadow: Shadow }
 
@@ -638,7 +702,8 @@ export function drawJustice(ctx: SketchContext): Part[] {
   const strokes: Stroke[] = [];
   const pitch = tolerance(n(ctx, 'hatch', 0.7, 0.5, 2));
   // Off tabloid every outline is trimmed (kit/slabs.ts): no back edges, and a face narrower on paper than the smallest
-  // feature (the heap's undersides, the pans' edges) folded into it and left unhatched.
+  // feature (the heap's undersides, the pans' edges) folded into it and left unhatched; a pan's underside, the print's
+  // dark bar, is ticked across instead (`undersideBar`).
   for (const pc of bal.pieces) {
     const sl = pc.slab, at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const mm = mmPerUnit(at);
@@ -648,6 +713,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
       ? { minMM: pitch, angle: 0.62, gradient: 0.2, bias: 0, cross: pc.group === 'pile' }
       : { minMM: pitch, angle: 0.62, gradient: n(ctx, 'gradient', 1.1, 0, 2), bias: 0.12, cross: false };
     for (const pts of faceHatch(sl, lamp, eye, mm, spec, view)) strokes.push({ ink: 'carbon', group: pc.group, family: 'hatch', points: pts });
+    if (pc.group === 'pans') for (const pts of undersideBar(sl, eye, view, tolerance(Math.min(pitch, DARK_FLOOR * MIN_SPACING)))) strokes.push({ ink: 'carbon', group: pc.group, family: 'hatch', points: pts });
   }
 
   // The cord: the shared rise is one curve, the strands part at the beam. Its lamination is spaced on this card's
@@ -781,12 +847,30 @@ export function drawJustice(ctx: SketchContext): Part[] {
       const pageBox = { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + layoutLength(2), y1: CARD.y1 };
       const ang = n(ctx, 'shadowAngle', 0, -60, 60) * Math.PI / 180, step = tolerance(n(ctx, 'shadowPitch', 0.95, 0.5, 2));
       const cx = (pageBox.x0 + pageBox.x1) / 2, cy = (pageBox.y0 + pageBox.y1) / 2, reach = 400;
-      const ux = Math.cos(ang), uy = Math.sin(ang);
-      for (let o = -reach; o <= reach; o += step) {
-        const mx = cx - uy * o, my = cy + ux * o;
-        for (const run of clipToRect([{ x: mx - ux * reach, y: my - uy * reach }, { x: mx + ux * reach, y: my + uy * reach }], pageBox)) {
-          add('shadow-beam-carbon', run, p => inBeam(p) && !solids(p));
-          add('shadow-carbon', run, p => inRest(p) && !inBeam(p) && !solids(p));
+      if (S < 1) {
+        // On a card smaller than the print the shadow is a few millimetres deep, and the print's rows, level and 0.95 mm
+        // apart, left the beam's shadow three or four staggered stubs and the mass lighter than the print's. Here the
+        // shadow is ruled at the pen floor (with a fifth to spare), and the beam's shadow along its own tilt, so its
+        // lines run the length of it and show the tip themselves.
+        const fine = tolerance(Math.min(step, DARK_FLOOR * MIN_SPACING));
+        const rule = (angle: number, at: Point, key: string, keep: (p: Point) => boolean) => {
+          const ux = Math.cos(angle), uy = Math.sin(angle);
+          for (let k = -Math.ceil(reach / fine); k <= Math.ceil(reach / fine); k++) {
+            const mx = at.x - uy * k * fine, my = at.y + ux * k * fine;
+            for (const run of clipToRect([{ x: mx - ux * reach, y: my - uy * reach }, { x: mx + ux * reach, y: my + uy * reach }], pageBox)) add(key, run, keep);
+          }
+        };
+        const axis = beamAxis(shadow.polygons[1].map(v => pageOf(wide, new THREE.Vector3(v.x, 0, v.z))));
+        rule(axis.angle, axis.at, 'shadow-beam-carbon', p => inBeam(p) && !solids(p));
+        rule(ang, { x: cx, y: cy }, 'shadow-carbon', p => inRest(p) && !inBeam(p) && !solids(p));
+      } else {
+        const ux = Math.cos(ang), uy = Math.sin(ang);
+        for (let o = -reach; o <= reach; o += step) {
+          const mx = cx - uy * o, my = cy + ux * o;
+          for (const run of clipToRect([{ x: mx - ux * reach, y: my - uy * reach }, { x: mx + ux * reach, y: my + uy * reach }], pageBox)) {
+            add('shadow-beam-carbon', run, p => inBeam(p) && !solids(p));
+            add('shadow-carbon', run, p => inRest(p) && !inBeam(p) && !solids(p));
+          }
         }
       }
     } finally {

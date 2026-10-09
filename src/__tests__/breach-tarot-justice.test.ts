@@ -154,7 +154,8 @@ describe('Breach Tarot: XI Justice at 70 x 120 mm', () => {
       // Paths wholly inside the art window, per part of the scene.
       const inWindow = (prefix: string) => all(first, prefix)
         .filter(path => path.every(p => p.x >= card.x0 - 0.01 && p.x <= card.x1 + 0.01 && p.y >= card.y0 - 0.01 && p.y <= card.y1 + 0.01)).length;
-      const least = { 'sky-': 25, 'shadow-beam-': 8, 'shadow-carbon': 8, 'column-': 60, 'beam-': 60, 'pans-': 8, 'pile-': 200, 'helix-': 80, 'horizon-': 1 };
+      // The beam's shadow is ruled in a few long lines along its tilt on a small card, so it counts lines, not stubs.
+      const least = { 'sky-': 25, 'shadow-beam-': 4, 'shadow-carbon': 8, 'column-': 60, 'beam-': 60, 'pans-': 8, 'pile-': 200, 'helix-': 80, 'horizon-': 1 };
       for (const [prefix, n] of Object.entries(least)) expect(inWindow(prefix), `${fit} ${prefix}`).toBeGreaterThan(n);
       expect(first.parts.some(part => part.id.startsWith('slogan-') || part.id.startsWith('title-'))).toBe(false);
       const phrase = points(first, 'card-phrase');
@@ -208,6 +209,52 @@ describe('Breach Tarot: XI Justice at 70 x 120 mm', () => {
       const small = heap(result), big = heap(tabloid);
       expect(small.tone / big.tone, fit).toBeGreaterThan(0.6);
       expect(small.against, fit).toBeGreaterThan(6);
+    }
+  }, 120_000);
+
+  it('rules the shadow as a solid tipped mass: the beam\'s shadow in long lines along its tilt, the rows at the pen floor and not the print\'s 0.95 mm, and the pans\' undersides given weight', async () => {
+    /** A stroke's tilt in degrees, its heap's end down, end to end. */
+    const tiltOf = (path: Pt[], side: number) => {
+      const [l, r] = [path[0], path[path.length - 1]].sort((a, b) => a.x - b.x);
+      return Math.atan2((side < 0 ? l.y - r.y : r.y - l.y), r.x - l.x) * 180 / Math.PI;
+    };
+    /** Gaps between neighbouring parallel strokes: their midpoints' offsets square to `deg`, sorted, neighbours within a twentieth merged. */
+    const gaps = (list: Pt[][], deg: number) => {
+      const nx = -Math.sin(deg * Math.PI / 180), ny = Math.cos(deg * Math.PI / 180);
+      const offsets = [...new Set(list.map(path => { const m = centroid(path); return Math.round((m.x * nx + m.y * ny) * 20) / 20; }))].sort((a, b) => a - b);
+      return offsets.slice(1).map((o, i) => o - offsets[i]).filter(g => g > 0.06);
+    };
+    for (const fit of fits) {
+      const result = await rendered(fit);
+      const side = heapSide(result);
+      // The beam's shadow: nearly all its ink in lines tipped 8 to 15 degrees, heap end down, the longest of them most of
+      // the shadow's width (the print's level rows left it staggered stubs, none longer than a third of it).
+      const beam = paths(result.parts, 'shadow-beam-carbon');
+      const ink = beam.reduce((sum, path) => sum + length(path), 0);
+      const tipped = beam.filter(path => tiltOf(path, side) > 8 && tiltOf(path, side) < 15).reduce((sum, path) => sum + length(path), 0);
+      expect(tipped / ink, fit).toBeGreaterThan(0.9);
+      const xs = beam.flat().map(p => p.x);
+      expect(Math.max(...beam.map(path => Math.abs(path[path.length - 1].x - path[0].x))), fit).toBeGreaterThan(0.6 * (Math.max(...xs) - Math.min(...xs)));
+      // Both parts of the shadow ruled tighter than the print's 0.95 mm, and never closer than the pen floor.
+      const longest = beam.reduce((a, b) => length(a) > length(b) ? a : b), [a, b] = [longest[0], longest[longest.length - 1]];
+      const along: [Pt[][], number][] = [[beam, Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI], [paths(result.parts, 'shadow-carbon'), 0]];
+      for (const [list, deg] of along) {
+        const g = gaps(list, deg).sort((p, q) => p - q);
+        expect(g.length, fit).toBeGreaterThan(3);
+        expect(g[0], fit).toBeGreaterThan(0.5 - 0.02);
+        expect(g[Math.floor(g.length / 2)], fit).toBeLessThan(0.8);
+      }
+      // Each pan's underside has weight. Where it is a sliver on the card (both pans in width) it is ticked across as a
+      // bar: short strokes slanting up to the right. Where it is wide enough (the heap's pan in height) the faces' hatch
+      // runs along it, as on the print. Before, a sliver was left an outline.
+      const columnX = centroid(sampled(paths(result.parts, 'column-carbon'))).x;
+      for (const arm of [-1, 1]) {
+        const pan = paths(result.parts, 'pans-carbon').filter(path => Math.sign(centroid(path).x - columnX) === arm);
+        const ticks = pan.filter(path => length(path) < 2 && tiltOf(path, -1) > 25 && tiltOf(path, -1) < 45).length;
+        const hatched = pan.filter(path => length(path) > 1 && Math.abs(tiltOf(path, -1)) < 5).length;
+        expect(ticks > 4 || hatched > 10, `${fit} arm ${arm}: ${ticks} ticks, ${hatched} hatch lines`).toBe(true);
+        if (fit === 'width') expect(ticks, `${fit} arm ${arm}`).toBeGreaterThan(4);
+      }
     }
   }, 120_000);
 
