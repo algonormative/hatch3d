@@ -499,7 +499,8 @@ export function drawStrength(ctx: SketchContext): Part[] {
 
     // Page masks: where the wall stands, where the helix lies, and the pocket of clear paper round the person.
     const damCover = meshCoverage(slabGeos, view, PAGE, halo(n(ctx, 'knockout', 0.6, 0.2, 2)));
-    const helixCover = meshCoverage(helix.meshes, view, PAGE, halo(n(ctx, 'helixKnockout', 1.1, 0.3, 3)));
+    const helixKnockout = halo(n(ctx, 'helixKnockout', 1.1, 0.3, 3));
+    const helixCover = meshCoverage(helix.meshes, view, PAGE, helixKnockout);
     const b = figure.bounds;
     // The pocket reaches well above the head and out on both sides but stops just under the feet, so the walkway shows.
     // Its reach round the figure scales with the card.
@@ -631,11 +632,22 @@ export function drawStrength(ctx: SketchContext): Part[] {
       const into = strandLine.has(st) ? lineBands : bands;
       into.set(band, [...(into.get(band) ?? []), st]);
     }
+    // On a small card the helix's surfaces are coarse against the paper, and its tail is thinner than the coverage's
+    // cells: the paper kept round it is measured from its drawn lines too (none at tabloid, where the surfaces suffice).
+    const helixRuns: Point[][] = [];
     for (const [slackOf, banded] of [[helixSlack, bands], [helixSlack + STRAND_SAG, lineBands]] as const) for (const [band, mine] of banded) {
       projectStrokes(mine, { ...px, bias: biasAt(slackOf, band * 60 + 30) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), undefined, run[0].y * fine.mmY < turnY ? scrap : undefined); },
+        begin: st => runs => {
+          for (const run of runs) {
+            const page = scalePoints(run, fine.mmX, fine.mmY);
+            if (!FORMAT.tabloid) helixRuns.push(page);
+            add(`${st.group}-${st.ink}`, page, undefined, run[0].y * fine.mmY < turnY ? scrap : undefined);
+          }
+        },
       });
     }
+    const nearHelix = glyphMask(helixRuns, helixKnockout);
+    const aroundHelix = (p: Point) => helixCover(p) || nearHelix(p);
     // The person: tube lines with the slack the figure cards use. On a small card the person is a few millimetres tall and
     // its pieces are thinned as the wall's are, its outline first, then its bands or rings.
     const figureSlack = n(ctx, 'figureSlack', 1.2, 0.1, 3) * k;
@@ -656,7 +668,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
       const t = (y - HORIZON_Y) / (lakeBottom - HORIZON_Y);
       const ink = i % 4 === 0 ? 'ultramarine' : 'carbon';
       add(`lake-${ink}`, [{ x: CARD.x0, y }, { x: CARD.x1, y }],
-        p => p.y < yAt(crestLine, p.x) - shore && !damCover(p) && !helixCover(p) && !inPocket(p) && (t > 0.3 || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]));
+        p => p.y < yAt(crestLine, p.x) - shore && !damCover(p) && !aroundHelix(p) && !inPocket(p) && (t > 0.3 || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]));
       y += lakePitch * (1 + 0.5 * t ** 1.3);
     }
     // The gorge: the lower wall falls into shadow in long vertical rules, a few at first and every one at the foot. The
@@ -680,7 +692,9 @@ export function drawStrength(ctx: SketchContext): Part[] {
     if (reachSky > 0) {
       const skyPattern = barPattern(ctx.random('strength-sky'), 0.86);
       // The rules and their breaks keep their millimetres on paper; the clearing round the neck scales with the card.
-      const skyClear = meshCoverage(helix.meshes, view, PAGE, halo(n(ctx, 'skyClear', 2.6, 0.5, 6)));
+      const clearing = halo(n(ctx, 'skyClear', 2.6, 0.5, 6));
+      const skyCover = meshCoverage(helix.meshes, view, PAGE, clearing), skyNear = glyphMask(helixRuns, clearing);
+      const skyClear = (p: Point) => skyCover(p) || skyNear(p);
       const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1);
       for (let y = skyTop + tolerance(0.3), i = 0; y < skyBottom; i++, y += tolerance(n(ctx, 'skyPitch', 1.3, 0.8, 2.5))) {
         const t = (y - skyTop) / (skyBottom - skyTop);
@@ -699,7 +713,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     }
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'lake', 'dam', 'gorge', 'parapet', 'helix', 'figure', 'slogan'], INKS);
-    parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !damCover(p) && !helixCover(p), 0.3) });
+    parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !damCover(p) && !aroundHelix(p), 0.3) });
     parts.push(...cardFrame('VIII', 'STRENGTH', { phrase: settings }));
     return parts;
   } finally {
