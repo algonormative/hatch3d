@@ -2,16 +2,17 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
-import { slabGeometry, slabMatrix, slabStrokes, solid, type Slab } from '../../kit/slabs.ts';
-import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
-import { clearBands, onWordBox, planSlogans, rigidWords, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { pageExtent, slabEdges, slabGeometry, slabMatrix, slabStrokes, solid, type Slab } from '../../kit/slabs.ts';
+import { helixStrands, narrowStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
+import { clearBands, onWordBox, planSlogans, rigidWords, sloganSettings, type SloganPlan, type SloganSurface } from '../../kit/lettering.ts';
 import { hatchedDisc, circlePath } from '../../kit/fills.ts';
 import type { Family, Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { densify, keepAlong } from '../../kit/page.ts';
-import { horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { densify, keepAlong, reduceAtScale } from '../../kit/page.ts';
+import { horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { restPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
@@ -21,20 +22,43 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * and twisted, and the drawing comes undone with closeness: full hatch at the card's edges, then
  * bare edges, dashes, dots, and a void at the point. The helix rises straight through the point,
  * unbent and fully drawn: the one thing that passes through unchanged.
+ *
+ * On a smaller card (`kit/format.ts`) the nave and its infall are the same seeded world, scaled with the card. The
+ * singularity's marks (the disc, the halo ring, the broken horizon rule) and the radii where the drawing comes undone
+ * keep their places and scale their size, so the lens bends the same picture; the dashes, dots and hatch pitches stay
+ * in real millimetres, so there are fewer of them. The slabs are outlined as a small card draws them (no back edges,
+ * slivers folded into the outline), the infall is thinned in proportion to the card, and the phrase moves to the band.
  */
 const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** The singularity: the vanishing point, on the shared horizon at the card's centre line. */
 export const SINGULARITY: Point = { x: PAGE.width / 2, y: HORIZON_Y };
+/** The singularity on tabloid's page, where the world's page-picked places are authored. */
+const TABLOID_SINGULARITY: Point = { x: TABLOID_PAGE.width / 2, y: TABLOID_HORIZON_Y };
 const EYE = 4.2;
-
+/** Where the camera stands down the nave, world units. */
+const STAND = 6;
+/** The step at which a page path is resampled for the lens to bend: 0.8 mm on the print, scaled with the card. */
+const LENS_STEP = layoutLength(0.8);
 
 /** One-point perspective down the nave, shifted so the vanishing point sits on the horizon. */
 export function deathCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
-    fov: n(ctx, 'fov', 64, 40, 90), eye: [0, EYE, 6], target: [0, EYE, -100], far: 600,
+    fov: n(ctx, 'fov', 64, 40, 90), eye: [0, EYE, STAND], target: [0, EYE, -100], far: 600,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The world camera: `deathCamera` in tabloid's frame (its page, raster and horizon, and its field of view whatever the
+ * fit), the same camera at tabloid. The infall and the torn helix are placed on the page through it, so every size and
+ * fit builds the same world.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  const camera = tabloidFrameCamera({ fov: n(ctx, 'fov', 64, 40, 90), eye: EYE, far: 600, depth: { width: 559, height: 864 } });
+  camera.position.z = STAND;
+  camera.updateMatrixWorld();
+  return camera;
 }
 
 /** The nave: paired piers with inward cantilevers in the Breach Cathedral grammar, lintels, paving. */
@@ -74,8 +98,9 @@ function nave(ctx: SketchContext): Slab[] {
 /**
  * Infall: fragments torn from the nave on a spiral toward the point, chosen on the page and set back
  * into the world along the camera ray, so the lens then sweeps them in. Stretched along the swirl.
+ * The page is tabloid's and `view` is `worldCamera`, so every size and fit seeds the same fragments.
  */
-function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
+export function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
   const amount = n(ctx, 'infall', 0.5, 0, 1);
   const rng = ctx.random('death-infall');
   const count = Math.round(60 * amount);
@@ -87,8 +112,8 @@ function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
     const arm = i % 2 ? Math.PI : 0;
     const a = start + arm + 2.6 * f + (rng() - 0.5) * 0.5;
     const rho = 128 * Math.exp(-1.15 * f) + (rng() - 0.5) * 10;
-    const page = { x: SINGULARITY.x + rho * Math.cos(a), y: SINGULARITY.y + rho * Math.sin(a) * 1.15 };
-    const ndc = new THREE.Vector3(page.x / PAGE.width * 2 - 1, -(page.y / PAGE.height * 2 - 1), 0.5).unproject(view);
+    const page = { x: TABLOID_SINGULARITY.x + rho * Math.cos(a), y: TABLOID_SINGULARITY.y + rho * Math.sin(a) * 1.15 };
+    const ndc = new THREE.Vector3(page.x / TABLOID_PAGE.width * 2 - 1, -(page.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
     const dir = ndc.sub(view.position).normalize();
     const p = view.position.clone().addScaledVector(dir, 14 + 46 * rng());
     const size = 0.35 + 1.1 * (1 - f) * rng();
@@ -100,18 +125,38 @@ function infall(ctx: SketchContext, view: THREE.PerspectiveCamera): Slab[] {
   return out;
 }
 
+/** The fewest infall fragments a smaller card keeps, as a share of those seeded, so the two arms of the spiral still read. */
+export const INFALL_FLOOR = 0.4;
+
+/**
+ * The infall a card draws: every fragment at tabloid. The fragments are loose blocks whose size scales with the card,
+ * so a smaller card keeps them in proportion to its scale (`scaledCount` by length, never under `INFALL_FLOOR` of
+ * them), as an even spread over their seeded order, less those smaller on paper than `MIN_FEATURE`. The seeded
+ * fragments themselves never change.
+ */
+export function shownInfall(fragments: Slab[], view: THREE.Camera): Slab[] {
+  const target = scaledCount(fragments.length, Math.round(INFALL_FLOOR * fragments.length), 'length');
+  if (target >= fragments.length && !MIN_FEATURE) return fragments;
+  const keep = target / fragments.length;
+  return fragments.filter((s, i) => evenlyKept(i, keep) && pageExtent(view, s).size >= MIN_FEATURE);
+}
+
 /**
  * Radii on the page, in millimetres from the singularity, where each register gives way. `core` is
  * the event horizon: a solid hatched disc, the darkest mark on the card, that nothing returns from.
+ * They are the singularity's flat marks: authored on tabloid and scaled with the card, the halo
+ * between the disc and the Einstein radius never under the halo floor.
  */
 export interface Undoing { core: number; void: number; dots: number; dashes: number; edges: number }
 
 export function undoing(ctx: SketchContext): Undoing {
   const k = 0.6 + 0.8 * n(ctx, 'undoing', 0.5, 0, 1);
-  const core = 6 + 14 * n(ctx, 'core', 0.5, 0, 1);
-  // The halo's edge is the Einstein radius: subtle, a few millimetres of paper round the disc.
-  const ring = core + 3 + 6 * n(ctx, 'lensing', 0.5, 0, 1);
-  return { core, void: ring, dots: ring + 16 * k, dashes: ring + 36 * k, edges: ring + 70 * k };
+  const core = layoutLength(6 + 14 * n(ctx, 'core', 0.5, 0, 1));
+  // The halo's edge is the Einstein radius: subtle, a few millimetres of paper round the disc. (At tabloid the sum keeps
+  // the print's order of operations, to the bit.)
+  const lensing = n(ctx, 'lensing', 0.5, 0, 1);
+  const ring = FORMAT.tabloid ? core + 3 + 6 * lensing : core + halo(3 + 6 * lensing);
+  return { core, void: ring, dots: ring + layoutLength(16 * k), dashes: ring + layoutLength(36 * k), edges: ring + layoutLength(70 * k) };
 }
 
 /**
@@ -124,8 +169,10 @@ export interface Lens { einstein: number; primary: (p: Point) => Point; secondar
 
 export function lens(ctx: SketchContext, u: Undoing): Lens {
   const swirl = 4 * n(ctx, 'swirl', 0.5, 0, 1);
-  const reach = 80;
+  const reach = layoutLength(80);
   const t = u.void;
+  // The secondary image keeps a knockout halo off the disc.
+  const rim = u.core + halo(0.6);
   const polar = (p: Point) => ({ r: Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y), a: Math.atan2(p.y - SINGULARITY.y, p.x - SINGULARITY.x) });
   const at = (r: number, a: number): Point => ({ x: SINGULARITY.x + r * Math.cos(a), y: SINGULARITY.y + r * Math.sin(a) });
   return {
@@ -138,7 +185,7 @@ export function lens(ctx: SketchContext, u: Undoing): Lens {
     secondary: p => {
       const { r, a } = polar(p);
       const r2 = (Math.sqrt(r * r + 4 * t * t) - r) / 2;
-      return r2 > u.core + 0.6 ? at(r2, a + Math.PI - swirl * Math.exp(-r2 / reach)) : null;
+      return r2 > rim ? at(r2, a + Math.PI - swirl * Math.exp(-r2 / reach)) : null;
     },
   };
 }
@@ -174,13 +221,16 @@ export function unrenderHatch(path: Point[], u: Undoing): Point[][] {
 
 export type HelixMode = 'world' | 'apart' | 'torn';
 
-/** The helix as a vertical column in the nave: on the line through the point, or set off to one side. */
-function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMode): Strand[] {
+/**
+ * The helix as a vertical column in the nave: on the line through the point, or set off to one side. `view` is
+ * `worldCamera`: the torn column's place is picked on tabloid's page.
+ */
+export function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMode): Strand[] {
   // Torn stands well off to one side, where the pull can reach its ends without swallowing its middle.
   const offset = mode === 'torn' ? -64 : 0;
   let x = 0;
   if (offset !== 0) {
-    const ndc = new THREE.Vector3((SINGULARITY.x + offset) / PAGE.width * 2 - 1, -(SINGULARITY.y / PAGE.height * 2 - 1), 0.5).unproject(view);
+    const ndc = new THREE.Vector3((TABLOID_SINGULARITY.x + offset) / TABLOID_PAGE.width * 2 - 1, -(TABLOID_SINGULARITY.y / TABLOID_PAGE.height * 2 - 1), 0.5).unproject(view);
     const dir = ndc.sub(view.position).normalize();
     x = view.position.x + dir.x * (36 / -dir.z);
   }
@@ -195,7 +245,11 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, mode: HelixMo
   }));
 }
 
-/** A coarse page bitmap of the helix's silhouette, so a separate helix can stand in front of all. */
+/**
+ * A coarse page bitmap of the helix's silhouette, so a separate helix can stand in front of all. Its cells are a quarter
+ * millimetre on paper at any size, as fine as a small card's depth raster: cells scaled with the card (`4 / S` px per mm)
+ * moved 1.4 mm of ink on a 70 × 120 card, and added 3,000 points.
+ */
 function coverage(geometries: THREE.BufferGeometry[], view: THREE.Camera): (p: Point) => boolean {
   const res = 4, gw = Math.ceil(PAGE.width * res), gh = Math.ceil(PAGE.height * res);
   const grid = new Uint8Array(gw * gh);
@@ -226,18 +280,29 @@ function coverage(geometries: THREE.BufferGeometry[], view: THREE.Camera): (p: P
 
 export function drawDeath(ctx: SketchContext): Part[] {
   const view = deathCamera(ctx);
+  // The world is laid out in tabloid's frame and drawn with the card's own camera (the same camera at tabloid).
+  const world = worldCamera(ctx);
   const mode: HelixMode = ctx.params.helixMode === 'world' || ctx.params.helixMode === 'torn' ? ctx.params.helixMode : 'apart';
-  const architecture = [...nave(ctx), ...infall(ctx, view)];
-  const strands = column(ctx, view, mode);
+  const architecture = [...nave(ctx), ...shownInfall(infall(ctx, world), view)];
+  const strands = column(ctx, world, mode);
   const density = n(ctx, 'hatchDensity', 0.62, 0, 1);
   const interruption = n(ctx, 'interruption', 0.32, 0, 1);
   const beatRng = ctx.random('death-rests');
   const beats = restPattern(beatRng, interruption);
-  // The first six strokes of every solid are its outline edges; the rest is hatch.
-  const strokes: Stroke[] = architecture.flatMap((s, owner) => slabStrokes(s, density, beats[(s.beat * 7) % 64])
-    .map((stroke, k): Stroke => ({ ink: stroke.ink, group: 'system', family: k < 6 ? 'edge' : 'hatch', points: stroke.points, owner })));
+  const removeHidden = ctx.params.occlusion !== false;
+  // The first six strokes of every solid are its outline edges; the rest is hatch. A small card outlines each solid as
+  // `slabEdges` does instead (no back edges, a face narrower on paper than the smallest feature folded into the
+  // outline): `slabStrokes` has no trim of its own.
+  const strokes: Stroke[] = architecture.flatMap((s, owner) => {
+    const made = slabStrokes(s, density, beats[(s.beat * 7) % 64])
+      .map((stroke, k): Stroke => ({ ink: stroke.ink, group: 'system', family: k < 6 ? 'edge' : 'hatch', points: stroke.points, owner }));
+    if (FORMAT.tabloid) return made;
+    const outline = slabEdges(s, view, removeHidden).map((points): Stroke => ({ ink: 'carbon', group: 'system', family: 'edge', points, owner }));
+    return [...outline, ...made.slice(6)];
+  });
   for (const s of strands) {
-    for (const stroke of strandStrokes(s, density, interruption, ctx, view)) {
+    // A strand narrower on the card than the smallest feature is drawn by its line (none at tabloid).
+    for (const stroke of narrowStrands(strandStrokes(s, density, interruption, ctx, view), view)) {
       strokes.push({ ink: stroke.ink, group: 'helix', family: 'membrane', points: stroke.points });
     }
   }
@@ -249,29 +314,35 @@ export function drawDeath(ctx: SketchContext): Part[] {
   // A fixed rank per source stroke (golden-ratio sequence): which lines give out first near the point.
   const rankOf = (i: number) => (i * 0.6180339887) % 1;
   const radius = (p: Point) => Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y);
+  // How far out the faint secondary image is drawn from: 70 mm on the print, scaled with the card.
+  const ghostReach = layoutLength(70);
   try {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
     // Where the helix ends lie on the page, for the torn mode's measure of how far along it a point is.
     const ends = strands.flatMap(s => [strandPoint(s, 0, 0), strandPoint(s, 1, 0)]).map(p => (-p.clone().project(view).y * 0.5 + 0.5) * PAGE.height);
     const mid = (Math.min(...ends) + Math.max(...ends)) / 2, half = (Math.max(...ends) - Math.min(...ends)) / 2;
     const endness = (p: Point) => smooth(0.62, 1.05, Math.abs(p.y - mid) / half);
-    // The phrase lives where the drawing still holds: on near faces, well out from the point.
+    // The phrase lives where the drawing still holds: on near faces, well out from the point. Where the format sets it
+    // in the band, under the card's name, the art carries no words (and so no title).
+    const settings = sloganSettings(ctx);
     const surfaces: SloganSurface[] = [];
-    architecture.forEach((s, id) => {
+    if (PHRASE === 'art') architecture.forEach((s, id) => {
       const p = pageOf(view, new THREE.Vector3(s.x, s.y, s.z + s.d / 2));
-      const inside = p.x > CARD.x0 + 10 && p.x < CARD.x1 - 10 && p.y > CARD.y0 + 8 && p.y < CARD.y1 - 8;
-      if (s.role === 'stack' && inside && radius(p) > u.edges + 12) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
+      const inset = layoutLength(10), drop = layoutLength(8);
+      const inside = p.x > CARD.x0 + inset && p.x < CARD.x1 - inset && p.y > CARD.y0 + drop && p.y < CARD.y1 - drop;
+      if (s.role === 'stack' && inside && radius(p) > u.edges + layoutLength(12)) surfaces.push({ id, matrix: slabMatrix(s), w: s.w, h: s.h, d: s.d });
     });
-    const slogans = planSlogans(ctx, surfaces, {
-      view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
-      art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y },
-    });
-    const pen = sloganSettings(ctx).pen as Ink;
+    const slogans: SloganPlan = PHRASE === 'art'
+      ? planSlogans(ctx, surfaces, {
+        view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
+        art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: CARD.y1 / MM_Y },
+      })
+      : { strokes: [], strokeCaps: [], knockouts: new Map(), placed: [], titleStrokes: [], titleCap: 0 };
+    const pen = settings.pen as Ink;
     for (const points of slogans.strokes) strokes.push({ ink: pen, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
     const drawn: { key: string; path: Point[]; family: Family }[] = [];
     const words: { key: string; path: Point[] }[] = [];
-    const removeHidden = ctx.params.occlusion !== false;
     projectStrokes(strokes, { view, depth, width: W, height: H }, {
       hidden: () => removeHidden,
       pieces: (c, stroke) => {
@@ -287,7 +358,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
           const lensed = stroke.family !== 'membrane' || mode === 'world';
           if (stroke.family === 'membrane' && mode === 'torn') {
             // Whole through the middle; toward each end it is pulled in and shredded.
-            const torn = densify(mm).map(p => { const e = endness(p) ** 1.4; const q = bend.primary(p); return { x: p.x + (q.x - p.x) * e * 1.6, y: p.y + (q.y - p.y) * e * 1.6 }; });
+            const torn = densify(mm, LENS_STEP).map(p => { const e = endness(p) ** 1.4; const q = bend.primary(p); return { x: p.x + (q.x - p.x) * e * 1.6, y: p.y + (q.y - p.y) * e * 1.6 }; });
             for (const inside of clipWindow(torn)) {
               for (const path of keepAlong(inside, (p, at) => {
                 const e = endness(p);
@@ -300,7 +371,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
             }
             continue;
           }
-          const primary = lensed ? densify(mm).map(bend.primary) : mm;
+          const primary = lensed ? densify(mm, LENS_STEP).map(bend.primary) : mm;
           for (const inside of clipWindow(primary)) {
             const kept = stroke.family === 'hatch' ? unrenderHatch(inside, u)
               : stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world') ? unrenderEdge(inside, u, rank)
@@ -309,7 +380,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
           }
           // The faint secondary image: a few outline edges near the line of sight, broken and sparse.
           if ((stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world')) && rank < 0.16) {
-            const ghost = densify(mm).filter(p => radius(p) < 70).map(p => bend.secondary(p));
+            const ghost = densify(mm, LENS_STEP).filter(p => radius(p) < ghostReach).map(p => bend.secondary(p));
             let ghostRun: Point[] = [];
             const flush = () => {
               for (const path of keepAlong(ghostRun, (_, at) => at % 2.4 < 1.3)) drawn.push({ key, path, family: 'edge' });
@@ -321,33 +392,36 @@ export function drawDeath(ctx: SketchContext): Part[] {
         } };
       },
     });
-    const lettering = rigidWords(words, bend.primary, { x0: CARD.x0 + 3, x1: CARD.x1 - 3, y0: CARD.y0 + 3, y1: CARD.y1 - 3 });
+    const edge = layoutLength(3);
+    const lettering = rigidWords(words, bend.primary, { x0: CARD.x0 + edge, x1: CARD.x1 - edge, y0: CARD.y0 + edge, y1: CARD.y1 - edge });
     for (const w of lettering.words) for (const path of clipWindow(w.path)) drawn.push({ key: w.key, path, family: 'text' });
     const onWord = (p: Point) => onWordBox(lettering.boxes, p);
     // A separate helix stands in front of everything, the singularity's own marks included.
     const front = mode === 'apart' ? coverage(helixMeshes, view) : null;
-    const buckets = new PartBuckets();
+    // Curves keep their shape on a small card: the reducer's thresholds scale with it (`simplify` at tabloid).
+    const buckets = new PartBuckets(undefined, { reduce: reduceAtScale });
     const add = (key: string, path: Point[], family: Family | 'flat') => {
       const clear = (p: Point) => (!front || family === 'membrane' || !front(p)) && (family === 'text' || family === 'flat' || !onWord(p));
       const kept = front || lettering.boxes.length ? keepAlong(path, clear, 0.25) : [path];
-      const floor = family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5;
+      // A piece of a face's hatch shorter than the smallest feature is a speck on a small card.
+      const floor = hatchMin(family) ?? (family === 'text' ? 0.05 : family === 'edge' ? 0.35 : 0.5);
       for (const piece of kept) buckets.add(key, piece, family === 'text' || family === 'flat', floor);
     };
     for (const d of drawn) add(d.key, d.path, d.family);
     // The flat marks: the horizon rule, unbent, broken at the point; the event horizon, a disc hatched
     // solid in two crossing families; and one thin ring at the Einstein radius, the halo's edge.
-    const gap = u.void + 2;
+    const gap = u.void + halo(2), rule = tolerance(0.9);
     const disc = hatchedDisc(SINGULARITY, u.core, [[Math.PI / 4, 0.55], [-Math.PI / 4, 0.8]]);
     for (const path of [...disc, circlePath(SINGULARITY, bend.einstein)]) add('singularity-carbon', path, 'flat');
     for (const path of [
       [{ x: CARD.x0, y: HORIZON_Y }, { x: SINGULARITY.x - gap, y: HORIZON_Y }],
       [{ x: SINGULARITY.x + gap, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }],
-      [{ x: CARD.x0, y: HORIZON_Y + 0.9 }, { x: SINGULARITY.x - gap, y: HORIZON_Y + 0.9 }],
-      [{ x: SINGULARITY.x + gap, y: HORIZON_Y + 0.9 }, { x: CARD.x1, y: HORIZON_Y + 0.9 }],
+      [{ x: CARD.x0, y: HORIZON_Y + rule }, { x: SINGULARITY.x - gap, y: HORIZON_Y + rule }],
+      [{ x: SINGULARITY.x + gap, y: HORIZON_Y + rule }, { x: CARD.x1, y: HORIZON_Y + rule }],
     ]) add('threshold-carbon', path, 'flat');
     const parts = buckets.toParts(['system', 'helix', 'slogan', 'title'], INKS);
     for (const id of ['singularity-carbon', 'threshold-carbon']) parts.push({ id, pen: 'carbon', paths: buckets.get(id) ?? [] });
-    parts.push(...cardFrame('XIII', 'DEATH'));
+    parts.push(...cardFrame('XIII', 'DEATH', { phrase: settings }));
     return parts;
   } finally {
     for (const geometry of geometries) geometry.dispose();
