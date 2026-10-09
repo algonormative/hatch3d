@@ -359,7 +359,9 @@ export function helixCourse(ctx: SketchContext, view: THREE.PerspectiveCamera, s
   const first = neck.length + coil.length - 1;
   const lying = pts.map((q, i) => (i >= first && i < pts.length - 1 ? q.clone().setY(Math.max(q.y, lakeY + tube * widthAt(cum[i] / total) * 0.6)) : q));
   const curve = new THREE.CatmullRomCurve3(lying.map(q => q.clone().multiplyScalar(BIG)), false, 'centripetal');
-  return { curve, centre, tube, tipFraction, flare, topY, apexUp: Math.max(...neck.map(q => q.y)) };
+  // Where the coil lies among the curve's points: from the neck's foot to where the tail leaves it.
+  const coilSpan = { from: neck.length - 1, to: neck.length - 1 + coil.length - 1 };
+  return { curve, centre, tube, tipFraction, flare, topY, apexUp: Math.max(...neck.map(q => q.y)), coilSpan };
 }
 export type HelixCourse = ReturnType<typeof helixCourse>;
 
@@ -455,6 +457,40 @@ export function strengthWorld(ctx: SketchContext) {
 }
 export type StrengthWorld = ReturnType<typeof strengthWorld>;
 
+/**
+ * How a small card draws the coil as one heavy mass rather than a tangle of loops. At 70 × 120 each turn of the rope is
+ * a couple of millimetres across and the turns overlap on the sheet, and its strands, drawn as single lines, showed their
+ * far halves through the gaps between the ribbons: every turn's loops crossed its neighbours'. Off tabloid the coil gets a
+ * solid core in the depth pass (`CORE` of the rope's girth, inside the strands), so only each turn's near half of the
+ * strands shows, a rope's lay across it, and the turns behind are hidden by the ones in front; and each turn is drawn by
+ * its outline (`coilOutline`, at the strands' own girth), so the turns read as bands laid one on another.
+ */
+const CORE = 0.9;
+
+/** The coil's axis, inner end to outer end, at world scale (the course is built `BIG` times larger). */
+function coilAxis(course: HelixCourse): THREE.CatmullRomCurve3 {
+  const { from, to } = course.coilSpan;
+  return new THREE.CatmullRomCurve3(course.curve.points.slice(from, to + 1).map(q => q.clone().multiplyScalar(1 / BIG)), false, 'centripetal');
+}
+
+/** The coil's solid core for the depth pass: a tube round its axis, `CORE` of the rope's girth. */
+function coilCore(course: HelixCourse): THREE.BufferGeometry {
+  const { from, to } = course.coilSpan;
+  return new THREE.TubeGeometry(coilAxis(course), (to - from) * 4, course.tube * CORE, 16, false);
+}
+
+/** The coil's outline seen from `eye`: the two lines along the rope where its girth turns away from the eye. */
+function coilOutline(course: HelixCourse, eye: THREE.Vector3): THREE.Vector3[][] {
+  const axis = coilAxis(course), count = (course.coilSpan.to - course.coilSpan.from) * 8;
+  const sides: THREE.Vector3[][] = [[], []];
+  for (let i = 0; i <= count; i++) {
+    const c = axis.getPointAt(i / count), across = axis.getTangentAt(i / count).cross(c.clone().sub(eye)).normalize();
+    sides[0].push(c.clone().addScaledVector(across, course.tube));
+    sides[1].push(c.clone().addScaledVector(across, -course.tube));
+  }
+  return sides;
+}
+
 export function drawStrength(ctx: SketchContext): Part[] {
   const view = strengthCamera(ctx);
   const eye = view.position.clone();
@@ -485,15 +521,19 @@ export function drawStrength(ctx: SketchContext): Part[] {
   const helixStrokes: Stroke[] = helix.strokes.map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
   // Off tabloid, which of them are strands drawn as their line (`narrowStrands`; at tabloid none is).
   const strandLine = new Set(FORMAT.tabloid ? [] : helixStrokes.filter((_, i) => helix.strokes[i].role === 'spine'));
+  // Off tabloid, the coil's turns by their outline (see `CORE`).
+  if (!FORMAT.tabloid) helixStrokes.push(...coilOutline(course, eye).map((points): Stroke => ({ ink: 'vermilion', group: 'helix', family: 'membrane', points })));
   const figureStrokes: Stroke[] = figure.strokes.map(st => ({ ink: st.ink, group: 'figure', family: 'hatch', points: st.points }));
   // Its outlines, which a small card ranks above its bands or rings (see `person` below).
   const figureEdge = new Set(figureStrokes.filter((_, i) => figure.strokes[i].group === 'figure-edge'));
 
   const slabGeos = slabs.map(slabGeometry);
   const geometries = [...slabGeos, ...helix.meshes, ...figure.meshes];
+  // Off tabloid the coil's solid core hides its strands' far halves and the turns behind (see `CORE`).
+  const core = FORMAT.tabloid ? [] : [coilCore(course)];
   try {
     fitDepthRange(view, geometries);
-    const fine = fineDepth(geometries, view, { W, H, MM_X, MM_Y }, OVERSAMPLE), px = fine.env;
+    const fine = fineDepth([...geometries, ...core], view, { W, H, MM_X, MM_Y }, OVERSAMPLE), px = fine.env;
     const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2);
 
@@ -715,6 +755,6 @@ export function drawStrength(ctx: SketchContext): Part[] {
     parts.push(...cardFrame('VIII', 'STRENGTH', { phrase: settings }));
     return parts;
   } finally {
-    for (const geo of geometries) geo.dispose();
+    for (const geo of [...geometries, ...core]) geo.dispose();
   }
 }

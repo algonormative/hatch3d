@@ -257,6 +257,21 @@ describe('Breach Tarot: VIII Strength at 70 x 120 mm', () => {
     }
   }, 120_000);
 
+  it('lays the coil on the water as one heavy mass, its turns banded by their outline, not a tangle of loops', async () => {
+    for (const fit of fits) {
+      const result = await render(fit);
+      const { horizonY } = formatOf(fit);
+      const person = box(paths(result, 'figure-').flat());
+      // The coil's lines: the helix's paths wholly on the water, left of the person (the tail's last stretch excluded).
+      const coil = paths(result, 'helix-').filter(path => path.every(p => p.y > horizonY && p.x < person.x0 - 3));
+      const whole = box(coil.flat());
+      const longest = Math.max(...coil.map(path => { const b = box(path); return b.x1 - b.x0; }));
+      // A turn's outline runs on under the coil, its longest line over half the coil's width; drawn by its twining strands
+      // alone, far halves showing through, its longest line was a loop of a tenth of it.
+      expect(longest / (whole.x1 - whole.x0)).toBeGreaterThan(0.4);
+    }
+  }, 120_000);
+
   it('keeps its halos at the card\'s scale, never under the floor: the lake\'s knockout round the helix and the sky\'s clearing round the neck', async () => {
     for (const fit of fits) {
       const result = await render(fit);
