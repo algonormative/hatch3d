@@ -7,7 +7,7 @@ import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_H
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
-import { thinParallel } from '../../kit/density.ts';
+import { thinRanked } from '../../kit/density.ts';
 import { hatchedBar } from '../../kit/fills.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -431,7 +431,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     }
     // The coil keeps to its own ribbons: the pulse ticks the helix strews past its edges read as scraps at this size.
     const onCoil = meshCoverage(helix.meshes, view, PAGE, 0.3);
-    // On a small card the figure's pieces wait for `thinParallel`, ranked: the outline, then the planes and seams, then the cloth.
+    // On a small card the figure's pieces wait for `thinRanked`: the outline, then the planes and seams, then the cloth.
     const figurePieces: { key: string; piece: Point[]; min?: number; rank: number }[] = [];
     const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => {
       // Off tabloid a piece of hatch shorter than the smallest feature is a speck, and is dropped (`hatchMin`).
@@ -452,13 +452,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     // A limb on a small card is a few millimetres across: its planes, the pinstripe beside each plane edge and the
     // outline crowd into one band of ink. Where a line runs beside one that ranks above it, closer than the pens
     // hold apart, that stretch of it is left out.
-    if (figurePieces.length) {
-      const order = figurePieces.map((_, i) => i).sort((a, b) => figurePieces[a].rank - figurePieces[b].rank || a - b);
-      const thinned = thinParallel(order.map(i => figurePieces[i].piece), MIN_SPACING);
-      const kept: Point[][][] = [];
-      order.forEach((i, j) => { kept[i] = thinned[j]; });
-      figurePieces.forEach(({ key, min }, i) => { for (const piece of kept[i]) buckets.add(key, piece, false, min); });
-    }
+    for (const { item, runs } of thinRanked(figurePieces, MIN_SPACING)) for (const piece of runs) buckets.add(item.key, piece, false, item.min);
 
     // The paving: joints half a cube apart in the avenue's grid, from the plinth's foot to under the
     // viewer's feet. As they crowd into the distance they drop out in halves (every second, fourth,

@@ -83,7 +83,7 @@ export function buildLantern(ctx: SketchContext, view: THREE.PerspectiveCamera, 
 }
 
 /**
- * What each of the figure's strokes draws, for a small card that thins them (`thinParallel`) in that order: the
+ * What each of the figure's strokes draws, for a small card that thins them (`thinRanked`) in that order: the
  * `outline` (limbs, cloak, hood and staff), the `rim` of the hood's opening, the cloak's `fold`s, the contour `ring`s,
  * and the dark `hollow` in the hood.
  */

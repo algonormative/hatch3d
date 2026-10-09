@@ -4,7 +4,7 @@ import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { FORMAT, MIN_SPACING, PAGE, PHRASE, S, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
-import { thinParallel } from '../../kit/density.ts';
+import { thinRanked } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { narrowStrands } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -44,7 +44,7 @@ const HINT_R = 36.8;
 /** How many times finer each way the hermit's and the lantern's depth test is on a small card (`printFine`; `fineDepth`). */
 const FIGURE_OVERSAMPLE = printFine();
 /**
- * The order a small card thins the summit's marks in (`thinParallel`): what ranks first keeps its line where two run
+ * The order a small card thins the summit's marks in (`thinRanked`): what ranks first keeps its line where two run
  * closer than the pens hold apart. The hermit's outline, then the lantern's frame, the hood's opening, the cloak's
  * folds, the rings and the hood's hollow, then the slabs' edges and last their hatch.
  */
@@ -178,7 +178,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     // Every ordinary path goes through the reducer at the card's scale (`reduceAtScale`: the print's reducer at tabloid),
     // so a small card's hermit and lantern keep their curves.
     const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
-    // On a small card the summit's marks (the hermit, the lantern's frame, the slabs) wait for `thinParallel`, ranked
+    // On a small card the summit's marks (the hermit, the lantern's frame, the slabs) wait for `thinRanked`
     // (`RANK`): where one runs beside a mark that ranks above it, closer than the pens hold apart, that stretch of it is
     // left out. At tabloid every mark goes straight to its part.
     const pending: { key: string; piece: Point[]; min?: number; rank: number }[] | undefined = FORMAT.tabloid ? undefined : [];
@@ -243,13 +243,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     projectStrokes(narrowStrands(lantern.strokes, view).map(h => ({ ink: h.ink, group: 'helix', points: h.points })), { ...fine.env, bias: biasAt(lanternSlack, lanternD) }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), undefined, 0.15); },
     });
-    if (pending?.length) {
-      const order = pending.map((_, i) => i).sort((a, b) => pending[a].rank - pending[b].rank || a - b);
-      const thinned = thinParallel(order.map(i => pending[i].piece), MIN_SPACING);
-      const kept: Point[][][] = [];
-      order.forEach((i, j) => { kept[i] = thinned[j]; });
-      pending.forEach(({ key, min }, i) => { for (const piece of kept[i]) buckets.add(key, piece, false, min); });
-    }
+    for (const { item, runs } of thinRanked(pending ?? [], MIN_SPACING)) for (const piece of runs) buckets.add(item.key, piece, false, item.min);
 
     // The night. Darkness is the card's gradient: black at the top, opening toward the horizon where the
     // network glows. Round the lantern it falls to nothing in a soft falloff, so the ruling thins and

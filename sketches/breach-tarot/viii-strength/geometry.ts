@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { FORMAT, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutY, printFine, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { thinParallel } from '../../kit/density.ts';
+import { thinRanked } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -588,7 +588,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], keep: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) buckets.add(key, piece, false, min);
     };
-    // On a small card the wall's pieces wait for `thinParallel`, ranked: its outlines, then its faces' rings and hatch, then
+    // On a small card the wall's pieces wait for `thinRanked`: its outlines, then its faces' rings and hatch, then
     // the gorge's rules. At this size a joint's two edges, a ring beside its face's edge, or a rule beside a joint print as
     // one thick line: where a line runs beside one that ranks above it, closer than the pens hold apart, that stretch of
     // it is left out. The print adds each as it comes.
@@ -599,11 +599,9 @@ export function drawStrength(ctx: SketchContext): Part[] {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) into.push({ key, piece, min, rank });
     };
     const addWall = (rank: number, key: string, run: Point[], keep: (p: Point) => boolean, min?: number) => ranked(wall, rank, key, run, keep, min);
-    /** A ranked set's pieces, thinned (`thinParallel`) and bucketed. */
+    /** A ranked set's pieces, thinned (`thinRanked`) and bucketed, in rank order. */
     const thinInto = (list: Ranked[]) => {
-      const order = list.map((_, i) => i).sort((a, b) => list[a].rank - list[b].rank || a - b);
-      const thinned = thinParallel(order.map(i => list[i].piece), MIN_SPACING);
-      order.forEach((i, j) => { for (const piece of thinned[j]) buckets.add(list[i].key, piece, false, list[i].min); });
+      for (const { item, runs } of thinRanked(list, MIN_SPACING, { order: 'rank' })) for (const piece of runs) buckets.add(item.key, piece, false, item.min);
     };
 
     // The wall, a slab at a time, each with slack in world units at its own distance.

@@ -282,3 +282,22 @@ export function thinParallel(paths: Point[][], limit: number, options: { angle?:
     return runs;
   });
 }
+
+/** A piece of a mark and its rank for `thinRanked`: of two that run too close, the lower rank keeps its line. */
+export interface RankedPiece { piece: Point[]; rank: number }
+
+/**
+ * `thinParallel` for a card that collects its marks as it projects them (each a `piece` with a `rank`, plus whatever else
+ * it needs to bucket it: its part key, its shortest length) and thins them once they are all in. The pieces are thinned in
+ * rank order, lowest first, ties in the order given; each comes back with its kept runs, in the order given, or with
+ * `order: 'rank'` in the order they were thinned (for a card whose parts take their paths in that order). `limit` is the
+ * format's `MIN_SPACING`. Ranks name what should survive: an outline before the planes inside it, and those before the cloth.
+ */
+export function thinRanked<T extends RankedPiece>(items: readonly T[], limit: number, options: { angle?: number; step?: number; order?: 'input' | 'rank' } = {}): { item: T; runs: Point[][] }[] {
+  const { order: emit = 'input', ...thinning } = options;
+  const byRank = items.map((_, i) => i).sort((a, b) => items[a].rank - items[b].rank || a - b);
+  const thinned = thinParallel(byRank.map(i => items[i].piece), limit, thinning);
+  const runs: Point[][][] = [];
+  byRank.forEach((i, j) => { runs[i] = thinned[j]; });
+  return (emit === 'rank' ? byRank : items.map((_, i) => i)).map(i => ({ item: items[i], runs: runs[i] }));
+}
