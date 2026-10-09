@@ -42,10 +42,10 @@ Usage: npm run -s density -- <result.json> [--against reference.json] [--k 2] [-
   process.exit(args.help ? 0 : 2);
 }
 
-const number = (name: string, value: string | undefined): number | undefined => {
+const number = (name: string, value: string | undefined, zero = false): number | undefined => {
   if (value === undefined) return undefined;
   const n = Number(value);
-  if (!(n > 0)) { console.error(`--${name} must be a positive number`); process.exit(2); }
+  if (!(n > 0 || (zero && n === 0))) { console.error(`--${name} must be a ${zero ? "nonnegative" : "positive"} number`); process.exit(2); }
   return n;
 };
 
@@ -59,13 +59,22 @@ for (const item of (args.pen ?? "").split(",").filter(Boolean)) {
 const options = { k: number("k", args.k), minRun: number("min-run", args["min-run"]), angle: number("angle", args.angle), worst: number("worst", args.worst) };
 
 function probe(file: string): DensityReport {
-  const result = JSON.parse(readFileSync(file, "utf-8")) as { parts: Part[]; metadata?: { pens?: { id: string; width: number }[] } };
+  let result: { parts: Part[]; metadata?: { pens?: { id: string; width: number }[] } };
+  try { result = JSON.parse(readFileSync(file, "utf-8")); } catch (e) { fail(`cannot read ${file}: ${(e as Error).message}`); }
+  if (!Array.isArray(result.parts)) fail(`${file} has no parts: pass a sketch render's result.json`);
   const widths = new Map((result.metadata?.pens ?? []).map(p => [p.id, p.width]));
-  return densityProbe(result.parts, { ...options, penWidth: pen => every ?? overrides.get(pen) ?? widths.get(pen) ?? NaN });
+  const missing = [...new Set(result.parts.map(part => part.pen))].filter(pen => (every ?? overrides.get(pen) ?? widths.get(pen)) === undefined);
+  if (missing.length) fail(`${file} declares no width for pen ${missing.join(", ")}: give one with --pen ${missing[0]}=0.25`);
+  return densityProbe(result.parts, { ...options, penWidth: pen => every ?? overrides.get(pen) ?? widths.get(pen)! });
+}
+
+function fail(message: string): never {
+  console.error(`density: ${message}`);
+  process.exit(2);
 }
 
 const report = probe(positionals[0]);
-const denser = args.against ? denserThan(report, probe(args.against), number("slack", args.slack)) : undefined;
+const denser = args.against ? denserThan(report, probe(args.against), number("slack", args.slack, true)) : undefined;
 if (args.json) console.log(JSON.stringify(denser ? { ...report, denser } : report, null, 2));
 else {
   console.log(describeDensity(report));

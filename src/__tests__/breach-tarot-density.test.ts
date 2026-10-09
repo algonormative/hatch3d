@@ -30,6 +30,33 @@ describe('density probe', () => {
     expect(probe([part('a', [line(0, 10, 10, 10), line(0, 10.3, 10 * Math.cos(turn), 10.3 + 10 * Math.sin(turn))])]).violations).toBe(0);
   });
 
+  it('passes strokes converging at 15 degrees, though they run under the limit for 1.5 mm', () => {
+    const turn = 15 * Math.PI / 180;
+    const converging = [line(0, 10, 10, 10), line(0, 10.1, 10 * Math.cos(turn), 10.1 + 10 * Math.sin(turn))];
+    expect(probe([part('a', converging)]).violations).toBe(0);
+    // ...which is under the limit long enough to count once the angle allows it.
+    expect(densityProbe([part('a', converging)], { penWidth: () => 0.25, angle: 20 }).violations).toBe(1);
+  });
+
+  it('counts a run only while it lasts unbroken, and a share only of the length that runs too close', () => {
+    // A stroke that touches down beside a line twice, 0.6 mm each time: 1.2 mm in all, but never 1 mm at once.
+    const touches: Point[] = [{ x: 1, y: 10.3 }, { x: 1.6, y: 10.3 }, { x: 2, y: 12 }, { x: 5, y: 12 }, { x: 5, y: 10.3 }, { x: 5.6, y: 10.3 }];
+    const touching = probe([part('a', [line(0, 10, 10, 10), touches])]);
+    expect(touching.violations).toBe(0);
+    expect(touching.parts[0].crowded).toBe(0);
+    // A 2 mm stroke beside the middle of a 10 mm one: 2 mm of each run too close, a third of the 12 mm drawn.
+    const report = probe([part('a', [line(0, 10, 10, 10), line(4, 10.3, 6, 10.3)])]);
+    expect(report.violations).toBe(1);
+    expect(report.parts[0].drawn).toBeCloseTo(12, 9);
+    expect(report.parts[0].crowded).toBeCloseTo(4, 9);
+    expect(report.parts[0].share).toBeCloseTo(1 / 3, 9);
+  });
+
+  it('takes a ring smaller than the limit for a dot, not two strokes', () => {
+    const ring = Array.from({ length: 25 }, (_, i) => ({ x: 10 + 0.2 * Math.cos(i / 24 * 2 * Math.PI), y: 10 + 0.2 * Math.sin(i / 24 * 2 * Math.PI) }));
+    expect(probe([part('a', [ring])]).violations).toBe(0);
+  });
+
   it('judges each part by its own pen, and a stroke folded back on itself', () => {
     expect(probe([part('a', [line(0, 10, 10, 10)]), part('b', [line(0, 10.3, 10, 10.3)])]).violations).toBe(0);
     expect(probe([part('words', [line(0, 10, 10, 10), line(0, 10.3, 10, 10.3)], 'lettering')]).violations).toBe(0);

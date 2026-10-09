@@ -11,15 +11,16 @@ import type { Part, Point } from '../../src/sketch/types.ts';
  *   - one runs beside the other (its points project onto the other's segments),
  *   - the gap between them is under `k × width`, but over `coincident × width`: closer than that they are the
  *     same line drawn twice, which costs plot time but adds no density,
- *   - and they stay that close for at least `minRun` millimetres.
+ *   - and they stay that close, without a break, for at least `minRun` millimetres.
  * Each stroke is cut into pieces no longer than the limit and binned on a grid, so the probe is linear in the
  * total length drawn (about 150 ms for a tabloid card, 20 ms for a 70 × 120 one).
  *
  * The report gives the violating pairs, worst first, with where they are, and per part the share of its drawn
  * length that runs too close to another stroke. A Breach card is not free of them even at tabloid: a low eye
- * sees every box's top face as a sliver, and receding walls converge, so the approved prints flag well over half
- * their length. A re-projected card is therefore held to its own print: `denserThan` names the parts that crowd
- * more than they do on the reference render, which is what a pitch that shrank with the card does.
+ * sees a box's top face as a sliver, and receding walls converge, so the approved prints flag a good share of their
+ * length (the Fool's 38%, the Tower's 54%, the Star's 7%). A re-projected card is therefore held to its own print:
+ * `denserThan` names the parts that crowd more than they do on the reference render, which is what a pitch that
+ * shrank with the card does.
  */
 
 export interface DensityOptions {
@@ -31,7 +32,7 @@ export interface DensityOptions {
   coincident?: number;
   /** The most two strokes may turn from parallel and still count, in degrees. Default 10. */
   angle?: number;
-  /** The shortest stretch, in millimetres, two strokes must run that close to count. Default 1. */
+  /** The shortest unbroken stretch, in millimetres, two strokes must run that close to count. Default 1. */
   minRun?: number;
   /** How many of the worst violations to keep, per part and overall. Default 5. */
   worst?: number;
@@ -44,7 +45,7 @@ export interface DensityViolation {
   paths: [number, number];
   /** Narrowest gap between them, in millimetres. */
   gap: number;
-  /** How far they run closer than the limit, in millimetres. */
+  /** The longest stretch they run closer than the limit without a break, in millimetres. */
   run: number;
   /** Where the narrowest gap is, on the page. */
   at: Point;
@@ -157,8 +158,9 @@ function probePart(part: Part, limit: number, floor: number, sinMax: number, min
   const order = new Int32Array(count), fill = start.slice(0, cols * rows);
   for (let i = 0; i < count; i++) order[fill[cellOf[i]]++] = i;
 
-  // Per ordered pair of paths (this one beside that one): how far this one runs too close, and its narrowest gap.
-  type Pair = { run: number; gap: number; at: Point };
+  // Per ordered pair of paths (this one beside that one): the longest stretch of this one that runs too close
+  // without a break (its pieces in a row), the stretch it is on, the last piece of it, and the narrowest gap.
+  type Pair = { run: number; current: number; last: number; gap: number; at: Point };
   const pairs = new Map<number, Pair>();
   const stride = part.paths.length;
   // The other paths each piece runs too close to, for the crowded length once the pairs are known.
@@ -189,14 +191,18 @@ function probePart(part: Part, limit: number, floor: number, sinMax: number, min
     for (const [other, gap] of gapTo) {
       const key = owner[i] * stride + other;
       const pair = pairs.get(key);
-      if (!pair) pairs.set(key, { run: len[i], gap, at: { x: mx[i], y: my[i] } });
+      if (!pair) pairs.set(key, { run: len[i], current: len[i], last: i, gap, at: { x: mx[i], y: my[i] } });
       else {
-        pair.run += len[i];
+        // Pieces are numbered along each path, so the next piece of the same stretch is the next number.
+        pair.current = pair.last === i - 1 ? pair.current + len[i] : len[i];
+        pair.last = i;
+        pair.run = Math.max(pair.run, pair.current);
         if (gap < pair.gap) { pair.gap = gap; pair.at = { x: mx[i], y: my[i] }; }
       }
     }
   }
-  // A pair of paths counts once, when either side runs `minRun` too close: the longer run, the narrower gap.
+  // A pair of paths counts once, when either side runs `minRun` too close without a break: the longer run, the
+  // narrower gap.
   const out: DensityViolation[] = [];
   const violating = new Set<number>();
   for (const [key, pair] of pairs) {
