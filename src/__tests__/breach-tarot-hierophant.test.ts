@@ -193,16 +193,27 @@ describe('Breach Tarot: V The Hierophant at 70 x 120 mm', () => {
       const tone = length(result, 'print-lettering') / (length(print, 'print-lettering') * s * s);
       expect(tone).toBeGreaterThan(0.4);
       expect(tone).toBeLessThan(1.25);
+      // The sky stops short of the wall and the piers by their knockout halo (1.1 mm in tabloid, scaled with the card, never
+      // under 0.5 mm): no ruling comes nearer than about the floor, nor further than the scaled halo and about a third of a
+      // millimetre.
+      const shapes = result.parts.filter(part => /^(wall|pier)-/.test(part.id)).flatMap(part => part.paths.flat());
+      let nearShape = Infinity;
+      for (const p of of(result, id => id.startsWith('sky-'))) for (const q of shapes) nearShape = Math.min(nearShape, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(nearShape, `${fits[i]} sky to wall`).toBeGreaterThan(0.4);
+      expect(nearShape, `${fits[i]} sky to wall`).toBeLessThan(Math.max(0.5, 1.1 * s) + 0.35);
     }
   }, 120_000);
 
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card without its pitches holding is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 2 }), ...fits.map(render)]);
     const master = probe(print);
-    for (const result of small) {
+    for (const [k, result] of small.entries()) {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
+      // The wall's outline is trimmed on a small card (kit/slabs.ts' `SlabTrim`), drawn edge by edge: 44-48 lines on the
+      // wall, where the untrimmed outline runs to 30-32. Its crowded share and length barely move, so the count is the check.
+      expect(result.parts.filter(part => part.id === 'wall-carbon').reduce((n, part) => n + part.paths.length, 0), `${fits[k]} wall lines`).toBeGreaterThan(38);
     }
     // The negative control: the print scaled down onto the card, as a sketch that is not page-aware is, its sky ruling,
     // course joints, pier hatch, lanes and gate fill shrinking with it.
