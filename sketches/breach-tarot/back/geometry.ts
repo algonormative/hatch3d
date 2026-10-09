@@ -20,8 +20,8 @@ import { cathedral } from './cathedral.ts';
  *     walk in is the walk out, whichever way up the card is held.
  *   - `field`: a field of helix crossings, the playing-card back's all-over trellis: thin twin helices in two families,
  *     woven over and under by turns, round a quiet lozenge window in the middle.
- *   - `composite` (composite.ts): every element at once in one emblem: a through-labyrinth walked by the helix from a
- *     gate of slabs at the head to the star at its heart and out to the foot, walls heavier toward the heart, the
+ *   - `composite` (composite.ts), the default: every element at once in one emblem: a through-labyrinth walked by the
+ *     helix, wound round a gate of slabs at the head, to the star at its heart and out to the foot, walls heavier toward the heart, the
  *     heart ruled dark, paper round whatever passes in front.
  *   - `cathedral` (cathedral.ts): the Breach Cathedral that the deck grew from, head to tail: its cantilevered slabs
  *     round the open shaft, its ribbed membrane looping round them in front and behind.
@@ -362,10 +362,10 @@ function trellis(ctx: SketchContext, half: HalfBack): void {
   }
 }
 
-/** The form a render asks for, by its `form` control (the helix by default). */
+/** The form a render asks for, by its `form` control (`composite` by default, and for a name it does not know). */
 export function backForm(ctx: SketchContext): BackForm {
   const form = ctx.params.form;
-  return typeof form === 'string' && (BACK_FORMS as readonly string[]).includes(form) ? form as BackForm : 'helix';
+  return typeof form === 'string' && (BACK_FORMS as readonly string[]).includes(form) ? form as BackForm : 'composite';
 }
 
 export function drawBack(ctx: SketchContext): Part[] {

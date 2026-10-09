@@ -16,15 +16,17 @@ import { box, faceOnPage, faceSeen, faces, FLOOR, hidden, obliqueView, seenEdges
  *     from the head fills the right-hand half and its turn, from the foot, the left. Its walls grow heavier toward the
  *     heart, a line more every other ring: **value as line density**, darkest at the centre.
  *   - **The helix** walks it, in its native inks (strand a's acid spine and strand b's vermilion line, rungs in
- *     ultramarine and violet by turns), from the gate at the head to the heart, and, turned, from the heart out to the
- *     foot: the walk in is the walk out.
+ *     ultramarine and violet by turns), from the head round the gate's courses to the heart, and, turned, from the
+ *     heart out to the foot: the walk in is the walk out.
  *   - **The heart** is ruled dark, carbon and ultramarine by turns, round **a flat mark**: the Star's eight points,
  *     knocked out of it in paper.
  *   - **The gates**, at head and foot, are **slab architecture hatched by light** (the kit's `facetStrokes`, in an
  *     architect's oblique, lit from in front so the fronts stay paper and the undersides and flanks take the hatch):
  *     courses of slab stepping out from the card's end toward the labyrinth, so gates and labyrinth make one lozenge.
- *     The helix comes down through a breach in the first and last course and passes behind the one between. Where a
- *     mark passes behind another, it stops short with paper round the one in front: **the knockout**, everywhere.
+ *     The helix winds round them, never through: along the lane above a course, round its end, back along the lane
+ *     below and on round the next course's other end, a pen floor and a half clear of every block, and back to the
+ *     axis above the mouth. Where marks meet, one gives way with paper round the other: **the knockout** (the heart's
+ *     ruling round the star and round the helix).
  *
  * It is drawn as its top half (the head's gate, the right-hand walk, the upper heart) and turned.
  */
@@ -104,9 +106,44 @@ export function composite(ctx: SketchContext, half: HalfBack): void {
   for (let k = 0; k < 8; k++) star.push(tip(k), valley(k));
   const nearStar = (p: P, by: number) => insideRing(star, p) || nearest([...star, star[0]], p, by) < by;
 
-  // ---- The walk, from the head to the heart: down to the mouth, round each circuit's right half, in through each ring.
-  const head = CARD.top + FRAME.rule + 2 * gap;
+  // The thread's measures, and the paper it keeps from a gate block (its swing, then a pen floor and a half).
+  const amp = Math.min(0.18 * step, 0.85), period = Math.max(4.4 * amp + 1.8, 3.4);
+  const band = amp + gap, clear = amp + 1.5 * gap;
+
+  // ---- The gate: courses of slab stepping out from the head toward the labyrinth, so the gates and the labyrinth
+  // between them make one lozenge. Between the courses run the thread's lanes: it winds round each course in turn, round
+  // its right end, then the next one's left, clear of every block, and comes back to the axis above the mouth. World x
+  // and y are page millimetres from the card's centre; z comes toward the eye.
+  const view = obliqueView(-0.42, -0.5);
+  const head = CARD.top + FRAME.rule + band + 1.5 * gap, last = c.y - R0 - band - 1.5 * gap;
+  const courses = 3, lane = (last - head) / courses;
+  // A block's footprint on the page, its front and the underside the oblique shows: as tall as a lane leaves it.
+  const foot = lane - 2 * clear, turnR = lane / 2;
+  const course = foot / 1.55, deep = 1.1 * course;
+  const widest = Math.min(0.78 * cw, 2 * (cw / 2 - FRAME.rule - gap - turnR - amp));
+  const slabs: ReturnType<typeof box>[] = [];
+  const footprints: { x0: number; x1: number; y0: number; y1: number }[] = [];
+  for (let i = 0; i < courses; i++) {
+    const fw = widest * (0.3 + 0.5 * i / (courses - 1)), y = head + (i + 0.5) * lane - c.y;
+    const s = box(0, y, 0, fw - 0.42 * deep, course, deep, 0.9 + 0.1 * i);
+    slabs.push(s);
+    // Its page footprint, from its eight corners.
+    const ps = [-1, 1].flatMap(a => [-1, 1].flatMap(b => [-1, 1].map(d => view.page(new THREE.Vector3(s.x + a * s.w / 2, s.y + b * s.h / 2, s.z + d * s.d / 2)))));
+    footprints.push({ x0: Math.min(...ps.map(q => q.x)), x1: Math.max(...ps.map(q => q.x)), y0: Math.min(...ps.map(q => q.y)), y1: Math.max(...ps.map(q => q.y)) });
+  }
+
+  // ---- The walk, from the head to the heart: round the gate's courses, down to the mouth, round each circuit's right
+  // half, in through each ring.
   const walkPts: P[] = [{ x: c.x + dx, y: head }];
+  footprints.forEach((f, i) => {
+    const right = i % 2 === 0, ym = (f.y0 + f.y1) / 2, ex = right ? f.x1 : f.x0;
+    // Along the lane above to the course's end, round it, and back along the lane below.
+    for (let k = 0; k <= 48; k++) {
+      const t = -Math.PI / 2 + (right ? 1 : -1) * Math.PI * k / 48;
+      walkPts.push({ x: ex + turnR * Math.cos(t), y: ym + turnR * Math.sin(t) });
+    }
+  });
+  walkPts.push({ x: c.x + dx, y: last });
   for (let j = 1; j <= circuits; j++) {
     const r = mid(j), a = Math.acos(dx / r);
     const down = j % 2 === 1;
@@ -123,34 +160,9 @@ export function composite(ctx: SketchContext, half: HalfBack): void {
   const walk = rounded(resample(walkPts, 0.15), 8, 2);
   const walkTurned = walk.map(turn);
 
-  // The thread's measures.
-  const amp = Math.min(0.18 * step, 0.85), period = Math.max(3.4 * amp + 1.4, 2.8);
-  const band = amp + gap;
-
-  // ---- The gate: courses of slab stepping out from the head toward the labyrinth, so the gates and the labyrinth
-  // between them make one lozenge. The thread comes down through a breach in every other course and passes behind the
-  // ones between. World x and y are page millimetres from the card's centre; z comes toward the eye.
-  const view = obliqueView(-0.42, -0.5);
-  const top = head - c.y + 1.5 * gap, bottom = -R0 - 2.5 * gap;
-  const zone = bottom - top;
-  const courses = 3;
-  const course = Math.min(0.16 * zone, 0.065 * cw), deep = 1.1 * course;
-  const widest = Math.min(0.78 * cw, cw - 2 * inset - 2);
-  const breach = band + 2.5 * gap;
-  const slabs: ReturnType<typeof box>[] = [];
-  for (let i = 0; i < courses; i++) {
-    const f = i / (courses - 1);
-    const w = widest * (0.4 + 0.6 * f), y = top + course / 2 + f * (zone - course - 3 * gap);
-    if (i % 2 === 0) {
-      // Broken by the breach round the thread's line.
-      slabs.push(box((-w / 2 + dx - breach) / 2, y, 0, dx - breach + w / 2, course, deep, 0.9));
-      slabs.push(box((dx + breach + w / 2) / 2, y, 0, w / 2 - dx - breach, course, deep, 0.9));
-    } else slabs.push(box(0, y, 2.5, w, course, deep, 1));
-  }
-  const thread = (p: P) => new THREE.Vector3(p.x - c.x, p.y - c.y, 0);
   const light = new THREE.Vector3(-0.3, 0.55, 0.78).normalize();
   const pad = 1.2 * gap;
-  // The thread's band, either way up: marks behind it give way.
+  // The thread's band, either way up: marks it crosses give way.
   const nearThread = (p: P) => nearest(walk, p, band + gap) < band + gap || nearest(walkTurned, p, band + gap) < band + gap;
 
   for (const s of slabs) {
@@ -160,7 +172,7 @@ export function composite(ctx: SketchContext, half: HalfBack): void {
       if (!faceSeen(view, face)) continue;
       const size = faceOnPage(view, face);
       // A face too narrow to hold a ring and a field reads as a speck of hatch: its outline carries it.
-      if (size.width < 2 * FLOOR.feature) continue;
+      if (size.width < 1.5 * FLOOR.feature) continue;
       // Held on paper: the facet hatch's floor (0.072 world units at pitch 1) at the pen floor, on the face's tighter axis.
       const pitch = MIN_SPACING / 0.072 / Math.min(size.su, size.sv);
       const eye = face.centre.clone().addScaledVector(view.toward(face.centre), 1e5);
@@ -170,8 +182,6 @@ export function composite(ctx: SketchContext, half: HalfBack): void {
       }
     }
   }
-  // Where the thread passes behind a slab, it is hidden, with paper round the slab.
-  const threadKeep = (p: P) => !hidden(slabs, view, thread(p), pad);
 
   // ---- The walls: each ring's right half, broken where the walk crosses it, heavier toward the heart.
   const lines = (k: number) => 1 + Math.floor(k / 2), wallPitch = 1.2 * gap;
@@ -206,7 +216,7 @@ export function composite(ctx: SketchContext, half: HalfBack): void {
   threadAlong(half, walk, {
     amp: (s, total) => amp * smooth(0, 3 * period, s) * clamp((total - s) / (2.5 * period), 0, 1) ** 0.7,
     period, gap,
-    keep: threadKeep,
+    keep: () => true,
   });
 }
 

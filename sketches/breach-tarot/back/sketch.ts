@@ -20,7 +20,7 @@ const sketch: Sketch = {
     { id: 'violet', color: '#776090', width: 0.25 },
   ],
   controls: [
-    { type: 'select', id: 'form', label: 'Reading', default: 'helix', options: [...BACK_FORMS],
+    { type: 'select', id: 'form', label: 'Reading', default: 'composite', options: [...BACK_FORMS],
       optionLabels: { helix: 'The helix, closed into a ring', labyrinth: 'The labyrinth, head to tail, joined by a thread', field: 'A field of helix crossings round a quiet window', composite: 'Every element: a labyrinth walked by the helix between slab gates, round a star', cathedral: 'The Breach Cathedral, head to tail' } },
     { type: 'toggle', id: 'frame', label: 'Rule at the card’s edge', default: true },
     { type: 'slider', id: 'ringSize', label: 'Ring radius (of the card’s width)', default: 0.31, min: 0.2, max: 0.4, step: 0.01, group: 'Helix' },

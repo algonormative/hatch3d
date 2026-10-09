@@ -133,6 +133,33 @@ describe('Breach Tarot: the back', () => {
     expect(total).toBeLessThanOrEqual(BUDGET_MM[form]);
   });
 
+  it('composite winds its helix round every gate block, never through or under one', () => {
+    // Each gate block's page footprint, from its outline: the boxes of its edges, merged where they touch, and merged
+    // again into courses where they share a height (so a course split by a breach counts as one).
+    const HALO = 0.5;
+    for (const { raw } of [plotted.get('composite')!, printed.get('composite')!]) {
+      let boxes = raw.filter(part => part.id === 'gate-carbon').flatMap(part => part.paths.map(bounds));
+      const touch = (a: ReturnType<typeof bounds>, b: ReturnType<typeof bounds>, slack: number, xToo: boolean) =>
+        a.y0 <= b.y1 + slack && b.y0 <= a.y1 + slack && (!xToo || (a.x0 <= b.x1 + slack && b.x0 <= a.x1 + slack));
+      for (const xToo of [true, false]) {
+        for (let merged = true; merged;) {
+          merged = false;
+          for (let i = 0; i < boxes.length && !merged; i++) for (let j = i + 1; j < boxes.length && !merged; j++) {
+            if (!touch(boxes[i], boxes[j], xToo ? 0.3 : -0.3, xToo)) continue;
+            const [a, b] = [boxes[i], boxes[j]];
+            boxes = [...boxes.filter((_, k) => k !== i && k !== j), { x0: Math.min(a.x0, b.x0), x1: Math.max(a.x1, b.x1), y0: Math.min(a.y0, b.y0), y1: Math.max(a.y1, b.y1) }];
+            merged = true;
+          }
+        }
+      }
+      // Three courses at the head and three at the foot.
+      expect(boxes).toHaveLength(6);
+      const strays = raw.filter(part => part.id.startsWith('thread-')).flatMap(part => part.paths.flat())
+        .filter(p => boxes.some(b => p.x > b.x0 - HALO && p.x < b.x1 + HALO && p.y > b.y0 - HALO && p.y < b.y1 + HALO));
+      expect(strays.slice(0, 3)).toEqual([]);
+    }
+  });
+
   it('composite draws every element of the deck, each in its own inks, at both sizes', () => {
     // The slab gates, the labyrinth, the dark heart, the star, and the helix in all four of its inks.
     const wanted = ['gate-carbon', 'gate-ultramarine', 'labyrinth-carbon', 'heart-carbon', 'star-carbon', 'thread-acid', 'thread-vermilion', 'thread-ultramarine', 'thread-violet'];

@@ -235,10 +235,10 @@ describe('print export: the stack back', () => {
     expect(inkInBand(rgb, w, h, safeBand())).toBe(0);
   }, 120_000);
 
-  it('draws the labyrinth for --back-form labyrinth, not the helix the stack gives by default, and refuses a form it does not know', async () => {
-    const helix = (await backRun()).manifest.files[0].sha256;
-    expect((await backRun({ backForm: 'helix' })).manifest.files[0].sha256).toBe(helix);
-    expect((await backRun({ backForm: 'labyrinth' })).manifest.files[0].sha256).not.toBe(helix);
+  it('draws the labyrinth for --back-form labyrinth, not the composite the stack gives by default, and refuses a form it does not know', async () => {
+    const composite = (await backRun()).manifest.files[0].sha256;
+    expect((await backRun({ backForm: 'composite' })).manifest.files[0].sha256).toBe(composite);
+    expect((await backRun({ backForm: 'labyrinth' })).manifest.files[0].sha256).not.toBe(composite);
     await expect(backRun({ backForm: 'labyrinh' })).rejects.toThrow(/labyrinh/);
   }, 120_000);
 

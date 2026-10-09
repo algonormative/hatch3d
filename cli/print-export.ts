@@ -295,7 +295,7 @@ export interface BackEntry { sketch: string; seed: number; params?: Record<strin
 export interface PrintStack extends Stack { back?: BackEntry }
 
 /**
- * The back's piece, with `--back-form` as its `form` when given. The sketch draws the helix for a form it does not
+ * The back's piece, with `--back-form` as its `form` when given. The sketch draws the composite for a form it does not
  * know, so a misspelt one is refused here rather than printed.
  */
 function backPiece(back: BackEntry, form?: string): Piece {
