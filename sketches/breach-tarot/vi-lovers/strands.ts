@@ -3,7 +3,7 @@ import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { helixStrands, strandPoint, strandStrokes } from '../../kit/helix.ts';
 import { clamp, smooth } from '../../kit/params.ts';
-import { PAGE } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import type { Stroke } from '../../kit/types.ts';
 
 /**
@@ -148,18 +148,14 @@ export function strand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, 
 }
 
 /**
- * The lead-in of one lover: a thin flat ribbon along its own smooth arc, from the tower top to the meeting
- * point, in the strand's native inks. It is the same strand of the kit's twin helix, laid on the arc
- * unwound (no turns) with no radius, so it keeps its width and does not coil. It narrows at both ends, and
- * is turned about the arc to show the most of its width to the eye.
+ * The roll about its arc that shows the eye the most of a lead ribbon's width: the ribbon's width lies along
+ * -sin θ × normal + cos θ × binormal, and this is the θ (of 24) whose narrowest view along the arc is widest. Seen by
+ * `bigView`, the world camera in tabloid's frame moved out `scale` times as the spine was built, so every size and fit
+ * rolls the ribbon as the print does.
  */
-export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, width: number, scale: number): Strand {
-  const start = spine.pts[0];
+export function leadRoll(bigView: THREE.Camera, spine: Spine, scale: number): number {
   const length = spine.length;
-  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
-  const base = { ...template[which], x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: 0, depth: 1, width, swell: 0, centre: -1e3, turns: 0.001 };
-  // The ribbon's width lies along -sin θ × normal + cos θ × binormal; pick the θ that shows most of it on the sheet.
-  const aspect = PAGE.width / PAGE.height;
+  const aspect = TABLOID_PAGE.width / TABLOID_PAGE.height;
   const seen = (theta: number) => {
     let least = Infinity;
     for (let i = 1; i < 12; i++) {
@@ -174,7 +170,21 @@ export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spi
   };
   let theta = 0, best = -1;
   for (let i = 0; i < 24; i++) { const th = i / 24 * Math.PI * 2, v = seen(th); if (v > best) { best = v; theta = th; } }
-  const st = { ...base, theta0: theta };
+  return theta;
+}
+
+/**
+ * The lead-in of one lover: a thin flat ribbon along its own smooth arc, from the tower top to the meeting
+ * point, in the strand's native inks. It is the same strand of the kit's twin helix, laid on the arc
+ * unwound (no turns) with no radius, so it keeps its width and does not coil. It narrows at both ends, and
+ * is turned about the arc by `roll` (`leadRoll`) to show the most of its width to the eye.
+ */
+export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, width: number, scale: number, roll: number): Strand {
+  const start = spine.pts[0];
+  const length = spine.length;
+  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
+  const base = { ...template[which], x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: 0, depth: 1, width, swell: 0, centre: -1e3, turns: 0.001 };
+  const st = { ...base, theta0: roll };
   const bend = (p: THREE.Vector3): THREE.Vector3 => {
     const s = clamp((p.y - start.y) / length, 0, 1) * length;
     const fr = spine.frame(s);

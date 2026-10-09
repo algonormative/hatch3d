@@ -3,20 +3,21 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { figureMeshes, figureStrokes, footOf, meeting } from './figures.ts';
+import { figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
 import { roundedPocket } from './pocket.ts';
 import { shadowOf } from './shadows.ts';
-import { Spine, leadStrand, strand, winding, type Ribbon } from './strands.ts';
+import { Spine, leadRoll, leadStrand, strand, winding, type Ribbon } from './strands.ts';
 import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from './towers.ts';
 
 /**
@@ -34,7 +35,8 @@ import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from '.
  * course faces word by word: `wants` on the near tower and `want` on the far one sit at mirrored
  * places, slightly off.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** The card's depth raster at tabloid; on any other page, the format's. */
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 7.2;
@@ -43,11 +45,28 @@ const SLACK = { slab: 0.6, helix: 0.12, figure: 0.03 } as const;
 /** Depth bands: each gets its own bias, so the slack is the same distance in the world near and far. */
 const BAND_EDGES = [18, 24, 27, 30, 34, 39, 45, 53, 62, 75, 95, Infinity];
 
+/** The card's camera, on the format's page. */
 export function loversCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the Lovers' world is laid out with. At tabloid it is `loversCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: EYE, near: 8, far: 4000 });
+}
+
+/** A copy of `view` moved out `k` times, for the strands built `k` times larger. */
+function grownView(view: THREE.PerspectiveCamera, k: number): THREE.PerspectiveCamera {
+  const big = view.clone();
+  big.position.multiplyScalar(k); big.near *= k; big.far *= k;
+  big.updateProjectionMatrix(); big.updateMatrixWorld(true);
+  return big;
 }
 
 /** A polyline cut into runs of at most `size` points, each sharing its end point with the next. */
@@ -59,16 +78,33 @@ function chunk<T>(points: T[], size: number): T[][] {
 
 type Placed = Stroke & { band: number; kind: keyof typeof SLACK };
 
-export function drawLovers(ctx: SketchContext): Part[] {
-  const view = loversCamera(ctx);
-  const eye = view.position.clone();
-  const forward = new THREE.Vector3();
-  view.getWorldDirection(forward);
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
-  /** The world point `d` units in front of the eye that lands at page position (px, py). */
-  const at = (px: number, py: number, d: number) => new THREE.Vector3((px - PAGE.width / 2) * d / f, EYE + (HORIZON_Y - py) * d / f, -d);
-  const bandOf = (p: THREE.Vector3) => Math.max(0, BAND_EDGES.findIndex((edge, i) => eye.z - p.z >= edge && eye.z - p.z < BAND_EDGES[i + 1]));
+export interface LoversWorld {
+  light: THREE.Vector3;
+  lovers: { left: Figure; right: Figure };
+  near: Tower;
+  far: Tower;
+  /** The strands' build scale (`helixScale`): they are built this many times larger, then scaled back. */
+  scale: number;
+  /** Each strand's centre line, lead-in then shared tail, and its lead-in alone; the ribbon they wind. */
+  spineA: Spine; spineB: Spine; leadA: Spine; leadB: Spine;
+  ribbon: Ribbon;
+  /** How far strand b is turned to sit as in the full helix past the meeting point. */
+  phaseB: number;
+  /** The lead ribbons' half-width, and each one's roll about its arc (the one that shows the eye most of it). */
+  leadWidth: number; rollA: number; rollB: number;
+}
+
+/**
+ * The card's world: the light, the two lovers, the two towers and the strands' course. It is laid out in tabloid's
+ * frame, with `worldCamera` and tabloid's page millimetres, so every size and fit builds the same world, to the bit;
+ * each card's own camera then draws it.
+ */
+export function loversWorld(ctx: SketchContext): LoversWorld {
+  const camera = worldCamera(ctx);
+  const eye = camera.position.clone();
+  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  /** The world point `d` units in front of the eye that lands at tabloid page position (px, py). */
+  const at = (px: number, py: number, d: number) => new THREE.Vector3((px - TABLOID_PAGE.width / 2) * d / f, EYE + (TABLOID_HORIZON_Y - py) * d / f, -d);
 
   // The pattern both towers are cut from, and how they stand: turned toward each other, each leaning toward the other.
   const count = Math.round(n(ctx, 'courses', 12, 8, 24));
@@ -77,7 +113,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
   const pattern = coursePattern(ctx.random('lovers-courses'), count + skip, n(ctx, 'width', 5.2, 3.5, 12));
   const yaw = THREE.MathUtils.degToRad(n(ctx, 'yaw', 8, 8, 45));
   const lean = THREE.MathUtils.degToRad(n(ctx, 'lean', 5, 0, 12));
-  const heightAt = (top: number, base: THREE.Vector3) => EYE + (HORIZON_Y - top) * (eye.z - base.z) / f;
+  const heightAt = (top: number, base: THREE.Vector3) => EYE + (TABLOID_HORIZON_Y - top) * (eye.z - base.z) / f;
   const nearTop = n(ctx, 'nearTop', 175, 60, 220), farRatio = n(ctx, 'farRatio', 1, 0.6, 1.3);
 
   // One low light from the left and a little in front throws every shadow back across the ground and to the right.
@@ -120,9 +156,6 @@ export function drawLovers(ctx: SketchContext): Part[] {
 
   // The strands: one from each tower top, in one smooth arc, meeting, then winding together up the card. Built larger, then scaled back.
   const S = n(ctx, 'helixScale', 8, 4, 40);
-  const bigView = view.clone();
-  bigView.position.multiplyScalar(S); bigView.near *= S; bigView.far *= S;
-  bigView.updateProjectionMatrix(); bigView.updateMatrixWorld(true);
   const meetX = n(ctx, 'meetX', 125, 100, 180), meetDepth = n(ctx, 'meetDepth', 28, 20, 90), tailX = n(ctx, 'tailX', 115, 90, 190);
   const meet = at(meetX, n(ctx, 'meetY', 108, 60, 150), meetDepth);
   const tail = new THREE.CatmullRomCurve3([meet.clone(), at((meetX + tailX) / 2, 72, meetDepth + 0.5), at(tailX, 0, meetDepth + 1)], false, 'centripetal');
@@ -135,19 +168,42 @@ export function drawLovers(ctx: SketchContext): Part[] {
     const start = toward.multiplyScalar(Math.cos(arm)).add(new THREE.Vector3(0, Math.sin(arm), 0));
     return new THREE.CubicBezierCurve3(from, from.clone().addScaledVector(start, reach * 0.45), meet.clone().addScaledVector(tau, -reach * 0.4), meet.clone());
   };
-  const leadA = lead(near.top), leadB = lead(far.top);
-  const spineA = new Spine(leadA, tail, S), spineB = new Spine(leadB, tail, S);
+  const leadCurveA = lead(near.top), leadCurveB = lead(far.top);
+  const spineA = new Spine(leadCurveA, tail, S), spineB = new Spine(leadCurveB, tail, S);
   const ribbon: Ribbon = {
     radius: n(ctx, 'helixR', 1.9, 0.5, 4) * S, width: n(ctx, 'ribbon', 0.12, 0.08, 1.5) * S, pitch: n(ctx, 'pitch', 3.2, 1.5, 12) * S,
     open: n(ctx, 'open', 2.0, 0.5, 12) * S, flare: n(ctx, 'flare', 2.0, 0.5, 12) * S, slim: n(ctx, 'slim', 0, 0, 1),
   };
   // Phase: each strand has wound its own number of turns by the meeting point; turn the second so the two sit as in the full helix beyond it.
-  const strandA = strand(ctx, bigView, spineA, 0, ribbon, 0, S);
-  const strandB = strand(ctx, bigView, spineB, 1, ribbon, -(winding(spineB, ribbon).joinTurns - winding(spineA, ribbon).joinTurns), S);
-  // Each strand's lead-in, from its tower top to the meeting point, a thin ribbon on its own smooth arc.
+  const phaseB = -(winding(spineB, ribbon).joinTurns - winding(spineA, ribbon).joinTurns);
+  // Each strand's lead-in, from its tower top to the meeting point, a thin ribbon on its own smooth arc, rolled as tabloid's eye sees it.
   const leadWidth = n(ctx, 'leadWidth', 0.1, 0.02, 0.4) * S;
-  const leadRibbonA = leadStrand(ctx, bigView, new Spine(leadA, null, S), 0, leadWidth, S);
-  const leadRibbonB = leadStrand(ctx, bigView, new Spine(leadB, null, S), 1, leadWidth, S);
+  const leadA = new Spine(leadCurveA, null, S), leadB = new Spine(leadCurveB, null, S);
+  const bigWorld = grownView(camera, S);
+  return {
+    light, lovers, near, far, scale: S, spineA, spineB, leadA, leadB, ribbon, phaseB,
+    leadWidth, rollA: leadRoll(bigWorld, leadA, S), rollB: leadRoll(bigWorld, leadB, S),
+  };
+}
+
+export function drawLovers(ctx: SketchContext): Part[] {
+  const view = loversCamera(ctx);
+  const eye = view.position.clone();
+  const forward = new THREE.Vector3();
+  view.getWorldDirection(forward);
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
+  const bandOf = (p: THREE.Vector3) => Math.max(0, BAND_EDGES.findIndex((edge, i) => eye.z - p.z >= edge && eye.z - p.z < BAND_EDGES[i + 1]));
+  // The world, the same at every size; this card's camera draws it.
+  const world = loversWorld(ctx);
+  const { light, lovers, near, far, scale: S, spineA, spineB, ribbon } = world;
+
+  // The strands' strokes are spaced on this card's paper, so they take this card's camera, moved out as they were built.
+  const bigView = grownView(view, S);
+  const strandA = strand(ctx, bigView, spineA, 0, ribbon, 0, S);
+  const strandB = strand(ctx, bigView, spineB, 1, ribbon, world.phaseB, S);
+  const leadRibbonA = leadStrand(ctx, bigView, world.leadA, 0, world.leadWidth, S, world.rollA);
+  const leadRibbonB = leadStrand(ctx, bigView, world.leadB, 1, world.leadWidth, S, world.rollB);
 
   const lit = (_p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.9 * (1 - Math.max(0, normal.dot(light))) ** 1.3 + 0.04, 0, 1);
   const env = { forward, density: 0.4, dark: lit, screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; } };
@@ -182,13 +238,14 @@ export function drawLovers(ctx: SketchContext): Part[] {
       const d = Math.sqrt(lo * hi);
       return Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
     };
-    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    // Each lover's own clear pocket of paper: nothing of the towers or the sky comes near its lines.
-    const loverPocket = roundedPocket(figureGeos, view, n(ctx, 'pocket', 3, 0.5, 8));
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)));
+    // Each lover's own clear pocket of paper: nothing of the towers or the sky comes near its lines. A halo: it scales with the card.
+    const loverPocket = roundedPocket(figureGeos, view, halo(n(ctx, 'pocket', 3, 0.5, 8)));
 
     // The phrase, one word to a face, from the near tower across to the far one. `wants` and `want` sit at mirrored places.
+    // Where the format sets the phrase in the band, under the card's name, the towers carry no words.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('lovers-words');
     const style = { face: settings.face, height: settings.size };
     const textStrokes: THREE.Vector3[][] = [];
@@ -237,7 +294,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.9);
+    const onGlyph = glyphMask(glyphPaths, halo(0.9));
     const buckets = new PartBuckets(0.4);
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
@@ -257,9 +314,9 @@ export function drawLovers(ctx: SketchContext): Part[] {
     const towerShade = meshCoverage([shadowGeos[0]], view, PAGE, 0, 4);
     const leftShade = meshCoverage([shadowGeos[1]], view, PAGE, spread, 4), rightShade = meshCoverage([shadowGeos[2]], view, PAGE, spread, 4);
     const loverShade = (p: Point) => leftShade(p) || rightShade(p);
-    const standing = meshCoverage(slabGeos, view, PAGE, 0.5, 4);
-    const onLover = meshCoverage(figureGeos, view, PAGE, 0.7, 4);
-    const tilt = THREE.MathUtils.degToRad(n(ctx, 'shadowAngle', 62, 20, 85)), step = n(ctx, 'shadowPitch', 0.55, 0.4, 2);
+    const standing = meshCoverage(slabGeos, view, PAGE, halo(0.5), 4);
+    const onLover = meshCoverage(figureGeos, view, PAGE, halo(0.7), 4);
+    const tilt = THREE.MathUtils.degToRad(n(ctx, 'shadowAngle', 62, 20, 85)), step = tolerance(n(ctx, 'shadowPitch', 0.55, 0.4, 2));
     // Scraps of a tower's shadow cut off by a lover's shadow, a few millimetres long, are dropped.
     const hatch = (key: string, shortest: number, families: readonly (readonly [number, number])[], keep: (p: Point) => boolean) => {
       for (const [angle, pitch] of families) {
@@ -268,7 +325,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
         const mid = { x: (CARD.x0 + CARD.x1) / 2, y: (CARD.y0 + CARD.y1) / 2 };
         for (let o = -span / 2; o < span / 2; o += pitch) {
           const line: Point[] = [{ x: mid.x + nx * o - cx * span, y: mid.y + ny * o - cy * span }, { x: mid.x + nx * o + cx * span, y: mid.y + ny * o + cy * span }];
-          for (const inside of clipWindow(line, { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + 0.8, y1: CARD.y1 })) {
+          for (const inside of clipWindow(line, { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + layoutLength(0.8), y1: CARD.y1 })) {
             for (const piece of keepAlong(inside, keep, 0.2)) buckets.add(key, piece, false, shortest);
           }
         }
@@ -281,11 +338,12 @@ export function drawLovers(ctx: SketchContext): Part[] {
     hatch('shadow-right-carbon', 1.5, [[tilt, step], [cross, step * 1.5]], p => rightShade(p) && !leftShade(p) && !standing(p) && !onLover(p));
 
     // The sky: a light ruling, thinning and breaking as it comes down to the horizon, knocked out round everything standing in it.
+    // The ruling and its breaks keep their millimetres on paper, so a small card keeps the print's tones in fewer rules.
     const reach = n(ctx, 'sky', 0.9, 0, 1);
-    const pitch = n(ctx, 'skyPitch', 1.5, 0.8, 5);
+    const pitch = tolerance(n(ctx, 'skyPitch', 1.5, 0.8, 5));
     const rhythm = barPattern(ctx.random('lovers-sky'), 0.86);
-    const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
-    if (reach > 0) for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += pitch) {
+    const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1);
+    if (reach > 0) for (let y = skyTop + tolerance(0.3), i = 0; y < skyBottom; i++, y += pitch) {
       const t = (y - skyTop) / (skyBottom - skyTop);
       const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
       const limit = [0.95, 0.72, 0.5, 0.28][tier];
@@ -296,7 +354,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'shadow', 'shadow-left', 'shadow-right', 'near', 'far', 'left', 'left-edge', 'right', 'right-edge', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p) && !loverPocket(p), 0.3) });
-    parts.push(...cardFrame('VI', 'THE LOVERS'));
+    parts.push(...cardFrame('VI', 'THE LOVERS', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of [...geometries, ...shadowGeos]) geo.dispose();
