@@ -4,6 +4,7 @@ import { flowBody, ribbonStrokes } from '../../kit/mannequin/gesture.ts';
 import { LOOK, type Look } from '../../kit/mannequin/hatch.ts';
 import type { Skeleton } from '../../kit/mannequin/skeleton.ts';
 import type { ClothStroke, Tube } from '../../kit/mannequin/tube.ts';
+import { FORMAT, S, layoutLength } from '../../kit/format.ts';
 import { clamp } from '../../kit/params.ts';
 import { pageOf } from '../../kit/perspective.ts';
 
@@ -16,8 +17,19 @@ import { pageOf } from '../../kit/perspective.ts';
  */
 const BUILD = 1.3;
 
-/** Plain carbon throughout, so the figure stays one pen beside the wall's hatch. */
-const BODY_LOOK: Look = { ...LOOK, cloth: 'carbon', accent: 'carbon', edge: 'carbon', crease: 'carbon', detail: 'carbon', figure: 'figure', contour: 'figure', family: 'hatch' };
+/**
+ * Plain carbon throughout, so the figure stays one pen beside the wall's hatch. Its outlines are grouped `figure-edge`
+ * so a small card can rank them above the bands (the card draws every stroke into its `figure` part).
+ */
+const BODY_LOOK: Look = { ...LOOK, cloth: 'carbon', accent: 'carbon', edge: 'carbon', crease: 'carbon', detail: 'carbon', figure: 'figure', contour: 'figure-edge', family: 'hatch' };
+
+/**
+ * The ribbons' bands round the trunk and round each limb on a small card: the print's six round the trunk, and the kit's
+ * four on a limb, scaled with the card and never under one, so each band keeps its width on paper and there are fewer
+ * of them, as a ruling keeps its pitch. Undefined at tabloid, where the figure keeps the print's.
+ */
+const BANDS = FORMAT.tabloid ? undefined : { trunk: Math.max(1, Math.round(6 * S)), limb: Math.max(1, Math.round(4 * S)) };
+const RIBBON = { fill: 0.58, twist: 0.3, lines: 6 };
 
 /** A head's outline on the page: the hull of its surface as the eye sees it, so a crown or chin seen end-on is not lost. */
 function headOutline(head: Tube, view: THREE.Camera, look: Look): ClothStroke {
@@ -49,11 +61,19 @@ export function bodyPerson(s: Skeleton, view: THREE.PerspectiveCamera) {
   };
   const head = body.head!;
   const strokes: ClothStroke[] = [
-    ...ribbonStrokes({ ...body, head: undefined }, env, BODY_LOOK, { bands: 6, fill: 0.58, twist: 0.3, lines: 6 }),
+    // On a small card each tube is ribboned on its own, as the trunk of a body, so it takes the band count given it.
+    ...(BANDS
+      ? [body.trunk, ...body.limbs].flatMap(t => ribbonStrokes({ ...body, trunk: t, limbs: [], head: undefined }, env, BODY_LOOK, { ...RIBBON, bands: t === body.trunk ? BANDS.trunk : BANDS.limb }))
+      : ribbonStrokes({ ...body, head: undefined }, env, BODY_LOOK, { bands: 6, ...RIBBON })),
     ...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, BODY_LOOK, s.height * 0.012),
     headOutline(head, view, BODY_LOOK),
   ];
+  return { strokes, meshes: bodyMeshes(body, 0.7), bounds: figureBounds(s, view) };
+}
+
+/** The skeleton's box on the card's page, with a margin that scales with the card (1.5 mm on the print). */
+export function figureBounds(s: Skeleton, view: THREE.Camera) {
   const pts = [...s.joints.values()].flatMap(j => [pageOf(view, j.origin), pageOf(view, j.end)]);
-  const bounds = { x0: Math.min(...pts.map(p => p.x)) - 1.5, x1: Math.max(...pts.map(p => p.x)) + 1.5, y0: Math.min(...pts.map(p => p.y)) - 1.5, y1: Math.max(...pts.map(p => p.y)) + 1.5 };
-  return { strokes, meshes: bodyMeshes(body, 0.7), bounds };
+  const m = layoutLength(1.5);
+  return { x0: Math.min(...pts.map(p => p.x)) - m, x1: Math.max(...pts.map(p => p.x)) + m, y0: Math.min(...pts.map(p => p.y)) - m, y1: Math.max(...pts.map(p => p.y)) + m };
 }
