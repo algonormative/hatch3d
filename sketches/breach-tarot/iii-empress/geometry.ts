@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -15,6 +15,7 @@ import { barPattern } from '../../kit/rhythm.ts';
 import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
+import { Clearance } from './clearance.ts';
 
 /**
  * III The Empress: there will always be more. No figure: abundance as a crop that grew into a
@@ -427,6 +428,22 @@ function courseGroups(slabs: Slab[]): Slab[][] {
  * the slight differences in width between courses do not make the edge shiver.
  */
 function silhouette(plant: Plant): THREE.Vector3[] {
+  const { edge, first, last, left, right } = outlineSides(plant);
+  return [edge(first.l, -1, -1), ...left, edge(last.l, -1, 1), edge(last.r, 1, 1), ...right.reverse(), edge(first.r, 1, -1), edge(first.l, -1, -1)];
+}
+
+/**
+ * A far plant narrower on the card than its outline can be drawn (its two sides closer than the smallest feature): one
+ * line up the middle of its front instead, from the foot to the top, halfway between the outline's two sides.
+ */
+function spine(plant: Plant): THREE.Vector3[] {
+  const { edge, first, last, left, right } = outlineSides(plant);
+  const mid = (a: THREE.Vector3, b: THREE.Vector3) => a.clone().add(b).multiplyScalar(0.5);
+  return [mid(edge(first.l, -1, -1), edge(first.r, 1, -1)), ...left.map((q, i) => mid(q, right[i])), mid(edge(last.l, -1, 1), edge(last.r, 1, 1))];
+}
+
+/** The two sides of a far plant's outline, course by course (smoothed over three), and its first and last courses' end blocks. */
+function outlineSides(plant: Plant) {
   const e = 0.02;
   const groups = courseGroups(plant.slabs);
   const edge = (sl: Slab, x: number, y: number) => new THREE.Vector3(x * (sl.w / 2 + e), y * (sl.h / 2 + e), sl.d / 2 + e).applyMatrix4(slabMatrix(sl));
@@ -438,8 +455,7 @@ function silhouette(plant: Plant): THREE.Vector3[] {
   });
   const smoothed = (pts: THREE.Vector3[]) => pts.map((q, i) => i === 0 || i === pts.length - 1 ? q : pts[i - 1].clone().add(q).add(pts[i + 1]).multiplyScalar(1 / 3));
   const left = smoothed(ends.map(g => edge(g.l, -1, 0))), right = smoothed(ends.map(g => edge(g.r, 1, 0)));
-  const first = ends[0], last = ends[ends.length - 1];
-  return [edge(first.l, -1, -1), ...left, edge(last.l, -1, 1), edge(last.r, 1, 1), ...right.reverse(), edge(first.r, 1, -1), edge(first.l, -1, -1)];
+  return { edge, first: ends[0], last: ends[ends.length - 1], left, right };
 }
 
 export function drawEmpress(ctx: SketchContext): Part[] {
@@ -458,7 +474,9 @@ export function drawEmpress(ctx: SketchContext): Part[] {
   const strokes: Banded[] = [];
   for (const plant of plants) {
     if (plant.outline) {
-      const line = silhouette(plant);
+      // A far plant narrower on the card than the smallest feature is one line up its middle (`MIN_FEATURE` is 0 at tabloid).
+      const narrow = plant.slabs.reduce((hi, sl) => Math.max(hi, sl.w), 0) * mmPerUnit(plant.base) < MIN_FEATURE;
+      const line = narrow ? spine(plant) : silhouette(plant);
       strokes.push({ ink: 'carbon', group: 'far', family: 'edge', points: line, band: bandOf(plant.base) });
       continue;
     }
@@ -556,8 +574,13 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     }
     const onGlyph = glyphMask(glyphPaths, halo(0.9));
     const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number, exact = false) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, exact, min);
+    // Off tabloid the far field gives way: its plants are small enough on the card that one standing a row behind another
+    // shows a sliver of outline beside it, closer than the pens hold apart. So each far mark keeps only what clears
+    // everything drawn in front of it (drawn first, band by band) by the format's spacing. The print is unchanged.
+    const clear = FORMAT.tabloid ? undefined : new Clearance(MIN_SPACING);
+    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number, exact = false, giveWay = false) => {
+      const keep = (p: Point) => !onGlyph(p) && extra(p) && !(giveWay && clear?.near(p));
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, keep, 0.15)) if (buckets.add(key, piece, exact, min)) clear?.add(piece);
     };
     // On a small card the path reducer's 1.4 mm stride is a large share of the wind's twists, and turns its ribbon's
     // edges to zigzags: there its strokes keep every point (and the reducer's shortest path). The print is unchanged.
@@ -567,12 +590,13 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       if (!mine.length) continue;
       projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(band) }, {
         // Scraps are dropped: ground rules under 3 mm and far outlines and ticks under 1.6 mm, which the plants in front
-        // cut up. Real millimetres on any card: a scrap is as short on paper whatever the size. Off tabloid a piece of a
-        // face's hatch shorter than the smallest feature is a speck, and goes too (`MIN_FEATURE` is 0 at tabloid).
+        // cut up. Real millimetres on any card: a scrap is as short on paper whatever the size. Off tabloid a piece of the
+        // crop shorter than the smallest feature goes too (`MIN_FEATURE` is 0 at tabloid): a speck of a face's hatch, or a
+        // stub of a course's edge where the plants in front cut it, which on a small card is a third of its print length.
         begin: st => runs => {
-          const min = st.group === 'ground' ? tolerance(3) : st.group === 'far' ? tolerance(1.6) : st.family === 'hatch' ? MIN_FEATURE || undefined : undefined;
+          const min = st.group === 'ground' ? tolerance(3) : st.group === 'far' ? tolerance(1.6) : st.group === 'crop' ? MIN_FEATURE || undefined : undefined;
           const exact = st.group === 'wind' && smoothWind;
-          for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, exact ? MIN_LENGTH_MM : min, exact);
+          for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, exact ? MIN_LENGTH_MM : min, exact, st.group === 'far');
         },
       });
     }
