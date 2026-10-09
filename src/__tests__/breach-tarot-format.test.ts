@@ -8,7 +8,8 @@ import { CARD as CARD_OF_CARDS, HORIZON_Y as HORIZON_OF_CARDS, cardFrame } from 
 import { targetPage } from '../sketch/render-target.ts';
 import {
   AREA, CARD, FORMAT, FRAME, HORIZON_Y, MIN_FEATURE, PAGE, PITCH_SCALE, SHEET, TABLOID_CARD, TABLOID_FORMAT, TABLOID_HORIZON_Y,
-  assertFormatPage, depthRaster, evenlyKept, fitFov, formatFor, halo, layoutLength, layoutX, layoutY, rasterFor, scaledCount, tolerance,
+  assertFormatPage, depthRaster, evenlyKept, fitFov, formatFor, halo, layoutLength, layoutX, layoutY, rasterFor, scaledCount, tabloidX, tabloidY,
+  tolerance,
 } from '../../sketches/kit/format.ts';
 
 let dir: string | undefined;
@@ -43,6 +44,8 @@ describe('Breach Tarot format', () => {
     for (const v of [0, 0.1, 0.4, 18, 42.37, 139.7, 250.68, 261.4, 389.8, 1e-9]) {
       expect(layoutX(v)).toBe(v);
       expect(layoutY(v)).toBe(v);
+      expect(tabloidX(v)).toBe(v);
+      expect(tabloidY(v)).toBe(v);
       expect(layoutLength(v)).toBe(v);
       expect(halo(v)).toBe(v);
       expect(tolerance(v)).toBe(v);
@@ -293,6 +296,54 @@ describe('Breach Tarot format', () => {
         expect(p.y).toBeLessThanOrEqual((above ? g.card.y0 - g.frame.rule : g.card.bottom) - clear);
       }
     }
+  });
+
+  it('carries a tabloid page position there and back, and trims a slab for a small card: its back edges, its slivers shaded', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
+    const entry = join(dir, 'probe.ts');
+    const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches/kit', path));
+    // A page-aware probe, its points 20 mm in, inside either page's margin: tabloid's (100, 300) laid out here and carried
+    // back, in tenths; and edge and hatch counts for a block below the eye showing three wide faces, and a slab as thin as
+    // a card (two of its three faces seen edge-on, in shade under a light from straight above), with and without trimming.
+    await writeFile(entry, `import { HORIZON_Y, PAGE, depthRaster, layoutX, layoutY, tabloidX, tabloidY } from ${kit('format.ts')};
+      import { horizonCamera } from ${kit('perspective.ts')};
+      import { facetStrokes, solid } from ${kit('slabs.ts')};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.25 }], controls: [],
+        draw() {
+          const { W, H } = depthRaster(559, 864);
+          const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y });
+          const light = view.position.clone().set(0, 1, 0);
+          const slab = h => { const s = solid(3, -6, -30, 6, h, 4, 0, 'stack'); s.ry = 0.6; return s; };
+          const block = slab(3), thin = slab(0.02);
+          const count = (s, family, trim) => 20 + facetStrokes(s, light, view.position, false, undefined, trim).filter(st => st.family === family).length;
+          return [
+            { id: 'there-and-back', pen: 'ink', paths: [[{ x: 20 + layoutX(100) / 10, y: 20 + layoutY(300) / 10 }, { x: 20 + tabloidX(layoutX(100)) / 10, y: 20 + tabloidY(layoutY(300)) / 10 }]] },
+            { id: 'block', pen: 'ink', paths: [[{ x: count(block, 'edge'), y: count(block, 'edge', { view }) }, { x: count(block, 'edge', { view, hidden: false }), y: 20 }]] },
+            { id: 'thin', pen: 'ink', paths: [[{ x: count(thin, 'edge'), y: count(thin, 'edge', { view }) }, { x: count(thin, 'hatch', { view }), y: count(thin, 'hatch', { view, shade: true }) }]] },
+          ];
+        } };`);
+    const [print, small] = await Promise.all([renderSketch({ entry }), renderSketch({ entry, finishing: { page: { width: 70, height: 120 } } })]);
+    const path = (r: typeof print, id: string) => r.parts.find(part => part.id === id)!.paths[0];
+    // There and back: tabloid's position itself, by way of the card's own (which is not it). (At tabloid both are the
+    // identity: see 'leaves every tabloid measurement exactly as authored'.)
+    const [here, back] = path(small, 'there-and-back');
+    expect(here.x).toBeLessThan(25);
+    expect(here.y).toBeLessThan(45);
+    expect(back.x).toBeCloseTo(30, 9);
+    expect(back.y).toBeCloseTo(50, 9);
+    // At tabloid the trim is ignored: the six outline strokes of the print (two face loops, four depth edges), and the
+    // same hatch.
+    expect(path(print, 'block')).toEqual([{ x: 26, y: 26 }, { x: 26, y: 20 }]);
+    const [thinEdges, thinHatch] = path(print, 'thin');
+    expect(thinEdges).toEqual({ x: 26, y: 26 });
+    expect(thinHatch.y).toBe(thinHatch.x);
+    // On the small card: twelve edges, less the three between faces turned away (all twelve where back edges are kept);
+    // on the thin slab, less the three inner edges of its slivers too; and a line down each of its two shaded slivers.
+    expect(path(small, 'block')).toEqual([{ x: 26, y: 29 }, { x: 32, y: 20 }]);
+    const [edges, hatch] = path(small, 'thin');
+    expect(edges).toEqual({ x: 26, y: 26 });
+    expect(hatch.y - hatch.x).toBe(2);
   });
 
   it('narrows a long name to the card’s width, with and without the phrase, and sets a short one as it is', async () => {

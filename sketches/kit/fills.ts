@@ -81,6 +81,12 @@ export interface BandHatch {
   angle?: number;
   /** How far inside the band edge the hatch stops (default 0.5 mm). */
   margin?: number;
+  /**
+   * `bandMarks` only: a band narrower than this across, in millimetres, is drawn as its centreline alone (like the
+   * outlines, not clipped to the area), since its two rules would print as one blot. Pass `MIN_FEATURE`
+   * (`kit/format.ts`), which is 0 at tabloid, so the print keeps its band. Default 0: always a band.
+   */
+  narrow?: number;
 }
 
 /** Parallel hatch across `area`, kept only where it lies within `half - margin` of the centreline. */
@@ -97,8 +103,9 @@ export function bandHatch(centreline: Point[], half: number, area: Rect, hatch: 
   return out;
 }
 
-/** A flat band along a centreline: two outline rules and a dense hatch between them. */
+/** A flat band along a centreline: two outline rules and a dense hatch between them; under `hatch.narrow` across, the centreline. */
 export function bandMarks(centreline: Point[], half: number, area: Rect, hatch?: BandHatch): Point[][] {
+  if (hatch?.narrow && 2 * half < hatch.narrow) return [centreline];
   return [...bandOutlines(centreline, half), ...bandHatch(centreline, half, area, hatch)];
 }
 

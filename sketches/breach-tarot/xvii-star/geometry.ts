@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tabloidY, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, pageExtent, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { clearBands, planSloganAttempts, sloganSettings, type SloganPlan, type SloganSurface } from '../../kit/lettering.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -42,8 +42,6 @@ export interface Sky { star: Slab[]; debris: Slab[]; words: Slab[]; centre: THRE
 
 /** A page point authored in tabloid's frame, on the format's page. */
 const placed = (p: Point): Point => ({ x: layoutX(p.x), y: layoutY(p.y) });
-/** A page y back in tabloid's frame (measured from the horizon), for a pattern tuned on tabloid's page. */
-const tabloidY = (y: number): number => FORMAT.tabloid ? y : TABLOID_HORIZON_Y + (y - HORIZON_Y) / S;
 /** The fewest fragments a smaller card keeps in its sky at the `constellation` default, so the constellation still reads. */
 export const CONSTELLATION_FLOOR = 16;
 
@@ -109,18 +107,6 @@ export function sky(ctx: SketchContext, view: THREE.PerspectiveCamera): Sky {
   return { star, debris, words, centre };
 }
 
-/** A slab's bounding box on the page: its centre and its larger side, in millimetres. */
-export function pageExtent(view: THREE.Camera, s: Slab): { x: number; y: number; size: number } {
-  const m = slabMatrix(s);
-  const xs: number[] = [], ys: number[] = [];
-  for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) {
-    const p = pageOf(view, new THREE.Vector3(x * s.w / 2, y * s.h / 2, z * s.d / 2).applyMatrix4(m));
-    xs.push(p.x); ys.push(p.y);
-  }
-  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-  return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0) };
-}
-
 /** The fragments the sky seeds at the `constellation` control's default. */
 const SEEDED_DEFAULT = 45;
 
@@ -140,94 +126,6 @@ export function shownDebris(debris: Slab[], view: THREE.Camera): Slab[] {
     const e = pageExtent(view, s);
     return e.size >= MIN_FEATURE && e.x > CARD.x0 && e.x < CARD.x1 && e.y > CARD.y0 && e.y < HORIZON_Y;
   });
-}
-
-/**
- * A slab's twelve edges, each pushed a hair outward so the depth test keeps it, less the inner edges of any face
- * that sees the eye but is narrower on paper than `MIN_FEATURE`. Such a sliver (an arm's shaded side, seen nearly
- * edge-on) is drawn as part of its slab's outline instead of as two strokes closer than the pen can hold apart.
- * With `hidden`, the edges between two faces turned away are left out too: the depth test hides them, except
- * within a pixel or two of the outline, where on a small card they would double it.
- */
-export function slabEdges(s: Slab, view: THREE.Camera, hidden = true): THREE.Vector3[][] {
-  const m = slabMatrix(s);
-  const half = [s.w / 2, s.h / 2, s.d / 2];
-  const e = 0.006;
-  const local = (v: number[]) => new THREE.Vector3(v[0], v[1], v[2]).applyMatrix4(m);
-  const others = (a: number) => [0, 1, 2].filter(b => b !== a);
-  // A face is an axis and a side; its corners run round it.
-  const corners = (a: number, side: number) => {
-    const [i, j] = others(a);
-    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => { const c = [0, 0, 0]; c[a] = side * half[a]; c[i] = u * half[i]; c[j] = v * half[j]; return local(c); });
-  };
-  const seen = (a: number, side: number) => {
-    const c = [0, 0, 0], o = [0, 0, 0];
-    c[a] = side * half[a]; o[a] = side * (half[a] + 1);
-    const centre = local(c);
-    return view.position.clone().sub(centre).dot(local(o).sub(centre)) > 0;
-  };
-  const narrow = (a: number, side: number) => {
-    const q = corners(a, side).map(p => pageOf(view, p));
-    let area = 0, longest = 0;
-    for (let k = 0; k < 4; k++) {
-      const p0 = q[k], p1 = q[(k + 1) % 4];
-      area += p0.x * p1.y - p1.x * p0.y;
-      longest = Math.max(longest, Math.hypot(p1.x - p0.x, p1.y - p0.y));
-    }
-    return Math.abs(area) / 2 / longest < MIN_FEATURE;
-  };
-  const edges: THREE.Vector3[][] = [];
-  for (let k = 0; k < 3; k++) {
-    const [i, j] = others(k);
-    for (const si of [-1, 1]) for (const sj of [-1, 1]) {
-      const a = seen(i, si), b = seen(j, sj);
-      if (a && b && (narrow(i, si) || narrow(j, sj))) continue;
-      if (hidden && !a && !b) continue;
-      const end = (sk: number) => { const c = [0, 0, 0]; c[k] = sk * half[k]; c[i] = si * (half[i] + e); c[j] = sj * (half[j] + e); return local(c); };
-      edges.push([end(-1), end(1)]);
-    }
-  }
-  return edges;
-}
-
-/**
- * A slab's shaded slivers, on a small card: a face that sees the eye but is narrower on paper than `MIN_FEATURE` (an
- * arm's side, seen nearly edge-on) loses its inner edge (`slabEdges`) and its hatch, every piece of it shorter than the
- * smallest feature (`shortestKept`). Where the print hatches that face (in shade), one line in the hatch's ink runs down
- * its middle instead, the length of the face, so the arm keeps its shaded side. None at tabloid.
- */
-export function sliverShade(s: Slab, view: THREE.Camera, light: THREE.Vector3): Stroke[] {
-  if (!MIN_FEATURE) return [];
-  const m = slabMatrix(s), rot = new THREE.Matrix4().extractRotation(m);
-  const half = [s.w / 2, s.h / 2, s.d / 2];
-  const e = 0.006;
-  const local = (v: number[]) => new THREE.Vector3(v[0], v[1], v[2]).applyMatrix4(m);
-  const out: Stroke[] = [];
-  for (let a = 0; a < 3; a++) for (const side of [-1, 1]) {
-    const [i, j] = [0, 1, 2].filter(b => b !== a);
-    const unit = [0, 0, 0];
-    unit[a] = side;
-    const normal = new THREE.Vector3(unit[0], unit[1], unit[2]).applyMatrix4(rot);
-    const c = [0, 0, 0];
-    c[a] = side * half[a];
-    const centre = local(c).addScaledVector(normal, e);
-    // Seen, and in shade: a face the print hatches (as `facetStrokes` does from a darkness of 0.32).
-    if (view.position.clone().sub(centre).dot(normal) <= 0 || faceDarkness(normal, light, s.tone) < 0.32) continue;
-    const corner = (u: number, v: number) => { const q = [...c]; q[i] = u * half[i]; q[j] = v * half[j]; return pageOf(view, local(q)); };
-    const quad = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
-    let area = 0, longest = 0;
-    for (let k = 0; k < 4; k++) {
-      const p0 = quad[k], p1 = quad[(k + 1) % 4];
-      area += p0.x * p1.y - p1.x * p0.y;
-      longest = Math.max(longest, Math.hypot(p1.x - p0.x, p1.y - p0.y));
-    }
-    if (Math.abs(area) / 2 / longest >= MIN_FEATURE) continue;
-    // Down the middle along its long side.
-    const along = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y) >= Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y) ? i : j;
-    const end = (t: number) => { const q = [...c]; q[along] = t * half[along]; return local(q).addScaledVector(normal, e); };
-    out.push({ ink: 'ultramarine', group: 'star', family: 'hatch', points: [end(-1), end(1)] });
-  }
-  return out;
 }
 
 /**
@@ -322,16 +220,10 @@ export function drawStar(ctx: SketchContext): Part[] {
   const strands = streams(ctx, centre);
   const solids = [...star, ...debris, ...words];
   const light = new THREE.Vector3(0.2, 0.3, 1).normalize();
-  // Each solid in the raking-light hatch; off tabloid, its outline drawn without the slivers a smaller card makes.
-  const facets = (s: Slab, shaded: boolean) => {
-    const all = facetStrokes(s, light, view.position, s.role === 'debris');
-    return FORMAT.tabloid ? all : [
-      ...slabEdges(s, view, ctx.params.occlusion !== false).map(points => ({ ink: 'carbon' as const, family: 'edge' as const, points })),
-      ...all.filter(st => st.family !== 'edge'),
-      // The star's arms keep their shaded sides.
-      ...(shaded ? sliverShade(s, view, light) : []),
-    ];
-  };
+  // Each solid in the raking-light hatch; off tabloid, its outline trimmed of the slivers and back edges a smaller card
+  // makes, and the star's arms keep their shaded sides (`SlabTrim` in kit/slabs.ts).
+  const hidden = ctx.params.occlusion !== false;
+  const facets = (s: Slab, shaded: boolean) => facetStrokes(s, light, view.position, s.role === 'debris', undefined, { view, hidden, shade: shaded });
   const strokes: Stroke[] = solids.flatMap((s, owner) => facets(s, owner < star.length).map(st => ({ ink: st.ink, family: st.family, points: st.points, group: owner < star.length ? 'star' : 'pieces', owner })));
   const density = 0.55;
   for (const s of strands) for (const st of strandStrokes(s, density, 0.32, ctx, view)) strokes.push({ ink: st.ink, group: 'helix', family: 'membrane', points: st.points });

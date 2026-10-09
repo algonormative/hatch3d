@@ -566,7 +566,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     if (clock) {
       const box = { x0: CARD.x0, x1: CARD.x1, y0: cy - amp - layoutLength(4), y1: cy + amp + layoutLength(4) };
       // A band narrower than the smallest feature is drawn as its centreline.
-      const marks = 2 * clockHalf < MIN_FEATURE ? [wave] : bandMarks(wave, clockHalf, box, { pitch: tolerance(0.8), angle: Math.PI / 4 });
+      const marks = bandMarks(wave, clockHalf, box, { pitch: tolerance(0.8), angle: Math.PI / 4, narrow: MIN_FEATURE });
       for (const path of marks) {
         for (const inside of clipWindow(path)) for (const piece of keepAlong(inside, p => !standing(p) && !inBolt(p, halo(0.8)), 0.12)) buckets.add('clock-carbon', piece, true);
       }

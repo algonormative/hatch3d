@@ -46,11 +46,13 @@ import { formatLoaded, preferredFit } from './format-preference.ts';
  *   - a pitch, gap, dash or minimum length, a lettering size: real millimetres, `tolerance(0.62)` where it could
  *     fall under the pen floor; a knockout halo: `halo(2.2)`;
  *   - a count that is really density: `scaledCount(80, 24)` (by the window's area), `scaledCount(80, 24, 'length')`
- *     (by `S`, for things spaced along a length that scales with the card, like rays round a sun); to keep that many
- *     of a seeded set, `evenlyKept(i, kept / total)` on each one's seeded index;
+ *     (by `S`, for things spaced along a length that scales with the card, like rays round a sun, or whose own size
+ *     scales with it, like rain dashes and loose blocks: there `'area'` keeps the count per area but loses the tone);
+ *     to keep that many of a seeded set, `evenlyKept(i, kept / total)` on each one's seeded index;
  *   - a feature smaller than `MIN_FEATURE` millimetres on paper (0 at tabloid): draw it as an outline or a single
  *     line, or drop it;
- *   - a page length fed to a gradient tuned on tabloid: back in tabloid millimetres as `length / S`.
+ *   - a page length fed to a gradient tuned on tabloid: back in tabloid millimetres as `length / S`; a page position
+ *     fed to a pattern tuned on tabloid's page (a waver keyed on y): back in tabloid's frame as `tabloidX` / `tabloidY`.
  * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`. A title
  * (`titleEnabled`) is lettered in the art with the phrase, so where the phrase leaves the art (`band`, `none`) the
  * card carries no title; the band has no room for one.
@@ -270,6 +272,10 @@ export const layoutLength = (mm: number): number => identity ? mm : mm * S;
 export const layoutX = (x: number): number => identity ? x : PAGE.width / 2 + (x - TABLOID_CENTRE_X) * S;
 /** A page y authored on tabloid, measured from the horizon. */
 export const layoutY = (y: number): number => identity ? y : HORIZON_Y + (y - TABLOID_FORMAT.horizonY) * S;
+/** The inverse of `layoutX`: a page x here, back in tabloid's frame, for a pattern tuned on tabloid's page positions. */
+export const tabloidX = (x: number): number => identity ? x : TABLOID_CENTRE_X + (x - PAGE.width / 2) / S;
+/** The inverse of `layoutY`: a page y here, back in tabloid's frame (measured from the horizon), for a pattern tuned on tabloid's page positions. */
+export const tabloidY = (y: number): number => identity ? y : TABLOID_HORIZON_Y + (y - HORIZON_Y) / S;
 /**
  * A tolerance in real millimetres, never below the pen floor (by default the format's minimum spacing). At tabloid
  * with its own pens it is the identity; a `pen` option on a tabloid page sets the floor there too.
@@ -281,6 +287,12 @@ export const halo = (mm: number): number => identity ? mm : Math.max(0.5, S * mm
  * A count tuned on tabloid that is really a density (stars, fragments, ticks, rays): scaled by the art window's
  * area (`per: 'area'`), or by `S` for things spaced along a length that scales with the card (`per: 'length'`,
  * e.g. rays round a sun), rounded, and never under `floor`, which keeps the card's character. `n` itself at tabloid.
+ *
+ * Where each item's own size scales with the card (rain dashes, loose blocks), thin by `'length'`: each item's ink
+ * then shrinks with `S` and the window's area with `S²`, so keeping `S` of the items keeps the tone. `'area'` keeps
+ * the count per area but loses the tone (by `S`, under a third at 70 × 120); use it for items whose size holds on
+ * paper (a tick, a dot, a dash of fixed length), where the ink per item stays put, or where a sparser field is the
+ * point (the Star's constellation).
  */
 export function scaledCount(n: number, floor: number, per: 'area' | 'length' = 'area'): number {
   return identity ? n : Math.max(floor, Math.round(n * (per === 'area' ? AREA : S)));

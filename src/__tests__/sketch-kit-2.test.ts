@@ -5,7 +5,7 @@ import { alongRay, collapseBand, helixStrands, strandPoint, towerFrame } from '.
 import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
-import { densityPitch, facetStrokes, faceDarkness, rakingLight, slabGeometry, slabMatrix, slabStrokes, solid } from '../../sketches/kit/slabs.ts';
+import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
 import { horizonCamera, pageOf } from '../../sketches/kit/perspective.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
@@ -48,6 +48,25 @@ describe('sketch kit: slabs', () => {
     // Outline only: twelve edges' worth of strokes, nothing else; and faces turned away draw nothing.
     expect(facetStrokes(s, new THREE.Vector3(0, 0, -1), eye, true).every(st => st.family === 'edge')).toBe(true);
     expect(facetStrokes(s, new THREE.Vector3(0, 0, -1), eye, false).filter(st => st.family === 'hatch').every(st => st.points.every(p => p.z > 0))).toBe(true);
+  });
+
+  it('leaves a slab untrimmed at tabloid, whatever trim a card asks for small cards, and measures it on the page', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+    const thin = solid(3, 4, -40, 6, 0.02, 4, 0, 'stack');
+    thin.ry = 0.6;
+    const light = new THREE.Vector3(0, 1, 0);
+    for (const outline of [false, true]) {
+      expect(facetStrokes(thin, light, view.position, outline, undefined, { view, shade: true })).toEqual(facetStrokes(thin, light, view.position, outline));
+      expect(facetStrokes(thin, light, view.position, outline, undefined, { view, hidden: false })).toEqual(facetStrokes(thin, light, view.position, outline));
+    }
+    expect(sliverShade(thin, view, light)).toEqual([]);
+    // Its box on the page: centred about its centre's projection, its 6 x 4 footprint turned 0.6 rad spanning about
+    // 7.2 units across, at 10.6 mm a unit 40 units out.
+    const extent = pageExtent(view, thin), centre = pageOf(view, new THREE.Vector3(3, 4, -40));
+    expect(extent.x).toBeCloseTo(centre.x, 0);
+    expect(extent.y).toBeCloseTo(centre.y, 0);
+    expect(extent.size).toBeGreaterThan(72);
+    expect(extent.size).toBeLessThan(80);
   });
 
   it('lowers the raking light as the angle control falls', () => {
@@ -176,6 +195,11 @@ describe('sketch kit: flat fills', () => {
     expect(hatch.length).toBeGreaterThan(20);
     for (const run of hatch) for (const p of run) expect(sideOf(centreline, p).dist).toBeLessThan(half - 0.5 + 0.2);
     expect(bandMarks(centreline, half, area).length).toBe(2 + hatch.length);
+    // Narrower across than `narrow`, a band is its centreline alone; wider, or with no floor (tabloid's 0), a band.
+    expect(bandMarks(centreline, 0.4, area, { narrow: 1 })).toEqual([centreline]);
+    expect(bandMarks(centreline, 0.6, area, { narrow: 1 })).toEqual(bandMarks(centreline, 0.6, area));
+    expect(bandMarks(centreline, 0.4, area, { narrow: 0 })).toEqual(bandMarks(centreline, 0.4, area));
+    expect(bandMarks(centreline, half, area, { pitch: 0.8, narrow: 1 })).toEqual(bandMarks(centreline, half, area, { pitch: 0.8 }));
   });
 
   it('draws a hatched bar: an outer rule, an inner rule, and hatch inside both', () => {
