@@ -9,6 +9,7 @@ import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slab
 import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
 import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
+import { thinParallel } from '../../sketches/kit/density.ts';
 import { reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
 import { PartBuckets, fineDepth } from '../../sketches/kit/strokes.ts';
 import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
@@ -343,5 +344,29 @@ describe('sketch kit: shared card helpers', () => {
     expect(fine.env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, finer, 160, 248).depthData);
     expect([fine.mmX, fine.mmY]).toEqual([raster.MM_X / 4, raster.MM_Y / 4]);
     expect(fineDepth(slabs, view, raster, 1).env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, view, 40, 62).depthData);
+  });
+
+  it('thins near-parallel strokes in rank order: the first path keeps its line, a neighbour closer than the limit loses the stretch beside it', () => {
+    const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
+    const [outline, near, far, over, crossing] = thinParallel([line(0, 10, 0), line(0, 10, 0.2), line(0, 10, 1), line(-5, 5, 0.2), [{ x: 5, y: -3 }, { x: 5.1, y: 3 }]], 0.5);
+    // A kept path is one run, cut into steps of 0.2 mm along its length.
+    const ends = (runs: { x: number; y: number }[][]) => runs.map(r => [r[0], r[r.length - 1]]);
+    expect(ends(outline)).toEqual([line(0, 10, 0)]);
+    expect(near).toEqual([]);
+    expect(ends(far)).toEqual([line(0, 10, 1)]);
+    // Only the stretch beside the outline goes: from x = 0 on, the part before it carries on.
+    expect(over).toHaveLength(1);
+    expect(over[0][0]).toEqual({ x: -5, y: 0.2 });
+    expect(over[0][over[0].length - 1].x).toBeCloseTo(0, 9);
+    // A stroke that crosses at an angle is not beside it, and keeps its line.
+    expect(crossing).toHaveLength(1);
+    // The order ranks them: a path given first wins, and a path never crowds itself.
+    expect(thinParallel([line(0, 10, 0.2), line(0, 10, 0)], 0.5).map(runs => runs.length)).toEqual([1, 0]);
+    const [back] = thinParallel([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0.1 }, { x: 0, y: 0.1 }]], 0.5);
+    expect(back).toHaveLength(1);
+    expect(back[0][back[0].length - 1]).toEqual({ x: 0, y: 0.1 });
+    // A path that carries on from where another ends keeps its line; one the limit apart does too.
+    expect(thinParallel([line(0, 10, 0), line(10.5, 20, 0.1)], 0.5)[1]).toHaveLength(1);
+    expect(thinParallel([line(0, 10, 0), line(0, 10, 0.5)], 0.5)[1]).toHaveLength(1);
   });
 });

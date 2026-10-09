@@ -7,6 +7,7 @@ import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_H
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
+import { thinParallel } from '../../kit/density.ts';
 import { hatchedBar } from '../../kit/fills.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -20,7 +21,6 @@ import { contourTube } from '../../kit/mannequin/body.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { thinParallel } from './thin.ts';
 import { colossus, cutTube, frameAt, fromFrame, headCoil, headOf, plinthFronts, seatedSkeleton, toFrame, type Colossus, type Frame } from './figure.ts';
 
 /**
