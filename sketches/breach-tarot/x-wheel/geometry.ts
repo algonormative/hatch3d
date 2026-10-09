@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
-import { facetStrokes, ruledFaces, slabFaceNormal, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabFaceNormal, slabGeometry, slabMatrix, solid, swapRuledFaces, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
@@ -506,15 +506,12 @@ export function drawWheel(ctx: SketchContext): Part[] {
     const group = sl.kind === 'paver' ? 'ground' : sl.kind === 'spoke' ? 'rim' : sl.kind;
     // Under 1.5 mm on this card's paper a slab is an outline; its hatch keeps its pitch on paper.
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
-    let made = facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at), trim);
+    const faceted = facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at), trim);
     // Off tabloid a tower's dark faces are ruled (`ruledFaces`) in place of their rings and hatch. A course is a couple
     // of millimetres tall on a small card, where the facet hatch fits a ring and a tick, and the towers falling dark
     // into the ground would print as light as those rising pale out of it. The proud tower at the top keeps its hatch.
     const ruled = trim && sl.kind === 'tower' && sl.tower !== 0 && !outline ? ruledFaces(sl, LIGHT, view, tolerance(RULE_MM) / mmPerUnit(at)) : [];
-    if (ruled.length) {
-      const faces = new Set(ruled.map(st => st.face));
-      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
-    }
+    const made = swapRuledFaces(faceted, ruled);
     const kept = dropGrazing(sl, eye, made, GRAZING);
     for (const st of trim ? trimmedEdges(sl, eye, kept) : visibleEdges(sl, eye, kept)) {
       for (const piece of aboveGround(st.points)) strokes.push({ ink: st.ink, group, family: st.family, points: piece, soft: st.soft });

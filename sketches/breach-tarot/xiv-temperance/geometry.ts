@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, swapRuledFaces, type Slab } from '../../kit/slabs.ts';
 import type { HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
@@ -203,13 +203,9 @@ export function drawTemperance(ctx: SketchContext): Part[] {
   for (const [group, v] of vessels) for (const sl of v.slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
-    let made = facetStrokes(sl, light, eye, outline, FACET_MM_PER_UNIT / mmPerUnit(at), { view });
+    const faceted = facetStrokes(sl, light, eye, outline, FACET_MM_PER_UNIT / mmPerUnit(at), { view });
     const ruled = FORMAT.tabloid || outline ? [] : ruledFaces(sl, light, view, tolerance(RULE_MM) / mmPerUnit(at));
-    if (ruled.length) {
-      const faces = new Set(ruled.map(st => st.face));
-      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
-    }
-    for (const st of made) strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
+    for (const st of swapRuledFaces(faceted, ruled)) strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
   }
 
   const slabsOf = (v: Vessel) => v.slabs.map(slabGeometry);

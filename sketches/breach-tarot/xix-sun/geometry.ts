@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, depthRaster, halo, hatchMin, layoutLength, maskRes, scaledCount, tolerance } from '../../kit/format.ts';
-import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, swapRuledFaces, type Slab } from '../../kit/slabs.ts';
 import { alongRay, helixStrands, narrowStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { glyphMask, groundWord, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
 import { circlePath } from '../../kit/fills.ts';
@@ -214,13 +214,9 @@ export function drawSun(ctx: SketchContext): Part[] {
   // on paper, in place of their rings and hatch.
   const mmPerUnit = (sl: Slab) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2)) / -sl.z;
   w.slabs.forEach((sl, owner) => {
-    let made = facetStrokes(sl, back, view.position, false, undefined, { view });
+    const faceted = facetStrokes(sl, back, view.position, false, undefined, { view });
     const ruled = FORMAT.tabloid ? [] : ruledFaces(sl, back, view, tolerance(WALL_RULE_MM) / mmPerUnit(sl));
-    if (ruled.length) {
-      const faces = new Set(ruled.map(st => st.face));
-      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
-    }
-    strokes.push(...made.map(st => ({ ...st, group: 'wall', owner })));
+    strokes.push(...swapRuledFaces(faceted, ruled).map(st => ({ ...st, group: 'wall', owner })));
   });
   // The waves, turned onto their rays. On a small card a ribbon narrower than the smallest feature is drawn by its line
   // (`narrowStrands`), in the violet its laminations give it on the print. That line is the helix seen side on, a wave,

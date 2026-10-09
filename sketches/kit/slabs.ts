@@ -312,6 +312,17 @@ export function ruledFaces(s: Slab, light: THREE.Vector3, view: THREE.Camera, st
 }
 
 /**
+ * A slab's strokes with the faces `ruled` (from `ruledFaces`) drawn by the ruling in place of the hatch: the hatch on every
+ * face the ruling covers is dropped, then the ruled lines are added at the end. The outline, and the hatch on any face not
+ * ruled, stay. `made` itself when nothing was ruled. Needs the `face` tag that `facetStrokes` puts on its hatch.
+ */
+export function swapRuledFaces(made: FacetStroke[], ruled: FacetStroke[]): FacetStroke[] {
+  if (!ruled.length) return made;
+  const faces = new Set(ruled.map(st => st.face));
+  return [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
+}
+
+/**
  * How `facetStrokes` trims a slab on a small card (ignored at tabloid, so the print stays byte-identical): the outline
  * as `slabEdges` draws it in the card's `view` (slivers folded into it; with `hidden`, the default, no back edges:
  * pass `false` where the card's occlusion control is off), and with `shade`, a line down each shaded sliver

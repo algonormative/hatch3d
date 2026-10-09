@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { facetStrokes, ruledFaces, solid, swapRuledFaces } from '../../sketches/kit/slabs.ts';
+import { horizonCamera } from '../../sketches/kit/perspective.ts';
 import { TABLOID_FORMAT, formatFor, maskRes } from '../../sketches/kit/format.ts';
 import { BIAS_FLOOR, chunkPolyline, hiddenBias } from '../../sketches/kit/strokes.ts';
 
@@ -55,5 +57,36 @@ describe('sketch kit: shared card helpers, batch 4', () => {
     expect(chunkPolyline([...five, 5], 4, 1)).toEqual([[0, 1, 2, 3], [3, 4, 5]]);
     // A short polyline is returned as it is under `whole`, a single point included.
     expect(chunkPolyline([7], 4, 1)).toEqual([[7]]);
+  });
+
+  describe('a slab\'s ruled faces swapped in for its hatch', () => {
+    const page = { width: 279.4, height: 431.8 };
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+    // A block to the right of the eye, lit from behind and a little from the left: its front face is dark and ruled; the side
+    // that turns to the eye is hatched as well, but is lit enough to stay hatch.
+    const block = solid(10, 2, -30, 6, 8, 4, 0, 'stack');
+    const behind = new THREE.Vector3(-0.5, 0.3, -1).normalize();
+
+    it('drops the hatch on exactly the faces the ruling covers, keeps the outline and the other faces\' hatch, and adds the ruled lines last', () => {
+      const made = facetStrokes(block, behind, view.position, false);
+      const ruled = ruledFaces(block, behind, view, 1);
+      const ruledFace = new Set(ruled.map(st => st.face));
+      expect(ruled.length).toBeGreaterThan(0);
+      // The test is only worth something if the facet hatch covers the ruled face and some face besides.
+      const hatchFaces = new Set(made.filter(st => st.family === 'hatch').map(st => st.face));
+      expect(hatchFaces.size).toBeGreaterThan(ruledFace.size);
+      const swapped = swapRuledFaces(made, ruled);
+      expect(swapped.slice(swapped.length - ruled.length)).toEqual(ruled);
+      const rest = swapped.slice(0, swapped.length - ruled.length);
+      expect(rest).toEqual(made.filter(st => st.family !== 'hatch' || !ruledFace.has(st.face)));
+      expect(rest.filter(st => st.family === 'edge')).toEqual(made.filter(st => st.family === 'edge'));
+      expect(rest.some(st => st.family === 'hatch' && ruledFace.has(st.face))).toBe(false);
+      expect(rest.some(st => st.family === 'hatch')).toBe(true);
+    });
+
+    it('hands back the strokes it was given when nothing is ruled', () => {
+      const made = facetStrokes(block, behind, view.position, false);
+      expect(swapRuledFaces(made, [])).toBe(made);
+    });
   });
 });
