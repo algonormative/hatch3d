@@ -428,22 +428,6 @@ function courseGroups(slabs: Slab[]): Slab[][] {
  * the slight differences in width between courses do not make the edge shiver.
  */
 function silhouette(plant: Plant): THREE.Vector3[] {
-  const { edge, first, last, left, right } = outlineSides(plant);
-  return [edge(first.l, -1, -1), ...left, edge(last.l, -1, 1), edge(last.r, 1, 1), ...right.reverse(), edge(first.r, 1, -1), edge(first.l, -1, -1)];
-}
-
-/**
- * A far plant narrower on the card than its outline can be drawn (its two sides closer than the smallest feature): one
- * line up the middle of its front instead, from the foot to the top, halfway between the outline's two sides.
- */
-function spine(plant: Plant): THREE.Vector3[] {
-  const { edge, first, last, left, right } = outlineSides(plant);
-  const mid = (a: THREE.Vector3, b: THREE.Vector3) => a.clone().add(b).multiplyScalar(0.5);
-  return [mid(edge(first.l, -1, -1), edge(first.r, 1, -1)), ...left.map((q, i) => mid(q, right[i])), mid(edge(last.l, -1, 1), edge(last.r, 1, 1))];
-}
-
-/** The two sides of a far plant's outline, course by course (smoothed over three), and its first and last courses' end blocks. */
-function outlineSides(plant: Plant) {
   const e = 0.02;
   const groups = courseGroups(plant.slabs);
   const edge = (sl: Slab, x: number, y: number) => new THREE.Vector3(x * (sl.w / 2 + e), y * (sl.h / 2 + e), sl.d / 2 + e).applyMatrix4(slabMatrix(sl));
@@ -455,7 +439,8 @@ function outlineSides(plant: Plant) {
   });
   const smoothed = (pts: THREE.Vector3[]) => pts.map((q, i) => i === 0 || i === pts.length - 1 ? q : pts[i - 1].clone().add(q).add(pts[i + 1]).multiplyScalar(1 / 3));
   const left = smoothed(ends.map(g => edge(g.l, -1, 0))), right = smoothed(ends.map(g => edge(g.r, 1, 0)));
-  return { edge, first: ends[0], last: ends[ends.length - 1], left, right };
+  const first = ends[0], last = ends[ends.length - 1];
+  return [edge(first.l, -1, -1), ...left, edge(last.l, -1, 1), edge(last.r, 1, 1), ...right.reverse(), edge(first.r, 1, -1), edge(first.l, -1, -1)];
 }
 
 export function drawEmpress(ctx: SketchContext): Part[] {
@@ -474,9 +459,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
   const strokes: Banded[] = [];
   for (const plant of plants) {
     if (plant.outline) {
-      // A far plant narrower on the card than the smallest feature is one line up its middle (`MIN_FEATURE` is 0 at tabloid).
-      const narrow = plant.slabs.reduce((hi, sl) => Math.max(hi, sl.w), 0) * mmPerUnit(plant.base) < MIN_FEATURE;
-      const line = narrow ? spine(plant) : silhouette(plant);
+      const line = silhouette(plant);
       strokes.push({ ink: 'carbon', group: 'far', family: 'edge', points: line, band: bandOf(plant.base) });
       continue;
     }
