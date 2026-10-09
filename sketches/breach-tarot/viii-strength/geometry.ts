@@ -475,10 +475,10 @@ export function drawStrength(ctx: SketchContext): Part[] {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const pitch = FACET_MM_PER_UNIT / mmPerUnit(at);
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5 || owner >= dam.courses.length;
-    // Off tabloid the parapet's outline is trimmed (kit/slabs.ts): no back edges, and its sliver of a top folded into it.
-    // The courses keep all their edges (the trim would fold the walkway into the crest's far edge, which the parapet hides),
-    // and are thinned on the page instead (see `addWall`).
-    for (const st of facetStrokes(sl, light, eye, outline, pitch, owner >= dam.courses.length ? { view } : undefined)) {
+    // The slabs keep all their edges on a small card, untrimmed: the trim (kit/slabs.ts) folds a sliver of a face into the
+    // far edge, and here the far edges are hidden (the walkway's behind the parapet, the parapet's behind its own front),
+    // so the crest and the parapet went missing. The wall is thinned on the page instead (see `addWall`).
+    for (const st of facetStrokes(sl, light, eye, outline, pitch)) {
       strokes.push({ ink: st.ink, group: owner < dam.courses.length ? 'dam' : 'parapet', family: st.family, points: st.points, owner });
     }
   });
