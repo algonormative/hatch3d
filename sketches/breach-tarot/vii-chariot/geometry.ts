@@ -1,17 +1,18 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
+import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage, pathLength, type Rect } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, pathLength, reduceAtScale, type Rect } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera, type PageSize } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -27,8 +28,20 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * landed, askew. The road keeps the two lanes, one dark, one pale. The helix is the chariot: a taut
  * streak racing up the ramp just over the paving, its head at the front edge, its body trailing back
  * down to the horizon. Below, the ramp's long shadow lies across the open ground in flat hatch.
+ *
+ * On a small card (kit/format.ts) the world is the print's: the road's course, its slabs, the slabs in flight and the
+ * helix are all laid out in tabloid's frame (`worldCamera`, tabloid's page and horizon), so its page-position controls
+ * keep their print meaning, and the card's own camera draws that world small. Pitches, dashes and the helix's
+ * lamination spacing stay in real millimetres; the halos and the marks sized to the scene scale with the card; small
+ * slabs are trimmed to their outlines; and the phrase moves to the bottom band.
  */
-const { W, H } = depthRaster(1118, 1728);
+/**
+ * How much finer than the card's raster its hidden-line test runs: off tabloid, at least the print's resolution in the
+ * world. The slabs are under half a unit thick and the helix rides a third of a unit over the paving, so on a small card
+ * a 0.25 mm pixel spans a slab's side, and the depth test frays outlines and eats the lane's stripes.
+ */
+const FINE = FORMAT.tabloid ? 1 : Math.max(1, Math.ceil(PITCH_SCALE));
+const { W, H } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const PW = PAGE.width;
 const MM_X = PW / W, MM_Y = PAGE.height / H;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -52,17 +65,27 @@ const T_FAR = 330;
 /** Gap between slabs, world units. */
 const GAP = 0.14;
 
-const focal = (view: THREE.PerspectiveCamera) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-/** The world point at page position `p`, at depth `t` in front of the eye. */
+/** Page millimetres per world unit at depth 1, for `view` drawing on `page`. */
+const focal = (view: THREE.PerspectiveCamera, page: PageSize = PAGE) => page.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+/** The world point at tabloid page position `p`, at depth `t` in front of the eye: `view` is `worldCamera`. */
 const worldAt = (view: THREE.PerspectiveCamera, p: Point, t: number) =>
-  new THREE.Vector3((p.x - PW / 2) * t / focal(view), view.position.y + (HORIZON_Y - p.y) * t / focal(view), -t);
+  new THREE.Vector3((p.x - TABLOID_PAGE.width / 2) * t / focal(view, TABLOID_PAGE), view.position.y + (TABLOID_HORIZON_Y - p.y) * t / focal(view, TABLOID_PAGE), -t);
 
+/** The card's camera, on the format's page. */
 export function chariotCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 2, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the Chariot's world is laid out with. At tabloid it is `chariotCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: n(ctx, 'eye', 6, 3, 12), near: 2, far: 4000 });
 }
 
 export interface Frame3 { T: THREE.Vector3; N: THREE.Vector3; B: THREE.Vector3 }
@@ -91,21 +114,22 @@ const cubic = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Ve
  * The road's course: on the ground from far off (it vanishes at `vanishX` on the horizon) toward the
  * eye, swinging round into its lean at the lift-off; then a ramp (a cubic) climbing to the front edge,
  * placed by its page position and depth and leaving along `endHeading`/`endClimb`; then the road not
- * yet built, a cubic curling on through the sky.
+ * yet built, a cubic curling on through the sky. The page positions are tabloid's: `view` is `worldCamera`.
  */
 export function makePath(ctx: SketchContext, view: THREE.PerspectiveCamera): RoadPath {
-  const f = focal(view), eyeY = view.position.y, eye = view.position.clone();
+  const f = focal(view, TABLOID_PAGE), eyeY = view.position.y, eye = view.position.clone();
+  const TW = TABLOID_PAGE.width;
   const rng = ctx.random('chariot-path');
   const jig = (a: number) => (rng() - 0.5) * 2 * a;
-  const kFar = (n(ctx, 'vanishX', 60, 18, 130) - PW / 2) / f;
+  const kFar = (n(ctx, 'vanishX', 60, 18, 130) - TW / 2) / f;
   const liftP = { x: n(ctx, 'liftX', 100, 40, 200) + jig(8), y: n(ctx, 'liftY', 312, 262, 330) };
-  const tL = eyeY * f / (liftP.y - HORIZON_Y);
-  const xL = (liftP.x - PW / 2) * tL / f;
+  const tL = eyeY * f / (liftP.y - TABLOID_HORIZON_Y);
+  const xL = (liftP.x - TW / 2) * tL / f;
   const kL = n(ctx, 'liftLean', -1.6, -4, 0.5);
   const L = new THREE.Vector3(xL, 0, -tL), TL = new THREE.Vector3(-kL, 0, 1).normalize();
   // Beyond the laid road it runs straight to the vanishing point; between there and the lift-off, a cubic
   // that leaves the far end heading straight at us and swings round into the lift-off over `liftEase`.
-  const xF = (n(ctx, 'vanishX', 60, 18, 130) - PW / 2) * T_FAR / f;
+  const xF = (n(ctx, 'vanishX', 60, 18, 130) - TW / 2) * T_FAR / f;
   const groundX = (t: number) => xF + kFar * (t - T_FAR);
   const groundK = () => kFar;
   const endP = { x: n(ctx, 'endX', 170, 110, 245) + jig(10), y: n(ctx, 'endY', 160, 80, 210) + jig(8) };
@@ -206,7 +230,13 @@ export function makePath(ctx: SketchContext, view: THREE.PerspectiveCamera): Roa
 export type Side = 'dark' | 'pale';
 /** A slab in flight is on a parabola from `from` to `to`, `h` high at its middle, and has come a share `u` of the way. */
 export interface Flight { from: THREE.Vector3; to: THREE.Vector3; h: number; u: number }
-export interface Piece { slab: Slab; side: Side; kind: 'road' | 'landed' | 'flying'; row: number; ramp: boolean; flight?: Flight; /** A short slab laid at the knee: takes no word. */ sub?: boolean }
+export interface Piece {
+  slab: Slab; side: Side; kind: 'road' | 'landed' | 'flying'; row: number; ramp: boolean; flight?: Flight;
+  /** A short slab laid at the knee: takes no word. */
+  sub?: boolean;
+  /** A road slab's cell: from arc length `span[0]` to `span[1]` along the road. */
+  span?: [number, number];
+}
 const arcAt = (f: Flight, u: number): THREE.Vector3 => f.from.clone().lerp(f.to, u).add(new THREE.Vector3(0, f.h * 4 * u * (1 - u), 0));
 
 /** A slab laid on the road's frame: `lat` across from the centreline, sitting on it. */
@@ -253,10 +283,10 @@ const corners = (sl: Slab): THREE.Vector3[] => {
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) out.push(new THREE.Vector3(sx * sl.w / 2, sy * sl.h / 2, sz * sl.d / 2).applyMatrix4(m));
   return out;
 };
-function pageBox(view: THREE.Camera, sl: Slab): Rect {
+function pageBox(view: THREE.Camera, sl: Slab, page: PageSize = PAGE): Rect {
   const r: Rect = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
   for (const c of corners(sl)) {
-    const q = pageOf(view, c);
+    const q = pageOf(view, c, page);
     r.x0 = Math.min(r.x0, q.x); r.x1 = Math.max(r.x1, q.x); r.y0 = Math.min(r.y0, q.y); r.y1 = Math.max(r.y1, q.y);
   }
   return r;
@@ -303,7 +333,7 @@ export function buildRoad(ctx: SketchContext, path: RoadPath, d: Dims): Build {
     for (let k = parts - 1; k >= 0; k--) {
       const t0 = s0 + (s1 - s0) * k / parts, t1 = s0 + (s1 - s0) * (k + 1) / parts;
       const sub = parts > 1 && k !== Math.floor(parts / 2);
-      for (const lane of [0, 1] as const) pieces.push({ slab: cellSlab(path, d, t0, t1, lane, beat++), side: sideOfLane(lane), kind: 'road', row, ramp, sub });
+      for (const lane of [0, 1] as const) pieces.push({ slab: cellSlab(path, d, t0, t1, lane, beat++), side: sideOfLane(lane), kind: 'road', row, ramp, sub, span: [t0, t1] });
     }
     s1 = s0;
   }
@@ -347,7 +377,8 @@ export function buildRoad(ctx: SketchContext, path: RoadPath, d: Dims): Build {
 /**
  * In flight: dark slabs from the left, pale from the right, each on an arc from off the card's side
  * toward a cell a little past the edge. Each is tried at random and kept only where it lies in the
- * sky on the card, clear of the road, the helix and the others, with its arc showing behind it.
+ * sky on the card, clear of the road, the helix and the others, with its arc showing behind it. All of
+ * it is measured on tabloid's page: `view` is `worldCamera`, and `blocked` a bitmap of tabloid's page.
  */
 function addFlyers(ctx: SketchContext, view: THREE.PerspectiveCamera, path: RoadPath, d: Dims, build: Build, blocked: (p: Point) => boolean): void {
   const fr = ctx.random('chariot-flight');
@@ -370,7 +401,7 @@ function addFlyers(ctx: SketchContext, view: THREE.PerspectiveCamera, path: Road
       const land = cellSlab(path, d, cells[ci].s0, cells[ci].s1, lane, 0);
       const Lp = new THREE.Vector3(land.x, land.y, land.z);
       const tl = -Lp.z;
-      const fromPage = { x: side === 'dark' ? CARD.x0 + 15 - 50 * fr() : CARD.x1 - 15 + 50 * fr(), y: CARD.y0 + 30 + (HORIZON_Y - CARD.y0 - 90) * fr() };
+      const fromPage = { x: side === 'dark' ? TABLOID_CARD.x0 + 15 - 50 * fr() : TABLOID_CARD.x1 - 15 + 50 * fr(), y: TABLOID_CARD.y0 + 30 + (TABLOID_HORIZON_Y - TABLOID_CARD.y0 - 90) * fr() };
       const from = worldAt(view, fromPage, tl * (0.8 + 1.4 * fr()));
       const h = arc * (0.3 + 0.9 * fr());
       const u = 0.35 + 0.5 * fr();
@@ -381,11 +412,11 @@ function addFlyers(ctx: SketchContext, view: THREE.PerspectiveCamera, path: Road
       const axis = new THREE.Vector3(fr() - 0.5, fr() - 0.5, fr() - 0.5).normalize();
       setRotation(sl, quatOf(land).premultiply(new THREE.Quaternion().setFromAxisAngle(axis, amp * (0.5 + 0.5 * fr()))));
       if (side === 'dark') sl.tone = 1.5;
-      const pg = pageBox(view, sl);
+      const pg = pageBox(view, sl, TABLOID_PAGE);
       // In the sky, on the card, or running a little off its own side as it comes in.
       const lap = lim.lap * (pg.x1 - pg.x0);
       const offLeft = side === 'dark' ? lap : -4, offRight = side === 'pale' ? lap : -4;
-      if (pg.x0 < CARD.x0 - offLeft || pg.x1 > CARD.x1 + offRight || pg.y0 < CARD.y0 + 5 || pg.y1 > HORIZON_Y - 3) continue;
+      if (pg.x0 < TABLOID_CARD.x0 - offLeft || pg.x1 > TABLOID_CARD.x1 + offRight || pg.y0 < TABLOID_CARD.y0 + 5 || pg.y1 > TABLOID_HORIZON_Y - 3) continue;
       // Clear of the road, the helix and the landed slabs, with room round it.
       let hit = false;
       for (let y = pg.y0 - lim.margin; y <= pg.y1 + lim.margin && !hit; y += 1.5) for (let x = pg.x0 - lim.margin; x <= pg.x1 + lim.margin; x += 1.5) if (blocked({ x, y })) { hit = true; break; }
@@ -393,12 +424,12 @@ function addFlyers(ctx: SketchContext, view: THREE.PerspectiveCamera, path: Road
       // Its arc must show on the card behind it, sweeping in from the side.
       let seen = 0, total = 0;
       for (let w = Math.max(0, u - 0.5); w <= u - 0.06; w += 0.02) {
-        const q = pageOf(view, arcAt(flight, w));
+        const q = pageOf(view, arcAt(flight, w), TABLOID_PAGE);
         total++;
-        if (q.x > CARD.x0 && q.x < CARD.x1 && q.y > CARD.y0 && q.y < HORIZON_Y) seen++;
+        if (q.x > TABLOID_CARD.x0 && q.x < TABLOID_CARD.x1 && q.y > TABLOID_CARD.y0 && q.y < TABLOID_HORIZON_Y) seen++;
       }
       if (total < 4 || seen < lim.seen * total) continue;
-      const a0 = pageOf(view, arcAt(flight, Math.max(0, u - 0.5))), a1 = pageOf(view, arcAt(flight, u - 0.05));
+      const a0 = pageOf(view, arcAt(flight, Math.max(0, u - 0.5)), TABLOID_PAGE), a1 = pageOf(view, arcAt(flight, u - 0.05), TABLOID_PAGE);
       // It must sweep in from the side, not hang from a string.
       if (Math.hypot(a1.x - a0.x, a1.y - a0.y) < 25 || Math.abs(a1.x - a0.x) < 0.6 * Math.abs(a1.y - a0.y)) continue;
       // Not seen edge-on: a slab in flight shows a face.
@@ -427,9 +458,79 @@ function addFlyers(ctx: SketchContext, view: THREE.PerspectiveCamera, path: Road
   }
 }
 
-/** Lines the length of a road slab's top, `count` across its width, so they run on from row to row as stripes down the lane. */
-function laneHatch(sl: Slab, count: number): THREE.Vector3[][] {
-  const m = slabMatrix(sl), y = sl.h / 2 + 0.006, a = sl.w / 2 - 0.08, b = sl.d / 2;
+/**
+ * The road's slabs as a small card draws them. Far down the road the rows on the ground are closer on paper than the
+ * pen holds apart, and a row's long edges too short to draw: so a row shorter on paper than the smallest feature is
+ * drawn together with the rows beyond it, as one slab over their cells, until that slab is at least a feature long. The
+ * rows stand that far apart and the road keeps its edges; the world's rows are unchanged. Every other piece is drawn
+ * as it is, and all of them where `MIN_FEATURE` is 0 (tabloid). `view` is the card's camera.
+ */
+function drawnPieces(pieces: Piece[], path: RoadPath, d: Dims, view: THREE.Camera): Piece[] {
+  if (!MIN_FEATURE) return pieces;
+  const rows = new Map<number, Piece[]>();
+  for (const pc of pieces) if (pc.kind === 'road') rows.set(pc.row, [...rows.get(pc.row) ?? [], pc]);
+  // A plain row on the ground: one slab to a lane (the knee's rows are laid in shorter slabs, and stay as they are).
+  const ground = (row: number) => { const ps = rows.get(row)!; return ps.length === 2 && !ps[0].ramp ? ps : undefined; };
+  const along = (s0: number, s1: number) => { const a = pageOf(view, path.at(s0)), b = pageOf(view, path.at(s1)); return Math.hypot(b.x - a.x, b.y - a.y); };
+  const out = pieces.filter(pc => pc.kind !== 'road' || !ground(pc.row));
+  let group: Piece[][] = [];
+  const flush = () => {
+    if (group.length === 1) out.push(...group[0]);
+    else if (group.length) {
+      const s0 = group[group.length - 1][0].span![0], s1 = group[0][0].span![1];
+      for (const pc of group[0]) out.push({ ...pc, slab: cellSlab(path, d, s0, s1, pc.side === 'dark' ? DARK_LANE : DARK_LANE === 1 ? 0 : 1, pc.slab.beat), span: [s0, s1] });
+    }
+    group = [];
+  };
+  // Rows run from the front edge back along the road, so a group grows away from the eye.
+  for (const row of [...rows.keys()].sort((a, b) => a - b)) {
+    const ps = ground(row);
+    if (!ps) { flush(); continue; }
+    group.push(ps);
+    if (along(ps[0].span![0], group[0][0].span![1]) >= MIN_FEATURE) flush();
+  }
+  flush();
+  return out;
+}
+
+/**
+ * The road not yet laid as a grid of single lines, each edge the unlaid cells share drawn once, with the gaps between
+ * them closed: the lanes' outer edges and the line between the lanes, each running on over the cells beside it, and
+ * one line across at each cell boundary, over the lanes with an unlaid cell on either side. `top(s, lat)` is the point
+ * on the road's top surface at arc length `s`, `lat` across from its centreline.
+ */
+function unbuiltGrid(build: Build, d: Dims, top: (s: number, lat: number) => THREE.Vector3): THREE.Vector3[][] {
+  const { cells } = build, n = cells.length;
+  if (!n) return [];
+  const open = (ci: number, lane: 0 | 1) => ci >= 0 && ci < n && build.unbuilt.some(u => u.ci === ci && u.lane === lane);
+  // The cell boundaries: the outer two where the outlines had them, those between on the shared line.
+  const bound = (b: number) => b === 0 ? cells[0].s0 + GAP / 2 : b === n ? cells[n - 1].s1 - GAP / 2 : cells[b].s0;
+  const outer = d.laneW + GAP / 2;
+  const lines: THREE.Vector3[][] = [];
+  for (const [lat, beside] of [[-outer, (ci: number) => open(ci, 0)], [0, (ci: number) => open(ci, 0) || open(ci, 1)], [outer, (ci: number) => open(ci, 1)]] as const) {
+    let run: THREE.Vector3[] = [];
+    for (let ci = 0; ci <= n; ci++) {
+      if (ci < n && beside(ci)) {
+        for (let k = run.length ? 1 : 0; k <= 6; k++) run.push(top(bound(ci) + (bound(ci + 1) - bound(ci)) * k / 6, lat));
+        continue;
+      }
+      if (run.length > 1) lines.push(run);
+      run = [];
+    }
+  }
+  for (let b = 0; b <= n; b++) {
+    const left = open(b - 1, 0) || open(b, 0), right = open(b - 1, 1) || open(b, 1);
+    if (left || right) lines.push([top(bound(b), left ? -outer : 0), top(bound(b), right ? outer : 0)]);
+  }
+  return lines;
+}
+
+/**
+ * Lines the length of a road slab's top, `count` across its width, so they run on from row to row as stripes down the
+ * lane; on its underside where `side` is -1.
+ */
+function laneHatch(sl: Slab, count: number, side = 1): THREE.Vector3[][] {
+  const m = slabMatrix(sl), y = side * (sl.h / 2 + 0.006), a = sl.w / 2 - 0.08, b = sl.d / 2;
   const out: THREE.Vector3[][] = [];
   for (let q = 1; q < count; q++) {
     const x = -a + 2 * a * q / count;
@@ -544,10 +645,12 @@ const pitchOf = (ctx: SketchContext, taper: number, bulge: number, head: number,
  * The helix, built `S` times the size and brought back, so the kit's fixed wiggles do not bend a thin
  * smooth streak. Laid along the track as the kit's `helixAlong` lays it, but the strands are turned so
  * that at the head they stand off the paving at `helixStart` from its normal, and everything before
- * the head is cut away; over the last few millimetres to the head the ribbons round off.
+ * the head is cut away; over the last few millimetres to the head (on the print) the ribbons round off.
+ * Its shape is the world's, measured with `world` (`worldCamera`, on tabloid's page); its laminations are
+ * spaced on this card's paper, through the card's own camera `view`.
  */
-function chariotHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, track: Track) {
-  const sv = view.clone();
+function chariotHelix(ctx: SketchContext, world: THREE.PerspectiveCamera, view: THREE.PerspectiveCamera, track: Track) {
+  const sv = world.clone();
   sv.position.multiplyScalar(S); sv.near *= S; sv.far *= S;
   sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
   const curve = new THREE.CatmullRomCurve3(track.curve.points.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
@@ -601,13 +704,13 @@ function chariotHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, track: 
     const off = frames.normals[k].clone().multiplyScalar((p.x - start.x) * scale).addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * scale);
     return curve.getPointAt(s).add(off.addScaledVector(roadN[k], -(1 - flats[k]) * off.dot(roadN[k])));
   };
-  // The head rounds off over its last `tip` millimetres on the sheet.
+  // The head rounds off over its last `tip` millimetres on the print's sheet.
   const tip = 3;
   const arcs = strands.map(st => {
     const acc = [0];
-    let prev = pageOf(sv, bend(strandPoint(st, 0, 0)));
+    let prev = pageOf(sv, bend(strandPoint(st, 0, 0)), TABLOID_PAGE);
     for (let k = 1; k <= STEPS; k++) {
-      const q = pageOf(sv, bend(strandPoint(st, k / STEPS, 0)));
+      const q = pageOf(sv, bend(strandPoint(st, k / STEPS, 0)), TABLOID_PAGE);
       acc.push(acc[k - 1] + Math.hypot(q.x - prev.x, q.y - prev.y));
       prev = q;
     }
@@ -618,6 +721,7 @@ function chariotHelix(ctx: SketchContext, view: THREE.PerspectiveCamera, track: 
   // The kit spaces the laminations by how the upright, unbent strand looks to the camera it is given.
   // Bent along the road that measure means nothing, so it is given a stand-in: a camera looking at the
   // upright strand from the side the eye sees it from at the head, at the scale of the middle of the ramp.
+  // It has the card's own lens, so the laminations are spaced on this card's paper.
   const spacingView = new THREE.PerspectiveCamera(view.fov, view.aspect, 1, 1e8);
   const mid = start.clone().setY(start.y + length / 2);
   spacingView.position.copy(mid).add(new THREE.Vector3(Math.cos(sight), 0, Math.sin(sight)).multiplyScalar(S * n(ctx, 'helixLamination', 52, 20, 200)));
@@ -729,44 +833,67 @@ function dashed(run: Point[], on: number, off: number, keep: (p: Point) => boole
   return keepAlong(run, (p, at) => at % (on + off) < on && keep(p), 0.1);
 }
 
+export interface ChariotWorld {
+  path: RoadPath;
+  build: Build;
+  track: Track;
+  helix: { strokes: HelixStroke[]; meshes: THREE.BufferGeometry[] };
+  /** The cells beyond the edge, as boxes (the caller disposes of them). */
+  cellBoxes: THREE.BufferGeometry[];
+}
+
+/**
+ * The Chariot's world: the road's course and its slabs, the two just landed, the helix, and the slabs in flight, placed
+ * clear of all of it on the page. It is laid out in tabloid's frame, with `worldCamera` and tabloid's page, so every size
+ * and fit builds the same world, to the bit. `view` is the card's own camera: it only spaces the helix's laminations on
+ * this card's paper (its strokes), never its shape.
+ */
+export function chariotWorld(ctx: SketchContext, view: THREE.PerspectiveCamera): ChariotWorld {
+  const world = worldCamera(ctx);
+  const d = dims(ctx);
+  const path = makePath(ctx, world);
+  const build = buildRoad(ctx, path, d);
+  const track = helixTrack(ctx, path, d, world.position);
+  const helix = chariotHelix(ctx, world, view, track);
+  // Cells beyond the edge, as boxes: the flyers keep off them and the sky clears round them.
+  const cellBoxes = build.unbuilt.map(({ ci, lane }) => slabGeometry(cellSlab(path, d, build.cells[ci].s0, build.cells[ci].s1, lane, 0)));
+  const preGeos = build.pieces.map(p => slabGeometry(p.slab));
+  const blocked = meshCoverage([...preGeos, ...helix.meshes, ...cellBoxes], world, TABLOID_PAGE, 0);
+  for (const g of preGeos) g.dispose();
+  addFlyers(ctx, world, path, d, build, blocked);
+  return { path, build, track, helix, cellBoxes };
+}
+
 export function drawChariot(ctx: SketchContext): Part[] {
   const view = chariotCamera(ctx);
   const eye = view.position.clone();
   const f = focal(view);
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const d = dims(ctx);
-  const path = makePath(ctx, view);
-  const build = buildRoad(ctx, path, d);
-  const track = helixTrack(ctx, path, d, view.position);
-  const helix = chariotHelix(ctx, view, track);
+  const { path, build, track, helix, cellBoxes } = chariotWorld(ctx, view);
   const hatch = n(ctx, 'hatch', 1, 0.6, 3);
   // The light: low and from behind the scene, a little to one side, so the ramp's shadow comes toward us across the ground.
   const az = THREE.MathUtils.degToRad(n(ctx, 'lightAzimuth', -5, -70, 70)), el = THREE.MathUtils.degToRad(n(ctx, 'lightElevation', 28, 10, 70));
   const light = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
-
-  // Cells beyond the edge, as boxes: the flyers keep off them and the sky clears round them.
-  const cellBoxes = build.unbuilt.map(({ ci, lane }) => slabGeometry(cellSlab(path, d, build.cells[ci].s0, build.cells[ci].s1, lane, 0)));
-  const preGeos = build.pieces.map(p => slabGeometry(p.slab));
-  const blocked = meshCoverage([...preGeos, ...helix.meshes, ...cellBoxes], view, PAGE, 0);
-  for (const g of preGeos) g.dispose();
-  addFlyers(ctx, view, path, d, build, blocked);
   const { pieces } = build;
 
   const bandOf = (p: THREE.Vector3) => { const dd = eye.z - p.z; return BAND_EDGES.findIndex((e, i) => dd >= e && dd < BAND_EDGES[i + 1]); };
   type Banded = Stroke & { band: number; slack: number };
   const strokes: Banded[] = [];
-  for (const pc of pieces) {
+  for (const pc of drawnPieces(pieces, path, d, view)) {
     const sl = pc.slab, at = new THREE.Vector3(sl.x, sl.y, sl.z), mm = mmPerUnit(at), band = bandOf(at);
     if (pc.kind === 'road') {
       // The road: every slab in outline; the dark lane's rows hatched in stripes while they are big enough on the sheet, the pale lane open paper.
+      // On a small card a slab's outline is trimmed (kit/slabs.ts): no back edges, and its thin sides folded into it.
       const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quatOf(sl));
       const open = up.dot(eye.clone().sub(at).normalize());
       // A row seen at a grazing angle changes depth fast from pixel to pixel: it takes the proportional slack.
       const slack = pc.ramp && open > 0.3 ? SLAB_SLACK : ROAD_SLACK;
-      for (const st of facetStrokes(sl, light, eye, true)) strokes.push({ ink: 'carbon', group: 'road', family: st.family, points: st.points, band, slack });
+      for (const st of facetStrokes(sl, light, eye, true, undefined, { view })) strokes.push({ ink: 'carbon', group: 'road', family: st.family, points: st.points, band, slack });
       const pg = pageBox(view, sl);
-      // Only while its top is seen fairly open: edge on, the stripes only scribble.
-      if (pc.side === 'dark' && open > 0.12 && Math.min(pg.x1 - pg.x0, pg.y1 - pg.y0) > 1.7 && sl.w * mm > 5) {
+      // Only while its top is seen fairly open: edge on, the stripes only scribble. How big is big enough is the print's
+      // (sizes on its sheet, scaled with the card), so the dark lane stays dark as far down the road as it does there.
+      if (pc.side === 'dark' && open > 0.12 && Math.min(pg.x1 - pg.x0, pg.y1 - pg.y0) > layoutLength(1.7) && sl.w * mm > layoutLength(5)) {
         // Where the lane is seen nearly edge on (on the ground, at the knee) its stripes are kept at least 0.55 mm apart on the sheet, or they pile up into a solid bar.
         const count = Math.round(sl.w * mm / (hatch * 0.85));
         for (const points of laneHatch(sl, Math.max(1, Math.min(count, Math.round(laneWidthOnPage(view, sl) / 0.55))))) strokes.push({ ink: 'carbon', group: 'road', family: 'hatch', points, band, slack });
@@ -777,7 +904,17 @@ export function drawChariot(ctx: SketchContext): Part[] {
     // face, opened up (a lighter tone, a wider pitch) so they stay the dark force without outweighing the helix.
     const group = pc.side;
     const dark = pc.side === 'dark';
-    const facets = facetStrokes(dark ? { ...sl, tone: n(ctx, 'darkTone', 0.9, 0.2, 1.5) } : sl, light, eye, !dark, hatch * n(ctx, 'darkPitch', 12, 6, 30) / mm);
+    if (dark && !FORMAT.tabloid) {
+      // On a small card that hatch, its pitch held on paper, fits a ring and leaves the slab paper, as pale as the pale
+      // ones: there a dark slab is striped like the dark lane it is flying in to join, on the broad face it shows the
+      // eye, in the print's ring and field inks by turns.
+      for (const st of facetStrokes(sl, light, eye, true, undefined, { view })) strokes.push({ ink: st.ink, group, family: st.family, points: st.points, band, slack: SLAB_SLACK });
+      const toward = Math.sign(new THREE.Vector3(0, 1, 0).applyQuaternion(quatOf(sl)).dot(eye.clone().sub(at))) || 1;
+      const count = Math.max(1, Math.min(Math.round(sl.w * mm / (hatch * 0.85)), Math.round(laneWidthOnPage(view, sl) / 0.55)));
+      laneHatch(sl, count, toward).forEach((points, j) => strokes.push({ ink: j % 2 ? 'ultramarine' : 'carbon', group, family: 'hatch', points, band, slack: SLAB_SLACK }));
+      continue;
+    }
+    const facets = facetStrokes(dark ? { ...sl, tone: n(ctx, 'darkTone', 0.9, 0.2, 1.5) } : sl, light, eye, !dark, hatch * n(ctx, 'darkPitch', 12, 6, 30) / mm, { view });
     for (const st of facets) strokes.push({ ink: st.ink, group, family: st.family, points: st.points, band, slack: SLAB_SLACK });
   }
   // The road's far end: two edge rules running out to the horizon at the vanishing point.
@@ -806,32 +943,36 @@ export function drawChariot(ctx: SketchContext): Part[] {
   const wide = view.clone();
   try {
     fitDepthRange(view, geometries);
-    const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
+    const raster = { W, H, MM_X, MM_Y };
+    const fine = fineDepth(geometries, view, raster, FINE);
+    const depthBuffer = fine.env.depth, DW = fine.env.width, DH = fine.env.height, DX = fine.mmX, DY = fine.mmY;
     // The helix is tested only against the slabs, not its own ribbons, which only broke it up.
-    const slabDepth = renderDepthBufferCPU(slabGeos, view, W, H);
+    const slabDepth = fineDepth(slabGeos, view, raster, FINE).env.depth;
     const nearP = view.near, farP = view.far;
     const biasOf = (band: number, slack: number) => {
       const lo = BAND_EDGES[band], hi = Number.isFinite(BAND_EDGES[band + 1]) ? BAND_EDGES[band + 1] : lo * 1.4;
       const dd = Math.sqrt(Math.max(lo, 8) * hi);
       return Math.max(3e-5, (slack < 0 ? groundSlack(-slack, dd) : slack) * nearP * farP / ((farP - nearP) * dd * dd));
     };
-    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
-    const cellsNear = meshCoverage(cellBoxes, wide, PAGE, 0.8);
+    // The halos are the print's, scaled with the card (`halo`), never under half a millimetre.
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));
+    const cellsNear = meshCoverage(cellBoxes, wide, PAGE, halo(0.8));
     // What stands over the road is cut out of it on the sheet (the ground rows are let through the depth test loosely).
     const standing = pieces.filter(p => p.kind !== 'road').map(p => slabGeometry(p.slab));
-    const overRoad = meshCoverage([...standing, ...helix.meshes], view, PAGE, 0.6);
+    const overRoad = meshCoverage([...standing, ...helix.meshes], view, PAGE, halo(0.6));
     for (const g of standing) g.dispose();
 
     // The phrase: one word to a slab, cut into a face that looks at the eye: the flying ones, the landed
-    // ones, and the sides of the ramp, so the eye has to hunt for them.
+    // ones, and the sides of the ramp, so the eye has to hunt for them. Where the format puts the phrase
+    // in the bottom band (a small card), the art carries no words and the card frame sets it there.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('chariot-words');
     const style = { face: settings.face, height: settings.size };
     const textStrokes: THREE.Vector3[][] = [];
     const visible = (lines3: THREE.Vector3[][], band: number) => {
       let total = 0, seen = 0;
-      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth: depthBuffer, width: W, height: H, bias: biasOf(band, SLAB_SLACK * 1.5) }, {
+      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth: depthBuffer, width: DW, height: DH, bias: biasOf(band, SLAB_SLACK * 1.5) }, {
         hidden: () => hidden, begin: () => runs => { for (const r of runs) addTo(r.length); },
       });
       count(false, k => { total += k; });
@@ -850,8 +991,8 @@ export function drawChariot(ctx: SketchContext): Part[] {
         const sl = pc.slab, at = new THREE.Vector3(sl.x, sl.y, sl.z);
         const unit = 1 / mmPerUnit(at);
         const page = pageOf(view, at);
-        const ok = page.x > CARD.x0 + 6 && page.x < CARD.x1 - 6 && page.y > CARD.y0 + 8 && page.y < CARD.y1 - 8
-          && !placed.some(q => Math.hypot(q.x - page.x, q.y - page.y) < 30);
+        const ok = page.x > CARD.x0 + layoutLength(6) && page.x < CARD.x1 - layoutLength(6) && page.y > CARD.y0 + layoutLength(8) && page.y < CARD.y1 - layoutLength(8)
+          && !placed.some(q => Math.hypot(q.x - page.x, q.y - page.y) < layoutLength(30));
         const frames = ok ? textFrames(sl, view, eye, pc.kind === 'road' ? [0, 2] : [0, 1, 2]) : [];
         const fits = frames.filter(fr => wmm * unit <= 2 * fr.a * 0.9 && style.height * unit <= 2 * fr.b * 0.85).sort((a, b) => b.score - a.score)[0];
         return { pc, fr: fits, k: (kindOf(pc) === want ? 0 : 0.8) + 0.6 * wrng() - (fits ? fits.score * 0.3 : 0) };
@@ -861,7 +1002,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
         const ww = wmm * unit, hh = style.height * unit;
         const x0 = -ww / 2 + (wrng() - 0.5) * (2 * fr!.a - ww) * 0.7, y0 = -hh / 2 + (wrng() - 0.5) * (2 * fr!.b - hh) * 0.5;
         const word3 = strokeText(word, 0, 0, style).map(p2 => p2.map(q => fr!.c.clone().addScaledVector(fr!.ub, x0 + q.x * unit).addScaledVector(fr!.vb, y0 + hh - q.y * unit)));
-        const onCard = word3.every(l => l.every(q => { const pq = pageOf(view, q); return pq.x > CARD.x0 + 2 && pq.x < CARD.x1 - 2 && pq.y > CARD.y0 + 2 && pq.y < CARD.y1 - 2; }));
+        const onCard = word3.every(l => l.every(q => { const pq = pageOf(view, q); return pq.x > CARD.x0 + layoutLength(2) && pq.x < CARD.x1 - layoutLength(2) && pq.y > CARD.y0 + layoutLength(2) && pq.y < CARD.y1 - layoutLength(2); }));
         if (!onCard || !visible(word3, bandOf(fr!.c))) continue;
         textStrokes.push(...word3);
         used.add(pc);
@@ -870,8 +1011,8 @@ export function drawChariot(ctx: SketchContext): Part[] {
       }
     });
     const glyphPaths: Point[][] = [];
-    for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
-      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
+    for (const l of projectPolylinesClipped(textStrokes, view, DW, DH).polylines) for (const c of clipProjectedPolyline(l, DW, DH)) {
+      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), DX, DY)));
     }
     // The arcs the flying slabs have come along: a dashed trail behind each, and a clear lane through the ruled sky.
     const trailPaths: Point[][] = [];
@@ -881,13 +1022,14 @@ export function drawChariot(ctx: SketchContext): Part[] {
       if (line.length < 2) continue;
       for (const inside of clipWindow(line)) trailPaths.push(...dashed(inside, 2.4, 1.8, () => true));
     }
-    const onTrail = glyphMask(trailPaths, 1.4);
-    const onGlyph = glyphMask(glyphPaths, 0.9);
-    const buckets = new PartBuckets(0.4);
+    const onTrail = glyphMask(trailPaths, halo(1.4));
+    const onGlyph = glyphMask(glyphPaths, halo(0.9));
+    // The reducer scales with the card (`simplify` itself at tabloid), so the streak and the arcs stay curves when small.
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
-    const nearHelix = meshCoverage(helix.meshes, view, PAGE, 2);
+    const nearHelix = meshCoverage(helix.meshes, view, PAGE, halo(2));
     const batches = new Map<string, Banded[]>();
     for (const st of strokes) {
       const key = `${st.band}:${st.slack}`;
@@ -895,15 +1037,16 @@ export function drawChariot(ctx: SketchContext): Part[] {
       batches.get(key)!.push(st);
     }
     for (const mine of batches.values()) {
-      projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(mine[0].band, mine[0].slack) }, {
+      projectStrokes(mine, { view, depth: depthBuffer, width: DW, height: DH, bias: biasOf(mine[0].band, mine[0].slack) }, {
         begin: st => runs => {
           for (const run of runs) {
-            if (st.group !== 'road') { add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, 0.6); continue; }
+            // Off tabloid a piece of a face's hatch shorter than the smallest feature is a speck, and dropped (`hatchMin`).
+            if (st.group !== 'road') { add(`${st.group}-${st.ink}`, scalePoints(run, DX, DY), undefined, hatchMin(st.family) ?? 0.6); continue; }
             // Road lines are cut where the helix or a slab stands over them; a short scrap left right beside the
             // helix (between its strands) is dropped, or it reads as a stray tick.
-            for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) for (const piece of keepAlong(inside, p => !onGlyph(p) && !overRoad(p), 0.15)) {
+            for (const inside of clipWindow(scalePoints(run, DX, DY))) for (const piece of keepAlong(inside, p => !onGlyph(p) && !overRoad(p), 0.15)) {
               const scrap = pathLength(piece) < 2.5 && piece.every(nearHelix);
-              if (!scrap) buckets.add(`${st.group}-${st.ink}`, piece, false, 0.6);
+              if (!scrap) buckets.add(`${st.group}-${st.ink}`, piece, false, hatchMin(st.family) ?? 0.6);
             }
           }
         },
@@ -912,17 +1055,22 @@ export function drawChariot(ctx: SketchContext): Part[] {
     const helixBatches = new Map<number, Banded[]>();
     for (const st of helixStrokes) { if (!helixBatches.has(st.band)) helixBatches.set(st.band, []); helixBatches.get(st.band)!.push(st); }
     for (const mine of helixBatches.values()) {
-      projectStrokes(mine, { view, depth: slabDepth, width: W, height: H, bias: biasOf(mine[0].band, SLAB_SLACK) }, {
-        begin: st => runs => { for (const run of runs) add(`helix-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+      projectStrokes(mine, { view, depth: slabDepth, width: DW, height: DH, bias: biasOf(mine[0].band, SLAB_SLACK) }, {
+        begin: st => runs => { for (const run of runs) add(`helix-${st.ink}`, scalePoints(run, DX, DY)); },
       });
     }
-    projectStrokes(rails, { view, depth: depthBuffer, width: W, height: H }, {
+    projectStrokes(rails, { view, depth: depthBuffer, width: DW, height: DH }, {
       hidden: () => false,
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, DX, DY)); },
     });
     // Slabs not yet laid: the outlines of their tops, dashed, on through the sky.
     const unbuiltLines: THREE.Vector3[][] = [];
-    for (const { ci, lane } of build.unbuilt) {
+    const top = (s: number, lat: number) => { const fr = path.frame(s); return path.at(s).addScaledVector(fr.N, d.thick).addScaledVector(fr.B, lat); };
+    // On a small card the gap between them is narrower on paper than the smallest feature, and two outlines that close
+    // print as one thick dash: there each shared edge is drawn once (`unbuiltGrid`).
+    const nearest = build.cells[0];
+    if (nearest && GAP * mmPerUnit(top(nearest.s0, 0)) < MIN_FEATURE) unbuiltLines.push(...unbuiltGrid(build, d, top));
+    else for (const { ci, lane } of build.unbuilt) {
       const c = build.cells[ci];
       const edge = (s: number, side: number) => { const fr = path.frame(s); return path.at(s).addScaledVector(fr.N, d.thick).addScaledVector(fr.B, laneLat(d, lane) + side * d.laneW / 2); };
       const sA = c.s0 + GAP / 2, sB = c.s1 - GAP / 2;
@@ -930,10 +1078,10 @@ export function drawChariot(ctx: SketchContext): Part[] {
       const left = along(-1), right = along(1);
       unbuiltLines.push([...left, ...right.reverse(), left[0]]);
     }
-    projectStrokes(unbuiltLines.map(points => ({ points })), { view: wide, depth: depthBuffer, width: W, height: H }, {
+    projectStrokes(unbuiltLines.map(points => ({ points })), { view: wide, depth: depthBuffer, width: DW, height: DH }, {
       hidden: () => false,
       begin: () => runs => {
-        for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
+        for (const run of runs) for (const inside of clipWindow(scalePoints(run, DX, DY))) {
           for (const piece of dashed(inside, 1.8, 1.4, p => !onGlyph(p) && !solids(p))) buckets.add('unbuilt-carbon', piece);
         }
       },
@@ -957,8 +1105,9 @@ export function drawChariot(ctx: SketchContext): Part[] {
     }
     for (const [row, pts] of byRow) shadowPolys.push(hull([...pts, ...(byRow.get(row + 1) ?? [])].map(toGround)));
     const inShadow = polyCoverage(shadowPolys);
-    const pitch = n(ctx, 'shadowPitch', 0.7, 0.5, 3);
-    for (let y = HORIZON_Y + 1.5; y < CARD.y1; y += pitch) {
+    // Its pitch is a tone, held in real millimetres; it starts a little below the horizon, a gap that scales with the card.
+    const pitch = tolerance(n(ctx, 'shadowPitch', 0.7, 0.5, 3));
+    for (let y = HORIZON_Y + layoutLength(1.5); y < CARD.y1; y += pitch) {
       add('shadow-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], p => inShadow(p) && !solids(p));
     }
 
@@ -967,10 +1116,11 @@ export function drawChariot(ctx: SketchContext): Part[] {
     // short dashes, as if blown past.
     const reachSky = n(ctx, 'sky', 0.5, 0, 1);
     const pattern = barPattern(ctx.random('chariot-sky'), 0.86);
-    const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
+    // The ruling's pitch and its dashes are tones, in real millimetres; the reach of the streak's wake is the scene's.
+    const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1);
     const streak = track.ramp.map(q => pageOf(view, q));
-    const nearStreak = (p: Point) => streak.some(q => Math.hypot(q.x - p.x, (q.y - p.y) * 0.8) < 24);
-    if (reachSky > 0) for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += 1.2) {
+    const nearStreak = (p: Point) => streak.some(q => Math.hypot(q.x - p.x, (q.y - p.y) * 0.8) < layoutLength(24));
+    if (reachSky > 0) for (let y = skyTop + layoutLength(0.3), i = 0; y < skyBottom; i++, y += 1.2) {
       const t = (y - skyTop) / (skyBottom - skyTop);
       const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
       // Every other of the longest rules runs on down to the horizon, broken more as it goes; the rest stop short.
@@ -991,7 +1141,7 @@ export function drawChariot(ctx: SketchContext): Part[] {
     for (const p2 of glyphPaths) buckets.add('slogan-lettering', p2, true);
     const parts = buckets.toParts(['sky', 'shadow', 'trail', 'road', 'unbuilt', 'pale', 'dark', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
-    parts.push(...cardFrame('VII', 'THE CHARIOT'));
+    parts.push(...cardFrame('VII', 'THE CHARIOT', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of [...geometries, ...cellBoxes]) geo.dispose();
