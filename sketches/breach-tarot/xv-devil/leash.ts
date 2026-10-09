@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
-import { helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
+import { helixStrands, narrowStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { clamp } from '../../kit/params.ts';
 
 export interface LeashOptions {
@@ -18,7 +18,9 @@ export interface LeashOptions {
  * membrane; the pillar splits it, one strand to each side, so `index` picks which. Built `scale`
  * times the size and brought back, so a thin smooth ribbon does not read as lightning. The strand
  * is the kit's, in its native inks. The lamination spacing is measured by a stand-in camera that
- * sees the unbent strand as it would stand at the curve's start.
+ * sees the unbent strand as it would stand at the curve's start. Off tabloid, a strand narrower on the card than the
+ * smallest feature is drawn by its line (`narrowStrands`, in `view`): its edges would print as one blot and its
+ * laminations as specks.
  */
 export function leashStrand(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THREE.Vector3[], index: 0 | 1, o: LeashOptions) {
   const S = o.scale;
@@ -42,7 +44,7 @@ export function leashStrand(ctx: SketchContext, view: THREE.PerspectiveCamera, p
     const k = Math.min(400, Math.round(u * 400));
     return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - start.x).addScaledVector(frames.binormals[k], p.z - start.z - 0.25);
   };
-  const strokes: HelixStroke[] = strandStrokes(st, o.density, 0.2, ctx, sv).map(h => ({ ...h, points: h.points.map(q => bend(q).multiplyScalar(1 / S)) }));
+  const strokes: HelixStroke[] = narrowStrands(strandStrokes(st, o.density, 0.2, ctx, sv).map(h => ({ ...h, points: h.points.map(q => bend(q).multiplyScalar(1 / S)) })), view);
   const mesh = buildSurfaceMesh((u, w) => bend(strandPoint(st, u, 2 * w - 1)), {}, 320, 8).scale(1 / S, 1 / S, 1 / S);
   mesh.computeBoundingSphere();
   return { strokes, mesh, length: length / S };

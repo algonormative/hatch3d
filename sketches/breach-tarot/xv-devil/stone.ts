@@ -8,11 +8,12 @@ import type { Stroke } from '../../kit/types.ts';
  * and the undersides, under a light from behind) take the hatch at `pitch` units; the tops,
  * which the light reaches, take it `topOpen` times as open. `angle` is the hatch's direction on a
  * face, in radians from its horizontal edge; `course` alternates it so neighbouring courses
- * read apart.
+ * read apart. Given the card's camera (`view`), off tabloid the outline is trimmed (kit/slabs.ts' `SlabTrim`: no back
+ * edges, and a face narrower on paper than the smallest feature folded into it).
  */
-export function stoneStrokes(sl: Slab, eye: THREE.Vector3, pitch: number, course: number, group: string, topOpen = 3): Stroke[] {
+export function stoneStrokes(sl: Slab, eye: THREE.Vector3, pitch: number, course: number, group: string, topOpen = 3, view?: THREE.Camera): Stroke[] {
   const out: Stroke[] = [];
-  for (const st of facetStrokes(sl, new THREE.Vector3(0, 0, -1), eye, true)) out.push({ ink: st.ink, group, family: st.family, points: st.points });
+  for (const st of facetStrokes(sl, new THREE.Vector3(0, 0, -1), eye, true, undefined, view ? { view } : undefined)) out.push({ ink: st.ink, group, family: st.family, points: st.points });
   const m = slabMatrix(sl);
   const rot = new THREE.Matrix4().extractRotation(m);
   const hx = sl.w / 2, hy = sl.h / 2, hz = sl.d / 2;

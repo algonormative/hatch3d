@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { bodyMeshes, contourTube, type Body } from '../../kit/mannequin/body.ts';
-import { ELONGATED, flowBody, gesture, ribbonStrokes } from '../../kit/mannequin/gesture.ts';
+import { ELONGATED, figureBands, flowBody, gesture, ribbonStrokes } from '../../kit/mannequin/gesture.ts';
 import { LOOK, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton, withPose, type JointAngles, type JointName, type Pose, type Side, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import type { ClothStroke, Tube, ViewEnv } from '../../kit/mannequin/tube.ts';
@@ -76,10 +76,11 @@ function headOutline(head: Tube, screen: ToneEnv['screen'], look: Look): ClothSt
 /**
  * Plain contour hatch that follows the form: long bands run the length of each limb and wind slowly
  * round it, their lines coming in where the light leaves them dark, with an outline; the head is a
- * blank egg, thinly ringed, outlined by its hull, with no face.
+ * blank egg, thinly ringed, outlined by its hull, with no face. Its bands are the print's at tabloid and fewer on a
+ * smaller card (`figureBands`), where a figure fifteen millimetres tall would crowd them.
  */
 export function figureStrokes(f: Figure, env: ToneEnv & ViewEnv): Stroke[] {
-  const out: ClothStroke[] = ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { bands: 6, fill: 0.58, twist: 0.3, lines: 6 });
+  const out: ClothStroke[] = ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { bands: figureBands(), fill: 0.58, twist: 0.3, lines: 6 });
   const head = f.body.head!;
   out.push(...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, FIGURE_LOOK, f.skeleton.height * 0.012),
     headOutline(head, env.screen, FIGURE_LOOK));
