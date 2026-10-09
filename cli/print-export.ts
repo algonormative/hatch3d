@@ -5,7 +5,7 @@
  *   npm run print-export -- [stack.json] [--profile mpc] [--only 0-fool,xvi-tower,chart] [--no-chart] [--out dir]
  *       [--carbon 0.35] [--colour 0.42] [--lettering 0.26] [--gap 0.25] [--min-run 0.5]
  *       [--texture 0.04] [--grain 0.5] [--ink] [--ink-jitter 0.08] [--ink-blob 1.6] [--seed 1]
- *       [--back image.png | --back-form helix|labyrinth|field | --no-back] [--supersample 4]
+ *       [--back image.png | --back-form helix|labyrinth|field|composite|cathedral | --no-back] [--supersample 4]
  *
  * The stack (default `sketches/phase-garden/stacks/tarot-print.json`) sets the page to the trim and the border and
  * margin that keep the art in the safe zone. Its `back` (a sketch and seed, optional `params`) is the card back, drawn
@@ -356,7 +356,7 @@ export interface RunOptions {
   back?: string;
   /** Skip the stack's back. */
   noBack?: boolean;
-  /** This run's `form` for the stack's back: helix, labyrinth or field. */
+  /** This run's `form` for the stack's back: one of the back's `BACK_FORMS`. */
   backForm?: string;
   out?: string;
 }
@@ -425,7 +425,7 @@ function main(argv: string[]): Promise<void> {
 Usage: npm run print-export -- [stack.json] [--profile mpc] [--only 0-fool,xvi-tower,chart] [--no-chart] [--out dir]
          [--carbon 0.35] [--colour 0.42] [--lettering 0.26] [--gap 0.25] [--min-run 0.5] [--supersample 4]
          [--texture 0.04] [--grain 0.5] [--ink] [--ink-jitter 0.08] [--ink-blob 1.6] [--seed 1]
-         [--back image.png | --back-form helix|labyrinth|field | --no-back]
+         [--back image.png | --back-form helix|labyrinth|field|composite|cathedral | --no-back]
 
 Writes .sketch-output/print/<profile>/NN-<card>.front.png, 22-test-chart.front.png, back.png and manifest.json.
 back.png is the stack's back (its sketch at the trim), or the image --back gives; --no-back skips it, and --back-form

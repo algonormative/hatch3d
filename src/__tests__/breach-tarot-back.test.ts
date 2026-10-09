@@ -14,8 +14,11 @@ const PLOT = { width: 70, height: 120 };
 const PRINT: Page = (JSON.parse(readFileSync(resolve('sketches/phase-garden/stacks/tarot-print.json'), 'utf8')) as { page: Page }).page;
 /** The print's safe zone, and the half-width of its widest stroke (print-export's colour width), in millimetres. */
 const SAFE_MM = 5, PRINT_HALF_STROKE = 0.42 / 2;
-/** A back is plotted 22 times: its line, at 70 x 120, in millimetres. */
-const BUDGET_MM = 3000;
+/**
+ * A back is plotted 22 times: its line, at 70 x 120, in millimetres. The first three forms keep under 3 m; the two that
+ * gather the deck's elements (`composite`) and redraw the Breach Cathedral (`cathedral`) under 3.5 m.
+ */
+const BUDGET_MM: Record<string, number> = { helix: 3000, labyrinth: 3000, field: 3000, composite: 3500, cathedral: 3500 };
 /** How far a turned path may lie from the path it lands on. */
 const TOLERANCE_MM = 0.05;
 
@@ -124,9 +127,18 @@ describe('Breach Tarot: the back', () => {
     }
   });
 
-  it.each(BACK_FORMS)('%s plots in under 3 m of line at 70 x 120', form => {
+  it.each(BACK_FORMS)('%s plots within its line budget at 70 x 120', form => {
     const total = plotted.get(form)!.raw.reduce((sum, part) => sum + part.paths.reduce((s, path) => s + pathLength(path), 0), 0);
     expect(total).toBeGreaterThan(500);
-    expect(total).toBeLessThanOrEqual(BUDGET_MM);
+    expect(total).toBeLessThanOrEqual(BUDGET_MM[form]);
+  });
+
+  it('composite draws every element of the deck, each in its own inks, at both sizes', () => {
+    // The slab gates, the labyrinth, the dark heart, the star, and the helix in all four of its inks.
+    const wanted = ['gate-carbon', 'gate-ultramarine', 'labyrinth-carbon', 'heart-carbon', 'star-carbon', 'thread-acid', 'thread-vermilion', 'thread-ultramarine', 'thread-violet'];
+    for (const { raw } of [plotted.get('composite')!, printed.get('composite')!]) {
+      const ids = new Set(raw.filter(part => part.paths.length).map(part => part.id));
+      for (const id of wanted) expect(ids, id).toContain(id);
+    }
   });
 });

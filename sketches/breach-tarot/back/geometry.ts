@@ -5,10 +5,12 @@ import { clipToRect, pathLength, segDist, straightened } from '../../kit/page.ts
 import { clamp, n } from '../../kit/params.ts';
 import type { Ink } from '../../kit/types.ts';
 import { chartresPlan, type P2 } from '../xxi-world/labyrinth.ts';
+import { composite } from './composite.ts';
+import { cathedral } from './cathedral.ts';
 
 /**
  * The Breach Tarot's back: one design for all 22 cards, the same either way up. It names no card and carries no
- * words; it is drawn in the deck's own language, in one of three forms:
+ * words; it is drawn in the deck's own language, in one of five forms:
  *
  *   - `helix`: the twin helix closed into a ring, seen from above, in its native inks. Its ribbons broaden where the
  *     strands cross and turn edge-on at the ring's inside and outside; at every crossing the strand on top knocks the
@@ -18,16 +20,23 @@ import { chartresPlan, type P2 } from '../xxi-world/labyrinth.ts';
  *     walk in is the walk out, whichever way up the card is held.
  *   - `field`: a field of helix crossings, the playing-card back's all-over trellis: thin twin helices in two families,
  *     woven over and under by turns, round a quiet lozenge window in the middle.
+ *   - `composite` (composite.ts): every element at once in one emblem: a through-labyrinth walked by the helix from a
+ *     gate of slabs at the head to the star at its heart and out to the foot, walls heavier toward the heart, the
+ *     heart ruled dark, paper round whatever passes in front.
+ *   - `cathedral` (cathedral.ts): the Breach Cathedral that the deck grew from, head to tail: its cantilevered slabs
+ *     round the open shaft, its ribbed membrane looping round them in front and behind.
  *
  * **One way up is the other.** Every mark is built for one half of the card and drawn twice, as it is and turned
  * 180° about the card's centre, pen for pen. Each form's half is cut where the figure itself is symmetric (the ring
- * and every thread where they cross the card's centre line, the labyrinths whole), so the joins are continuous.
+ * and every thread where they cross the card's centre line, the labyrinths whole), so the joins are continuous. The
+ * last two hide their half's marks behind its own solids before turning it, and lay the halves out so that no solid
+ * crosses the middle, where a turned half (seen, in effect, from behind) could not hide the other consistently.
  *
  * **Page-aware.** Everything is laid out on the format's card rect (`kit/format.ts`): sizes as fractions of the card,
  * pitches in real millimetres no closer than the pens hold apart (`MIN_SPACING`). The card's outer edge is the
  * format's page margin, which a print stack keeps outside its safe zone, so anything inside the card is safe.
  */
-export const BACK_FORMS = ['helix', 'labyrinth', 'field'] as const;
+export const BACK_FORMS = ['helix', 'labyrinth', 'field', 'composite', 'cathedral'] as const;
 export type BackForm = typeof BACK_FORMS[number];
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
 
@@ -364,7 +373,9 @@ export function drawBack(ctx: SketchContext): Part[] {
   const form = backForm(ctx);
   if (form === 'helix') helixRing(ctx, half);
   else if (form === 'labyrinth') twinLabyrinth(ctx, half);
-  else trellis(ctx, half);
+  else if (form === 'field') trellis(ctx, half);
+  else if (form === 'composite') composite(ctx, half);
+  else cathedral(ctx, half);
   if (ctx.params.frame !== false) frame(half);
-  return half.parts(['frame', 'labyrinth', 'thread', 'helix']);
+  return half.parts(['frame', 'nave', 'gate', 'labyrinth', 'heart', 'star', 'thread', 'membrane', 'helix']);
 }
