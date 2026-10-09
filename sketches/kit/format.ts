@@ -23,8 +23,12 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  * **Other pages** follow tabloid's proportions under one scale `s`. `fit: 'height'` (the default) keeps the
  * vertical framing and crops the sides, so `s` is the page height ratio; `fit: 'width'` keeps the whole width,
  * so `s` is the width ratio and the camera's field of view widens. The card's outer edge sits on the page
- * margin (as tabloid's does at 18 mm; without one, tabloid's 18 mm scaled by the smaller ratio), and the bands
- * scale by `s`. Three kinds of millimetre follow three rules:
+ * margin (as tabloid's does at 18 mm; without one, tabloid's 18 mm scaled by the smaller ratio). The frame is the
+ * card's, not the scene's, so it ignores the fit: its lettering scales with the paper (the smaller ratio) but is
+ * never set under eight widths of its pen, and each band is as deep as its lettering needs with clear paper above
+ * and below, never shallower than tabloid's scaled; the art window gives up the rest. Every card of a deck at one
+ * size therefore has the same bands and horizon, whichever fit it draws its scene in. Three kinds of millimetre
+ * follow three rules:
  *   - layout (positions and sizes) scales with the card: `layoutX`, `layoutY` (measured from the art window's
  *     centre line and the horizon), `layoutLength`;
  *   - tolerance (what a pen can hold) stays in real millimetres, but never below the pen floor: `tolerance`;
@@ -77,8 +81,11 @@ export interface Format {
   sheet: { x: number; y: number };
   card: CardRect;
   horizonY: number;
-  /** The frame: the gap between each band's pair of rules, the numeral above, the name below, and the phrase's cap height when it sits in the band. */
-  frame: { rule: number; numeral: Lettering; name: Lettering; phraseHeight: number };
+  /**
+   * The frame: the gap between each band's pair of rules, the numeral above, the name below, the phrase's cap height
+   * when it sits in the band, and the paper between the name and the phrase (`lead`, at `phraseHeight`).
+   */
+  frame: { rule: number; numeral: Lettering; name: Lettering; phraseHeight: number; lead: number };
   pens: FormatPen[];
   /** Closest two parallel strokes may sit on the paper: twice the widest art pen. */
   minSpacing: number;
@@ -89,6 +96,17 @@ export interface Format {
 
 /** Smallest cap height the lettering pen keeps legible, in millimetres. */
 export const LEGIBLE_MM = 1.6;
+/**
+ * The frame's numeral and name are never set smaller than this many widths of their pen: the cathedral face's grid,
+ * eight units to the cap height, so a stroke never fills more than one unit of it.
+ */
+const FRAME_PENS = 8;
+/** Paper above and below a band's lettering, inside the band, as a fraction of its cap height (the name's in the bottom band). */
+const FRAME_CLEAR = 0.75;
+/** Paper between the name and the phrase in the bottom band, as a fraction of the phrase's cap height. */
+const PHRASE_LEAD = 0.6;
+/** The most of the card's height the two bands take on a small card; past it they shrink, and the frame sets its lettering smaller or not at all. */
+const BAND_SHARE = 0.25;
 /** Smallest feature a format other than tabloid draws as a shape, in millimetres on paper. */
 const FEATURE_MM = 1;
 /** The finest depth raster any format uses, in millimetres per pixel. */
@@ -110,7 +128,7 @@ export const TABLOID_FORMAT: Format = {
   name: 'tabloid', tabloid: true, page: TABLOID_PAGE, fit: 'height', s: 1, pitchScale: 1, sheet: { x: 1, y: 1 },
   card: TABLOID_CARD,
   horizonY: TABLOID_CARD.y0 + 0.6 * (TABLOID_CARD.y1 - TABLOID_CARD.y0),
-  frame: { rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2 },
+  frame: { rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2, lead: 1.1 },
   pens: pensOf(0.25, 0.13), minSpacing: 0.5, minFeature: 0, phrase: 'art',
 };
 
@@ -149,21 +167,34 @@ export function formatFor(page: Page, options: FormatOptions = {}): Format {
   }
   const sw = page.width / TABLOID_PAGE.width, sh = page.height / TABLOID_PAGE.height;
   const s = fit === 'width' ? sw : sh;
-  const m = page.margin ?? TABLOID_CARD.x0 * Math.min(sw, sh);
-  const band = (TABLOID_CARD.y0 - TABLOID_CARD.top) * s;
-  const card: CardRect = { x0: m, x1: page.width - m, top: m, bottom: page.height - m, y0: m + band, y1: page.height - m - band };
+  // The frame is the card's, not the scene's: it scales with the paper (as the margin does), whatever the fit, so
+  // every card of a deck has the same bands and shares one horizon.
+  const paper = Math.min(sw, sh);
+  const m = page.margin ?? TABLOID_CARD.x0 * paper;
+  const tab = TABLOID_FORMAT.frame;
+  // The name as tabloid's, scaled with the paper, never under eight widths of the frame's pen; the numeral larger
+  // in tabloid's proportion. Tracking is in the face's grid units, which already scale with the cap height.
+  const name: Lettering = { height: Math.max(tab.name.height * paper, FRAME_PENS * artPen), tracking: tab.name.tracking };
+  const numeral: Lettering = { height: name.height * tab.numeral.height / tab.name.height, tracking: tab.numeral.tracking };
+  // The band's double rule scales with the card, but stays far enough apart to print as two lines.
+  const frame = { rule: Math.max(tab.rule * paper, 1.5 * minSpacing), numeral, name, phraseHeight: LEGIBLE_MM, lead: PHRASE_LEAD * LEGIBLE_MM };
+  // Each band is tabloid's depth scaled with the paper, or as deep as its lettering needs with clear paper above and
+  // below it, whichever is more: the numeral in the top band; the name, and under it the phrase down to its
+  // descenders (3/8 of its cap height) where the format sets it there, in the bottom one.
+  const band = (TABLOID_CARD.y0 - TABLOID_CARD.top) * paper;
+  const lines = phrase === 'band' ? name.height + frame.lead + LEGIBLE_MM * 11 / 8 : name.height;
+  const needs = [frame.rule + numeral.height * (1 + 2 * FRAME_CLEAR), frame.rule + lines + 2 * FRAME_CLEAR * name.height];
+  // On a card too small for that, the two bands shrink together to a quarter of its height (never under tabloid's
+  // proportion), and the frame sets its lettering smaller to fit them, or leaves it out (see `cardFrame`).
+  const shrink = Math.min(1, BAND_SHARE * (page.height - 2 * m) / (needs[0] + needs[1]));
+  const [above, below] = needs.map(need => Math.max(band, need * shrink));
+  const card: CardRect = { x0: m, x1: page.width - m, top: m, bottom: page.height - m, y0: m + above, y1: page.height - m - below };
   if (!(card.x1 > card.x0 && card.y1 > card.y0)) {
-    throw new Error(`A ${page.width} × ${page.height} mm page with a ${m} mm margin leaves no room for the card's ${band.toFixed(2)} mm bands and an art window`);
+    throw new Error(`A ${page.width} × ${page.height} mm page with a ${m} mm margin leaves no room for the card's ${above.toFixed(2)} and ${below.toFixed(2)} mm bands and an art window`);
   }
-  // Tracking is in the face's grid units, which already scale with the cap height.
-  const sized = (base: Lettering): Lettering => ({ height: Math.max(LEGIBLE_MM, base.height * s), tracking: base.tracking });
-  const frame = TABLOID_FORMAT.frame;
   return {
     name: `${page.width}x${page.height}`, tabloid: false, page, fit, s, pitchScale: 1 / s, sheet: { x: sw, y: sh },
-    card, horizonY: card.y0 + 0.6 * (card.y1 - card.y0),
-    // The band's double rule scales with the card, but stays far enough apart to print as two lines.
-    frame: { rule: Math.max(frame.rule * s, 1.5 * minSpacing), numeral: sized(frame.numeral), name: sized(frame.name), phraseHeight: LEGIBLE_MM },
-    pens, minSpacing, minFeature: FEATURE_MM, phrase,
+    card, horizonY: card.y0 + 0.6 * (card.y1 - card.y0), frame, pens, minSpacing, minFeature: FEATURE_MM, phrase,
   };
 }
 

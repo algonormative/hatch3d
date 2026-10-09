@@ -50,7 +50,7 @@ const fitted = (height: number, room: number): number => height <= room ? height
  */
 export function cardFrame(numeral: string, name: string, options: FrameOptions = {}): Part[] {
   const pen = options.pen ?? 'carbon';
-  const { rule: gap, numeral: above, name: below, phraseHeight } = FRAME;
+  const { rule: gap, numeral: above, name: below, phraseHeight, lead: setLead } = FRAME;
   const rule = (y: number): Point[] => [{ x: CARD.x0, y }, { x: CARD.x1, y }];
   const paths: Point[][] = [rule(CARD.y0), rule(CARD.y0 - gap), rule(CARD.y1), rule(CARD.y1 + gap)];
   const numeralHeight = fitted(above.height, CARD.y0 - gap - CARD.top - 2 * BAND_CLEAR);
@@ -74,12 +74,13 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
     const width = measureStrokeText(phrase, tight);
     style = width > room ? { ...tight, height: phraseHeight * room / width } : tight;
   }
-  // Name above, phrase below; the pair, from the name's cap line to the phrase's descenders (3/8 of its height),
-  // centred in the band. A band too shallow for both (a card wider than tabloid's proportions) closes the lead,
-  // then sets both smaller, down to `MIN_LETTER`.
-  let nameHeight = below.height, lead = 0.5 * style.height;
+  // Name above, phrase below, the format's lead apart (in proportion, where the phrase was set smaller); the pair,
+  // from the name's cap line to the phrase's descenders (3/8 of its height), centred in the band. A band too
+  // shallow for both (a card too small for the format's bands) halves the lead, then sets both smaller, down to
+  // `MIN_LETTER`.
+  let nameHeight = below.height, lead = setLead * style.height / phraseHeight;
   const block = () => nameHeight + lead + style.height * 11 / 8;
-  if (block() > depth) lead = 0.25 * style.height;
+  if (block() > depth) lead /= 2;
   if (block() > depth) {
     const k = Math.max(0, depth) / block();
     nameHeight *= k; lead *= k; style = { ...style, height: style.height * k };

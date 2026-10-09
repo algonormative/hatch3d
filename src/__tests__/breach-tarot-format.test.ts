@@ -30,7 +30,7 @@ describe('Breach Tarot format', () => {
     expect(Object.is(HORIZON_Y, before.y0 + 0.6 * (before.y1 - before.y0))).toBe(true);
     expect(CARD_OF_CARDS).toBe(CARD);
     expect(HORIZON_OF_CARDS).toBe(HORIZON_Y);
-    expect(FRAME).toEqual({ rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2 });
+    expect(FRAME).toEqual({ rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2, lead: 1.1 });
     expect(PITCH_SCALE).toBe(1);
     expect(SHEET).toEqual({ x: 1, y: 1 });
     expect(FORMAT.phrase).toBe('art');
@@ -71,10 +71,10 @@ describe('Breach Tarot format', () => {
     expect(banded).toMatchObject({ tabloid: true, card: TABLOID_FORMAT.card, phrase: 'band' });
   });
 
-  it('lays a 70 x 120 mm card out in tabloid proportions under one scale', () => {
+  it('lays a 70 x 120 mm card out in tabloid proportions under one scale, its frame set for its pens', () => {
     const page = { width: 70, height: 120, margin: 4.51, paper: '#f4f0e6' };
     const f = formatFor(page);
-    const s = 120 / 431.8;
+    const s = 120 / 431.8, paper = 70 / 279.4;
     expect(f).toMatchObject({ name: '70x120', tabloid: false, fit: 'height', phrase: 'band', minSpacing: 0.5 });
     expect(f.s).toBeCloseTo(s, 12);
     expect(f.pitchScale).toBeCloseTo(1 / s, 12);
@@ -82,18 +82,37 @@ describe('Breach Tarot format', () => {
     // Without a margin the card's edge is tabloid's 18 mm scaled by the smaller ratio.
     expect(formatFor({ width: 70, height: 120 }).card.x0).toBeCloseTo(18 * 70 / 279.4, 9);
     expect(f.card.x1 - f.card.x0).toBeCloseTo(61, 0);
-    expect(f.card.y1 - f.card.y0).toBeCloseTo(97.6, 1);
     expect(f.horizonY).toBeCloseTo(f.card.y0 + 0.6 * (f.card.y1 - f.card.y0), 12);
-    expect(f.frame.numeral.height).toBeCloseTo(8 * s, 12);
-    expect(f.frame.name.height).toBeCloseTo(6.5 * s, 12);
+    // The name is never set under eight widths of its 0.25 mm pen (tabloid's 6.5 mm scaled would be 1.6), and the
+    // numeral is the larger, in tabloid's proportion.
+    expect(f.frame.name.height).toBe(2);
+    expect(f.frame.numeral.height).toBeCloseTo(2 * 8 / 6.5, 12);
     expect(f.frame.phraseHeight).toBe(1.6);
+    expect(f.frame.lead).toBeCloseTo(0.96, 12);
+    // Each band is as deep as its lettering needs, with three quarters of its cap height clear above and below
+    // (more than tabloid's 24 mm scaled, 6 mm): the numeral's, and the name's with the phrase under it to its
+    // descenders, so the bottom band is the deeper. The art window gives up the difference.
+    expect(f.card.y0 - f.card.top).toBeCloseTo(0.75 + 2.5 * 2 * 8 / 6.5, 9);
+    expect(f.card.bottom - f.card.y1).toBeCloseTo(0.75 + 2 + 0.96 + 1.6 * 11 / 8 + 2 * 0.75 * 2, 9);
+    expect(f.card.y1 - f.card.y0).toBeCloseTo(95.2, 1);
+    // Without the phrase in the band, the name alone needs less than tabloid's band, scaled with the paper.
+    const none = formatFor(page, { phrase: 'none' });
+    expect(none.card.bottom - none.card.y1).toBeCloseTo(24 * paper, 9);
+    expect(none.card.y0).toBe(f.card.y0);
     // Tracking is in grid units, which scale with the lettering already; the band's rules print as two lines.
     expect(f.frame.numeral.tracking).toBe(2.2);
     expect(f.frame.name.tracking).toBe(3.2);
     expect(f.frame.rule).toBe(0.75);
     expect(f.minFeature).toBe(1);
+    // The frame is the card's, whatever the fit: every card of the deck has the same bands and horizon.
+    const width = formatFor(page, { fit: 'width' });
+    expect(width.s).toBeCloseTo(paper, 12);
+    expect(width.card).toEqual(f.card);
+    expect(width.horizonY).toBe(f.horizonY);
+    expect(width.frame).toEqual(f.frame);
+    // A finer pen sets the name smaller: eight widths of 0.1 mm is under tabloid's 6.5 mm scaled with the paper.
     const wide = formatFor(page, { fit: 'width', pen: 0.1 });
-    expect(wide.s).toBeCloseTo(70 / 279.4, 12);
+    expect(wide.frame.name.height).toBeCloseTo(6.5 * paper, 12);
     expect(wide.minSpacing).toBeCloseTo(0.2, 12);
     expect(wide.pens.find(pen => pen.id === 'carbon')!.width).toBe(0.1);
     expect(() => formatFor(page, { fit: 'diagonal' })).toThrow(/fit/);
@@ -117,7 +136,10 @@ describe('Breach Tarot format', () => {
   it('puts the card’s edge on an explicit page margin, and says so when the card cannot fit', () => {
     const f = formatFor({ width: 70, height: 120, margin: 10 });
     expect(f.card).toMatchObject({ x0: 10, x1: 60, top: 10, bottom: 110 });
-    expect(f.card.y1 - f.card.y0).toBeCloseTo(100 - 48 * 120 / 431.8, 9);
+    // The bands are as deep whatever the margin.
+    const free = formatFor({ width: 70, height: 120 }).card;
+    expect(f.card.y0 - f.card.top).toBeCloseTo(free.y0 - free.top, 12);
+    expect(f.card.bottom - f.card.y1).toBeCloseTo(free.bottom - free.y1, 12);
     // Tabloid with another margin is laid out from that margin, not the preset.
     const wider = formatFor({ ...TABLOID_PAGE, margin: 25 });
     expect(wider).not.toBe(TABLOID_FORMAT);
@@ -179,7 +201,8 @@ describe('Breach Tarot format', () => {
     const result = await renderSketch({ entry: star, seed: 2, finishing: { page: { width: 70, height: 120, margin: 10 } }, timeoutMs: 120_000 });
     const frame = result.parts.find(part => part.id === 'card-frame')!;
     expect(frame.paths).toHaveLength(27);
-    expect(frame.paths[0]).toEqual([{ x: 10, y: 16.67 }, { x: 60, y: 16.67 }]);
+    // The art window's top: the margin, and the top band's 0.75 mm rule gap and 2.46 mm numeral, 1.85 mm clear either side.
+    expect(frame.paths[0]).toEqual([{ x: 10, y: 16.904 }, { x: 60, y: 16.904 }]);
   });
 
   it('carries --format from the request through the render process into the format module', async () => {
@@ -221,35 +244,49 @@ describe('Breach Tarot format', () => {
     expect(counts.x).toBeCloseTo(Math.round(1000 * area(f.card) / area(TABLOID_FORMAT.card)) / 10, 2);
     expect(counts.x).toBeLessThan(10);
     expect(counts.y).toBeCloseTo(Math.round(1000 * f.s) / 10, 2);
-    // The band, from the second rule to the card's edge: the name, then the phrase, apart and inside it.
-    // The band, from the second rule to the card's edge: the name, then the phrase, apart and inside it, with the
-    // frame's 0.2 mm of paper above the name and below the phrase's descenders.
-    const clear = 0.2 - 0.005;
-    const band = (r: typeof result, g: typeof f, low: number, high: number) => {
+    // The bands: the numeral above, and below it the name, then the phrase, apart and inside the band, each with
+    // `clear` mm of paper from the rules and the card's edge (at least the frame's 0.2 mm), the two lines `lead` apart.
+    const band = (r: typeof result, g: typeof f, low: number, high: number, clear = 0.2, lead = 0) => {
+      const eps = 0.005;
       const phrase = r.parts.find(part => part.id === 'card-phrase')!;
       expect(phrase.pen).toBe('lettering');
       const points = phrase.paths.flat(), ys = points.map(p => p.y), xs = points.map(p => p.x);
-      expect(Math.max(...ys)).toBeLessThanOrEqual(g.card.bottom - clear);
+      expect(Math.max(...ys)).toBeLessThanOrEqual(g.card.bottom - clear + eps);
       // Ascenders to descenders are 11/8 of the cap height.
       expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(low * 11 / 8);
       expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(high * 11 / 8);
       expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(g.page.width / 2, 0);
-      const name = r.parts.find(part => part.id === 'card-frame')!.paths.slice(4).flat().filter(p => p.y > g.card.y1);
-      expect(Math.min(...name.map(p => p.y))).toBeGreaterThanOrEqual(g.card.y1 + g.frame.rule + clear);
-      expect(Math.max(...name.map(p => p.y))).toBeLessThan(Math.min(...ys));
+      const lettering = r.parts.find(part => part.id === 'card-frame')!.paths.slice(4).flat();
+      const name = lettering.filter(p => p.y > g.card.y1), numeral = lettering.filter(p => p.y < g.card.y0);
+      expect(Math.min(...name.map(p => p.y))).toBeGreaterThanOrEqual(g.card.y1 + g.frame.rule + clear - eps);
+      expect(Math.min(...ys) - Math.max(...name.map(p => p.y))).toBeGreaterThan(lead - eps);
+      expect(Math.min(...numeral.map(p => p.y))).toBeGreaterThanOrEqual(g.card.top + clear - eps);
+      expect(Math.max(...numeral.map(p => p.y))).toBeLessThanOrEqual(g.card.y0 - g.frame.rule - clear + eps);
     };
-    band(result, f, 1.55, 1.65);
-    // A card wider than tabloid's proportions has a shallower band: both lines closer, then smaller, still inside it.
+    // At 70 x 120: the phrase at the lettering pen's legible 1.6 mm, three quarters of the name's 2 mm clear above
+    // it and below the phrase, the numeral's 1.85 mm above and below it, and the format's lead between the lines.
+    band(result, f, 1.55, 1.65, 1.5, f.frame.lead);
+    // A poker card, wider than tabloid's proportions, has the same frame.
     const poker = { width: 63.5, height: 88.9 };
-    band(await renderSketch({ entry, finishing: { page: poker } }), formatFor(targetPage(TABLOID_PAGE, poker)), 1.3, 1.6);
+    const pokerFormat = formatFor(targetPage(TABLOID_PAGE, poker));
+    expect(pokerFormat.frame).toEqual(f.frame);
+    band(await renderSketch({ entry, finishing: { page: poker } }), pokerFormat, 1.55, 1.65, 1.5, f.frame.lead);
+    // On a card too small for those bands, they shrink to a quarter of its height: both lines closer, then smaller,
+    // still inside it.
+    const small = { width: 30, height: 40 };
+    const smallFormat = formatFor(targetPage(TABLOID_PAGE, small));
+    const cardHeight = smallFormat.card.bottom - smallFormat.card.top;
+    expect((smallFormat.card.y0 - smallFormat.card.top) + (smallFormat.card.bottom - smallFormat.card.y1)).toBeCloseTo(cardHeight / 4, 9);
+    band(await renderSketch({ entry, finishing: { page: small } }), smallFormat, 1.2, 1.55);
     // On cards too small to letter, the phrase goes, then the name and numeral; whatever is set stays inside the card.
-    for (const tiny of [{ width: 30, height: 40 }, { width: 20, height: 30 }, { width: 10, height: 20 }]) {
+    for (const tiny of [{ width: 20, height: 30 }, { width: 15, height: 25 }, { width: 10, height: 20 }]) {
       const r = await renderSketch({ entry, finishing: { page: tiny } });
       const g = formatFor(targetPage(TABLOID_PAGE, tiny));
       expect(r.parts.find(part => part.id === 'card-phrase'), `${tiny.width} x ${tiny.height}`).toBeUndefined();
       // The four rules, and any lettering clear of them and of the card's edge.
       const frame = r.parts.find(part => part.id === 'card-frame')!;
       expect(frame.paths.length).toBeGreaterThanOrEqual(4);
+      const clear = 0.2 - 0.005;
       for (const p of frame.paths.slice(4).flat()) {
         const above = p.y < g.card.y0;
         expect(p.y).toBeGreaterThanOrEqual((above ? g.card.top : g.card.y1 + g.frame.rule) + clear);
