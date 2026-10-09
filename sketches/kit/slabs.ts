@@ -254,6 +254,52 @@ export function sliverShade(s: Slab, view: THREE.Camera, light: THREE.Vector3, i
   return out;
 }
 
+/** The faces of a slab in its own frame: each face's centre, and its two half-extents (the same six `facetStrokes` hatches). */
+const slabFaces = (s: Slab): [THREE.Vector3, THREE.Vector3, THREE.Vector3][] => {
+  const hx = s.w / 2, hy = s.h / 2, hz = s.d / 2;
+  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+  return [
+    [v(0, 0, hz), v(hx, 0, 0), v(0, hy, 0)], [v(0, 0, -hz), v(-hx, 0, 0), v(0, hy, 0)],
+    [v(hx, 0, 0), v(0, 0, -hz), v(0, hy, 0)], [v(-hx, 0, 0), v(0, 0, hz), v(0, hy, 0)],
+    [v(0, hy, 0), v(hx, 0, 0), v(0, 0, -hz)], [v(0, -hy, 0), v(hx, 0, 0), v(0, 0, hz)],
+  ];
+};
+
+/**
+ * A small card's dark slab faces, ruled. A course of a heavy block is a few millimetres tall on a 70 × 120 card, where
+ * the raking-light hatch (`facetStrokes`, its rings a fraction of the face deep at a pitch held on paper) fits one ring
+ * and leaves the middle paper: the block would print light. Each face that sees the eye, is dark enough that the
+ * print crosses its hatch (a darkness over 0.62), and is no narrower on paper than the smallest feature, is ruled along
+ * its length instead, inside its outline, lines `step` world units apart or a little more (carbon and ultramarine by
+ * turns, the print's ring and field inks), so the block keeps its weight. `step` is the hatch's ring pitch in world
+ * units at the slab's depth: the card's millimetres over its mm-per-unit there. These are hatch strokes only, with no
+ * outline (`slabEdges` is the card's to add). A card calls it only off tabloid.
+ */
+export function ruledFaces(s: Slab, light: THREE.Vector3, view: THREE.Camera, step: number): FacetStroke[] {
+  const m = slabMatrix(s), rot = new THREE.Matrix4().extractRotation(m);
+  const out: FacetStroke[] = [];
+  for (const [c0, U0, V0] of slabFaces(s)) {
+    const normal = c0.clone().normalize().applyMatrix4(rot);
+    const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
+    if (view.position.clone().sub(centre).dot(normal) <= 0 || faceDarkness(normal, light, s.tone) <= 0.62) continue;
+    // Along the face's longer side, across its shorter.
+    const [along, across] = U0.length() >= V0.length() ? [U0, V0] : [V0, U0];
+    const half = across.length(), long = along.length();
+    const A = along.clone().normalize().applyMatrix4(rot), B = across.clone().normalize().applyMatrix4(rot);
+    const at = (u: number, v: number) => centre.clone().addScaledVector(A, u).addScaledVector(B, v);
+    const p = pageOf(view, at(0, -half)), q = pageOf(view, at(0, half));
+    if (Math.hypot(q.x - p.x, q.y - p.y) < MIN_FEATURE) continue;
+    const lines = Math.floor(2 * half / step) - 1;
+    const gap = 2 * half / (lines + 1);
+    if (lines < 1 || long <= gap) continue;
+    for (let j = 0; j < lines; j++) {
+      const v = -half + (j + 1) * gap;
+      out.push({ ink: j % 2 ? 'ultramarine' : 'carbon', group: 'system', family: 'hatch', points: [at(-long + gap, v), at(long - gap, v)] });
+    }
+  }
+  return out;
+}
+
 /**
  * How `facetStrokes` trims a slab on a small card (ignored at tabloid, so the print stays byte-identical): the outline
  * as `slabEdges` draws it in the card's `view` (slivers folded into it; with `hidden`, the default, no back edges:

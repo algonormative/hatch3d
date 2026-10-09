@@ -5,7 +5,7 @@ import { alongRay, collapseBand, helixStrands, narrowStrands, ribbonEdges, ribbo
 import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
-import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
+import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, ruledFaces, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
 import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
 import { MIN_FEATURE, TABLOID_HORIZON_Y, TABLOID_RASTER, hatchMin } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
@@ -408,5 +408,32 @@ describe('sketch kit: shared card helpers', () => {
   it('sets no shortest piece of hatch at tabloid, whatever the stroke (the small card\'s is pinned by the Star\'s 70 x 120 test)', () => {
     expect(MIN_FEATURE).toBe(0);
     for (const family of ['hatch', 'edge', 'membrane', 'text']) expect(hatchMin(family)).toBeUndefined();
+  });
+
+  it('rules the dark faces of a slab that sees the eye along their length, a line every step, in the print\'s two inks by turns', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+    // 6 wide, 8 tall, 4 deep, its centre 30 units out: from the eye only its front face shows.
+    const block = solid(0, 2, -30, 6, 8, 4, 0, 'stack');
+    const behind = new THREE.Vector3(0, 0, -1);
+    const ruled = ruledFaces(block, behind, view, 1);
+    // The face is 6 across and 8 tall: five lines a unit apart, each the length of the face less a gap at either end.
+    expect(ruled.map(st => st.ink)).toEqual(['carbon', 'ultramarine', 'carbon', 'ultramarine', 'carbon']);
+    expect(ruled.every(st => st.family === 'hatch' && st.group === 'system' && st.points.length === 2)).toBe(true);
+    ruled.forEach((st, j) => {
+      const [a, b] = st.points;
+      expect(a.z).toBeCloseTo(-28 + 0.006, 9);
+      expect(b.z).toBeCloseTo(-28 + 0.006, 9);
+      expect(a.x).toBeCloseTo(-3 + (j + 1), 9);
+      expect(b.x).toBeCloseTo(a.x, 9);
+      expect([a.y, b.y].map(y => y - 2).sort((m, n) => m - n)).toEqual([-3, 3].map(y => expect.closeTo(y, 9)));
+    });
+    // A step wider than the face leaves it open; so does a light that falls on it, and a pale slab.
+    expect(ruledFaces(block, behind, view, 7)).toEqual([]);
+    expect(ruledFaces(block, new THREE.Vector3(0, 0, 1), view, 1)).toEqual([]);
+    expect(ruledFaces({ ...block, tone: 0.1 }, behind, view, 1)).toEqual([]);
+    // A face too short for even one line's length between its gaps (a square one with a single line) is left open, not a point.
+    expect(ruledFaces(solid(0, 2, -30, 2.4, 2.4, 4, 0, 'stack'), behind, view, 1)).toEqual([]);
+    // Closer steps give more lines.
+    expect(ruledFaces(block, behind, view, 0.5).length).toBe(11);
   });
 });

@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { faceDarkness, facetStrokes, slabEdges, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabEdges, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks, circlePath } from '../../kit/fills.ts';
@@ -162,50 +162,6 @@ export function leaningCity(ctx: SketchContext, view: THREE.PerspectiveCamera, l
 
 /** The pitch, in millimetres on paper, of the raking-light hatch's contour rings on its darkest faces (0.075 × 8.3). */
 const RULE_MM = 0.62;
-/** The faces of a slab in its own frame: each face's centre, and its two half-extents (as in `facetStrokes`). */
-const slabFaces = (s: Slab): [THREE.Vector3, THREE.Vector3, THREE.Vector3][] => {
-  const hx = s.w / 2, hy = s.h / 2, hz = s.d / 2;
-  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
-  return [
-    [v(0, 0, hz), v(hx, 0, 0), v(0, hy, 0)], [v(0, 0, -hz), v(-hx, 0, 0), v(0, hy, 0)],
-    [v(hx, 0, 0), v(0, 0, -hz), v(0, hy, 0)], [v(-hx, 0, 0), v(0, 0, hz), v(0, hy, 0)],
-    [v(0, hy, 0), v(hx, 0, 0), v(0, 0, -hz)], [v(0, -hy, 0), v(hx, 0, 0), v(0, 0, hz)],
-  ];
-};
-
-/**
- * A small card's dark slab faces, ruled. A course of the bob is a few millimetres tall on a 70 × 120 card, where the
- * raking-light hatch (`facetStrokes`, its rings a fraction of the face deep at a pitch held on paper) fits one ring and
- * leaves the middle paper: the heavy block would print light. Each face that sees the eye, is dark enough that the
- * print crosses its hatch, and is no narrower on paper than the smallest feature, is ruled along its length instead,
- * inside its outline, lines `step` world units apart or a little more (carbon and ultramarine by turns, the print's
- * ring and field inks), so the bob keeps its weight. A card calls it only off tabloid.
- */
-function ruledFaces(s: Slab, light: THREE.Vector3, view: THREE.Camera, step: number): FacetStroke[] {
-  const m = slabMatrix(s), rot = new THREE.Matrix4().extractRotation(m);
-  const out: FacetStroke[] = [];
-  for (const [c0, U0, V0] of slabFaces(s)) {
-    const normal = c0.clone().normalize().applyMatrix4(rot);
-    const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
-    if (view.position.clone().sub(centre).dot(normal) <= 0 || faceDarkness(normal, light, s.tone) <= 0.62) continue;
-    // Along the face's longer side, across its shorter.
-    const [along, across] = U0.length() >= V0.length() ? [U0, V0] : [V0, U0];
-    const half = across.length(), long = along.length();
-    const A = along.clone().normalize().applyMatrix4(rot), B = across.clone().normalize().applyMatrix4(rot);
-    const at = (u: number, v: number) => centre.clone().addScaledVector(A, u).addScaledVector(B, v);
-    const p = pageOf(view, at(0, -half)), q = pageOf(view, at(0, half));
-    if (Math.hypot(q.x - p.x, q.y - p.y) < MIN_FEATURE) continue;
-    const lines = Math.floor(2 * half / step) - 1;
-    const gap = 2 * half / (lines + 1);
-    if (lines < 1 || long <= gap) continue;
-    for (let j = 0; j < lines; j++) {
-      const v = -half + (j + 1) * gap;
-      out.push({ ink: j % 2 ? 'ultramarine' : 'carbon', group: 'system', family: 'hatch', points: [at(-long + gap, v), at(long - gap, v)] });
-    }
-  }
-  return out;
-}
-
 /**
  * A bob course's outline on a small card: the trimmed outline (`slabEdges`), its top drawn by the top face's near edges
  * alone, where its side faces meet it. Seen from just above, the top faces are slivers on a small card, and their far
