@@ -15,7 +15,7 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { type DoorPiece } from './doors.ts';
 import { figureMeshes, figureStrokes } from './figures.ts';
-import { devilLayout } from './layout.ts';
+import { EYE, devilLayout } from './layout.ts';
 import { leashRope } from './leash.ts';
 import { param } from './params.ts';
 import { type Piece } from './pillar.ts';
@@ -37,7 +37,6 @@ import { stoneStrokes } from './stone.ts';
  */
 const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
-const EYE = 6;
 
 export function devilCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({

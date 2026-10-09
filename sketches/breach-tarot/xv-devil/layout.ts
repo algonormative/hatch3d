@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
-import { PAGE } from '../../kit/format.ts';
+import { tabloidFrameCamera } from '../../kit/perspective.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { buildDoor, type Door } from './doors.ts';
 import { standing, type Figure } from './figures.ts';
 import { param } from './params.ts';
@@ -36,6 +37,17 @@ export function leashRoute(m: -1 | 1, pillar: Pillar, wrist: THREE.Vector3, figZ
   return route.map((p, i) => i < 2 ? p : p.clone().lerp(from.clone().lerp(to, (i - 1) / (route.length - 2)), 1 - Math.max(0, sag)));
 }
 
+/** The eye's height above the ground, world units. */
+export const EYE = 6;
+
+/**
+ * The card's camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the Devil's world is laid out with, so every size and fit builds the same world. At tabloid it is `devilCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: param(ctx, 'fov'), eye: EYE, near: 8, far: 4000 });
+}
+
 export interface Layout {
   pillar: Pillar;
   figures: Figure[];
@@ -48,10 +60,12 @@ export interface Layout {
 /**
  * Where everything stands, in world units: the pillar dead centre, a figure either side facing in, a
  * door frame behind and round each, and the route of each leash from the pillar to the figure's
- * wrist. Pure layout: no drawing, so what the card says can be checked without rendering it.
+ * wrist. Pure layout: no drawing, so what the card says can be checked without rendering it. Laid out in tabloid's
+ * frame (`worldCamera`, tabloid's page millimetres), so the figures and doors stand where the print stands them on any
+ * card, which draws them with its own camera.
  */
 export function devilLayout(ctx: SketchContext): Layout {
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(param(ctx, 'fov') / 2));
+  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(worldCamera(ctx).fov / 2));
   const rng = ctx.random('devil-layout');
   const v = param(ctx, 'variety');
 
