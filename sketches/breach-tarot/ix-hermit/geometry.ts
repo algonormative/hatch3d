@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_SPACING, PAGE, PHRASE, S, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_SPACING, PAGE, PHRASE, S, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
 import { thinParallel } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { narrowStrands } from '../../kit/helix.ts';
@@ -41,8 +41,8 @@ const FACET_MM_PER_UNIT = 8.3;
  * the first pass's light ended. Layout, in tabloid millimetres (`layoutLength`).
  */
 const HINT_R = 36.8;
-/** How many times finer each way the hermit's and the lantern's depth test is on a small card (`fineDepth`). */
-const FIGURE_OVERSAMPLE = 4;
+/** How many times finer each way the hermit's and the lantern's depth test is on a small card (`printFine`; `fineDepth`). */
+const FIGURE_OVERSAMPLE = printFine();
 /**
  * The order a small card thins the summit's marks in (`thinParallel`): what ranks first keeps its line where two run
  * closer than the pens hold apart. The hermit's outline, then the lantern's frame, the hood's opening, the cloak's

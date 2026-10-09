@@ -4,7 +4,7 @@ import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
 import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -41,7 +41,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * nearly edge-on (the rim's sides, the paving's tops) fail the test and print as dashes; the finer raster gives back
  * about the print's world per pixel.
  */
-const FINE = FORMAT.tabloid ? 1 : 4;
+const FINE = printFine();
 const RASTER = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const { W, H } = RASTER;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];

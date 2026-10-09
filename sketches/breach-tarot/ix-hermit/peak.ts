@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
-import { PAGE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster } from '../../kit/format.ts';
+import { PAGE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, printFine } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
@@ -12,8 +12,8 @@ import { HORIZON_Y } from '../card.ts';
  * level, looking level at the horizon; the peak stands far off, so its whole height rises above
  * that eye line and its foot lies just under it.
  */
-/** The card's depth raster at tabloid; on any other page, the format's. */
-export const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
+/** The card's depth raster at tabloid; on any other page, the format's, with room for the hermit's finer one (`printFine`). */
+export const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, printFine());
 export const EYE = 6;
 
 /** The card's camera, on the format's page. */

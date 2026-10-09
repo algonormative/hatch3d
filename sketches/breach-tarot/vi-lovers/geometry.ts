@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, printFine, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -43,10 +43,10 @@ import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from '.
  */
 /**
  * How much finer than the card's raster the lovers' own depth test is: at tabloid the card's own; on a smaller card,
- * where each lover floats a dozen or so millimetres tall, four times as fine each way, so their outlines are tested at
- * the detail they are drawn at.
+ * where each lover floats a dozen or so millimetres tall, as fine as the print's each way (`printFine`, four at 70 × 120), so
+ * their outlines are tested at the detail they are drawn at.
  */
-const FIGURE_OVERSAMPLE = FORMAT.tabloid ? 1 : 4;
+const FIGURE_OVERSAMPLE = printFine();
 /** The card's depth raster at tabloid; on any other page, the format's, with room for the lovers' finer one. */
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FIGURE_OVERSAMPLE);
 /**

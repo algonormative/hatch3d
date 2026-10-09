@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutY, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutY, printFine, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { thinParallel } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
@@ -39,12 +39,12 @@ import { bodyPerson, figureBounds } from './figure.ts';
  * the print's place and size against the dam, and the head still hangs over them.
  */
 /**
- * How much finer than the card's raster its depth pass is: the card's own at tabloid; on a smaller card four times as
- * fine each way (`fineDepth`), so the hidden-line test sees the world about as finely as the print's does. At the card's
+ * How much finer than the card's raster its depth pass is: the card's own at tabloid; on a smaller card as fine as the
+ * print's each way (`printFine`, four at 70 × 120; `fineDepth`), so the hidden-line test sees the world about as finely as the print's does. At the card's
  * own raster a pixel there covers several times as much of the world, and the parapet's thin top, the crest behind it
  * and the person's limbs were lost to the faces in front of them.
  */
-const OVERSAMPLE = FORMAT.tabloid ? 1 : 4;
+const OVERSAMPLE = printFine();
 /** The card's depth raster at tabloid; on any other page, the format's, with room for the finer pass. */
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, OVERSAMPLE);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
