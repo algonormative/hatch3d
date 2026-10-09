@@ -28,7 +28,8 @@ describe('Breach Tarot: IV The Emperor', () => {
     const ids = first.parts.map(p => p.id);
     for (const id of ['sky-carbon', 'ground-carbon', 'avenue-carbon', 'throne-carbon', 'figure-carbon', 'bar-carbon', 'slogan-lettering', 'horizon-carbon', 'card-frame']) expect(ids).toContain(id);
     expect(ids.some(id => id.startsWith('helix-') && id !== 'helix-carbon')).toBe(true);
-  }, 60_000);
+    // Two full tabloid renders: 60 s ran out more than once with the whole suite running alongside.
+  }, 180_000);
 
   it('is colossal by distance: the plinth stands just below the horizon and the head reaches the top quarter of the art window', async () => {
     const result = await renderSketch({ entry, seed: 2 });
