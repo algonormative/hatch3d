@@ -183,6 +183,28 @@ describe('Breach Tarot: 0 The Fool at 70 x 120 mm', () => {
     }
   }, 120_000);
 
+  it('draws its sun round on a small card, the thin rays waving gently rather than zigzagging, none doubled by a fine ray', async () => {
+    // The sharpest turn between two segments of a path, in degrees.
+    const sharpest = (path: { x: number; y: number }[]) => {
+      let worst = 0;
+      for (let i = 2; i < path.length; i++) {
+        const a = Math.atan2(path[i - 1].y - path[i - 2].y, path[i - 1].x - path[i - 2].x), b = Math.atan2(path[i].y - path[i - 1].y, path[i].x - path[i - 1].x);
+        worst = Math.max(worst, Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a))) * 180 / Math.PI);
+      }
+      return worst;
+    };
+    for (const result of await Promise.all(fits.map(render))) {
+      const sun = result.parts.find(part => part.id === 'sun-acid')!;
+      // Rims and waves keep every point: no corner (the path reducer's 1.4 mm stride made polygons and zigzags).
+      const curves = sun.paths.filter(path => path.length > 8);
+      expect(curves.length).toBeGreaterThanOrEqual(2 + 4);
+      for (const path of curves) expect(sharpest(path)).toBeLessThan(12);
+      // A fine ray never runs beside a ray closer than the pens hold apart.
+      const report = densityProbe([sun], { penWidth: () => 0.25 });
+      expect(report.violations, describeDensity(report)).toBe(0);
+    }
+  });
+
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card without its pitch scaling is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 1 }), ...fits.map(render)]);
     const master = probe(print);

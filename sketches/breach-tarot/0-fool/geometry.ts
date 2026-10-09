@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, scaledCount } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, scaledCount } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -11,7 +11,7 @@ import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { bigSuit, bigSuitMeshes, bigSuitStrokes } from '../../kit/mannequin/big-suit.ts';
@@ -491,18 +491,26 @@ export function drawFool(ctx: SketchContext): Part[] {
       const sky = { ...CARD, y1: HORIZON_Y - layoutLength(6) };
       const clearOf = meshCoverage(geometries, view, PAGE, halo(2.2));
       const clear = (p: Point) => !clearOf(p) && !onGlyph(p);
-      const put = (key: string, run: Point[], keep: (p: Point, at: number) => boolean = clear) => {
-        for (const inside of clipWindow(run, sky)) for (const piece of keepAlong(inside, keep, 0.12)) buckets.add(key, piece);
+      // On a small card the path reducer's 1.4 mm stride is a large share of the sun, and would turn its rims and its
+      // wavy rays to corners: there the curves keep every point (and the reducer's shortest path).
+      const smoothCurves = !FORMAT.tabloid;
+      const put = (key: string, run: Point[], keep: (p: Point, at: number) => boolean = clear, curve = false) => {
+        for (const inside of clipWindow(run, sky)) for (const piece of keepAlong(inside, keep, 0.12)) {
+          if (curve && smoothCurves) buckets.add(key, piece, true, MIN_LENGTH_MM);
+          else buckets.add(key, piece);
+        }
       };
       const at = (a: number, r: number): Point => ({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
-      for (const r of [R, R - 0.9]) put('sun-acid', Array.from({ length: 241 }, (_, i) => at(i / 240 * Math.PI * 2, r)));
+      for (const r of [R, R - 0.9]) put('sun-acid', Array.from({ length: 241 }, (_, i) => at(i / 240 * Math.PI * 2, r)), clear, true);
       const srng = ctx.random('fool-sun');
       const count = 12, spin = srng() * Math.PI / count;
       // A ray narrower than the smallest feature (about 0.13 R across, halfway out) is drawn as one line.
       const thin = 0.13 * R < MIN_FEATURE;
+      const rayAngle = (k: number) => spin + k * Math.PI * 2 / count;
+      const rayTip = (k: number) => R * (k % 4 === 0 ? 2.5 : k % 2 === 0 ? 2.0 : 2.25);
       for (let k = 0; k < count; k++) {
-        const a = spin + k * Math.PI * 2 / count;
-        const r0 = R * 1.12, r1 = R * (k % 4 === 0 ? 2.5 : k % 2 === 0 ? 2.0 : 2.25);
+        const a = rayAngle(k);
+        const r0 = R * 1.12, r1 = rayTip(k);
         const nx = -Math.sin(a), ny = Math.cos(a);
         const side = (r: number, w: number): Point => ({ x: c.x + r * Math.cos(a) + nx * w, y: c.y + r * Math.sin(a) + ny * w });
         if (k % 2 === 0) {
@@ -510,24 +518,38 @@ export function drawFool(ctx: SketchContext): Part[] {
           const w0 = R * 0.09, w1 = R * 0.035;
           put('sun-acid', thin ? [side(r0, 0), side(r1, 0)] : [side(r0, -w0), side(r1, -w1), side(r1, w1), side(r0, w0), side(r0, -w0)]);
         } else {
-          // Twisting: two strands crossing as the helix's do, narrowing to the tip; one strand when thin.
+          // Twisting: two strands crossing as the helix's do, narrowing to the tip. A thin ray is one strand, and the
+          // crossing's tight turns, on one line alone, read as lightning: it waves gently instead, as XIX's do.
+          const [amplitude, turns] = thin ? [0.06, 1.2] : [0.1, 2.2];
           for (const sgn of thin ? [1] : [-1, 1]) put('sun-acid', Array.from({ length: 80 }, (_, i) => {
             const f = i / 79, r = r0 + (r1 - r0) * f;
-            return side(r, sgn * R * 0.1 * (1 - 0.6 * f) * Math.sin(f * Math.PI * 2 * 2.2 + k));
-          }));
+            return side(r, sgn * R * amplitude * (1 - 0.6 * f) * Math.sin(f * Math.PI * 2 * turns + k));
+          }), clear, true);
         }
       }
       // Fine rays over the sky beyond the rays, broken into the rhythm, thinning with distance.
       const pattern = barPattern(srng, 0.7);
       // As many as keep their spacing round a sun that scales with the card.
       const fine = scaledCount(Math.round(48 + 64 * n(ctx, 'radiance', 0.5, 0, 1)), 16, 'length');
+      // On a small card a fine ray that would run beside one of the rays, closer than the pens hold apart, is left out
+      // up to that ray's tip, where beside it it doubled the ray; its rhythm is unchanged. (On the print they stand far
+      // enough apart.)
+      const pastRays = (a: number, r0: number): number => {
+        let from = r0;
+        if (MIN_FEATURE) for (let j = 0; j < count; j++) {
+          const off = a - rayAngle(j);
+          if (Math.cos(off) > 0 && rayTip(j) * Math.abs(Math.sin(off)) < 2 * MIN_SPACING + 0.1 * R) from = Math.max(from, rayTip(j) + 0.15 * R);
+        }
+        return from;
+      };
       for (let k = 0; k < fine; k++) {
         const a = (k + 0.5) / fine * Math.PI * 2;
         if (k % 3 === 1) continue;
-        const r0 = R * (1.3 + 0.25 * (k % 3));
+        const r0 = R * (1.3 + 0.25 * (k % 3)), from = pastRays(a, r0);
         put('sun-acid', [at(a, r0), at(a, 260)], (p, along) => clear(p)
           && pattern[Math.floor(along / (2.2 + 0.05 * Math.hypot(p.x - c.x, p.y - c.y))) % 64]
-          && Math.hypot(p.x - c.x, p.y - c.y) < R * (2.8 + 1.2 * ((k * 7) % 5) / 4));
+          && Math.hypot(p.x - c.x, p.y - c.y) < R * (2.8 + 1.2 * ((k * 7) % 5) / 4)
+          && (from === r0 || Math.hypot(p.x - c.x, p.y - c.y) >= from));
       }
     }
     for (const path2 of glyphPaths) buckets.add('slogan-lettering', path2, true);
