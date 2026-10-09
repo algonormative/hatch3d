@@ -26,6 +26,9 @@ import type { Ink } from '../../kit/types.ts';
  */
 const S = 3;
 const BARS = 16;
+/** The horn's turns, as a share of a plain pitch's (1.34 by default, 1.52 at the sharpest flare), past which its solid needs finer steps; and the most the steps may be scaled. */
+const TIGHT_TURNS = 2;
+const MAX_MESH_SCALE = 6;
 const SUB = 6;
 
 export interface Trumpet {
@@ -269,8 +272,14 @@ export function trumpet(ctx: SketchContext, world: THREE.PerspectiveCamera, view
   // The ribbons' solids, for the hidden-line test and the paper round the horn. A turn of the bell spans a score of their
   // steps along, whose chords cut inside its curve by a tenth of a millimetre or more on a small card, as much as half the
   // halo there: off tabloid they are stepped as finely as the edges are traced.
+  // A tight pack (a low `growth`) winds far more turns into the bell, and a step of 480 then sweeps so much of a turn that
+  // its triangles span the bore and overlap by the million, until the depth pass gives up. Past `TIGHT_TURNS` (the default
+  // pack's 1.34, and 1.52 at the sharpest flare) the steps grow faster than the turns, up to a cap that keeps the triangles
+  // in budget.
+  const baseSteps = FORMAT.tabloid ? 480 : 1200;
+  const meshSteps = Math.round(baseSteps * Math.min(MAX_MESH_SCALE, Math.max(1, (turnsTo[STEPS] / TIGHT_TURNS) ** 1.5)));
   const meshes = strands.map(st => {
-    const g = buildSurfaceMesh((u, v) => bend(strandPoint(st, u * tMax, 2 * v - 1)), {}, FORMAT.tabloid ? 480 : 1200, 8);
+    const g = buildSurfaceMesh((u, v) => bend(strandPoint(st, u * tMax, 2 * v - 1)), {}, meshSteps, 8);
     const pos = g.getAttribute('position'), index = g.getIndex()!;
     const kept: number[] = [];
     const vv = new THREE.Vector3();

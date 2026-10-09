@@ -57,6 +57,19 @@ describe('Breach Tarot: XX Judgement', () => {
     // The horn's lowest mark stays well above the highest mark of the lids: it sounds over the field.
     expect(lowest).toBeLessThanOrEqual(Math.min(...lids.map(p => p.y)) - 8);
   }, 60_000);
+
+  // The tightest pack winds so many turns into the bell that a fixed 480-step solid threw "CPU depth fragment budget exceeded".
+  it('renders the horn at its tightest pack', async () => {
+    const result = await renderSketch({ entry, seed: 1, params: { growth: -1 } });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.parts.filter(p => p.id.startsWith('helix-')).flatMap(p => p.paths).length).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('renders the horn at its tightest pack on the 70 x 120 mm card too', async () => {
+    const result = await renderSketch({ entry, seed: 1, params: { growth: -1 }, finishing: { page: { width: 70, height: 120 } }, timeoutMs: 120_000 });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.parts.filter(p => p.id.startsWith('helix-')).flatMap(p => p.paths).length).toBeGreaterThan(0);
+  }, 120_000);
 });
 
 describe('Breach Tarot: XX Judgement at 70 x 120 mm', () => {
