@@ -40,9 +40,9 @@ import { bodyPerson, figureBounds } from './figure.ts';
  */
 /**
  * How much finer than the card's raster its depth pass is: the card's own at tabloid; on a smaller card as fine as the
- * print's each way (`printFine`, four at 70 × 120; `fineDepth`), so the hidden-line test sees the world about as finely as the print's does. At the card's
- * own raster a pixel there covers several times as much of the world, and the parapet's thin top, the crest behind it
- * and the person's limbs were lost to the faces in front of them.
+ * print's each way (`printFine`, four at 70 × 120; `fineDepth`), so the hidden-line test sees the world about as finely
+ * as the print's does. At the card's own raster a pixel there covers several times as much of the world, and the
+ * parapet's thin top, the crest behind it and the person's limbs were lost to the faces in front of them.
  */
 const OVERSAMPLE = printFine();
 /** The card's depth raster at tabloid; on any other page, the format's, with room for the finer pass. */
