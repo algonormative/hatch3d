@@ -10,7 +10,7 @@ import { clearBands, planSloganAttempts, sloganSettings, type SloganPlan, type S
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { n } from '../../kit/params.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { insideRing, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { atPage, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 
@@ -278,13 +278,7 @@ export function drawStar(ctx: SketchContext): Part[] {
     // scaled with the card instead, so the links between near fragments are not swallowed by their glow.
     const linkStop = FORMAT.tabloid ? shine : meshCoverage(geometries, view, PAGE, halo(glow));
     const bands = [...slogans.knockouts.values()].flat().map(q => q.map(c => ({ x: c.x * MM_X, y: c.y * MM_Y })));
-    const inBand = (p: Point) => bands.some(q => {
-      let inside = false;
-      for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
-        if ((q[a].y > p.y) !== (q[b].y > p.y) && p.x < (q[b].x - q[a].x) * (p.y - q[a].y) / (q[b].y - q[a].y) + q[a].x) inside = !inside;
-      }
-      return inside;
-    });
+    const inBand = (p: Point) => bands.some(q => insideRing(q, p));
     const [nightA, nightB] = night(ctx, p => shine(p) || inBand(p));
     for (const p of nightA) add('night-carbon', p, false);
     for (const p of nightB) add('night-ultramarine', p, false);

@@ -145,6 +145,15 @@ export class Clearance {
   }
 }
 
+/** Whether `p` is inside the closed path `ring` (even-odd: both loops of a figure eight). */
+export function insideRing(ring: Point[], p: Point): boolean {
+  let inside = false;
+  for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+    if ((ring[a].y > p.y) !== (ring[b].y > p.y) && p.x < (ring[b].x - ring[a].x) * (p.y - ring[a].y) / (ring[b].y - ring[a].y) + ring[a].x) inside = !inside;
+  }
+  return inside;
+}
+
 /** Split a page path into short steps and keep the ones a test allows, carrying arclength. */
 export function keepAlong(path: Point[], keep: (p: Point, at: number) => boolean, step = 0.15): Point[][] {
   const out: Point[][] = [];

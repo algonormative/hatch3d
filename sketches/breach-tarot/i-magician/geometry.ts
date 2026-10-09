@@ -9,7 +9,7 @@ import { facetStrokes, pageExtent, slabGeometry, solid, type Slab } from '../../
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks } from '../../kit/fills.ts';
-import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
+import { insideRing, keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, onGround, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
@@ -125,15 +125,6 @@ export function scratchFigure(s: Skeleton, view: THREE.Camera, rng: () => number
     return { x: hc.x + r * Math.cos(a), y: hc.y + r * 1.15 * Math.sin(a) };
   }));
   return out;
-}
-
-/** Whether `p` is inside the closed path `ring` (even-odd: both loops of a figure eight). */
-function insideOf(ring: Point[], p: Point): boolean {
-  let inside = false;
-  for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
-    if ((ring[a].y > p.y) !== (ring[b].y > p.y) && p.x < (ring[b].x - ring[a].x) * (p.y - ring[a].y) / (ring[b].y - ring[a].y) + ring[a].x) inside = !inside;
-  }
-  return inside;
 }
 
 export interface MagicianWorld {
@@ -338,7 +329,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
     const nearMark = glyphMask([lemniscate], halo(BAND + 1.4));
     // On a small card the eyes of its loops are clear too: a millimetre or two across, what crossed them there was a
     // stray tick that read as a letter inside the mark. (The print's eyes are wide enough for the field to cross.)
-    const onMark = MIN_FEATURE ? (p: Point) => nearMark(p) || insideOf(lemniscate, p) : nearMark;
+    const onMark = MIN_FEATURE ? (p: Point) => nearMark(p) || insideRing(lemniscate, p) : nearMark;
     // Fire and figure: page masks of the sketch and of the flame's front runs, each breaking the other.
     const pageOfAll = (lines3: THREE.Vector3[][]) => {
       const out: Point[][] = [];

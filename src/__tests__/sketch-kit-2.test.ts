@@ -10,7 +10,7 @@ import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../.
 import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { thinParallel } from '../../sketches/kit/density.ts';
-import { Clearance, reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
+import { Clearance, insideRing, reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
 import { PartBuckets, fineDepth } from '../../sketches/kit/strokes.ts';
 import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
@@ -389,5 +389,19 @@ describe('sketch kit: shared card helpers', () => {
     sparse.add([{ x: 0, y: 0 }, { x: 8, y: 0 }]);
     expect(sparse.near({ x: 2, y: 0 })).toBe(false);
     expect(sparse.near({ x: 4.2, y: 0 })).toBe(true);
+  });
+
+  it('tells inside a closed path from outside by the even-odd rule, both loops of a figure eight included', () => {
+    const p = (x: number, y: number) => ({ x, y });
+    const square = [p(0, 0), p(4, 0), p(4, 4), p(0, 4)];
+    expect([p(2, 2), p(0.1, 0.1), p(3.9, 3.9)].map(q => insideRing(square, q))).toEqual([true, true, true]);
+    expect([p(-0.1, 2), p(4.1, 2), p(2, -0.1), p(2, 4.1), p(9, 9)].map(q => insideRing(square, q))).toEqual([false, false, false, false, false]);
+    // The path closes itself: its last point need not repeat the first, and one that does gives the same answer.
+    expect(insideRing([...square, square[0]], p(2, 2))).toBe(true);
+    // A figure eight crosses at (4, 2): both its loops are inside, the crossing's outside is not.
+    const eight = [p(0, 0), p(4, 2), p(8, 4), p(8, 0), p(4, 2), p(0, 4)];
+    expect([p(1.5, 2), p(6.5, 2)].map(q => insideRing(eight, q))).toEqual([true, true]);
+    expect([p(4, 3.5), p(4, 0.5), p(-1, 2), p(9, 2)].map(q => insideRing(eight, q))).toEqual([false, false, false, false]);
+    expect(insideRing([], p(1, 1))).toBe(false);
   });
 });
