@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
+import { S, TABLOID_CARD, TABLOID_HORIZON_Y, evenlyKept, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { valueNoise } from '../../kit/mannequin/hatch.ts';
@@ -50,8 +51,30 @@ export function ruling(o: Ruling): void {
 /** One ruled row of the network: its page y and the gaps (lit points) knocked out of it, as [x0, x1] page intervals. */
 export interface NetworkRow { y: number; gaps: [number, number][] }
 
-/** A lit point on the ground: a small hole in the ruling, on the page. */
-interface Lit { x: number; y: number; hx: number; hy: number }
+/**
+ * A lit point on the ground: a small hole in the ruling. `x`, `y` are its place on tabloid's page; `hx`, `hy` its size
+ * on paper, in millimetres, which holds on any card; `index` its place in the seeded set.
+ */
+export interface Lit { x: number; y: number; hx: number; hy: number; index: number }
+
+/**
+ * The fewest lit points a smaller card keeps, so the network still reads as the print's band of lights. By the window's
+ * area alone a 70 × 120 card keeps 60 of the print's 870 (seed 1), and its lit belt prints at under three quarters of
+ * the print's light (the holes' share of the rows, seeds 0 to 4); 90 holds the print's.
+ */
+const LIT_FLOOR = 90;
+
+/**
+ * The ruling's pitch below the horizon, in millimetres on paper, at `t` tabloid millimetres below the horizon (a card
+ * passes its own offset as `off / S`): `pitch` across the lit belt, opening a little, then fast toward the eye.
+ */
+function rowGap(ctx: SketchContext, pitch: number): (t: number) => number {
+  const grow = n(ctx, 'gridGrow', 60, 20, 200);
+  // The ruling is tight (the lit grid can only show against it) out to `belt` below the horizon, then opens out fast toward the eye.
+  const belt = n(ctx, 'gridBelt', 46, 20, 100), open = n(ctx, 'gridOpen', 0.1, 0.02, 0.3);
+  return (t: number) => (t < belt ? pitch * (1 + t / grow) : pitch * (1 + belt / grow) + open * (t - belt));
+}
+const gridPitch = (ctx: SketchContext) => n(ctx, 'gridPitch', 0.62, 0.5, 1.5);
 
 /**
  * The network the hermit left: a city seen at night from a height, as it sits on the plain below the
@@ -63,21 +86,23 @@ interface Lit { x: number; y: number; hx: number; hy: number }
  * Blocks are lit less the nearer they are, and none at all close to the eye. Lit points never stack: in
  * a column each sits clear of the one before it by more than its own height, so the convergence of the
  * grid shows only in how the points line up, never as a continuous line.
+ *
+ * The lit points are the seeded world: laid out in tabloid's frame (`sc` is `worldScale`, on tabloid's page and card),
+ * so every size and fit lights the print's lots. `networkRows` rules them on this card.
  */
-export function networkRows(ctx: SketchContext, sc: Scale): NetworkRow[] {
+export function networkLights(ctx: SketchContext, sc: Scale): Lit[] {
   const noise = valueNoise(ctx.random('night-city'));
   const lots = ctx.random('night-lots');
-  const pitch = n(ctx, 'gridPitch', 0.62, 0.5, 1.5), grow = n(ctx, 'gridGrow', 60, 20, 200);
   const across = n(ctx, 'gridLot', 1.4, 1, 12), deep = n(ctx, 'gridDepth', 6, 2, 40);
   const fill = n(ctx, 'gridFill', 0.92, 0.2, 1), space = n(ctx, 'gridSpace', 1.5, 1.2, 5);
-  // The ruling is tight (the lit grid can only show against it) out to `belt` below the horizon, then opens out fast toward the eye.
-  const belt = n(ctx, 'gridBelt', 46, 20, 100), open = n(ctx, 'gridOpen', 0.1, 0.02, 0.3);
-  const fade = belt;
+  const fade = n(ctx, 'gridBelt', 46, 20, 100);
   const blockAcross = Math.round(n(ctx, 'blockAcross', 6, 2, 10)), blockDeep = Math.round(n(ctx, 'blockDeep', 5, 2, 10));
   const streetAcross = Math.round(n(ctx, 'streetAcross', 2, 1, 4)), streetDeep = Math.round(n(ctx, 'streetDeep', 1, 1, 3));
-  const centre = (CARD.x0 + CARD.x1) / 2;
-  const reach = CARD.y1 - HORIZON_Y;
-  const gapAt = (off: number) => (off < belt ? pitch * (1 + off / grow) : pitch * (1 + belt / grow) + open * (off - belt));
+  const card = TABLOID_CARD, horizon = TABLOID_HORIZON_Y;
+  const centre = (card.x0 + card.x1) / 2;
+  const reach = card.y1 - horizon;
+  // The print's row pitch, for the dots' height: on any card the rows at a lot's place are as far apart on paper.
+  const gapAt = rowGap(ctx, gridPitch(ctx));
   const points: Lit[] = [];
   const lastAt = new Map<number, number>();
   const wrap = (i: number, period: number) => ((i % period) + period) % period;
@@ -90,10 +115,10 @@ export function networkRows(ctx: SketchContext, sc: Scale): NetworkRow[] {
     const hx = Math.min(2.2, Math.max(1.1, 0.45 * cell)), hy = Math.max(1.7, 1.4 * gapAt(off));
     const near = off / fade;
     const rowStreet = wrap(r, blockDeep + streetDeep) >= blockDeep;
-    const first = Math.floor((CARD.x0 - centre) / cell) - 1, last = Math.ceil((CARD.x1 - centre) / cell) + 1;
+    const first = Math.floor((card.x0 - centre) / cell) - 1, last = Math.ceil((card.x1 - centre) / cell) + 1;
     for (let i = first; i <= last; i++) {
       const x = centre + (i + 0.5) * cell;
-      if (x < CARD.x0 || x > CARD.x1) continue;
+      if (x < card.x0 || x > card.x1) continue;
       // Streets: between blocks across, and between blocks in depth.
       if (rowStreet || wrap(i, blockAcross + streetAcross) >= blockAcross) continue;
       // A block is lit or dark by smooth noise over the grid of blocks; fewer are lit toward the eye.
@@ -102,18 +127,34 @@ export function networkRows(ctx: SketchContext, sc: Scale): NetworkRow[] {
       if (block > 0.95 - 0.15 * near) continue;
       // Within a lit block, most lots show a light near the horizon and fewer toward the eye.
       if (lots() > fill * (1 - 0.45 * near ** 1.5)) continue;
-      const y = HORIZON_Y + off;
+      const y = horizon + off;
       // Each column starts at its own height, so the points do not all fall on the same rows.
-      if (!lastAt.has(i)) lastAt.set(i, HORIZON_Y + 1.3 - lots() * space * hy);
+      if (!lastAt.has(i)) lastAt.set(i, horizon + 1.3 - lots() * space * hy);
       if (y - lastAt.get(i)! < space * hy) continue;
       lastAt.set(i, y);
-      points.push({ x, y, hx, hy });
+      points.push({ x, y, hx, hy, index: points.length });
     }
   }
+  return points;
+}
+
+/**
+ * The plain ruled on this card, with the lit points cut out of its rows. The ruling is a tone: its pitch holds on paper
+ * (`rowGap`). The lit points are a density, each a hole of a fixed size on paper, so a smaller card keeps as many per
+ * square millimetre as the print (`scaledCount` by area, never under `LIT_FLOOR`), an even spread through the seeded
+ * set (`evenlyKept`), each at its own place scaled with the card. All of them, unmoved, at tabloid.
+ */
+export function networkRows(ctx: SketchContext, lights: Lit[]): NetworkRow[] {
+  // The pitch is a tone: real millimetres, never under the pen floor; the gradient reads this card's offsets as the print's.
+  const gapAt = rowGap(ctx, tolerance(gridPitch(ctx)));
+  const keep = lights.length ? scaledCount(lights.length, LIT_FLOOR) / lights.length : 1;
+  const points = lights.filter(q => evenlyKept(q.index, keep)).map(q => ({ ...q, x: layoutX(q.x), y: layoutY(q.y) }));
   points.sort((a, b) => a.y - b.y);
+  const reach = CARD.y1 - HORIZON_Y;
   const rows: NetworkRow[] = [];
   let from = 0;
-  for (let off = 1.3; off < reach; off += gapAt(off)) {
+  // The first rule a little below the horizon line, never closer to it than the pens hold apart.
+  for (let off = tolerance(layoutLength(1.3)); off < reach; off += gapAt(off / S)) {
     const y = HORIZON_Y + off;
     while (from < points.length && points[from].y + points[from].hy / 2 < y) from++;
     const found: [number, number][] = [];

@@ -1,4 +1,5 @@
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
+import { layoutLength } from '../../kit/format.ts';
 import { n, smooth } from '../../kit/params.ts';
 
 /**
@@ -7,7 +8,8 @@ import { n, smooth } from '../../kit/params.ts';
  * and, out from it, a pool that leans along `axis` (toward the summit stones it falls on), reaches
  * `pool` times as far that way, only part as far the other, and has an uneven edge. `dark(p)` is
  * how much of the night's ruling survives at a page point: 0 in the clear, rising to 1 across a
- * falloff `glow` mm wide.
+ * falloff `glow` mm wide. Both are layout: authored in tabloid millimetres and scaled with the card, so the pool
+ * keeps its size against the lantern and the hermit on any page.
  */
 export interface Light {
   core: number;
@@ -16,8 +18,8 @@ export interface Light {
 }
 
 export function lantern(ctx: SketchContext, lamp: Point, toward: Point): Light {
-  const core = n(ctx, 'lit', 10, 0, 40);
-  const glow = n(ctx, 'glow', 12, 4, 40);
+  const core = layoutLength(n(ctx, 'lit', 10, 0, 40));
+  const glow = layoutLength(n(ctx, 'glow', 12, 4, 40));
   const pool = n(ctx, 'pool', 1.9, 1, 3.5), up = n(ctx, 'poolUp', 0.8, 0.2, 1);
   const rag = n(ctx, 'ragged', 0.34, 0, 0.6);
   // Its own stream: nothing else on the card moves with the edge.

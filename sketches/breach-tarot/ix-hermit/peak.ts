@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { PAGE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
-import { horizonCamera } from '../../kit/perspective.ts';
+import { horizonCamera, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { HORIZON_Y } from '../card.ts';
 
 /**
@@ -11,14 +12,24 @@ import { HORIZON_Y } from '../card.ts';
  * level, looking level at the horizon; the peak stands far off, so its whole height rises above
  * that eye line and its foot lies just under it.
  */
-export const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** The card's depth raster at tabloid; on any other page, the format's. */
+export const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 export const EYE = 6;
 
+/** The card's camera, on the format's page. */
 export function hermitCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 40, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the card's world is laid out with. At tabloid it is `hermitCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 40, 75), eye: EYE, near: 8, far: 4000 });
 }
 
 /** Page-millimetre arithmetic for the level camera: the focal length in mm and the world <-> page maps. */
@@ -30,14 +41,21 @@ export interface Scale {
   at: (p: Point, d: number) => THREE.Vector3;
 }
 
-export function scaleOf(view: THREE.PerspectiveCamera): Scale {
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+/**
+ * The scale of `view` on `page`, whose horizon is at `horizonY`: by default the card's own camera on the format's page.
+ * The world is laid out with `worldScale`, in tabloid's frame.
+ */
+export function scaleOf(view: THREE.PerspectiveCamera, page: { width: number; height: number } = PAGE, horizonY = HORIZON_Y): Scale {
+  const f = page.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   return {
     f,
     mmPerUnit: p => f / Math.max(1, view.position.z - p.z),
-    at: (p, d) => new THREE.Vector3((p.x - PAGE.width / 2) * d / f, EYE + (HORIZON_Y - p.y) * d / f, -d),
+    at: (p, d) => new THREE.Vector3((p.x - page.width / 2) * d / f, EYE + (horizonY - p.y) * d / f, -d),
   };
 }
+
+/** The world's scale: `worldCamera` on tabloid's page, so page positions and sizes picked for the world are the print's. */
+export const worldScale = (ctx: SketchContext): Scale => scaleOf(worldCamera(ctx), TABLOID_PAGE, TABLOID_HORIZON_Y);
 
 export interface Peak {
   slabs: Slab[];
@@ -55,7 +73,8 @@ export interface Peak {
  * The mountain: columns of rough slabs on a grid laid along a ridge that runs diagonally into the
  * picture. From the summit the ridge falls away to the left and back in a long stair of lower and
  * lower columns, and ends to the right in a short cliff. Each column is a stack of uneven slabs a
- * little askew, topped to the height the profile asks for.
+ * little askew, topped to the height the profile asks for. It is laid out in tabloid's frame (`sc` is
+ * `worldScale`), so every size and fit builds the print's mountain.
  */
 export function buildPeak(ctx: SketchContext, sc: Scale): Peak {
   const layout = ctx.random('hermit-layout');
