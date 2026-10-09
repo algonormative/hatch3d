@@ -186,7 +186,7 @@ export function plates(ctx: SketchContext, view: THREE.Camera, w: Wall): Plate[]
 }
 
 /** How deep a plate stands on the page, in millimetres. */
-export const plateDepth = (plate: Plate): number => Math.max(...plate.page.map(p => p.y)) - Math.min(...plate.page.map(p => p.y));
+const plateDepth = (plate: Plate): number => Math.max(...plate.page.map(p => p.y)) - Math.min(...plate.page.map(p => p.y));
 
 /** The fewest fine rays a smaller card keeps round its sun, so the sky still reads as radiance. */
 export const FINE_FLOOR = 24;
@@ -209,8 +209,8 @@ export function drawSun(ctx: SketchContext): Part[] {
     .map(st => ({ ...st, group: 'rays', owner: 1000 + i }))));
   w.slabs.forEach((sl, owner) => strokes.push(...facetStrokes(sl, back, view.position, false, undefined, { view }).map(st => ({ ...st, group: 'wall', owner }))));
   // The waves, turned onto their rays. On a small card a ribbon narrower than the smallest feature is drawn by its line
-  // (`narrowStrands`), in the violet its laminations give it on the print. That line is the helix seen side on, a wave:
-  // it is drawn whole, every point kept, since tested against its own ribbon it lost the back of every turn and zigzagged.
+  // (`narrowStrands`), in the violet its laminations give it on the print. That line is the helix seen side on, a wave,
+  // and keeps every point: the buckets' reducer, a 1.4 mm stride, turned its swing into corners.
   const lines = new Set<Stroke>();
   for (const { strand, turn } of s.waves) {
     const turned = strandStrokes(strand, 0.4, 0.25, ctx, view).map(st => ({ ...st, points: st.points.map(p => p.clone().applyMatrix4(turn)) }));
@@ -283,7 +283,6 @@ export function drawSun(ctx: SketchContext): Part[] {
     const drawn = strokes;
     const buckets = new PartBuckets(0.4);
     projectStrokes(drawn, { view, depth, width: W, height: H }, {
-      hidden: st => !lines.has(st),
       begin: st => {
         const key = `${st.group}-${st.ink}`;
         // Off tabloid a scrap of a face's hatch shorter than the smallest feature is a speck, not shading.
@@ -334,8 +333,9 @@ export function drawSun(ctx: SketchContext): Part[] {
       for (const run of keepAlong([{ x: CARD.x0, y }, { x: CARD.x1, y }], p => !shaft(p) && !onGlyph(p), 0.25)) buckets.add(k % 4 === 0 ? 'shadow-ultramarine' : 'shadow-carbon', run);
     }
     // The ground: the cracked desert's plates, outside the shadow. On a small card a plate shallower on paper than the
-    // smallest feature is left out (far off, in the shaft, it scribbled), and a crack narrower than the pens hold apart is
-    // one line: a plate's edge gives way where it runs beside the edge of a plate drawn before it (far to near).
+    // smallest feature is left out (far off, in the shaft, they scribbled over the light, and with only a few rows of shadow
+    // either side the shaft no longer read), and a crack narrower than the pens hold apart is one line: a plate's edge gives
+    // way where it runs beside the edge of a plate drawn before it (far to near).
     const inShadowRow = (p: Point) => p.y >= y0 && p.y < y1 && !shaft(p);
     const ground: Point[][] = [];
     for (const plate of plates(ctx, view, w)) {
