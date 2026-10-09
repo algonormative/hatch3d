@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, printFine, tolerance } from '../../kit/format.ts';
+import { PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, printFine, sceneMin, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -55,7 +55,7 @@ const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.he
  * the card, never under the smallest feature (a tower's shadow is a few millimetres deep on a small card, and the
  * print's 3.5 mm would leave none of it). A piece of a lover's shadow hatch shorter than 1.5 mm is a speck at any size.
  */
-const SHORTEST = { slab: Math.max(layoutLength(2), MIN_FEATURE), towerShadow: Math.max(layoutLength(3.5), MIN_FEATURE), loverShadow: tolerance(1.5) };
+const SHORTEST = { slab: sceneMin(2), towerShadow: sceneMin(3.5), loverShadow: tolerance(1.5) };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 7.2;

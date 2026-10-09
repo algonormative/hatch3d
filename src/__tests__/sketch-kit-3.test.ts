@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import * as THREE from 'three';
+import { renderSketch } from '../../cli/sketch/runner.ts';
 import { TABLOID_FORMAT, formatFor, printFine } from '../../sketches/kit/format.ts';
 import { thinParallel, thinRanked } from '../../sketches/kit/density.ts';
 import { contourTube } from '../../sketches/kit/mannequin/body.ts';
@@ -13,6 +17,9 @@ import { horizonCamera } from '../../sketches/kit/perspective.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
+
+let dir: string | undefined;
+afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
 describe('sketch kit: shared card helpers, batch 3', () => {
   it('sets the depth oversample that gives back the print\'s world resolution: 1 at tabloid, 1 / s rounded up elsewhere', () => {
@@ -192,4 +199,25 @@ describe('sketch kit: shared card helpers, batch 3', () => {
       expect(ruledFaces({ ...block, rx: -Math.PI / 2 }, behind, view, 1).every(st => st.face === 5)).toBe(true);
     });
   });
+
+  it('keeps a scenery scrap at the layout scale but never under the smallest feature: as authored at tabloid, a millimetre or the scaled length on 70 x 120', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-kit3-'));
+    const entry = join(dir, 'probe.ts');
+    // A page-aware probe: lines whose ends encode what `sceneMin` gives for 2, 5 and 0.2 mm (the probe is clipped to the page margin, so offset from 20).
+    await writeFile(entry, `import { sceneMin } from ${JSON.stringify(resolve(import.meta.dirname, '../../sketches/kit/format.ts'))};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [],
+        draw() { return [{ id: 'mins', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 20 + sceneMin(2), y: 20 + sceneMin(5) }]] },
+          { id: 'tiny', pen: 'ink', paths: [[{ x: 20, y: 30 }, { x: 20 + sceneMin(0.2), y: 31 }]] }]; } };`);
+    const at = (r: Awaited<ReturnType<typeof renderSketch>>, id: string) => { const [a, b] = r.parts.find(part => part.id === id)!.paths[0]; return { x: b.x - a.x, y: b.y - a.y }; };
+    const tabloid = await renderSketch({ entry, timeoutMs: 120_000 });
+    expect(at(tabloid, 'mins').x).toBeCloseTo(2, 3);
+    expect(at(tabloid, 'mins').y).toBeCloseTo(5, 3);
+    expect(at(tabloid, 'tiny').x).toBeCloseTo(0.2, 3);
+    const small = await renderSketch({ entry, finishing: { page: { width: 70, height: 120 } }, timeoutMs: 120_000 });
+    // 2 mm scales to 0.56 mm, under the 1 mm feature floor; 5 mm to 1.39 mm, over it.
+    expect(at(small, 'mins').x).toBeCloseTo(1, 3);
+    expect(at(small, 'mins').y).toBeCloseTo(5 * 120 / 431.8, 3);
+    expect(at(small, 'tiny').x).toBeCloseTo(1, 3);
+  }, 120_000);
 });

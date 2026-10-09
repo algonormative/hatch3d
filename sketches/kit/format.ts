@@ -302,6 +302,13 @@ export const tolerance = (mm: number, floor = MIN_SPACING): number => identity &
 /** A knockout halo authored in tabloid millimetres: scaled with the card, never under 0.5 mm. */
 export const halo = (mm: number): number => identity ? mm : Math.max(0.5, S * mm);
 /**
+ * The shortest piece of scenery a cull keeps (the slivers a tower's courses cut from its lines, the scraps a shadow is cut
+ * into), authored in tabloid millimetres: scaled with the card like any layout length, never under the smallest feature.
+ * A tolerance in real millimetres would clear a small card's scenery (a tower's shadow is a few millimetres deep there).
+ * Identity at tabloid.
+ */
+export const sceneMin = (mm: number): number => Math.max(layoutLength(mm), MIN_FEATURE);
+/**
  * A count tuned on tabloid that is really a density (stars, fragments, ticks, rays): scaled by the art window's
  * area (`per: 'area'`), or by `S` for things spaced along a length that scales with the card (`per: 'length'`,
  * e.g. rays round a sun), rounded, and never under `floor`, which keeps the card's character. `n` itself at tabloid.
