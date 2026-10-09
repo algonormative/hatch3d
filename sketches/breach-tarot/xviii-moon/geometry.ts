@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import {
   FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutY,
-  printFine, scaledCount, tabloidX, tolerance,
+  S, printFine, scaledCount, tabloidX, tolerance,
 } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, pageExtent, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
@@ -47,6 +47,12 @@ const FINE = printFine();
 /** The card's depth raster at tabloid; on any other page, the format's, with room for the finer one. */
 const RASTER = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const { W, H, MM_X, MM_Y } = RASTER;
+/**
+ * The page masks (the knockouts round the towers, the moon and the city in the water, the moon's shells) are rastered
+ * this finely, in pixels per millimetre: the kit's 3 at tabloid, and as fine in the world as the print's on a smaller card
+ * (`3 / S`), where a stake or a piercing slab is a pixel or two wide at 3, its mask frays, and the night runs up to it.
+ */
+const MASK_RES = 3 / S;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** The eye is high over a small world: towers stand only a few eye heights tall, so the ground and the water open out below the horizon. */
 const EYE = 30;
@@ -563,7 +569,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // comes out as a bead of ticks: hatch shorter than `moonTick` is left out.
     const tick = n(ctx, 'moonTick', 1.2, 0.4, 3);
     // Nothing of the moon draws over a tower (a tower that rises into its sky stands in front of it).
-    const solids = meshCoverage(standGeos, viewR, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)));
+    const solids = meshCoverage(standGeos, viewR, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)), MASK_RES);
     const moonBySlab = new Map<number, Stroke[]>();
     for (const st of moonStrokes) moonBySlab.set(st.owner!, [...(moonBySlab.get(st.owner!) ?? []), st]);
     const blockEdges: Point[][] = [];
@@ -697,7 +703,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
 
     // The water ruling, knocked out where the reflection stands (and put back where the ripple breaks it). Its pitch
     // holds on paper.
-    const coverM = meshCoverage(waterGeos, viewM, PAGE, halo(0.5));
+    const coverM = meshCoverage(waterGeos, viewM, PAGE, halo(0.5), MASK_RES);
     const pitch = tolerance(n(ctx, 'waterPitch', 1.25, 0.55, 2));
     for (let y = HORIZON_Y + 1, i = 0; y < CARD.y1 - 0.3; i++) {
       const t = depthOf(y), b = bandOf(y);
@@ -717,9 +723,9 @@ export function drawMoon(ctx: SketchContext): Part[] {
     // the halos scale with the card (`halo`).
     const shells = shards ? moonGeos.slice(0, moonGeos.length - blockGeos.length) : [];
     const skyCover = shards ? [...frontOf(shells, eye), ...blockGeos] : moonGeos;
-    const shine = meshCoverage(skyCover, viewC, PAGE, halo(shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) * (sunlit ? 1.5 : 1) : n(ctx, 'moonHalo', 2.6, 0.5, 6)));
-    const fronts = shards ? meshCoverage(skyCover, viewC, PAGE, 0) : () => false;
-    const anyShell = shards ? meshCoverage(shells, viewC, PAGE, 0) : () => false;
+    const shine = meshCoverage(skyCover, viewC, PAGE, halo(shards ? n(ctx, 'brokenHalo', 0.8, 0.3, 4) * (sunlit ? 1.5 : 1) : n(ctx, 'moonHalo', 2.6, 0.5, 6)), MASK_RES);
+    const fronts = shards ? meshCoverage(skyCover, viewC, PAGE, 0, MASK_RES) : () => false;
+    const anyShell = shards ? meshCoverage(shells, viewC, PAGE, 0, MASK_RES) : () => false;
     const inside = (p: Point) => anyShell(p) && !fronts(p);
     if (shards) {
       const c = pageOf(view, shards.centre), r = shards.radius * f / eye.distanceTo(shards.centre) * 1.6;
@@ -765,7 +771,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
 
     // The crescent's unlit rest of the disc: a faint dashed rim, from horn to horn the long way round.
     if (moon) {
-      const edge = meshCoverage(moonGeos, viewC, PAGE, halo(1.2));
+      const edge = meshCoverage(moonGeos, viewC, PAGE, halo(1.2), MASK_RES);
       const rim: Point[] = Array.from({ length: 241 }, (_, k) => {
         const a = moon.bulge + moon.horns * 0.9 + k / 240 * (2 * Math.PI - 1.8 * moon.horns);
         return pageOf(view, rimPoint(moon, a));
