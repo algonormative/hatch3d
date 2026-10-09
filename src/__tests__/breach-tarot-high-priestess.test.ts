@@ -237,7 +237,8 @@ describe('Breach Tarot: II The High Priestess at 70 x 120 mm', () => {
     // On the print the cable's strands are ribbons with laminations, and the shadow's edges hatched bands.
     expect(print.parts.some(part => part.id === 'helix-violet' || part.id === 'helix-ultramarine')).toBe(true);
     expect(print.parts.find(part => part.id === 'shadow-carbon')!.paths.length).toBeGreaterThan(500);
-    for (const result of small) {
+    for (const [k, result] of small.entries()) {
+      const { s } = formatOf(fits[k]);
       // Here the strands are narrower on paper than the smallest feature: each is drawn by its spine.
       expect(result.parts.filter(part => part.id.startsWith('helix-')).map(part => part.id).sort()).toEqual(['helix-acid', 'helix-vermilion']);
       expect(result.parts.filter(part => part.id.startsWith('helix-')).reduce((n, part) => n + part.paths.length, 0)).toBeLessThanOrEqual(4);
@@ -252,6 +253,20 @@ describe('Breach Tarot: II The High Priestess at 70 x 120 mm', () => {
       const pitch = (threads.at(-1)! - threads[0]) / (threads.length - 1);
       expect(pitch).toBeGreaterThan(0.9);
       expect(pitch).toBeLessThan(1.05);
+      // The sky stops short of the pillars, the lintel and the cable by their knockout halo: 1.1 mm in tabloid, scaled with
+      // the card and never under 0.5 mm. So no sky ruling comes nearer those than the floor, nor further than the scaled
+      // halo and a quarter millimetre of sampling.
+      const clearance = (ids: RegExp) => {
+        const solid = result.parts.filter(part => ids.test(part.id)).flatMap(part => part.paths.flat());
+        let nearest = Infinity;
+        for (const p of points(result, 'sky-')) for (const q of solid) nearest = Math.min(nearest, Math.hypot(p.x - q.x, p.y - q.y));
+        return nearest;
+      };
+      const halo = Math.max(0.5, 1.1 * s);
+      for (const ids of [/^(dark|light|lintel)-/, /^helix-/]) {
+        expect(clearance(ids), `${fits[k]} ${ids}`).toBeGreaterThan(0.45);
+        expect(clearance(ids), `${fits[k]} ${ids}`).toBeLessThan(halo + 0.25);
+      }
     }
   }, 120_000);
 
