@@ -180,6 +180,20 @@ describe('Breach Tarot: III The Empress at 70 x 120 mm', () => {
       // No piece of the crop is shorter than the smallest feature: hatch specks and the stubs of cut edges are gone.
       const { minFeature } = formatOf(fits[k]);
       for (const path of paths(result, 'crop-')) expect(length(path)).toBeGreaterThanOrEqual(minFeature - 0.01);
+      // The sky stops short of the plants by their knockout halo (1 mm in tabloid) and of the wind by its own (4 mm), each
+      // scaled with the card and never under 0.5 mm. So no ruling comes nearer than the floor, nor much further than the
+      // scaled halo: the plants' by a third of a millimetre of sampling, the wind's by the mesh's raster as well.
+      const clearance = (ids: RegExp) => {
+        const solid = result.parts.filter(part => ids.test(part.id)).flatMap(part => part.paths.flat());
+        let nearest = Infinity;
+        for (const p of points(result, 'sky-')) for (const q of solid) nearest = Math.min(nearest, Math.hypot(p.x - q.x, p.y - q.y));
+        return nearest;
+      };
+      const { s } = formatOf(fits[k]);
+      expect(clearance(/^crop-/), `${fits[k]} crop`).toBeGreaterThan(0.45);
+      expect(clearance(/^crop-/), `${fits[k]} crop`).toBeLessThan(Math.max(0.5, s) + 0.3);
+      expect(clearance(/^wind-/), `${fits[k]} wind`).toBeGreaterThan(0.45);
+      expect(clearance(/^wind-/), `${fits[k]} wind`).toBeLessThan(Math.max(0.5, 4 * s) + 1);
     }
     // The negative control: the print scaled down onto the card, as a sketch that is not page-aware is, its sky ruling,
     // facet hatch and wind laminations shrinking with it.
