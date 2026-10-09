@@ -6,7 +6,7 @@ import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.t
 import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabEdges, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
-import { helixAlong, type HelixStroke } from '../../kit/helix.ts';
+import { helixAlong, narrowStrands } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks, circlePath } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -233,35 +233,6 @@ function courseOutline(s: Slab, view: THREE.Camera, covered: boolean): THREE.Vec
   return edges;
 }
 
-/**
- * The line's helix strands, each drawn as one line where its ribbon is narrower on this card's paper than the smallest
- * feature (none at tabloid). A strand's first two strokes are its edges, traced at the same samples either side of the
- * ribbon (kit/helix.ts' `strandStrokes`); on a 70 × 120 card they run a fifth of a millimetre apart and would print as
- * one blot, so they become one line down the ribbon's middle. Everything else the helix draws is kept.
- */
-function singleStrands(strokes: HelixStroke[], view: THREE.Camera): HelixStroke[] {
-  if (!MIN_FEATURE) return strokes;
-  const edges = new Map<string, HelixStroke[]>();
-  for (const st of strokes) {
-    const pair = edges.get(st.group) ?? [];
-    if (pair.length < 2) edges.set(st.group, [...pair, st]);
-  }
-  const merged = new Map<HelixStroke, HelixStroke | null>();
-  for (const [a, b] of edges.values()) {
-    if (!b || a.ink !== b.ink || a.points.length !== b.points.length) continue;
-    // The ribbon's widest on the card, between matching samples of its edges.
-    let widest = 0;
-    a.points.forEach((pa, i) => {
-      const p = pageOf(view, pa), q = pageOf(view, b.points[i]);
-      if (p.y > CARD.y0 && p.y < CARD.y1) widest = Math.max(widest, Math.hypot(q.x - p.x, q.y - p.y));
-    });
-    if (widest >= MIN_FEATURE) continue;
-    merged.set(a, { ...a, points: a.points.map((pa, i) => pa.clone().lerp(b.points[i], 0.5)) });
-    merged.set(b, null);
-  }
-  return strokes.flatMap(st => { const m = merged.get(st); return m === undefined ? [st] : m ? [m] : []; });
-}
-
 export function drawHangedMan(ctx: SketchContext): Part[] {
   const view = plumbCamera(ctx);
   const eye = view.position.clone();
@@ -298,7 +269,11 @@ export function drawHangedMan(ctx: SketchContext): Part[] {
       strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
     }
   }
-  for (const h of singleStrands(line.strokes, view)) strokes.push({ ink: h.ink, group: 'line', family: 'membrane', points: h.points });
+  // The line's helix strands, each drawn as one line where its ribbon is narrower on this card's paper than the smallest
+  // feature (none at tabloid). A strand's edges run a fifth of a millimetre apart on a 70 × 120 card and would print as
+  // one blot, so they become one line down the ribbon's middle, and everything else the helix draws is kept.
+  const inWindow = (p: Point) => p.y > CARD.y0 && p.y < CARD.y1;
+  for (const h of narrowStrands(line.strokes, view, { measure: 'widest', counts: inWindow, keep: 'rest' })) strokes.push({ ink: h.ink, group: 'line', family: 'membrane', points: h.points });
   strokes.push(plumb);
 
   const geometries = [...city.map(slabGeometry), ...bob.map(slabGeometry), ...line.meshes];

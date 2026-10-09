@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { bandHatch, bandMarks, bandOutlines, circlePath, discHatch, hatchedBar, hatchedDisc, sideOf } from '../../sketches/kit/fills.ts';
-import { alongRay, collapseBand, helixStrands, strandPoint, towerFrame } from '../../sketches/kit/helix.ts';
+import { alongRay, collapseBand, helixStrands, narrowStrands, ribbonEdges, ribbonMidline, ribbonWidths, strandPoint, strandStrokes, towerFrame } from '../../sketches/kit/helix.ts';
 import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
@@ -272,5 +272,55 @@ describe('sketch kit: shared card helpers', () => {
     expect(segDist(p(1, 1), p(0, 0), p(2, 0))).toBe(1);
     expect(segDist(p(-3, 4), p(0, 0), p(2, 0))).toBe(5);
     expect(segDist(p(3, 0), p(1, 1), p(1, 1))).toBeCloseTo(Math.hypot(2, 1), 12);
+  });
+
+  it('tags each helix stroke with its role, and a strand\'s edges are found by it', () => {
+    const ctx = sketchContext(5);
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 250 });
+    const [a, b] = helixStrands(ctx).map(st => strandStrokes({ ...st, z: -30 }, 0.5, 0.3, ctx, view));
+    expect([a, b].every(strokes => strokes.every(h => h.role))).toBe(true);
+    expect(a.slice(0, 2).map(h => h.role)).toEqual(['edge', 'edge']);
+    expect(a.filter(h => h.role === 'spine').map(h => h.ink)).toEqual(['acid']);
+    expect(b.some(h => h.role === 'spine')).toBe(false);
+    expect(new Set([...a, ...b].map(h => h.role))).toEqual(new Set(['edge', 'lamination', 'spine', 'rib', 'pulse']));
+    const edges = ribbonEdges([...a, ...b], 'strand-b')!;
+    expect(edges[0]).toBe(b[0]);
+    expect(edges[1]).toBe(b[1]);
+    // Not the first two strokes by position: a strand without its edges has none.
+    expect(ribbonEdges([...a, ...b].filter(h => h.role !== 'edge'), 'strand-a')).toBeUndefined();
+    const widths = ribbonWidths(edges, view), mid = ribbonMidline(edges);
+    expect(widths).toHaveLength(481);
+    expect(mid).toHaveLength(481);
+    expect(Math.min(...widths)).toBeGreaterThanOrEqual(0);
+    expect(mid[200].distanceTo(edges[0].points[200].clone().add(edges[1].points[200]).multiplyScalar(0.5))).toBeLessThan(1e-9);
+  });
+
+  it('draws a ribbon narrower than its limit as a line, by its median or its widest, keeping its spine or the rest', () => {
+    const ctx = sketchContext(5);
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 250 });
+    const [a, b] = helixStrands(ctx).map(st => strandStrokes({ ...st, z: -30 }, 0.5, 0.3, ctx, view));
+    const strokes = [...a, ...b];
+    const widths = ribbonWidths(ribbonEdges(strokes, 'strand-a')!, view).sort((x, y) => x - y);
+    const median = widths[widths.length >> 1], widest = widths[widths.length - 1];
+    expect(widest).toBeGreaterThan(median);
+    // No limit (tabloid), or a ribbon wide enough: every stroke, as it was.
+    expect(narrowStrands(strokes, view, { limit: 0 })).toBe(strokes);
+    expect(narrowStrands(strokes, view, { limit: median * 0.5 })).toEqual(strokes);
+    // Narrower than the limit: each strand is its line alone. Strand a keeps its spine, strand b has none, so its edges' midline.
+    const lines = narrowStrands(strokes, view, { limit: 1e6 });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(a.find(h => h.role === 'spine'));
+    expect([lines[1].group, lines[1].ink]).toEqual(['strand-b', b[0].ink]);
+    expect(lines[1].points).toEqual(ribbonMidline([b[0], b[1]]));
+    // `rest` merges only the two edges of each strand into their midline and keeps everything else, in order.
+    const rest = narrowStrands(strokes, view, { limit: 1e6, keep: 'rest' });
+    expect(rest).toHaveLength(strokes.length - 2);
+    expect(rest[0].points).toEqual(ribbonMidline([a[0], a[1]]));
+    expect(rest.slice(1, a.length - 1)).toEqual(a.slice(2));
+    // Between the median and the widest, the median says narrow and the widest says wide; a window that counts no sample says narrow.
+    const between = (median + widest) / 2;
+    expect(narrowStrands(strokes, view, { limit: between })).toHaveLength(2);
+    expect(narrowStrands(strokes, view, { limit: between, measure: 'widest' })).toEqual(strokes);
+    expect(narrowStrands(strokes, view, { limit: between, measure: 'widest', counts: () => false })).toHaveLength(2);
   });
 });

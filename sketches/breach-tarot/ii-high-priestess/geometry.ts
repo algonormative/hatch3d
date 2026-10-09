@@ -7,7 +7,7 @@ import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOI
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { helixAlong, type HelixStroke } from '../../kit/helix.ts';
+import { helixAlong, narrowStrands } from '../../kit/helix.ts';
 import { bandMarks } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage, pathLength, segDist, straightened } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
@@ -305,25 +305,6 @@ export function unwindThreads(spec: UnwindSpec, rng: () => number): UnwoundThrea
     out.push({ j, points, straightAt: top + length });
   }
   return out;
-}
-
-/**
- * The cable's strokes as a card draws them. Each strand is a ribbon: two vermilion edges (`helixAlong` traces them
- * first) with laminations, ribs and pulses between them. On a small card a strand narrower on paper than the smallest
- * feature (edge to edge, at the median of its length) is drawn as its spine alone, as a narrow band is: strand a's
- * acid spine, strand b's midway between its edges in their vermilion. At tabloid, every stroke.
- */
-export function cableStrokes(strokes: HelixStroke[], view: THREE.Camera): HelixStroke[] {
-  if (!MIN_FEATURE) return strokes;
-  return (['strand-a', 'strand-b'] as const).flatMap(group => {
-    const mine = strokes.filter(h => h.group === group);
-    const [e0, e1] = mine;
-    if (!e1) return mine;
-    const widths = e0.points.map((p, i) => { const a = pageOf(view, p), b = pageOf(view, e1.points[i]); return Math.hypot(a.x - b.x, a.y - b.y); }).sort((x, y) => x - y);
-    if (widths[widths.length >> 1] >= MIN_FEATURE) return mine;
-    const spine = mine.find(h => h.ink === 'acid' && h.points.length === e0.points.length);
-    return [spine ?? { ink: e0.ink, group, points: e0.points.map((p, i) => p.clone().lerp(e1.points[i], 0.5)) }];
-  });
 }
 
 /** The helix's own lamination palette (violet and ultramarine strands, a vermilion line every thirteenth, acid on the axis). */
@@ -730,8 +711,10 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       },
     });
 
-    // The helix cable's own strokes, in the helix's own inks (none remapped); on a small card each strand by its spine.
-    const helix: Stroke[] = cableStrokes(cable.strokes, view).map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
+    // The helix cable's own strokes, in the helix's own inks (none remapped). On a small card a strand narrower on paper
+    // than the smallest feature (edge to edge, at the median of its length) is drawn as its spine alone, as a narrow band
+    // is: strand a's acid spine, strand b's midway between its edges in their vermilion (`narrowStrands`).
+    const helix: Stroke[] = narrowStrands(cable.strokes, view).map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
     projectStrokes(helix, { view, depth: depthBuffer, width: W, height: H }, {
       // Nothing stands in front of the cable, and testing the strands against each other chops them
       // into scraps where they cross, so they are drawn whole, like twisted wire.

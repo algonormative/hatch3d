@@ -5,7 +5,7 @@ import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.t
 import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
-import { helixAlong, helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
+import { helixAlong, helixStrands, ribbonEdges, ribbonWidths, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
@@ -785,17 +785,17 @@ function steady(flags: boolean[], least: number): boolean[] {
 function strandThreads(view: THREE.Camera, strokes: HelixStroke[], tip = 0): { centres: { strand: 'a' | 'b'; points: THREE.Vector3[] }[]; masks: Map<'a' | 'b', Point[][]> } {
   const page = (p: THREE.Vector3) => pageOf(view, p);
   const lines = (['a', 'b'] as const).map(strand => {
-    // strandStrokes draws each strand's two edges first.
-    const [e1, e2] = strokes.filter(h => h.group === `strand-${strand}`).slice(0, 2).map(h => h.points);
-    if (!e1 || !e2) return null;
+    const edges = ribbonEdges(strokes, `strand-${strand}`);
+    if (!edges) return null;
+    const [e1, e2] = edges.map(h => h.points);
     const count = Math.min(e1.length, e2.length);
     const mid = Array.from({ length: count }, (_, k) => e1[k].clone().add(e2[k]).multiplyScalar(0.5));
-    const width = (k: number) => { const a = page(e1[k]), b = page(e2[k]); return Math.hypot(a.x - b.x, a.y - b.y); };
+    const widths = ribbonWidths(edges, view);
     // Narrow over a stretch, not where the twist turns the ribbon edge-on for a moment (a twentieth of the strand or less);
     // and never over the strand's last `tip` millimetres, where it comes to its point: that taper keeps its edges.
     const toEnd: number[] = new Array(count).fill(0);
     for (let k = count - 2; k >= 0; k--) { const p = page(mid[k]), q = page(mid[k + 1]); toEnd[k] = toEnd[k + 1] + Math.hypot(q.x - p.x, q.y - p.y); }
-    return { strand, mid, narrow: steady(mid.map((_, k) => width(k) < MIN_FEATURE), Math.ceil(count / 20)).map((thin, k) => thin && toEnd[k] > tip) };
+    return { strand, mid, narrow: steady(widths.map(w => w < MIN_FEATURE), Math.ceil(count / 20)).map((thin, k) => thin && toEnd[k] > tip) };
   });
   const [a, b] = lines;
   const drawn = (line: NonNullable<typeof a>) => line.narrow.map((thin, k) => {
