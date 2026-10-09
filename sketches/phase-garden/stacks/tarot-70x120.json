@@ -1,0 +1,29 @@
+{
+  "title": "Breach Tarot, 70 x 120 mm",
+  "out": ".sketch-output/finalize/tarot-70x120",
+  "edition": 1,
+  "page": {
+    "width": 70,
+    "height": 120,
+    "margin": 4.5
+  },
+  "border": {
+    "style": "simple",
+    "pen": "carbon",
+    "inset": 3,
+    "contentGap": 1.25
+  },
+  "defaults": {
+    "palette": "phase-garden",
+    "center": "none",
+    "mergeSameColor": false,
+    "vpype": {
+      "mergeTolerance": 0.1
+    }
+  },
+  "pieces": [
+    { "name": "0-fool", "title": "Breach Tarot: 0 The Fool, 70 x 120 mm", "sketch": "sketches/breach-tarot/0-fool/sketch.ts", "seed": 1 },
+    { "name": "xvi-tower", "title": "Breach Tarot: XVI The Tower, 70 x 120 mm", "sketch": "sketches/breach-tarot/xvi-tower/sketch.ts", "seed": 2 },
+    { "name": "xvii-star", "title": "Breach Tarot: XVII The Star, 70 x 120 mm", "sketch": "sketches/breach-tarot/xvii-star/sketch.ts", "seed": 2 }
+  ]
+}

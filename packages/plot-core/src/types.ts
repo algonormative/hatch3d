@@ -13,7 +13,8 @@ export interface Pen { id: string; color: string; width: number; passes?: number
 /** Optional physical finishing applied after draw() and before final SVG assembly. */
 export interface FinishingOptions {
   page?: Page;
-  border?: { style: 'simple' | 'double' | 'ticked' | 'cropmarks'; pen: string; inset?: number; contentGap?: number };
+  /** `lineGap`: a double border's distance between its two lines, in millimetres (default `DOUBLE_BORDER_INSET`, 2). */
+  border?: { style: 'simple' | 'double' | 'ticked' | 'cropmarks'; pen: string; inset?: number; contentGap?: number; lineGap?: number };
   pens?: Record<string, { color?: string; width?: number; passes?: number }>;
   density?: { maxDensity: number; cellSize: number };
 }

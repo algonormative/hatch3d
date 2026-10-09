@@ -19,6 +19,7 @@ import { dirname, extname, join, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
 import { targetPage } from '../src/sketch/render-target.ts';
+import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import type { Control, Page, Pen } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -193,9 +194,9 @@ function union(bs: (Bounds | null)[]): Bounds | null {
 /** Offset (mm) that centers the art bounds inside the area it may occupy. */
 export function placementOffset(layers: Layer[], page: Page, stack: Stack, center: FinalizeOptions['center']): { dx: number; dy: number; art: Bounds | null; area: Bounds } {
   const art = union(layers.filter(l => !isBorder(l)).map(l => l.bounds));
-  const border = stack.border as { inset?: number; contentGap?: number; style?: string } | undefined;
+  const border = stack.border as { inset?: number; contentGap?: number; style?: string; lineGap?: number } | undefined;
   // Mirrors finishing's content inset: the border's inner line plus half its 0.25 mm stroke.
-  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? 2 : 0) + (border.contentGap ?? 6) + 0.25 : page.margin ?? 18;
+  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? border.lineGap ?? DOUBLE_BORDER_INSET : 0) + (border.contentGap ?? 6) + 0.25 : page.margin ?? 18;
   const area = { x0: inner, y0: inner, x1: page.width - inner, y1: page.height - inner };
   if (!art || center === 'none') return { dx: 0, dy: 0, art, area };
   const dy = (area.y0 + area.y1) / 2 - (art.y0 + art.y1) / 2;

@@ -43,6 +43,10 @@ describe('finalize placement and pen plan', () => {
     expect(dx).toBe(0);
     expect(dy).toBeCloseTo((20.25 + 411.55) / 2 - (30 + 300) / 2, 3);
     expect(placementOffset(layers, page, { out: '', pieces: [], border } as Stack, 'none').dy).toBe(0);
+    // A double border's own gap between its lines moves the content area as finishing's does.
+    const card = { width: 70, height: 120, margin: 4.5 };
+    const area = placementOffset([], card, { out: '', pieces: [], border: { style: 'double', pen: 'carbon', inset: 3, lineGap: 0.75, contentGap: 0.5 } } as Stack, 'none').area;
+    expect(area.x0).toBeCloseTo(3 + 0.75 + 0.5 + 0.25, 9);
   });
 
   it('re-emits vpype output in the sketch grammar with the source layer tags, in millimetres', () => {
