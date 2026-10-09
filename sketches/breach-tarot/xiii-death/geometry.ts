@@ -62,7 +62,7 @@ export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
 }
 
 /** The nave: paired piers with inward cantilevers in the Breach Cathedral grammar, lintels, paving. */
-function nave(ctx: SketchContext): Slab[] {
+export function nave(ctx: SketchContext): Slab[] {
   const rng = ctx.random('death-nave');
   const out: Slab[] = [];
   const add = (x: number, y: number, z: number, w: number, h: number, d: number, role: Slab['role'] = 'stack') => {
