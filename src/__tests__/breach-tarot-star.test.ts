@@ -200,8 +200,14 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
         expect(here.widths[half] / s / there.widths[half], `half ${half}`).toBeGreaterThan(0.75);
         expect(here.widths[half] / s / there.widths[half], `half ${half}`).toBeLessThan(1.25);
       }
-      // The night keeps clear of every fragment and the star: a paper halo round each.
-      expect(clearance(result)).toBeGreaterThan(0.25);
+      // The night keeps clear of every fragment and the star by more than its own ruling (1.025 mm at the default): a
+      // paper halo round each that reads as glow, not as a cut-out.
+      expect(clearance(result)).toBeGreaterThan(1.025);
+      // Each of the eight arms keeps its shaded side, too narrow to hatch: a line of the hatch's ink down its length, one
+      // to an arm, on the side in shade only (its lit sides are as narrow, but the print leaves them paper).
+      const length = (line: Point[]) => line.slice(1).reduce((sum, q, k) => sum + Math.hypot(q.x - line[k].x, q.y - line[k].y), 0);
+      const shaded = result.parts.filter(part => part.id === 'star-ultramarine').flatMap(part => part.paths).filter(line => length(line) > 5);
+      expect(shaded.length).toBe(8);
     }
   }, 120_000);
 

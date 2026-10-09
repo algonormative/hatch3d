@@ -4,7 +4,7 @@ import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
-import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { clearBands, planSloganAttempts, sloganSettings, type SloganPlan, type SloganSurface } from '../../kit/lettering.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -23,7 +23,9 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  *
  * On a smaller card (`kit/format.ts`) the sky is the same seeded world, scaled with the card. The night's ruling and
  * the water's rows keep their pitch on paper, so there are fewer of them; the debris are thinned to a constellation;
- * a face too narrow to hold apart is drawn as part of its slab's outline; the phrase moves to the band.
+ * a face too narrow to hold apart is drawn as part of its slab's outline, and where it is in shade (an arm's side) as a
+ * line of its hatch's ink down its middle; the halos are measured in the night's ruling, so they still glow; the phrase
+ * moves to the band.
  */
 const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -189,6 +191,46 @@ export function slabEdges(s: Slab, view: THREE.Camera, hidden = true): THREE.Vec
 }
 
 /**
+ * A slab's shaded slivers, on a small card: a face that sees the eye but is narrower on paper than `MIN_FEATURE` (an
+ * arm's side, seen nearly edge-on) loses its inner edge (`slabEdges`) and its hatch, every piece of it shorter than the
+ * smallest feature (`shortestKept`). Where the print hatches that face (in shade), one line in the hatch's ink runs down
+ * its middle instead, the length of the face, so the arm keeps its shaded side. None at tabloid.
+ */
+export function sliverShade(s: Slab, view: THREE.Camera, light: THREE.Vector3): Stroke[] {
+  if (!MIN_FEATURE) return [];
+  const m = slabMatrix(s), rot = new THREE.Matrix4().extractRotation(m);
+  const half = [s.w / 2, s.h / 2, s.d / 2];
+  const e = 0.006;
+  const local = (v: number[]) => new THREE.Vector3(v[0], v[1], v[2]).applyMatrix4(m);
+  const out: Stroke[] = [];
+  for (let a = 0; a < 3; a++) for (const side of [-1, 1]) {
+    const [i, j] = [0, 1, 2].filter(b => b !== a);
+    const unit = [0, 0, 0];
+    unit[a] = side;
+    const normal = new THREE.Vector3(unit[0], unit[1], unit[2]).applyMatrix4(rot);
+    const c = [0, 0, 0];
+    c[a] = side * half[a];
+    const centre = local(c).addScaledVector(normal, e);
+    // Seen, and in shade: a face the print hatches (as `facetStrokes` does from a darkness of 0.32).
+    if (view.position.clone().sub(centre).dot(normal) <= 0 || faceDarkness(normal, light, s.tone) < 0.32) continue;
+    const corner = (u: number, v: number) => { const q = [...c]; q[i] = u * half[i]; q[j] = v * half[j]; return pageOf(view, local(q)); };
+    const quad = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+    let area = 0, longest = 0;
+    for (let k = 0; k < 4; k++) {
+      const p0 = quad[k], p1 = quad[(k + 1) % 4];
+      area += p0.x * p1.y - p1.x * p0.y;
+      longest = Math.max(longest, Math.hypot(p1.x - p0.x, p1.y - p0.y));
+    }
+    if (Math.abs(area) / 2 / longest >= MIN_FEATURE) continue;
+    // Down the middle along its long side.
+    const along = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y) >= Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y) ? i : j;
+    const end = (t: number) => { const q = [...c]; q[along] = t * half[along]; return local(q).addScaledVector(normal, e); };
+    out.push({ ink: 'ultramarine', group: 'star', family: 'hatch', points: [end(-1), end(1)] });
+  }
+  return out;
+}
+
+/**
  * The shortest piece of a stroke the sky keeps, in millimetres: what a face's hatch leaves shorter than the smallest
  * feature is a speck, not shading, and is dropped (nothing at tabloid); other strokes keep the buckets' own minimum.
  */
@@ -204,8 +246,11 @@ function streams(ctx: SketchContext, centre: THREE.Vector3): Strand[] {
 }
 
 /** Night: engraved hatch over the sky, knocked out round everything that shines. Its ruling is a tone, kept on paper. */
+/** The night's ruling: its pitch on paper, a tone kept at every size. */
+const nightPitch = (ctx: SketchContext): number => tolerance(1.25 - 0.45 * n(ctx, 'night', 0.5, 0, 1));
+
 function night(ctx: SketchContext, covered: (p: Point) => boolean): Point[][][] {
-  const pitch = tolerance(1.25 - 0.45 * n(ctx, 'night', 0.5, 0, 1));
+  const pitch = nightPitch(ctx);
   const out: Point[][][] = [[], []];
   const families: [number, number, number][] = [[0.07, pitch, 0], [-1.05, pitch * 1.7, 1]];
   for (const [angle, step, which] of families) {
@@ -278,14 +323,16 @@ export function drawStar(ctx: SketchContext): Part[] {
   const solids = [...star, ...debris, ...words];
   const light = new THREE.Vector3(0.2, 0.3, 1).normalize();
   // Each solid in the raking-light hatch; off tabloid, its outline drawn without the slivers a smaller card makes.
-  const facets = (s: Slab) => {
+  const facets = (s: Slab, shaded: boolean) => {
     const all = facetStrokes(s, light, view.position, s.role === 'debris');
     return FORMAT.tabloid ? all : [
       ...slabEdges(s, view, ctx.params.occlusion !== false).map(points => ({ ink: 'carbon' as const, family: 'edge' as const, points })),
       ...all.filter(st => st.family !== 'edge'),
+      // The star's arms keep their shaded sides.
+      ...(shaded ? sliverShade(s, view, light) : []),
     ];
   };
-  const strokes: Stroke[] = solids.flatMap((s, owner) => facets(s).map(st => ({ ink: st.ink, family: st.family, points: st.points, group: owner < star.length ? 'star' : 'pieces', owner })));
+  const strokes: Stroke[] = solids.flatMap((s, owner) => facets(s, owner < star.length).map(st => ({ ink: st.ink, family: st.family, points: st.points, group: owner < star.length ? 'star' : 'pieces', owner })));
   const density = 0.55;
   for (const s of strands) for (const st of strandStrokes(s, density, 0.32, ctx, view)) strokes.push({ ink: st.ink, group: 'helix', family: 'membrane', points: st.points });
   // The reflection: every sky stroke mirrored in the water plane.
@@ -329,9 +376,15 @@ export function drawStar(ctx: SketchContext): Part[] {
         };
       },
     });
-    // The night, knocked out with a paper halo round every shining thing and every word.
-    const clearance = halo(1.6 + 1.6 * n(ctx, 'halo', 0.5, 0, 1));
+    // The night, knocked out with a paper halo round every shining thing and every word. On a small card a halo scaled
+    // with the card is narrower than the night's ruling and reads as a cut-out, not a glow: there it is measured in the
+    // ruling instead, a ruling for each 1.6 mm of the print's (one to two of them; one and a half at the default).
+    const glow = 1.6 + 1.6 * n(ctx, 'halo', 0.5, 0, 1);
+    const clearance = FORMAT.tabloid ? halo(glow) : Math.max(halo(glow), nightPitch(ctx) * glow / 1.6);
     const shine = meshCoverage(geometries, view, PAGE, clearance);
+    // The constellation's links stop at the halos; on a small card, where those are measured in the ruling, at the halo
+    // scaled with the card instead, so the links between near fragments are not swallowed by their glow.
+    const linkStop = FORMAT.tabloid ? shine : meshCoverage(geometries, view, PAGE, halo(glow));
     const bands = [...slogans.knockouts.values()].flat().map(q => q.map(c => ({ x: c.x * MM_X, y: c.y * MM_Y })));
     const inBand = (p: Point) => bands.some(q => {
       let inside = false;
@@ -354,7 +407,7 @@ export function drawStar(ctx: SketchContext): Part[] {
       if (best < 0 || dist > layoutLength(46) || drawnPairs.has(pair)) return;
       drawnPairs.add(pair);
       const q = nodes[best];
-      for (const piece of keepAlong([p, q], (x, at) => !shine(x) && at % 2.2 < 1.1, 0.2)) add('constellation-acid', piece, false);
+      for (const piece of keepAlong([p, q], (x, at) => !linkStop(x) && at % 2.2 < 1.1, 0.2)) add('constellation-acid', piece, false);
     });
     // The water: dark rows parted by the star's glitter path, and the streams refracted below the surface.
     const starX = slabPage(star[star.length - 1]).x;
