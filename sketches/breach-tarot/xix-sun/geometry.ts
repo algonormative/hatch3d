@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, depthRaster, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, depthRaster, halo, hatchMin, layoutLength, maskRes, scaledCount, tolerance } from '../../kit/format.ts';
 import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { alongRay, helixStrands, narrowStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { glyphMask, groundWord, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -312,7 +312,7 @@ export function drawSun(ctx: SketchContext): Part[] {
     });
     const disc = s.radius * PAGE.height / 2 / (SUN_DIST * Math.tan(THREE.MathUtils.degToRad(view.fov / 2)));
     // The knockout round everything that stands (rays, waves, wall): scaled with the card, on a mask as fine as the print's.
-    const solidThings = meshCoverage(geometries, view, PAGE, halo(1.4), 3 / S);
+    const solidThings = meshCoverage(geometries, view, PAGE, halo(1.4), maskRes());
     // Fine rays over the whole sky, from just beyond the disc, in a fixed 64-step rhythm. Their dashes keep the print's
     // length on paper at the same place in the sky (the rhythm's cells lengthen with the distance in tabloid's millimetres).
     const rng = ctx.random('sun-fine');

@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU }
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { thinRanked, type RankedPiece } from '../../kit/density.ts';
 import {
-  FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, printFine, scaledCount, sceneMin,
+  FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, maskRes, printFine, scaledCount, sceneMin,
   tabloidY, tolerance,
 } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
@@ -43,8 +43,8 @@ import { trumpet, type Trumpet } from './trumpet.ts';
 const FINE = printFine();
 /** The card's depth raster at tabloid; on any other page, the format's, with room for the finer one. */
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
-/** The knockout masks' pixels per millimetre: 3 on the print, as fine in the world on a smaller card (`3 / S`). */
-const MASK_RES = 3 / S;
+/** The knockout masks' pixels per millimetre: 3 on the print, as fine in the world on a smaller card (`maskRes`). */
+const MASK_RES = maskRes();
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 const SLAB_SLACK = 0.2, HELIX_SLACK = 0.5;

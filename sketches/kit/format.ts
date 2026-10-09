@@ -277,6 +277,14 @@ export const depthRaster = (tabloidW: number, tabloidH: number, oversample = 1):
  */
 export const printFine = (format: Format = FORMAT): number => format.tabloid ? 1 : Math.ceil(format.pitchScale);
 
+/**
+ * The pixels per page millimetre of a knockout mask (`meshCoverage`'s `res`) that keep the print's resolution in the
+ * world: `base` (3, the default of `meshCoverage`) per tabloid millimetre, so `base / s` on a smaller card. A thin mesh
+ * (a staff a tenth of a millimetre across, a stake, a hair of ribbon) is still a pixel or two wide at that, where at the
+ * plain 3 per page millimetre it would be missed and the mask would fray. 3 at tabloid.
+ */
+export const maskRes = (format: Format = FORMAT, base = 3): number => base / format.s;
+
 const identity = FORMAT.tabloid;
 const TABLOID_CENTRE_X = TABLOID_PAGE.width / 2;
 /** Tabloid's horizon, in tabloid page millimetres: the line `layoutY` measures from. */

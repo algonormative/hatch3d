@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import {
   FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutY,
-  S, printFine, scaledCount, tabloidX, tolerance,
+  maskRes, printFine, scaledCount, tabloidX, tolerance,
 } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, pageExtent, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
@@ -49,10 +49,10 @@ const RASTER = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const { W, H, MM_X, MM_Y } = RASTER;
 /**
  * The page masks (the knockouts round the towers, the moon and the city in the water, the moon's shells) are rastered
- * this finely, in pixels per millimetre: the kit's 3 at tabloid, and as fine in the world as the print's on a smaller card
- * (`3 / S`), where a stake or a piercing slab is a pixel or two wide at 3, its mask frays, and the night runs up to it.
+ * this finely, in pixels per millimetre (`maskRes`): the kit's 3 at tabloid, and as fine in the world as the print's on a
+ * smaller card, where a stake or a piercing slab is a pixel or two wide at 3, its mask frays, and the night runs up to it.
  */
-const MASK_RES = 3 / S;
+const MASK_RES = maskRes();
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** The eye is high over a small world: towers stand only a few eye heights tall, so the ground and the water open out below the horizon. */
 const EYE = 30;

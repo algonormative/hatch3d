@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, fitFov, halo, layoutLength, layoutY, printFine, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, fitFov, halo, layoutLength, layoutY, maskRes, printFine, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, type AlongOptions, type HelixStroke } from '../../kit/helix.ts';
@@ -493,8 +493,8 @@ export function drawWorld(ctx: SketchContext): Part[] {
 
   // Clear paper round the helix and round the figure: nothing behind them comes near their lines. On a small card the
   // halos scale with it, on masks as fine as the print's.
-  const helixCover = FORMAT.tabloid ? world.helixCover : meshCoverage(world.helix.meshes, view, PAGE, halo(n(ctx, 'helixClear', 1.4, 0, 4)), 3 / S);
-  const figureCover = FORMAT.tabloid ? world.figureCover : meshCoverage(figureMeshes, view, PAGE, halo(n(ctx, 'figureClear', 1.7, 0.5, 6)), 3 / S);
+  const helixCover = FORMAT.tabloid ? world.helixCover : meshCoverage(world.helix.meshes, view, PAGE, halo(n(ctx, 'helixClear', 1.4, 0, 4)), maskRes());
+  const figureCover = FORMAT.tabloid ? world.figureCover : meshCoverage(figureMeshes, view, PAGE, halo(n(ctx, 'figureClear', 1.7, 0.5, 6)), maskRes());
 
   // The flat mark: the first set's four marks in the corners, where the old card keeps its four
   // living creatures, each by its sign: the Star (Aquarius) for the angel, Death (Scorpio) for the

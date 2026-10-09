@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, tolerance } from '../../kit/format.ts';
+import { MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, maskRes, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, ribbonEdges, ribbonMidline, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
@@ -744,8 +744,8 @@ export function drawJustice(ctx: SketchContext): Part[] {
     // The knockouts round what stands and round the cord scale with the card (never under half a millimetre), on a mask
     // as fine for the card as the print's is for the print (3 cells to the millimetre there): at 3 a millimetre a small
     // card's halos would round to the same two cells, and the cord's glow be no wider than a solid's knockout.
-    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)), 3 / S);
-    const cordClear = meshCoverage(cords.map(c => c.mesh), view, PAGE, halo(n(ctx, 'cordHalo', 3, 1, 8)), 3 / S);
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)), maskRes());
+    const cordClear = meshCoverage(cords.map(c => c.mesh), view, PAGE, halo(n(ctx, 'cordHalo', 3, 1, 8)), maskRes());
 
     // The phrase: each word cut into the front of a block of the heap or a course of the column. Or, where the format
     // sets it in the band, under the card's name instead.

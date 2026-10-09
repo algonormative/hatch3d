@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_SPACING, PAGE, PHRASE, S, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_SPACING, PAGE, PHRASE, halo, hatchMin, layoutLength, maskRes, printFine, tolerance } from '../../kit/format.ts';
 import { thinRanked } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { narrowStrands } from '../../kit/helix.ts';
@@ -122,7 +122,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     // Page masks: everything that stands, the mountain alone, and a pocket of clear paper round the hermit and his lantern.
     // They are drawn at the print's resolution in the world (3 pixels per tabloid millimetre, `3 / S` here), so a small
     // card's staff, a tenth of a millimetre across, still clears its pocket.
-    const res = 3 / S;
+    const res = maskRes();
     const standing = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 0.8, 0.2, 2)), res);
     const peakCover = meshCoverage(slabGeos, view, PAGE, 0, res);
     const pocket = meshCoverage([...figure.meshes, ...lanternGeos], view, PAGE, halo(n(ctx, 'pocket', 1.3, 0.3, 3)), res);
