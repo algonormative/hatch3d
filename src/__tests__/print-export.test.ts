@@ -242,6 +242,21 @@ describe('print export: the stack back', () => {
     await expect(backRun({ backForm: 'labyrinh' })).rejects.toThrow(/labyrinh/);
   }, 120_000);
 
+  it('refuses a stack whose back or face params name a control the sketch does not declare, naming the piece and the key', async () => {
+    const stack = JSON.parse(readFileSync(stackPath, 'utf8'));
+    const write = (edit: (s: any) => void) => {
+      const copy = structuredClone(stack);
+      edit(copy);
+      const path = join(mkdtempSync(join(tmpdir(), 'print-export-stack-')), 'stack.json');
+      writeFileSync(path, JSON.stringify(copy));
+      return path;
+    };
+    await expect(backRun({ stackPath: write(s => { s.back.params = { ...s.back.params, formm: 'helix' }; }) })).rejects.toThrow(/back has no control named formm/);
+    const first = stack.pieces[0].name;
+    await expect(backRun({ stackPath: write(s => { s.pieces[0].params = { ...s.pieces[0].params, sloganSzie: 2 }; }), only: [first], noBack: true }))
+      .rejects.toThrow(new RegExp(`${first} has no control named sloganSzie`));
+  }, 120_000);
+
   it('prints an explicit --back image in place of the stack back', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'print-export-'));
     const explicit = join(dir, 'explicit.png');

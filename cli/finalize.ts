@@ -121,11 +121,13 @@ async function loadSketch(stack: Stack, entry: string): Promise<{ page: Page; pe
   return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [] };
 }
 
-/** Overrides may only name controls the sketch declares, so a typo can't silently do nothing. */
-/** Layering: stack-wide params, then the piece's own params, then title stamping and explicit overrides. */
+/**
+ * Layering: stack-wide params, then the piece's own params, then title stamping and explicit overrides. Every layer
+ * may only name controls the sketch declares, so a typo can't silently do nothing.
+ */
 function withOverrides(stack: Stack, piece: Piece, controls: Control[], overrides: Record<string, unknown>): Record<string, unknown> {
   const ids = new Set(controls.map(c => c.id));
-  for (const key of Object.keys({ ...stack.params, ...overrides })) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
+  for (const key of Object.keys({ ...stack.params, ...piece.params, ...overrides })) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
   return { ...stack.params, ...piece.params, ...overrides };
 }
 

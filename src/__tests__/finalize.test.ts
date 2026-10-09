@@ -89,6 +89,12 @@ describe('finalize placement and pen plan', () => {
     const layers = svg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1);
     expect(layers.filter(l => /data-part-id="[^"]*slogan/.test(l)).map(l => /inkscape:label="([^"]*)"/.exec(l)![1])).toEqual([lettering.label]);
   }, 30_000);
+
+  it('rejects a piece whose own params name no control, naming the piece and the key', async () => {
+    const stack: Stack = { out: mkdtempSync(join(tmpdir(), 'finalize-')), border, pieces: [] };
+    const piece = { name: 'misspelt-piece', sketch: 'sketches/breach-cathedral-tower/sketch.ts', seed: 211, params: { sloganSzie: 2 } };
+    await expect(previewPiece(stack, piece, resolveOptions(stack).palette, {}, stack.out)).rejects.toThrow(/misspelt-piece has no control named sloganSzie/);
+  }, 30_000);
 });
 
 describe('finalize print title', () => {
