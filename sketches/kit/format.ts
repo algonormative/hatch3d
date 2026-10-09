@@ -1,6 +1,7 @@
 import type { FormatOptions, Page } from '../../src/sketch/types.ts';
 import { adoptRenderTarget, renderTarget, targetPage } from '../../src/sketch/render-target.ts';
 import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
+import { formatLoaded, preferredFit } from './format-preference.ts';
 
 /**
  * The format a Breach card is drawn at: its page and everything laid out from it (the card rect, the bands and
@@ -53,6 +54,8 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`. A title
  * (`titleEnabled`) is lettered in the art with the phrase, so where the phrase leaves the art (`band`, `none`) the
  * card carries no title; the band has no room for one.
+ * The fit: a card declares the one it prefers in `prefers.ts`, imported first by its `sketch.ts` (see
+ * `kit/format-preference.ts`); a render that names a fit overrides it.
  * Check the result against the card's tabloid print with the density probe: `denserThan` in `kit/density.ts`, or
  * `npm run -s density -- small/result.json --against tabloid/result.json`. The Fool is the worked example.
  */
@@ -199,8 +202,13 @@ export function formatFor(page: Page, options: FormatOptions = {}): Format {
 }
 
 const target = renderTarget();
-/** This process's format: from the render target, else tabloid. */
-export const FORMAT: Format = target.page || target.format ? formatFor(targetPage(TABLOID_PAGE, target.page), target.format) : TABLOID_FORMAT;
+const targeted = Boolean(target.page || target.format);
+// The render's own format options, with the card's preferred fit where they name none (see format-preference.ts).
+const named = target.format?.fit !== undefined, preferred = preferredFit();
+const options: FormatOptions = !named && preferred ? { ...target.format, fit: preferred } : target.format ?? {};
+/** This process's format: from the render target, in the card's preferred fit unless the render names one; else tabloid. */
+export const FORMAT: Format = targeted ? formatFor(targetPage(TABLOID_PAGE, target.page), options) : TABLOID_FORMAT;
+if (targeted) formatLoaded(FORMAT.fit, named);
 if (FORMAT !== TABLOID_FORMAT) adoptRenderTarget();
 
 export const PAGE: Page = FORMAT.page;

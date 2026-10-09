@@ -143,7 +143,8 @@ describe('Breach Tarot: XVI The Tower', () => {
 describe('Breach Tarot: XVI The Tower at 70 x 120 mm', () => {
   const page = { width: 70, height: 120 };
   const fits: Fit[] = ['height', 'width'];
-  const render = (fit: Fit) => renderSketch({ entry, seed: 2, finishing: { page }, ...(fit === 'width' ? { format: { fit } } : {}), timeoutMs: 120_000 });
+  // Each fit named: a card draws in its own preferred fit where the render names none.
+  const render = (fit: Fit) => renderSketch({ entry, seed: 2, finishing: { page }, format: { fit }, timeoutMs: 120_000 });
   const formatOf = (fit: Fit) => formatFor(targetPage(TABLOID_PAGE, page), { fit });
   const frameOf = (fit: Fit): Frame => { const f = formatOf(fit); return { card: f.card, horizonY: f.horizonY, s: f.s }; };
   const probe = (parts: readonly Part[], result: RenderResult) => densityProbe(parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });

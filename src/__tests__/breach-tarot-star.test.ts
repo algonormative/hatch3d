@@ -43,7 +43,8 @@ describe('Breach Tarot: XVII The Star', () => {
 describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
   const page = { width: 70, height: 120 };
   const fits: Fit[] = ['height', 'width'];
-  const render = (fit: Fit) => renderSketch({ entry, seed: 2, finishing: { page }, ...(fit === 'width' ? { format: { fit } } : {}), timeoutMs: 120_000 });
+  // Each fit named: a card draws in its own preferred fit where the render names none.
+  const render = (fit: Fit) => renderSketch({ entry, seed: 2, finishing: { page }, format: { fit }, timeoutMs: 120_000 });
   const formatOf = (fit: Fit) => formatFor(targetPage(TABLOID_PAGE, page), { fit });
   const points = (result: RenderResult, prefix: string) => result.parts.filter(part => part.id.startsWith(prefix)).flatMap(part => part.paths.flat());
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });

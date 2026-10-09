@@ -295,6 +295,42 @@ describe('Breach Tarot format', () => {
     }
   });
 
+  it('draws in a card’s preferred fit where the render names none, an explicit fit winning, and refuses it once the format has loaded', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
+    const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches/kit', path));
+    // A page-aware probe that prefers `width`, declared first, and draws a line as long as the format's scale.
+    await writeFile(join(dir, 'prefers.ts'), `import { preferFit } from ${kit('format-preference.ts')};\npreferFit('width');\n`);
+    const probe = (first: string, second: string) => `import ${first};\nimport ${second};
+      import { S } from ${kit('format.ts')};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [],
+        draw() { return [{ id: 'scale', pen: 'ink', paths: [[{ x: 10, y: 10 }, { x: 10 + 10 * S, y: 10 }]] }]; } };`;
+    await writeFile(join(dir, 'probe.ts'), probe(`'./prefers.ts'`, kit('format.ts')));
+    const finishing = { page: { width: 70, height: 120 } };
+    const scale = (r: Awaited<ReturnType<typeof renderSketch>>) => (r.parts[0].paths[0][1].x - 10) / 10;
+    const [preferred, height] = await Promise.all([
+      renderSketch({ entry: join(dir, 'probe.ts'), finishing }),
+      renderSketch({ entry: join(dir, 'probe.ts'), finishing, format: { fit: 'height' } }),
+    ]);
+    expect(scale(preferred)).toBeCloseTo(70 / 279.4, 3);
+    expect(scale(height)).toBeCloseTo(120 / 431.8, 3);
+    // Declared after the format has laid itself out, the preference would be ignored: the render fails instead.
+    await writeFile(join(dir, 'late.ts'), probe(kit('format.ts'), `'./prefers.ts'`));
+    await expect(renderSketch({ entry: join(dir, 'late.ts'), finishing })).rejects.toThrow(/prefers fit 'width', but the format had already loaded in fit 'height'/);
+    // A render that names its fit is drawn in it, however late the card declares its own.
+    expect(scale(await renderSketch({ entry: join(dir, 'late.ts'), finishing, format: { fit: 'height' } }))).toBeCloseTo(120 / 431.8, 3);
+    // The pilot cards: the Fool and the Tower keep their whole width, the Star its vertical framing.
+    const cards: [string, number, 'width' | 'height'][] = [['0-fool', 1, 'width'], ['xvi-tower', 2, 'width'], ['xvii-star', 2, 'height']];
+    for (const [card, seed, fit] of cards) {
+      const entry = resolve(import.meta.dirname, `../../sketches/breach-tarot/${card}/sketch.ts`);
+      const [plain, named] = await Promise.all([
+        renderSketch({ entry, seed, finishing, timeoutMs: 120_000 }),
+        renderSketch({ entry, seed, finishing, format: { fit }, timeoutMs: 120_000 }),
+      ]);
+      expect(plain.parts, card).toEqual(named.parts);
+    }
+  });
+
   it('takes the pen floor from a pen option on a tabloid page too, and leaves the preset alone', async () => {
     dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
     const entry = join(dir, 'probe.ts');
