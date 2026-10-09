@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, depthRaster, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
-import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, depthRaster, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
+import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { alongRay, helixStrands, narrowStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
 import { glyphMask, groundWord, planSloganAttempts, sloganSettings, type SloganSurface } from '../../kit/lettering.ts';
 import { circlePath } from '../../kit/fills.ts';
@@ -36,6 +36,8 @@ const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.4;
 const SUN_DIST = 150;
+/** The print's ring pitch on the wall's dark faces, in millimetres on paper (0.075 world units at 8.65 mm to the unit). */
+const WALL_RULE_MM = 0.65;
 
 export function sunCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
@@ -207,7 +209,19 @@ export function drawSun(ctx: SketchContext): Part[] {
   // outline is trimmed (kit/slabs.ts' `SlabTrim`): the rays' thin steps and the coping's edge would double their outlines.
   s.rays.forEach((r, i) => strokes.push(...facetStrokes(r, new THREE.Vector3(0.2, 0.3, 1).normalize(), view.position, false, undefined, { view })
     .map(st => ({ ...st, group: 'rays', owner: 1000 + i }))));
-  w.slabs.forEach((sl, owner) => strokes.push(...facetStrokes(sl, back, view.position, false, undefined, { view }).map(st => ({ ...st, group: 'wall', owner }))));
+  // A course of the wall is two or three millimetres tall on a small card, where the hatch fits one ring and leaves the face
+  // paper, and the backlit wall would print light: there its dark faces are ruled (`ruledFaces`) at the print's ring pitch
+  // on paper, in place of their rings and hatch.
+  const mmPerUnit = (sl: Slab) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2)) / -sl.z;
+  w.slabs.forEach((sl, owner) => {
+    let made = facetStrokes(sl, back, view.position, false, undefined, { view });
+    const ruled = FORMAT.tabloid ? [] : ruledFaces(sl, back, view, tolerance(WALL_RULE_MM) / mmPerUnit(sl));
+    if (ruled.length) {
+      const faces = new Set(ruled.map(st => st.face));
+      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
+    }
+    strokes.push(...made.map(st => ({ ...st, group: 'wall', owner })));
+  });
   // The waves, turned onto their rays. On a small card a ribbon narrower than the smallest feature is drawn by its line
   // (`narrowStrands`), in the violet its laminations give it on the print. That line is the helix seen side on, a wave,
   // and keeps every point: the buckets' reducer, a 1.4 mm stride, turned its swing into corners.

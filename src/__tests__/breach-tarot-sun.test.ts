@@ -174,7 +174,7 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
     }
   }, 120_000);
 
-  it('still reads as the Sun: the disc in its place in the sky and its size against the card, blown out, the rays straight and wavy by turns round it, fine rays out to the frame, the wall on the horizon showing it only through the breach, and its shadow parted by the shaft', async () => {
+  it('still reads as the Sun: the disc in its place in the sky and its size against the card, blown out, the rays straight and wavy by turns round it, fine rays out to the frame, the dark wall on the horizon showing it only through the breach, and its shadow parted by the shaft', async () => {
     for (const fit of fits) {
       const result = await rendered(fit);
       const { card, horizonY, s } = formatOf(fit);
@@ -221,6 +221,9 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
       expect(Math.max(...wall.map(p => p.y)), fit).toBeGreaterThan(horizonY + 1);
       expect(Math.min(...wall.map(p => p.x)), fit).toBeLessThan(card.x0 + 0.01);
       expect(Math.max(...wall.map(p => p.x)), fit).toBeGreaterThan(card.x1 - 0.01);
+      // Backlit, its courses' dark faces are ruled along their length, carbon and ultramarine by turns, where the print's
+      // rings and crossed hatch would leave a course of a few millimetres one ring and paper.
+      expect(all(result, 'wall-ultramarine').length, fit).toBeGreaterThan(10);
       const horizon = all(result, 'horizon-');
       expect(horizon.length, fit).toBe(1);
       const h0 = Math.min(...horizon[0].map(p => p.x)), h1 = Math.max(...horizon[0].map(p => p.x));
@@ -323,8 +326,8 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
       expect(report.share).toBeLessThan(master.share);
       const share = (id: string) => report.parts.find(part => part.id === id)!.share;
       // The slabs are trimmed on a small card (kit/slabs.ts' `SlabTrim`): untrimmed, the coping's thin edge and the rays' thin
-      // steps doubled their outlines (the wall's crowded share near the print's 55%, the rays' over 60%).
-      expect(share('wall-carbon'), `${fit} ${describeDensity(report)}`).toBeLessThan(0.45);
+      // steps doubled their outlines (the wall's crowded share over 60%, the rays' too).
+      expect(share('wall-carbon'), `${fit} ${describeDensity(report)}`).toBeLessThan(0.55);
       expect(share('rays-carbon'), `${fit} ${describeDensity(report)}`).toBeLessThan(0.45);
       // A crack narrower than the pens hold apart is drawn once, and the shallowest plates are left out: drawn as on the
       // print, three fifths of the desert ran too close.
