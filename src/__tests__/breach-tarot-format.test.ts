@@ -185,7 +185,7 @@ describe('Breach Tarot format', () => {
     expect(end(width).y).toBeCloseTo(20, 3);
   });
 
-  it('scales density counts with the card, and sets the phrase in the band under the name, a shallow band too', async () => {
+  it('scales density counts with the card, and sets the phrase in the band under the name, a shallow band too, none on a card too small', async () => {
     dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
     const entry = join(dir, 'probe.ts');
     const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches', path));
@@ -205,24 +205,40 @@ describe('Breach Tarot format', () => {
     expect(counts.x).toBeLessThan(10);
     expect(counts.y).toBeCloseTo(Math.round(1000 * f.s) / 10, 2);
     // The band, from the second rule to the card's edge: the name, then the phrase, apart and inside it.
+    // The band, from the second rule to the card's edge: the name, then the phrase, apart and inside it, with the
+    // frame's 0.2 mm of paper above the name and below the phrase's descenders.
+    const clear = 0.2 - 0.005;
     const band = (r: typeof result, g: typeof f, low: number, high: number) => {
       const phrase = r.parts.find(part => part.id === 'card-phrase')!;
       expect(phrase.pen).toBe('lettering');
       const points = phrase.paths.flat(), ys = points.map(p => p.y), xs = points.map(p => p.x);
-      expect(Math.min(...ys)).toBeGreaterThan(g.card.y1 + g.frame.rule);
-      expect(Math.max(...ys)).toBeLessThan(g.card.bottom);
+      expect(Math.max(...ys)).toBeLessThanOrEqual(g.card.bottom - clear);
       // Ascenders to descenders are 11/8 of the cap height.
       expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(low * 11 / 8);
       expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(high * 11 / 8);
       expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(g.page.width / 2, 0);
       const name = r.parts.find(part => part.id === 'card-frame')!.paths.slice(4).flat().filter(p => p.y > g.card.y1);
-      expect(Math.min(...name.map(p => p.y))).toBeGreaterThan(g.card.y1 + g.frame.rule + 0.1);
+      expect(Math.min(...name.map(p => p.y))).toBeGreaterThanOrEqual(g.card.y1 + g.frame.rule + clear);
       expect(Math.max(...name.map(p => p.y))).toBeLessThan(Math.min(...ys));
     };
     band(result, f, 1.55, 1.65);
     // A card wider than tabloid's proportions has a shallower band: both lines closer, then smaller, still inside it.
     const poker = { width: 63.5, height: 88.9 };
     band(await renderSketch({ entry, finishing: { page: poker } }), formatFor(targetPage(TABLOID_PAGE, poker)), 1.3, 1.6);
+    // On cards too small to letter, the phrase goes, then the name and numeral; whatever is set stays inside the card.
+    for (const tiny of [{ width: 30, height: 40 }, { width: 20, height: 30 }, { width: 10, height: 20 }]) {
+      const r = await renderSketch({ entry, finishing: { page: tiny } });
+      const g = formatFor(targetPage(TABLOID_PAGE, tiny));
+      expect(r.parts.find(part => part.id === 'card-phrase'), `${tiny.width} x ${tiny.height}`).toBeUndefined();
+      // The four rules, and any lettering clear of them and of the card's edge.
+      const frame = r.parts.find(part => part.id === 'card-frame')!;
+      expect(frame.paths.length).toBeGreaterThanOrEqual(4);
+      for (const p of frame.paths.slice(4).flat()) {
+        const above = p.y < g.card.y0;
+        expect(p.y).toBeGreaterThanOrEqual((above ? g.card.top : g.card.y1 + g.frame.rule) + clear);
+        expect(p.y).toBeLessThanOrEqual((above ? g.card.y0 - g.frame.rule : g.card.bottom) - clear);
+      }
+    }
   });
 
   it('renders the Tower, with its double-resolution machine pass, on a 12 x 18 in page', async () => {

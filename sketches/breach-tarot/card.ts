@@ -1,7 +1,7 @@
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeText, type StrokeFace } from '../../src/sketch/stroke-text.ts';
 import { clipToRect, type Rect } from '../kit/page.ts';
-import { CARD, FRAME, PHRASE } from '../kit/format.ts';
+import { CARD, FRAME, LEGIBLE_MM, PHRASE } from '../kit/format.ts';
 
 /**
  * The Breach Tarot card. A numeral band at the top and a name band at the bottom, both in the Breach
@@ -35,27 +35,35 @@ export interface FrameOptions {
 const PHRASE_INSET = 0.06;
 /** Paper kept above the name and below the phrase's descenders, in millimetres. */
 const BAND_CLEAR = 0.2;
+/** The smallest the frame sets its lettering in a band too shallow for it; anything smaller is left out. */
+const MIN_LETTER = 0.75 * LEGIBLE_MM;
+/** Lettering `height` tall in a band with `room` for it: as it is, else as tall as the room, else none (0). */
+const fitted = (height: number, room: number): number => height <= room ? height : room >= MIN_LETTER ? room : 0;
 
 /**
  * Numeral above, name below, each between a pair of fine rules. When the format puts the phrase in the band
  * (`PHRASE` is `band`) and the card passes one, the name moves up and the phrase is set once beneath it, centred,
  * in the lettering pen at `FRAME.phraseHeight`, as its own part (`card-phrase`). A phrase too long for the card at
  * that height is tracked tighter, then set smaller to fit; a band too shallow for both lines sets them closer, then
- * smaller.
+ * smaller. Every line keeps `BAND_CLEAR` of paper from the rules and the card's edge; on a card so small that a line
+ * would be set under `MIN_LETTER`, the phrase is left out, then the name or numeral.
  */
 export function cardFrame(numeral: string, name: string, options: FrameOptions = {}): Part[] {
   const pen = options.pen ?? 'carbon';
   const { rule: gap, numeral: above, name: below, phraseHeight } = FRAME;
   const rule = (y: number): Point[] => [{ x: CARD.x0, y }, { x: CARD.x1, y }];
-  const paths: Point[][] = [
-    rule(CARD.y0), rule(CARD.y0 - gap), rule(CARD.y1), rule(CARD.y1 + gap),
-    ...centred(numeral, (CARD.top + CARD.y0 - gap) / 2, above.height, above.tracking),
-  ];
-  const phrase = PHRASE === 'band' && options.phrase && options.phrase.count !== 0 ? options.phrase.text.trim() : '';
-  if (!phrase) {
-    paths.push(...centred(name, (CARD.y1 + gap + CARD.bottom) / 2, below.height, below.tracking));
+  const paths: Point[][] = [rule(CARD.y0), rule(CARD.y0 - gap), rule(CARD.y1), rule(CARD.y1 + gap)];
+  const numeralHeight = fitted(above.height, CARD.y0 - gap - CARD.top - 2 * BAND_CLEAR);
+  if (numeralHeight) paths.push(...centred(numeral, (CARD.top + CARD.y0 - gap) / 2, numeralHeight, above.tracking));
+  // The bottom band's depth for lettering, from the second rule to the card's edge, less the paper either side.
+  const depth = CARD.bottom - (CARD.y1 + gap) - 2 * BAND_CLEAR;
+  const nameAlone = (): Part[] => {
+    const height = fitted(below.height, depth);
+    if (height) paths.push(...centred(name, (CARD.y1 + gap + CARD.bottom) / 2, height, below.tracking));
     return [{ id: 'card-frame', pen, paths }];
-  }
+  };
+  const phrase = PHRASE === 'band' && options.phrase && options.phrase.count !== 0 ? options.phrase.text.trim() : '';
+  if (!phrase) return nameAlone();
   // The phrase's style: the face's own tracking, tightened, then the height reduced, until it fits the card.
   const room = (CARD.x1 - CARD.x0) * (1 - 2 * PHRASE_INSET);
   const face = options.phrase!.face ?? 'cathedral';
@@ -67,20 +75,20 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
     style = width > room ? { ...tight, height: phraseHeight * room / width } : tight;
   }
   // Name above, phrase below; the pair, from the name's cap line to the phrase's descenders (3/8 of its height),
-  // centred in the band with a little paper above and below. A band too shallow for both (a card wider than
-  // tabloid's proportions) closes the lead, then sets both smaller.
-  const depth = CARD.bottom - (CARD.y1 + gap) - 2 * BAND_CLEAR;
+  // centred in the band. A band too shallow for both (a card wider than tabloid's proportions) closes the lead,
+  // then sets both smaller, down to `MIN_LETTER`.
   let nameHeight = below.height, lead = 0.5 * style.height;
   const block = () => nameHeight + lead + style.height * 11 / 8;
   if (block() > depth) lead = 0.25 * style.height;
   if (block() > depth) {
-    const k = depth / block();
+    const k = Math.max(0, depth) / block();
     nameHeight *= k; lead *= k; style = { ...style, height: style.height * k };
   }
+  if (Math.min(nameHeight, style.height) < MIN_LETTER) return nameAlone();
   const top = (CARD.y1 + gap + CARD.bottom) / 2 - block() / 2;
   paths.push(...centred(name, top + nameHeight / 2, nameHeight, below.tracking));
   const width = measureStrokeText(phrase, style);
-  const set = strokeText(phrase, (CARD.x0 + CARD.x1) / 2 - width / 2, top + below.height + lead, style);
+  const set = strokeText(phrase, (CARD.x0 + CARD.x1) / 2 - width / 2, top + nameHeight + lead, style);
   return [{ id: 'card-frame', pen, paths }, { id: 'card-phrase', pen: options.phrase!.pen ?? 'lettering', paths: set }];
 }
 
