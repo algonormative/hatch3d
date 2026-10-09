@@ -268,6 +268,15 @@ export const TABLOID_RASTER = { width: 1118, height: 1728 } as const;
 /** This process's depth raster for a card whose tabloid raster is `tabloidW × tabloidH` (see `rasterFor`). */
 export const depthRaster = (tabloidW: number, tabloidH: number, oversample = 1): Raster => rasterFor(FORMAT, tabloidW, tabloidH, oversample);
 
+/**
+ * How many times finer each way than the card's raster a hidden-line test must run to see the world as finely as the
+ * print's does: 1 at tabloid, else `1 / s` rounded up (4 at 70 × 120 in both fits). On a small card a pixel of the card's
+ * own raster spans several times the world a tabloid pixel does, so slabs a fraction of a unit thick, thin ribbons and a
+ * few millimetres of figure fray against it. Build the raster with room for it, `depthRaster(w, h, printFine())`, and test
+ * with `fineDepth(geometries, view, raster, printFine())` (`oversampledView` for a copy of the camera to fit).
+ */
+export const printFine = (format: Format = FORMAT): number => format.tabloid ? 1 : Math.ceil(format.pitchScale);
+
 const identity = FORMAT.tabloid;
 const TABLOID_CENTRE_X = TABLOID_PAGE.width / 2;
 /** Tabloid's horizon, in tabloid page millimetres: the line `layoutY` measures from. */

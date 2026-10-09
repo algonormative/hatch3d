@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
@@ -40,7 +40,7 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * world. The slabs are under half a unit thick and the helix rides a third of a unit over the paving, so on a small card
  * a 0.25 mm pixel spans a slab's side, and the depth test frays outlines and eats the lane's stripes.
  */
-const FINE = FORMAT.tabloid ? 1 : Math.max(1, Math.ceil(PITCH_SCALE));
+const FINE = printFine();
 const { W, H } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const PW = PAGE.width;
 const MM_X = PW / W, MM_Y = PAGE.height / H;
