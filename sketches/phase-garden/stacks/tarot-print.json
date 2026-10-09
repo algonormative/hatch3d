@@ -22,5 +22,6 @@
     { "name": "0-fool", "title": "Breach Tarot: 0 The Fool, print", "sketch": "sketches/breach-tarot/0-fool/sketch.ts", "seed": 1 },
     { "name": "xvi-tower", "title": "Breach Tarot: XVI The Tower, print", "sketch": "sketches/breach-tarot/xvi-tower/sketch.ts", "seed": 2 },
     { "name": "xvii-star", "title": "Breach Tarot: XVII The Star, print", "sketch": "sketches/breach-tarot/xvii-star/sketch.ts", "seed": 2 }
-  ]
+  ],
+  "back": { "sketch": "sketches/breach-tarot/back/sketch.ts", "seed": 1 }
 }

@@ -5,10 +5,11 @@
  *   npm run print-export -- [stack.json] [--profile mpc] [--only 0-fool,xvi-tower,chart] [--no-chart] [--out dir]
  *       [--carbon 0.35] [--colour 0.42] [--lettering 0.26] [--gap 0.25] [--min-run 0.5]
  *       [--texture 0.04] [--grain 0.5] [--ink] [--ink-jitter 0.08] [--ink-blob 1.6] [--seed 1]
- *       [--back image.png] [--supersample 4]
+ *       [--back image.png | --back-form helix|labyrinth|field | --no-back] [--supersample 4]
  *
  * The stack (default `sketches/phase-garden/stacks/tarot-print.json`) sets the page to the trim and the border and
- * margin that keep the art in the safe zone. Each card then goes through small steps that a later profile can reuse:
+ * margin that keep the art in the safe zone. Its `back` (a sketch and seed, optional `params`) is the card back, drawn
+ * through the same steps as a face. Each card then goes through small steps that a later profile can reuse:
  *
  *   1. render      the card at the trim size through the stack's finishing        (`previewPiece`, cli/finalize.ts)
  *   2. layout      read the pen layers; check the art stays `safeMm` inside the trim    (`layoutCard`)
@@ -21,8 +22,8 @@
  *   9. encode      8-bit sRGB PNG with its dpi
  *
  * Output: `.sketch-output/print/<profile>/NN-<card>.front.png` (NN is the deck order), `22-test-chart.front.png`,
- * `back.png` when `--back` gives one, and `manifest.json`. The thickened vectors are kept in `_work/` for a vector
- * profile to pick up.
+ * `back.png` (the stack's `back`, or `--back`; `--no-back` skips it), and `manifest.json`. The thickened vectors are
+ * kept in `_work/` for a vector profile to pick up.
  *
  * A CMYK profile (DriveThruCards, PrintNinja, Ivory) needs, that this machine lacks: an ICC engine (lcms2, or
  * ImageMagick/Ghostscript, none installed) and the printer's profile (GRACoL 2006 for US, FOGRA39 for Europe); a
@@ -41,6 +42,7 @@ import { INK_DEFAULTS, inkCharacter, type InkOptions } from './print-export/ink.
 import { compositeDownsample, encodePng, hexRgb, pngInfo, rasterizeSvg, readRgb, tintCanvas, type Grain } from './print-export/raster.ts';
 import { canvasSvg, layersSvg, parseLayers, strokeBounds, svgPageMm, type Bounds, type PenLayer } from './print-export/svg.ts';
 import { PEN_CLASSES, thickenLayers, type PenClass, type ThickenReport } from './print-export/thicken.ts';
+import { BACK_FORMS } from '../sketches/breach-tarot/back/geometry.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_STACK = 'sketches/phase-garden/stacks/tarot-print.json';
@@ -287,6 +289,31 @@ export function printBack(path: string, profile: PrintProfile, options: PrintOpt
   return { file: fileEntry(profile, options, 'back.png', 'back', png), png, svg: '' };
 }
 
+/** The stack's `back`: a sketch and its seed, with optional params; its `form` control picks one of the back's forms. */
+export interface BackEntry { sketch: string; seed: number; params?: Record<string, unknown> }
+/** The stack as this tool reads it: `back`, when present, is the card back drawn at the trim like a face. */
+export interface PrintStack extends Stack { back?: BackEntry }
+
+/**
+ * The back's piece, with `--back-form` as its `form` when given. The sketch draws the helix for a form it does not
+ * know, so a misspelt one is refused here rather than printed.
+ */
+function backPiece(back: BackEntry, form?: string): Piece {
+  const params = form === undefined ? back.params : { ...back.params, form };
+  const named = params?.form;
+  if (named !== undefined && !(BACK_FORMS as readonly unknown[]).includes(named)) {
+    throw new Error(`print-export: the back's form ${JSON.stringify(named)} is not one of ${BACK_FORMS.join(', ')}`);
+  }
+  return { name: 'back', sketch: back.sketch, seed: back.seed, params };
+}
+
+/** The stack's back: its sketch rendered at the trim through the stack's finishing, then `printSvg`, as a face is. */
+async function printStackBack(stack: Stack, piece: Piece, palette: Palette, profile: PrintProfile, options: PrintOptions, workDir: string): Promise<CardResult> {
+  const printed = printSvg(await previewPiece(stack, piece, palette, {}, join(workDir, slug(piece.name))), profile, options);
+  const file = fileEntry(profile, options, 'back.png', 'back', printed.png, { seed: piece.seed, artInsideSafeZone: printed.layout.safeOk });
+  return { file, png: printed.png, svg: vectorMaster(printed.layers, profile) };
+}
+
 export interface Manifest {
   schema: 1;
   profile: string;
@@ -301,8 +328,8 @@ export interface Manifest {
   files: PrintedFile[];
 }
 
-function loadStack(path: string): Stack {
-  const stack = JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')) as Stack;
+function loadStack(path: string): PrintStack {
+  const stack = JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')) as PrintStack;
   if (!Array.isArray(stack.pieces) || !stack.pieces.length) throw new Error('print-export: the stack needs pieces');
   return stack;
 }
@@ -325,7 +352,12 @@ export interface RunOptions {
   options: PrintOptions;
   only?: string[];
   chart: boolean;
+  /** A back image that replaces the stack's back. */
   back?: string;
+  /** Skip the stack's back. */
+  noBack?: boolean;
+  /** This run's `form` for the stack's back: helix, labyrinth or field. */
+  backForm?: string;
   out?: string;
 }
 
@@ -333,6 +365,12 @@ export interface RunOptions {
 export async function run(r: RunOptions, log: (line: string) => void = () => {}): Promise<Manifest> {
   const stack = loadStack(r.stackPath);
   checkStack(stack, r.profile, r.options);
+  if (r.back && r.noBack) throw new Error('print-export: --back and --no-back both given: pick one');
+  if (r.backForm !== undefined && (r.back || r.noBack || !stack.back)) {
+    throw new Error("print-export: --back-form sets the stack's back, so it needs a back in the stack and no --back or --no-back");
+  }
+  // The back is checked before any card renders, so a bad form fails at once.
+  const back = stack.back && !r.back && !r.noBack ? backPiece(stack.back, r.backForm) : undefined;
   const palette = resolveOptions(stack).palette;
   const out = resolve(ROOT, r.out ?? join('.sketch-output', 'print', r.profile.id));
   const workDir = join(out, '_work');
@@ -348,6 +386,7 @@ export async function run(r: RunOptions, log: (line: string) => void = () => {})
   for (const piece of stack.pieces.filter(p => wanted(p.name))) save(await printCard(stack, piece, palette, r.profile, r.options, workDir));
   if (r.chart && (!r.only || r.only.includes('chart'))) save(printChart(palette, r.profile, r.options));
   if (r.back) save(printBack(r.back, r.profile, r.options));
+  else if (back) save(await printStackBack(stack, back, palette, r.profile, r.options, workDir));
 
   // A run of a few cards keeps the files the earlier runs made.
   const manifestPath = join(out, 'manifest.json');
@@ -372,7 +411,8 @@ function main(argv: string[]): Promise<void> {
   const { values: a, positionals } = parseArgs({
     args: argv, allowPositionals: true,
     options: {
-      profile: { type: 'string' }, only: { type: 'string' }, out: { type: 'string' }, 'no-chart': { type: 'boolean', default: false }, back: { type: 'string' },
+      profile: { type: 'string' }, only: { type: 'string' }, out: { type: 'string' }, 'no-chart': { type: 'boolean', default: false },
+      back: { type: 'string' }, 'back-form': { type: 'string' }, 'no-back': { type: 'boolean', default: false },
       carbon: { type: 'string' }, colour: { type: 'string' }, lettering: { type: 'string' }, gap: { type: 'string' }, 'min-run': { type: 'string' }, supersample: { type: 'string' },
       texture: { type: 'string' }, grain: { type: 'string' }, seed: { type: 'string' },
       ink: { type: 'boolean', default: false }, 'ink-jitter': { type: 'string' }, 'ink-blob': { type: 'string' },
@@ -384,11 +424,13 @@ function main(argv: string[]): Promise<void> {
 
 Usage: npm run print-export -- [stack.json] [--profile mpc] [--only 0-fool,xvi-tower,chart] [--no-chart] [--out dir]
          [--carbon 0.35] [--colour 0.42] [--lettering 0.26] [--gap 0.25] [--min-run 0.5] [--supersample 4]
-         [--texture 0.04] [--grain 0.5] [--ink] [--ink-jitter 0.08] [--ink-blob 1.6] [--seed 1] [--back image.png]
+         [--texture 0.04] [--grain 0.5] [--ink] [--ink-jitter 0.08] [--ink-blob 1.6] [--seed 1]
+         [--back image.png | --back-form helix|labyrinth|field | --no-back]
 
-Writes .sketch-output/print/<profile>/NN-<card>.front.png, 22-test-chart.front.png and manifest.json.
---texture is paper grain on the tint only, as a tone fraction (0.04 is 4%); off by default. --ink adds ink character
-to the lines; off by default.`);
+Writes .sketch-output/print/<profile>/NN-<card>.front.png, 22-test-chart.front.png, back.png and manifest.json.
+back.png is the stack's back (its sketch at the trim), or the image --back gives; --no-back skips it, and --back-form
+sets its form for this run. --texture is paper grain on the tint only, as a tone fraction (0.04 is 4%); off by
+default. --ink adds ink character to the lines; off by default.`);
     return Promise.resolve();
   }
   const profile = PROFILES[a.profile ?? 'mpc'];
@@ -409,7 +451,7 @@ to the lines; off by default.`);
     grain: { seed, grainMm: num('grain', a.grain, 0.1, 5) ?? 0.5, strength }, ink,
   });
   return run({
-    stackPath: positionals[0] ?? DEFAULT_STACK, profile, options, chart: !a['no-chart'], back: a.back, out: a.out,
+    stackPath: positionals[0] ?? DEFAULT_STACK, profile, options, chart: !a['no-chart'], back: a.back, noBack: a['no-back'], backForm: a['back-form'], out: a.out,
     only: a.only?.split(',').map(s => slug(s.trim())).filter(Boolean),
   }, console.log).then(() => undefined);
 }

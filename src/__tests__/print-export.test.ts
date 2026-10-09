@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveOptions } from '../../cli/finalize.ts';
-import { MPC, checkStack, deckEntry, geometry, layoutCard, printBack, printCard, printChart, printOptions, printSvg, type PrintOptions } from '../../cli/print-export.ts';
+import { MPC, checkStack, deckEntry, geometry, layoutCard, printBack, printCard, printChart, printOptions, printSvg, run, type PrintOptions, type RunOptions } from '../../cli/print-export.ts';
 import { encodePng, hexRgb, pngInfo, readRgb, type RGB } from '../../cli/print-export/raster.ts';
 import { parseLayers } from '../../cli/print-export/svg.ts';
 import { thickenLayers, unguardedPairs } from '../../cli/print-export/thicken.ts';
@@ -212,4 +212,44 @@ describe('print export: the print stack and a real card', () => {
     const { width, height, rgb } = readRgb(card.png);
     expect(inkInBand(rgb, width, height, safeBand())).toBe(0);
   }, 240_000);
+});
+
+describe('print export: the stack back', () => {
+  const stackPath = resolve('sketches/phase-garden/stacks/tarot-print.json');
+  /** A run that draws only the back: `only: []` leaves out every card, and the back is drawn either way. */
+  const backRun = async (o: Partial<RunOptions> = {}) => {
+    const out = mkdtempSync(join(tmpdir(), 'print-export-back-'));
+    const manifest = await run({ stackPath, profile: MPC, options: options(), only: [], chart: false, out, ...o });
+    return { manifest, out };
+  };
+
+  it('draws the stack back at the canvas size, tinted at every edge, and lists it in the manifest', async () => {
+    const { manifest, out } = await backRun();
+    expect(manifest.files.map(f => f.file)).toEqual(['back.png']);
+    expect(manifest.files[0]).toMatchObject({ kind: 'back', seed: 1, widthPx: 897, heightPx: 1497, ppi: 300, artInsideSafeZone: true });
+    const png = readFileSync(join(out, 'back.png'));
+    expect(pngInfo(png)).toEqual({ width: 897, height: 1497, colorType: 2, ppi: 300, srgb: true });
+    const { width: w, height: h, rgb } = readRgb(png);
+    for (let x = 0; x < w; x++) { expect(isTint(rgb, x)).toBe(true); expect(isTint(rgb, (h - 1) * w + x)).toBe(true); }
+    for (let y = 0; y < h; y++) { expect(isTint(rgb, y * w)).toBe(true); expect(isTint(rgb, y * w + w - 1)).toBe(true); }
+    expect(inkInBand(rgb, w, h, safeBand())).toBe(0);
+  }, 120_000);
+
+  it('draws the labyrinth for --back-form labyrinth, not the helix the stack gives by default, and refuses a form it does not know', async () => {
+    const helix = (await backRun()).manifest.files[0].sha256;
+    expect((await backRun({ backForm: 'helix' })).manifest.files[0].sha256).toBe(helix);
+    expect((await backRun({ backForm: 'labyrinth' })).manifest.files[0].sha256).not.toBe(helix);
+    await expect(backRun({ backForm: 'labyrinh' })).rejects.toThrow(/labyrinh/);
+  }, 120_000);
+
+  it('prints an explicit --back image in place of the stack back', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'print-export-'));
+    const explicit = join(dir, 'explicit.png');
+    writeFileSync(explicit, encodePng(new Uint8Array(897 * 1497 * 3).fill(200), 897, 1497, 72));
+    const { manifest, out } = await backRun({ back: explicit });
+    expect(manifest.files[0]).toMatchObject({ file: 'back.png', kind: 'back' });
+    expect(manifest.files[0].seed).toBeUndefined();
+    const { rgb } = readRgb(readFileSync(join(out, 'back.png')));
+    expect(rgb.filter(v => v !== 200).length).toBe(0);
+  }, 120_000);
 });
