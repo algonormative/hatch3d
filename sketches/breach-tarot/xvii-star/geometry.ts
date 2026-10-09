@@ -188,6 +188,12 @@ export function slabEdges(s: Slab, view: THREE.Camera, hidden = true): THREE.Vec
   return edges;
 }
 
+/**
+ * The shortest piece of a stroke the sky keeps, in millimetres: what a face's hatch leaves shorter than the smallest
+ * feature is a speck, not shading, and is dropped (nothing at tabloid); other strokes keep the buckets' own minimum.
+ */
+export const shortestKept = (family: Stroke['family']): number | undefined => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
+
 /** Two helix streams pour from below the star down into the water. */
 function streams(ctx: SketchContext, centre: THREE.Vector3): Strand[] {
   const spread = 2.2 + 2 * n(ctx, 'streams', 0.5, 0, 1);
@@ -315,8 +321,7 @@ export function drawStar(ctx: SketchContext): Part[] {
       begin: stroke => {
         const text = stroke.family === 'text';
         const key = `${stroke.group}-${stroke.ink}`;
-        // What a face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped (none at tabloid).
-        const min = stroke.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
+        const min = shortestKept(stroke.family);
         return runs => {
           for (const run of runs) {
             for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y), { ...CARD, y1: HORIZON_Y - halo(0.5) })) add(key, inside, text, min);

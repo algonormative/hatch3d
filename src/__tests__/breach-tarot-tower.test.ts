@@ -197,6 +197,12 @@ describe('Breach Tarot: XVI The Tower at 70 x 120 mm', () => {
       // Its branches thinned, it still forks out over the sky, not one channel's strip: it reaches 40% of the
       // print's cells (its main channel alone, a third).
       expect(boltReach(small[k].parts, s)).toBeGreaterThan(0.4 * printReach);
+      // ...but thinned: under two thirds of the print's reach (with every branch kept it covers three quarters or more).
+      expect(boltReach(small[k].parts, s)).toBeLessThan(0.65 * printReach);
+      // The rain is thinned in proportion to the scale: about a quarter of the print's drops, not all that fall on the card.
+      const drops = (parts: Parts) => parts.filter(part => part.id.startsWith('storm-')).reduce((n, part) => n + part.paths.length, 0);
+      expect(drops(small[k].parts)).toBeLessThan(0.5 * drops(print.parts));
+      expect(drops(small[k].parts)).toBeGreaterThan(0.1 * drops(print.parts));
     }
   }, 120_000);
 

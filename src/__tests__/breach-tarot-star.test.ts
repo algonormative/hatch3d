@@ -81,7 +81,7 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
     const probeEntry = join(dir, 'probe.ts');
     // A page-aware probe: each of the sky's solids as a short path that encodes its world centre, from (42 + x, 20 + y)
     // to (43 + x, 110 + z), inside the margin of either page; and the debris the format draws.
-    await writeFile(probeEntry, `import { shownDebris, sky, starCamera } from ${JSON.stringify(resolve('sketches/breach-tarot/xvii-star/geometry.ts'))};
+    await writeFile(probeEntry, `import { shortestKept, shownDebris, sky, starCamera } from ${JSON.stringify(resolve('sketches/breach-tarot/xvii-star/geometry.ts'))};
       const at = s => [{ x: 42 + s.x, y: 20 + s.y }, { x: 43 + s.x, y: 110 + s.z }];
       export default { name: 'star-sky', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
         pens: [{ id: 'ink', color: '#111111', width: 0.25 }],
@@ -89,7 +89,8 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
         draw(ctx) {
           const view = starCamera(ctx), s = sky(ctx, view);
           return [{ id: 'star', pen: 'ink', paths: s.star.map(at) }, { id: 'words', pen: 'ink', paths: s.words.map(at) },
-            { id: 'debris', pen: 'ink', paths: s.debris.map(at) }, { id: 'shown', pen: 'ink', paths: shownDebris(s.debris, view).map(at) }];
+            { id: 'debris', pen: 'ink', paths: s.debris.map(at) }, { id: 'shown', pen: 'ink', paths: shownDebris(s.debris, view).map(at) },
+            { id: 'speck', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 21, y: 20 + 10 * (shortestKept('hatch') ?? 0) }]] }];
         } };`);
     const solids = (result: RenderResult, id: string) => result.parts.find(part => part.id === id)?.paths ?? [];
     const a5 = { width: 148, height: 210 };
@@ -100,6 +101,10 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
       ...fits.map(fit => renderSketch({ entry: probeEntry, seed: 2, finishing: { page }, ...(fit === 'width' ? { format: { fit } } : {}) })),
     ]);
     expect(solids(print, 'debris').length).toBeGreaterThan(40);
+    // The print keeps every scrap of hatch; a small card drops what is shorter than the smallest feature (1 mm).
+    const speck = (result: RenderResult) => solids(result, 'speck')[0].at(-1)!.y - 20;
+    expect(speck(print)).toBe(0);
+    for (const result of small) expect(speck(result)).toBeCloseTo(10, 3);
     expect(solids(print, 'shown')).toEqual(solids(print, 'debris'));
     const near = (a: Point[], b: Point[]) => a.every((p, i) => Math.abs(p.x - b[i].x) < 0.01 && Math.abs(p.y - b[i].y) < 0.01);
     for (const result of small) {
@@ -180,6 +185,11 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
       const water = [...points(result, 'water-'), ...points(result, 'glitter-')];
       expect(Math.min(...water.map(p => p.y))).toBeGreaterThan(horizonY);
       const sparkle = points(result, 'glitter-acid');
+      // Sparkle in proportion: fewer rows, each holding as many dashes as its narrower path does (the print's count
+      // scaled twice, about S squared), not the print's count on every row.
+      const dashes = (r: RenderResult) => r.parts.filter(part => part.id === 'glitter-acid').reduce((n, part) => n + part.paths.length, 0);
+      expect(dashes(result)).toBeLessThan(0.15 * dashes(print));
+      expect(dashes(result)).toBeGreaterThan(0.03 * dashes(print));
       expect(Math.abs(sparkle.reduce((sum, p) => sum + p.x, 0) / sparkle.length - (star.x0 + star.x1) / 2)).toBeLessThan(1.5);
       // It parts every row, and widens toward the viewer as the print's does: in tabloid's millimetres, its mean width in
       // the near and the far half of the water is within a quarter of the print's.

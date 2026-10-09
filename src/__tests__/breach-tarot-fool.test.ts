@@ -152,6 +152,36 @@ describe('Breach Tarot: 0 The Fool at 70 x 120 mm', () => {
     }
   }, 120_000);
 
+  it('keeps the print’s tones where the port scaled them: the collapse thinned, the shadow rows opening as on the print, the sun up to the tie’s halo', async () => {
+    const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 1 }), ...fits.map(render)]);
+    const count = (r: RenderResult, prefix: string) => r.parts.filter(part => part.id.startsWith(prefix)).reduce((n, part) => n + part.paths.length, 0);
+    // Points every `step` mm along a part's paths.
+    const along = (r: RenderResult, prefix: string, step: number) => r.parts.filter(part => part.id.startsWith(prefix)).flatMap(part => part.paths.flatMap(path => path.flatMap((b, i) => {
+      if (!i) return [b];
+      const a = path[i - 1], n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step);
+      return Array.from({ length: n }, (_, k) => ({ x: a.x + (b.x - a.x) * (k + 1) / n, y: a.y + (b.y - a.y) * (k + 1) / n }));
+    })));
+    for (const [k, result] of small.entries()) {
+      const { card, horizonY } = formatOf(fits[k]);
+      // The loose blocks are kept in proportion to the scale (about 0.28 of them, each now mostly an outline): a
+      // tenth or so of the print's collapse marks, not the three in ten that all of them make.
+      expect(count(result, 'collapse-')).toBeLessThan(0.15 * count(print, 'collapse-'));
+      expect(count(result, 'collapse-')).toBeGreaterThan(0.03 * count(print, 'collapse-'));
+      // Shadow rows start 0.62 mm apart at the horizon and open toward the foot as on the print: more than 0.85 mm
+      // apart in the nearer half of the ground (measured in the card's own millimetres they would stay under 0.8).
+      const rows = [...new Set(result.parts.filter(part => part.id.startsWith('shadow-')).flatMap(part => part.paths)
+        .filter(path => Math.abs(path[0].y - path.at(-1)!.y) < 0.01).map(path => Math.round(path[0].y * 1000) / 1000))].sort((a, b) => a - b);
+      const near = rows.filter(y => y > horizonY + 0.5 * (card.y1 - horizonY));
+      expect(near.length).toBeGreaterThan(2);
+      for (let i = 1; i < near.length; i++) expect(near[i] - near[i - 1]).toBeGreaterThan(0.85);
+      // The sun's fine rays stop at a halo round the tie that scales with the card: they come within 2 mm of it.
+      const tie = along(result, 'helix-', 0.2);
+      let nearest = Infinity;
+      for (const p of along(result, 'sun-', 0.1)) for (const q of tie) nearest = Math.min(nearest, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(nearest).toBeLessThan(2);
+    }
+  }, 120_000);
+
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card without its pitch scaling is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 1 }), ...fits.map(render)]);
     const master = probe(print);
