@@ -10,6 +10,7 @@ import { formatFor, type Fit } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xviii-moon/sketch.ts');
 
@@ -103,15 +104,6 @@ describe('Breach Tarot: XVIII The Moon at 70 x 120 mm', () => {
     return Array.from({ length: n }, (_, k) => ({ x: a.x + (b.x - a.x) * (k + 1) / n, y: a.y + (b.y - a.y) * (k + 1) / n }));
   }));
   /** The nearest two points of two sets come, by a millimetre grid. */
-  const nearest = (a: Pt[], b: Pt[]) => {
-    const cells = new Map<string, Pt[]>();
-    for (const q of b) { const key = `${Math.floor(q.x)},${Math.floor(q.y)}`; cells.set(key, [...cells.get(key) ?? [], q]); }
-    let d = Infinity;
-    for (const p of a) for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
-      for (const q of cells.get(`${Math.floor(p.x) + dx},${Math.floor(p.y) + dy}`) ?? []) d = Math.min(d, Math.hypot(p.x - q.x, p.y - q.y));
-    }
-    return d;
-  };
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
@@ -287,7 +279,7 @@ describe('Breach Tarot: XVIII The Moon at 70 x 120 mm', () => {
       // The halos are measured on a mask, so a clean ruling stands a little under the floor: none nearer than 0.35 mm,
       // nor further than the scaled halo and 0.15 mm.
       for (const [name, a, b, mm] of [['sky to towers', sky, tower, 1.1], ['sky to slabs', sky, slabs, 1.2], ['slabs to towers', slabs, tower, 1.1]] as const) {
-        const d = nearest(a, b);
+        const d = nearestDistance(a, b);
         expect(d, `${fit} ${name}`).toBeGreaterThan(0.35);
         expect(d, `${fit} ${name}`).toBeLessThan(Math.max(0.5, mm * s) + 0.15);
       }

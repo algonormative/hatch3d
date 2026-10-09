@@ -15,6 +15,7 @@ import { projectStrokes } from '../../sketches/kit/strokes.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xxi-world/sketch.ts');
 const sorted = (s?: Set<number>) => [...(s ?? [])].sort((a, b) => a - b);
@@ -140,16 +141,6 @@ describe('Breach Tarot: XXI The World at 70 x 120 mm', () => {
     return Array.from({ length: k }, (_, j) => ({ x: a.x + (b.x - a.x) * (j + 1) / k, y: a.y + (b.y - a.y) * (j + 1) / k }));
   }));
   /** The least distance from any of `a` to any of `b`. */
-  const nearest = (a: Pt[], b: Pt[]) => {
-    const sorted = [...b].sort((p, q) => p.x - q.x);
-    let best = Infinity;
-    for (const p of a) {
-      let lo = 0, hi = sorted.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid].x < p.x - best) lo = mid + 1; else hi = mid; }
-      for (let i = lo; i < sorted.length && sorted[i].x <= p.x + best; i++) best = Math.min(best, Math.hypot(sorted[i].x - p.x, sorted[i].y - p.y));
-    }
-    return best;
-  };
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
@@ -298,7 +289,7 @@ describe('Breach Tarot: XXI The World at 70 x 120 mm', () => {
       // a mask as fine as the print's. A wall stops a step of the walk short of the mask, which is a pixel off the mesh: no
       // nearer than 0.3 mm to his lines, nor further than the scaled halo and 0.15 (left at the print's, they were over 1.3).
       for (const [prefix, print] of [['figure', 1.7], ['helix-', 1.4]] as const) {
-        const gap = nearest(scene, sampled(all(result, prefix)));
+        const gap = nearestDistance(scene, sampled(all(result, prefix)));
         expect(gap, `${fit} ${prefix}`).toBeGreaterThan(0.3);
         expect(gap, `${fit} ${prefix}`).toBeLessThan(Math.max(0.5, print * s) + 0.15);
       }

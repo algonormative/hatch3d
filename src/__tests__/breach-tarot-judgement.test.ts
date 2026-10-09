@@ -10,6 +10,7 @@ import { TABLOID_FORMAT, formatFor, type Fit } from '../../sketches/kit/format.t
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { Point, RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xx-judgement/sketch.ts');
 
@@ -87,19 +88,6 @@ describe('Breach Tarot: XX Judgement at 70 x 120 mm', () => {
     const a = path[i - 1], n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.1);
     return Array.from({ length: n }, (_, k) => ({ x: a.x + (b.x - a.x) * (k + 1) / n, y: a.y + (b.y - a.y) * (k + 1) / n }));
   }));
-  const nearest = (a: Point[], b: Point[]) => {
-    const cells = new Map<string, Point[]>();
-    for (const q of b) {
-      const key = `${Math.floor(q.x)},${Math.floor(q.y)}`;
-      const list = cells.get(key);
-      if (list) list.push(q); else cells.set(key, [q]);
-    }
-    let d = Infinity;
-    for (const p of a) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-      for (const q of cells.get(`${Math.floor(p.x) + dx},${Math.floor(p.y) + dy}`) ?? []) d = Math.min(d, Math.hypot(p.x - q.x, p.y - q.y));
-    }
-    return d;
-  };
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
@@ -248,7 +236,7 @@ describe('Breach Tarot: XX Judgement at 70 x 120 mm', () => {
       // nearer than 0.35 mm, nor, where it meets them, further than the scaled halo and a little more.
       const halo = Math.max(0.5, 1.4 * s);
       for (const prefix of ['helix-', 'lid-', 'fragment-']) {
-        const gap = nearest(sky, along(result, prefix));
+        const gap = nearestDistance(sky, along(result, prefix));
         expect(gap, `${fit} sky to ${prefix}`).toBeGreaterThan(0.35);
         expect(gap, `${fit} sky to ${prefix}`).toBeLessThan(halo + 0.2);
       }

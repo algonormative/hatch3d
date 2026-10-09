@@ -9,6 +9,7 @@ import { formatFor, type Fit } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xiv-temperance/sketch.ts');
 
@@ -75,11 +76,6 @@ describe('Breach Tarot: XIV Temperance at 70 x 120 mm', () => {
   const points = (result: RenderResult, prefix: string) => paths(result, prefix).flat();
   const length = (path: Pt[]) => path.slice(1).reduce((sum, q, i) => sum + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0);
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
-  const nearest = (a: Pt[], b: Pt[]) => {
-    let d = Infinity;
-    for (const p of a) for (const q of b) d = Math.min(d, Math.hypot(p.x - q.x, p.y - q.y));
-    return d;
-  };
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
@@ -209,7 +205,7 @@ describe('Breach Tarot: XIV Temperance at 70 x 120 mm', () => {
       // under 0.5 mm), and the sky short of the helix by its clearing (2.6 mm on the print). The halo is measured on a
       // raster, so a clean ruling stands a little under the floor: none nearer than about 0.35 mm, nor further than the
       // scaled halo and a little more (the water's breaks and the sky's pitch leave a few tenths).
-      const skyToVessels = nearest(sky, vessels), waterToVessels = nearest(water, vessels), skyToHelix = nearest(sky, helix);
+      const skyToVessels = nearestDistance(sky, vessels), waterToVessels = nearestDistance(water, vessels), skyToHelix = nearestDistance(sky, helix);
       expect(skyToVessels, `${fit} sky to vessels`).toBeGreaterThan(0.35);
       expect(skyToVessels, `${fit} sky to vessels`).toBeLessThan(Math.max(0.5, 1.1 * s) + 0.15);
       expect(waterToVessels, `${fit} water to vessels`).toBeGreaterThan(0.35);

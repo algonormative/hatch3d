@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { facetStrokes, ruledFaces, solid, swapRuledFaces } from '../../sketches/kit/slabs.ts';
 import { horizonCamera } from '../../sketches/kit/perspective.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 import { TABLOID_FORMAT, formatFor, maskRes } from '../../sketches/kit/format.ts';
 import { BIAS_FLOOR, chunkPolyline, hiddenBias } from '../../sketches/kit/strokes.ts';
 
@@ -87,6 +88,29 @@ describe('sketch kit: shared card helpers, batch 4', () => {
     it('hands back the strokes it was given when nothing is ruled', () => {
       const made = facetStrokes(block, behind, view.position, false);
       expect(swapRuledFaces(made, [])).toBe(made);
+    });
+  });
+
+  describe('the test helper for a halo\'s two sides', () => {
+    it('finds the exact nearest distance between two point sets, as a brute-force scan does, whichever way round', () => {
+      let seed = 7;
+      const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+      const cloud = (n: number, dx: number) => Array.from({ length: n }, () => ({ x: dx + next() * 60, y: next() * 80 }));
+      for (const [a, b] of [[cloud(300, 0), cloud(500, 20)], [cloud(50, 0), cloud(2000, 100)], [cloud(400, 0), cloud(3, 0)]]) {
+        let brute = Infinity;
+        for (const p of a) for (const q of b) brute = Math.min(brute, Math.hypot(p.x - q.x, p.y - q.y));
+        expect(nearestDistance(a, b)).toBe(brute);
+        expect(nearestDistance(b, a)).toBe(brute);
+      }
+    });
+
+    it('reads a gap across both axes, and an empty set as no gap at all', () => {
+      expect(nearestDistance([{ x: 0, y: 0 }], [{ x: 3, y: 4 }, { x: 30, y: 0 }])).toBe(5);
+      expect(nearestDistance([{ x: 0, y: 0 }, { x: 10, y: 10 }], [{ x: 10, y: 11 }])).toBe(1);
+      expect(nearestDistance([], [{ x: 0, y: 0 }])).toBe(Infinity);
+      expect(nearestDistance([{ x: 0, y: 0 }], [])).toBe(Infinity);
+      // Points that touch have no gap.
+      expect(nearestDistance([{ x: 2, y: 2 }], [{ x: 9, y: 9 }, { x: 2, y: 2 }])).toBe(0);
     });
   });
 });

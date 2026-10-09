@@ -10,6 +10,7 @@ import { formatFor, type Fit } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { Point, RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xix-sun/sketch.ts');
 
@@ -62,15 +63,6 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
     return Array.from({ length: n }, (_, k) => ({ x: a.x + (b.x - a.x) * (k + 1) / n, y: a.y + (b.y - a.y) * (k + 1) / n }));
   }));
   /** The nearest any point of `a` comes to any of `b`, by a millimetre grid. */
-  const nearest = (a: Point[], b: Point[]) => {
-    const cells = new Map<string, Point[]>();
-    for (const q of b) { const key = `${Math.floor(q.x)},${Math.floor(q.y)}`; if (!cells.has(key)) cells.set(key, []); cells.get(key)!.push(q); }
-    let best = Infinity;
-    for (const p of a) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-      for (const q of cells.get(`${Math.floor(p.x) + dx},${Math.floor(p.y) + dy}`) ?? []) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
-    }
-    return best;
-  };
   /** The disc's rim: its centre, from its extent, and each ring's mean radius, outermost first. */
   const rim = (result: RenderResult) => {
     const rings = all(result, 'disc-'), ps = rings.flat();
@@ -283,7 +275,7 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
       // (cells of a third of a print millimetre). A fine ray ends within half its 0.25 mm sampling step and a cell of the
       // knockout's edge, so it stands no nearer than a quarter millimetre to what stands, nor further than the scaled knockout
       // and a tenth (left at the print's 1.4 mm, about a millimetre).
-      const gap = nearest(along(all(result, 'radiance-')), along([...all(result, 'rays-'), ...all(result, 'waves-'), ...all(result, 'wall-')]));
+      const gap = nearestDistance(along(all(result, 'radiance-')), along([...all(result, 'rays-'), ...all(result, 'waves-'), ...all(result, 'wall-')]));
       expect(gap, fit).toBeGreaterThan(0.25);
       expect(gap, fit).toBeLessThan(Math.max(0.5, 1.4 * s) + 0.1);
     }
@@ -293,7 +285,7 @@ describe('Breach Tarot: XIX The Sun at 70 x 120 mm', () => {
     const { s } = formatFor(targetPage(TABLOID_PAGE, page), { fit: 'width', phrase: 'art' });
     const words = along(all(art, 'slogan-'));
     expect(words.length).toBeGreaterThan(500);
-    const clear = nearest(along([...all(art, 'ground-'), ...all(art, 'shadow-')]), words);
+    const clear = nearestDistance(along([...all(art, 'ground-'), ...all(art, 'shadow-')]), words);
     expect(clear).toBeGreaterThan(0.3);
     expect(clear).toBeLessThan(Math.max(0.5, 0.8 * s) + 0.1);
   }, 120_000);

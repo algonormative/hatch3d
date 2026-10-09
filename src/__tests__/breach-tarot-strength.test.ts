@@ -9,6 +9,7 @@ import { formatFor, type Fit } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { Point, RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/viii-strength/sketch.ts');
 
@@ -109,15 +110,6 @@ describe('Breach Tarot: VIII Strength at 70 x 120 mm', () => {
     return Array.from({ length: n }, (_, k) => ({ x: a.x + (b.x - a.x) * (k + 1) / n, y: a.y + (b.y - a.y) * (k + 1) / n }));
   }));
   /** The least distance from any of `from` to any of `to`. */
-  const nearest = (from: Point[], to: Point[]) => {
-    const grid = new Map<string, Point[]>();
-    for (const q of to) { const key = `${Math.floor(q.x)},${Math.floor(q.y)}`; grid.set(key, [...(grid.get(key) ?? []), q]); }
-    let least = Infinity;
-    for (const p of from) for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
-      for (const q of grid.get(`${Math.floor(p.x) + i},${Math.floor(p.y) + j}`) ?? []) least = Math.min(least, Math.hypot(p.x - q.x, p.y - q.y));
-    }
-    return least;
-  };
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
@@ -279,12 +271,12 @@ describe('Breach Tarot: VIII Strength at 70 x 120 mm', () => {
       const helix = sampled(paths(result, 'helix-'));
       // The knockout (1.1 mm on the print) scales under the 0.5 mm floor: no lake line comes nearer than the floor less a
       // mask cell and a step, and some come nearer than the print's knockout would let them.
-      const lake = nearest(sampled(paths(result, 'lake-')), helix);
+      const lake = nearestDistance(sampled(paths(result, 'lake-')), helix);
       expect(lake).toBeGreaterThan(0.3);
       expect(lake).toBeLessThan(0.8);
       // The clearing (2.6 mm on the print) is the card's scale of it, over the floor: the sky's rules stop that far from the
       // neck, not the print's distance.
-      const sky = nearest(sampled(paths(result, 'sky-')), helix);
+      const sky = nearestDistance(sampled(paths(result, 'sky-')), helix);
       expect(sky).toBeGreaterThan(2.6 * s - 0.2);
       expect(sky).toBeLessThan(1.5);
     }

@@ -12,6 +12,7 @@ import { formatFor, type Fit } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { targetPage } from '../sketch/render-target.ts';
 import type { RenderResult } from '../sketch/types.ts';
+import { nearestDistance } from './helpers/nearest.ts';
 
 const entry = resolve('sketches/breach-tarot/xv-devil/sketch.ts');
 
@@ -120,7 +121,6 @@ describe('Breach Tarot: XV The Devil at 70 x 120 mm', () => {
   const length = (result: { parts: Part[] }, prefix: string) => paths(result, prefix).reduce((sum, path) => sum + path.slice(1).reduce((l, q, i) => l + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0), 0);
   /** Ink per square millimetre of a part's bounding box: how dark it reads. */
   const darkness = (result: { parts: Part[] }, prefix: string) => { const b = bounds(dense(result, prefix, 0.5)); return length(result, prefix) / ((b.x1 - b.x0) * (b.y1 - b.y0)); };
-  const nearest = (a: Pt[], b: Pt[]) => { let d = Infinity; for (const p of a) for (const q of b) d = Math.min(d, Math.hypot(p.x - q.x, p.y - q.y)); return d; };
   const ends = (result: { parts: Part[] }, prefix: string) => paths(result, prefix).flatMap(path => [path[0], path.at(-1)!]);
   const probe = (result: RenderResult) => densityProbe(result.parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
   /** The figures, the left one and the right, by which side of the card's centre line their points fall. */
@@ -295,13 +295,13 @@ describe('Breach Tarot: XV The Devil at 70 x 120 mm', () => {
       // The sky's knockout and its stand-off from the echo, 1.1 mm on the print: scaled (0.28-0.31 mm), under the 0.5 mm
       // floor, give or take a cell of its mask (0.50-0.63 mm); left at the print's size the nearest rule stops 0.9-1.1 mm short.
       const sky = ends(result, 'sky-');
-      for (const [what, gap] of [['solid', nearest(sky, solid)], ['echo', nearest(sky, echo)]] as const) {
+      for (const [what, gap] of [['solid', nearestDistance(sky, solid)], ['echo', nearestDistance(sky, echo)]] as const) {
         expect(gap, `${fit} sky to ${what}`).toBeGreaterThan(0.35);
         expect(gap, `${fit} sky to ${what}`).toBeLessThan(Math.max(0.5, 1.1 * s) + 0.25);
       }
       // The echo stops short of what stands in front of it by the print's 2.2 mm scaled (0.55-0.61 mm): 0.55-0.60 mm; left
       // at the print's size, 2.4-2.5 mm.
-      const echoGap = nearest(ends(result, 'echo-'), solid);
+      const echoGap = nearestDistance(ends(result, 'echo-'), solid);
       expect(echoGap, `${fit} echo to solid`).toBeGreaterThan(0.35);
       expect(echoGap, `${fit} echo to solid`).toBeLessThan(Math.max(0.5, 2.2 * s) + 0.3);
     }
