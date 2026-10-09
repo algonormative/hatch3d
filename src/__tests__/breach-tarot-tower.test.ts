@@ -212,6 +212,15 @@ describe('Breach Tarot: XVI The Tower at 70 x 120 mm', () => {
       const drops = (parts: Parts) => parts.filter(part => part.id.startsWith('storm-')).reduce((n, part) => n + part.paths.length, 0);
       expect(drops(small[k].parts)).toBeLessThan(0.5 * drops(print.parts));
       expect(drops(small[k].parts)).toBeGreaterThan(0.1 * drops(print.parts));
+      // The horizon keeps off the machine by its knockout halo (1.2 mm in tabloid, scaled with the card and never under
+      // 0.5 mm): no horizon point comes nearer its strokes than the floor, nor much further than the scaled halo plus about
+      // half a millimetre of sampling along the horizon.
+      const horizonPts = small[k].parts.filter(part => part.id.startsWith('horizon-')).flatMap(part => part.paths.flat());
+      const machinePts = small[k].parts.filter(part => part.id.startsWith('machine-')).flatMap(part => part.paths.flat());
+      let gap = Infinity;
+      for (const p of horizonPts) for (const q of machinePts) gap = Math.min(gap, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(gap, `${fit} horizon to machine`).toBeGreaterThan(0.45);
+      expect(gap, `${fit} horizon to machine`).toBeLessThan(Math.max(0.5, 1.2 * s) + 0.45);
     }
   }, 120_000);
 
