@@ -6,11 +6,12 @@ import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
 import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
-import { horizonCamera, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
+import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
 import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
-import { PartBuckets } from '../../sketches/kit/strokes.ts';
+import { PartBuckets, fineDepth } from '../../sketches/kit/strokes.ts';
+import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const page = { width: 279.4, height: 431.8 };
@@ -322,5 +323,25 @@ describe('sketch kit: shared card helpers', () => {
     expect(narrowStrands(strokes, view, { limit: between })).toHaveLength(2);
     expect(narrowStrands(strokes, view, { limit: between, measure: 'widest' })).toEqual(strokes);
     expect(narrowStrands(strokes, view, { limit: between, measure: 'widest', counts: () => false })).toHaveLength(2);
+  });
+
+  it('tests a small subject against a finer raster: a view of its own with the same projection, and the depth pass at m times the card\'s', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 40, height: 62 }, horizonY: 300 });
+    const finer = oversampledView(view, 4);
+    expect(finer).not.toBe(view);
+    expect(finer.view).toMatchObject({ fullWidth: 160, fullHeight: 248, width: 160, height: 248 });
+    expect(finer.projectionMatrix.equals(view.projectionMatrix)).toBe(true);
+    finer.near = 3;
+    expect(view.near).toBe(0.5);
+    expect(oversampledView(view, 1).projectionMatrix.equals(view.projectionMatrix)).toBe(true);
+    // The depth pass of a slab at 4 times a 40 x 62 raster, and the page millimetres per finer pixel.
+    const slabs = [solid(0, 2, -30, 8, 6, 2, 0, 'stack')].map(slabGeometry);
+    const raster = { W: 40, H: 62, MM_X: page.width / 40, MM_Y: page.height / 62 };
+    const fine = fineDepth(slabs, finer, raster, 4, 0.01);
+    expect([fine.env.width, fine.env.height, fine.env.bias, fine.env.view]).toEqual([160, 248, 0.01, finer]);
+    expect([fine.env.depth.width, fine.env.depth.height]).toEqual([160, 248]);
+    expect(fine.env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, finer, 160, 248).depthData);
+    expect([fine.mmX, fine.mmY]).toEqual([raster.MM_X / 4, raster.MM_Y / 4]);
+    expect(fineDepth(slabs, view, raster, 1).env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, view, 40, 62).depthData);
   });
 });

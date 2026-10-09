@@ -11,8 +11,8 @@ import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { fitDepthRange, horizonCamera, onGround, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
+import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { ELONGATED, gesture } from '../../kit/mannequin/gesture.ts';
 import { POSES, poseSkeleton, withPose, type JointName, type Skeleton } from '../../kit/mannequin/skeleton.ts';
@@ -439,22 +439,18 @@ export function drawMagician(ctx: SketchContext): Part[] {
       view.getWorldDirection(forward);
       const env = { forward, density: 0.4, dark: lit, screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; } };
       const figGeos = figureMeshes(fig);
-      const figView = view.clone();
-      // Its own raster: the card's, or finer by `FIGURE_OVERSAMPLE` each way, the camera's view offset with it (the same projection).
-      const m = FIGURE_OVERSAMPLE, FW = W * m, FH = H * m;
-      if (m !== 1) {
-        const o = view.view!;
-        figView.setViewOffset(o.fullWidth * m, o.fullHeight * m, o.offsetX * m, o.offsetY * m, o.width * m, o.height * m);
-      }
+      // Its own raster: the card's, or finer by `FIGURE_OVERSAMPLE` each way (`fineDepth`), with a view of its own to fit.
+      const m = FIGURE_OVERSAMPLE;
+      const figView = oversampledView(view, m);
       try {
         fitDepthRange(figView, figGeos);
-        const figDepth = renderDepthBufferCPU(figGeos, figView, FW, FH);
+        const fine = fineDepth(figGeos, figView, { W, H, MM_X, MM_Y }, m);
         const biasAt = (tol: number) => tol * figView.far * figView.near / ((figView.far - figView.near) * (eye.z - place.z) ** 2);
         const lines = figureStrokes(fig, env, figureBands());
         // An outline runs along the edge where the surface turns away from the eye, so its depth changes fastest there: it gets more slack than the hatch.
         for (const edge of [false, true]) {
-          projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { view: figView, depth: figDepth, width: FW, height: FH, bias: biasAt(edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK) }, {
-            begin: () => runs => { for (const run of runs) add('figure-carbon', scalePoints(run, MM_X / m, MM_Y / m), p => !onFlameFront(p)); },
+          projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { ...fine.env, bias: biasAt(edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK) }, {
+            begin: () => runs => { for (const run of runs) add('figure-carbon', scalePoints(run, fine.mmX, fine.mmY), p => !onFlameFront(p)); },
           });
         }
       } finally {

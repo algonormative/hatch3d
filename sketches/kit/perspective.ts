@@ -67,6 +67,18 @@ export function tabloidFrameCamera(spec: FrameCameraSpec): THREE.PerspectiveCame
   });
 }
 
+/**
+ * A copy of `view` for a depth raster `m` times finer each way (`W * m` by `H * m`): the same projection, its view
+ * offset scaled with the raster. Fit its depth range (`fitDepthRange`) without touching the card's own camera. Test a
+ * small subject against a finer raster with `fineDepth` (kit/strokes.ts).
+ */
+export function oversampledView(view: THREE.PerspectiveCamera, m: number): THREE.PerspectiveCamera {
+  const finer = view.clone();
+  const o = view.view;
+  if (m !== 1 && o) finer.setViewOffset(o.fullWidth * m, o.fullHeight * m, o.offsetX * m, o.offsetY * m, o.width * m, o.height * m);
+  return finer;
+}
+
 /** Where a world point lands on the page, in millimetres. */
 export function pageOf(view: THREE.Camera, world: THREE.Vector3, page: PageSize = PAGE): Point {
   const q = world.clone().project(view);

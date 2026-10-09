@@ -1,8 +1,9 @@
 import type * as THREE from 'three';
 import type { Part, Point } from '../../src/sketch/types.ts';
 import { projectPolylinesClipped, type ProjectedPoint } from '../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, type PackedDepthBuffer } from '../../src/sketch/depth-buffer.ts';
+import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU, type PackedDepthBuffer } from '../../src/sketch/depth-buffer.ts';
 import { splitPolylineByDepth } from '../../src/occlusion.ts';
+import type { Raster } from './format.ts';
 import { pathLength, simplify } from './page.ts';
 
 /** The strokes-to-parts pipeline the Breach sketches share. */
@@ -107,4 +108,16 @@ export function projectStrokes<S extends { points: THREE.Vector3[] }>(strokes: S
       receive(test ? splitPolylineByDepth(dense, env.depth, bias).visible : [dense]);
     }
   }
+}
+
+/**
+ * A depth test `m` times finer each way than the card's raster, for a small subject whose edges a card-sized pixel would
+ * blur: a figure a few millimetres tall, a fine thread. The depth pass of `geometries` seen from `view` (fit its range
+ * first; see `oversampledView` for a copy to fit) at `m` times the raster `raster` (the card's `W`, `H`, `MM_X`, `MM_Y`),
+ * as the `ProjectEnv` for `projectStrokes`, and the page millimetres per pixel of that finer raster, to scale the runs
+ * it gives back (`scalePoints(run, mmX, mmY)`). Build the card's raster with room for it: `depthRaster(w, h, m)`.
+ */
+export function fineDepth(geometries: THREE.BufferGeometry[], view: THREE.Camera, raster: Raster, m: number, bias?: number): { env: ProjectEnv; mmX: number; mmY: number } {
+  const width = raster.W * m, height = raster.H * m;
+  return { env: { view, depth: renderDepthBufferCPU(geometries, view, width, height), width, height, bias }, mmX: raster.MM_X / m, mmY: raster.MM_Y / m };
 }
