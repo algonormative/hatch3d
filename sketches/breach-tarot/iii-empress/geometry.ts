@@ -3,7 +3,8 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -11,7 +12,7 @@ import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -25,7 +26,9 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * the tops near it bend away from it, a stalk's lean growing with height. Near plants are hatched,
  * far ones outline only, the farthest ticks. The words are cut into plant faces from near to far.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** The card's depth raster at tabloid; on any other page, the format's. */
+const TABLOID_RASTER = { width: 1118, height: 1728 };
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** The nearest row of plants, in world units from the eye. */
@@ -38,12 +41,37 @@ const BAND_EDGES = [0, 28, 40, 58, 85, 125, 190, 300, 480, Infinity];
 const MAX_COURSES = 14;
 const MEAN_COURSE = 1.2;
 
+/** The card's camera, on the format's page. */
 export function empressCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the crop is planted with, so every size and fit grows the same field, plant for plant. At tabloid it is `empressCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  const eye = n(ctx, 'eye', 6, 3, 12);
+  return horizonCamera({
+    fov: n(ctx, 'fov', 54, 36, 75), eye: [0, eye, 0], target: [0, eye, -100], near: 8, far: 4000,
+    page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
+  });
+}
+
+/**
+ * The Empress's world: the growth field, the wind and the crop it bends. The crop is planted with `worldCamera`, in
+ * tabloid's frame (its culls and course counts are measured on tabloid's paper), so every size and fit builds the
+ * same world, to the bit. The wind's curve and surfaces are the camera's own at any size; `view` (the card's camera)
+ * only draws its strokes.
+ */
+export function empressWorld(ctx: SketchContext, view: THREE.PerspectiveCamera): { wind: Wind; plants: Plant[]; ticks: THREE.Vector3[][] } {
+  const field = fieldOf(ctx);
+  const wind = windRibbon(ctx, view, field);
+  return { wind, ...plantField(ctx, worldCamera(ctx), field, wind) };
 }
 
 /** Smooth 2D value noise over a seeded lattice, 0..1. */
@@ -268,8 +296,9 @@ function buildPlant(base: THREE.Vector3, m: number, height: number, w0: number, 
  * down, and left out if it still cannot stand.
  */
 export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, field: Field, wind: Wind): { plants: Plant[]; ticks: THREE.Vector3[][] } {
+  // Planted in tabloid's frame: `view` is `worldCamera`, and every page measure here is tabloid's (see `empressWorld`).
   const rowRng = ctx.random('crop-rows'), plantRng = ctx.random('crop-plants');
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const eye = view.position.y;
   const spacing = n(ctx, 'furrow', 2.8, 2, 7), rowStep = n(ctx, 'row', 3.4, 2.5, 8), reach = n(ctx, 'reach', 400, 100, 1400);
   const windTop = THREE.MathUtils.degToRad(n(ctx, 'lean', 10, 0, 40));
@@ -277,8 +306,8 @@ export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
   const right = new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)), along = new THREE.Vector3(Math.sin(yaw), 0, -Math.cos(yaw));
   const mmAt = (d: number) => f / Math.max(1, d);
   // No tower may rise past the upper part of the card: its tip is held to a page height.
-  const tipLimit = CARD.y0 + 50;
-  const heightCap = (d: number) => eye + (HORIZON_Y - tipLimit) * d / f;
+  const tipLimit = TABLOID_CARD.y0 + 50;
+  const heightCap = (d: number) => eye + (TABLOID_HORIZON_Y - tipLimit) * d / f;
 
   // The wind's track on the ground, to measure each plant against.
   const track = Array.from({ length: 241 }, (_, i) => {
@@ -318,8 +347,8 @@ export function plantField(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
       const base = new THREE.Vector3().addScaledVector(right, u).addScaledVector(along, vv);
       const d = -base.z;
       if (d < NEAR - 1) continue;
-      const at = pageOf(view, base);
-      if (at.x < CARD.x0 - 30 || at.x > CARD.x1 + 30 || at.y > PAGE.height) continue;
+      const at = pageOf(view, base, TABLOID_PAGE);
+      if (at.x < TABLOID_CARD.x0 - 30 || at.x > TABLOID_CARD.x1 + 30 || at.y > TABLOID_PAGE.height) continue;
       const spec: Spec = { r: Array.from({ length: 64 }, () => plantRng()), yaw: (plantRng() - 0.5) * 0.2 };
       const miss = plantRng();
       const g = clamp(field.growth(base.x, d) + (spec.r[44] - 0.5) * 0.06, 0, 1);
@@ -418,9 +447,8 @@ export function drawEmpress(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
-  const field = fieldOf(ctx);
-  const wind = windRibbon(ctx, view, field);
-  const { plants, ticks } = plantField(ctx, view, field, wind);
+  // The world, the same at every size; this card's camera draws it.
+  const { wind, plants, ticks } = empressWorld(ctx, view);
   // Light from the right and well forward: the fronts stay light, the left flanks fall dark.
   const light = new THREE.Vector3(0.5, 0.5, 0.55).normalize();
   const hatch = n(ctx, 'hatch', 1.6, 0.6, 4);
@@ -468,13 +496,14 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       const d = Math.sqrt(Math.max(lo, 8) * hi);
       return Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * d * d));
     };
-    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));
     // The wind keeps a wider margin of clear paper than the crop, so the ribbon never touches the ruled sky.
-    const windClear = meshCoverage(wind.meshes, view, PAGE, n(ctx, 'windHalo', 4, 1, 8));
+    const windClear = meshCoverage(wind.meshes, view, PAGE, halo(n(ctx, 'windHalo', 4, 1, 8)));
 
-    // The phrase: each word cut into the front of a plant course, staggered from near to far.
+    // The phrase: each word cut into the front of a plant course, staggered from near to far; or, where the format
+    // sets it in the band, under the card's name instead.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('crop-words');
     const style = { face: settings.face, height: settings.size };
     const textStrokes: THREE.Vector3[][] = [];
@@ -489,7 +518,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     };
     const centreX = (CARD.x0 + CARD.x1) / 2;
     const cands = plants.flatMap(p => p.slabs.map(sl => ({ sl, plant: p, at: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)) })))
-      .filter(({ at }) => at.y > CARD.y0 + 8 && at.y < CARD.y1 - 8 && at.x > CARD.x0 + 8 && at.x < CARD.x1 - 8);
+      .filter(({ at }) => at.y > CARD.y0 + layoutLength(8) && at.y < CARD.y1 - layoutLength(8) && at.x > CARD.x0 + layoutLength(8) && at.x < CARD.x1 - layoutLength(8));
     const used = new Set<Plant>();
     const placed: Point[] = [];
     const sideOf = wrng() < 0.5 ? 0 : 1;
@@ -501,7 +530,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
       const pick = (side: boolean | null) => cands.filter(({ sl, plant, at }) => {
         if (used.has(plant) || (side !== null && (at.x < centreX) !== side)) return false;
         // Words keep well apart on the sheet.
-        if (placed.some(q => Math.hypot(q.x - at.x, q.y - at.y) < 70)) return false;
+        if (placed.some(q => Math.hypot(q.x - at.x, q.y - at.y) < layoutLength(70))) return false;
         const mm = mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
         if (wmm > sl.w * mm * 0.9 || style.height > sl.h * mm * 0.8) return false;
         const normal = new THREE.Vector3(0, 0, 1).applyMatrix4(new THREE.Matrix4().extractRotation(slabMatrix(sl)));
@@ -525,17 +554,26 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.9);
+    const onGlyph = glyphMask(glyphPaths, halo(0.9));
     const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
+    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number, exact = false) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, exact, min);
     };
+    // On a small card the path reducer's 1.4 mm stride is a large share of the wind's twists, and turns its ribbon's
+    // edges to zigzags: there its strokes keep every point (and the reducer's shortest path). The print is unchanged.
+    const smoothWind = !FORMAT.tabloid;
     for (let band = 0; band < BAND_EDGES.length - 1; band++) {
       const mine = strokes.filter(s => s.band === band);
       if (!mine.length) continue;
       projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(band) }, {
-        // Scraps are dropped: ground rules under 3 mm and far outlines and ticks under 1.6 mm, which the plants in front cut up.
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, st.group === 'ground' ? 3 : st.group === 'far' ? 1.6 : undefined); },
+        // Scraps are dropped: ground rules under 3 mm and far outlines and ticks under 1.6 mm, which the plants in front
+        // cut up. Real millimetres on any card: a scrap is as short on paper whatever the size. Off tabloid a piece of a
+        // face's hatch shorter than the smallest feature is a speck, and goes too (`MIN_FEATURE` is 0 at tabloid).
+        begin: st => runs => {
+          const min = st.group === 'ground' ? tolerance(3) : st.group === 'far' ? tolerance(1.6) : st.family === 'hatch' ? MIN_FEATURE || undefined : undefined;
+          const exact = st.group === 'wind' && smoothWind;
+          for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, exact ? MIN_LENGTH_MM : min, exact);
+        },
       });
     }
     // The sky: a light ruling that thins and breaks as it comes down to the horizon, knocked out round what stands in it.
@@ -559,7 +597,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'ground', 'far', 'crop', 'wind', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
-    parts.push(...cardFrame('III', 'THE EMPRESS'));
+    parts.push(...cardFrame('III', 'THE EMPRESS', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
