@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, hatchMin, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { pageExtent, slabEdges, slabGeometry, slabMatrix, slabStrokes, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, narrowStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -191,20 +191,32 @@ export function lens(ctx: SketchContext, u: Undoing): Lens {
 }
 
 /**
+ * How a smaller card thins the undoing inside the dashes ring. The pull crowds the same nave into a band `S` as wide, so
+ * its lines run 1/S as close on paper, and their dashes and dots, kept in real millimetres, packed into ticks: at 70 × 120
+ * the dashes band carried twice the print's marks per square centimetre. There a line survives only below
+ * `keep ** √(1 − t)` of the print's share (all of it at the dashes ring, `keep` of it at the void), and a dash's gap is
+ * `gap` times the print's, its length unchanged. With `keep` at `S`, both bands carry about the print's marks per square
+ * centimetre. None at tabloid.
+ */
+export interface Sparse { keep: number; gap: number }
+export const SPARSE: Sparse | undefined = FORMAT.tabloid ? undefined : { keep: S, gap: 2 };
+
+/**
  * Edges: solid out to the dashes ring, construction dashes, then dots, then nothing at the point.
  * The pull crowds lines inward, so inside the dashes ring each line also has its own `rank` in
  * [0, 1) and survives only where rank is below a share that falls to zero at the void: density
- * thins smoothly toward the point instead of knotting there.
+ * thins smoothly toward the point instead of knotting there. `sparse` thins it further on a smaller card.
  */
-export function unrenderEdge(path: Point[], u: Undoing, rank = 0): Point[][] {
+export function unrenderEdge(path: Point[], u: Undoing, rank = 0, sparse?: Sparse): Point[][] {
   return keepAlong(path, (p, at) => {
     const r = Math.hypot(p.x - SINGULARITY.x, p.y - SINGULARITY.y);
     if (r >= u.dashes) return true;
-    if (rank >= Math.max(0, (r - u.void) / (u.dashes - u.void)) ** 1.6) return false;
+    const t = Math.max(0, (r - u.void) / (u.dashes - u.void));
+    if (rank >= (sparse ? t ** 1.6 * sparse.keep ** Math.sqrt(1 - t) : t ** 1.6)) return false;
     if (r >= u.dots) {
       const f = (u.dashes - r) / (u.dashes - u.dots);
-      const period = 1.4 + 2.4 * f;
-      return at % period < period * (0.62 - 0.25 * f);
+      const period = 1.4 + 2.4 * f, dash = period * (0.62 - 0.25 * f);
+      return at % (sparse ? dash + (period - dash) * sparse.gap : period) < dash;
     }
     if (r >= u.void) {
       const f = (u.dots - r) / (u.dots - u.void);
@@ -374,7 +386,7 @@ export function drawDeath(ctx: SketchContext): Part[] {
           const primary = lensed ? densify(mm, LENS_STEP).map(bend.primary) : mm;
           for (const inside of clipWindow(primary)) {
             const kept = stroke.family === 'hatch' ? unrenderHatch(inside, u)
-              : stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world') ? unrenderEdge(inside, u, rank)
+              : stroke.family === 'edge' || (stroke.family === 'membrane' && mode === 'world') ? unrenderEdge(inside, u, rank, SPARSE)
               : [inside];
             for (const path of kept) drawn.push({ key, path, family: stroke.family });
           }

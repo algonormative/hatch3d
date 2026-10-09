@@ -220,6 +220,28 @@ describe('Breach Tarot: XIII Death at 70 x 120 mm', () => {
     }
   }, 240_000);
 
+  it('comes undone as calmly as the print: no more dashes and dots per square centimetre round the disc than the print draws', async () => {
+    const tabloid = await print();
+    // Marks of the nave wholly inside a ring band, per square centimetre.
+    const perCm2 = (result: RenderResult, r: (p: P) => number, lo: number, hi: number) =>
+      100 * paths(result, 'system-').filter(path => path.every(p => r(p) >= lo && r(p) < hi)).length / (Math.PI * (hi * hi - lo * lo));
+    // The print's registers at the defaults: the halo ring at 13 + 3 + 3 mm, dots out to 16 mm beyond it, dashes to 36.
+    const printed = { dots: perCm2(tabloid, from(SINGULARITY), 19, 35), dashes: perCm2(tabloid, from(SINGULARITY), 35, 55) };
+    expect(printed.dashes).toBeGreaterThan(20);
+    for (const fit of fits) {
+      const result = await rendered(fit);
+      const { s } = formatOf(fit);
+      const { ring } = marks(result, fit), r = from(centreOf(fit));
+      // The same lines crowd into a band a quarter as wide: kept whole, their real-millimetre dashes ran twice as thick on
+      // the ground as the print's (70-78 per cm², against 32) and the dots nearly three times (31, against 11).
+      const dots = perCm2(result, r, ring, ring + 16 * s), dashes = perCm2(result, r, ring + 16 * s, ring + 36 * s);
+      expect(dashes, `${fit} dashes`).toBeLessThan(1.2 * printed.dashes);
+      expect(dots, `${fit} dots`).toBeLessThan(1.2 * printed.dots);
+      // Every stage still there: dots before the void, as on the print.
+      expect(dots, `${fit} dots`).toBeGreaterThan(0.3 * printed.dots);
+    }
+  }, 240_000);
+
   it('is no denser than its tabloid print, part by part, its slabs trimmed; the print shrunk onto the card is', async () => {
     const tabloid = await print();
     const master = probe(tabloid);
