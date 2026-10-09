@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -405,8 +405,8 @@ export interface TempleSpec {
 const FRONT_LIGHT = new THREE.Vector3(0.55, 0.6, 0.6).normalize();
 /** The dark pillar is lit from behind, so the faces we see fall heavy. */
 const BACK_LIGHT = new THREE.Vector3(-0.25, 0.55, -0.8).normalize();
-/** The fewest courses a small card's shaft keeps, so a pillar still reads as a stack. */
-const SHAFT_FLOOR = 6;
+/** The shortest course the seeded shaft lays, in tabloid page millimetres: the print's shortest on paper. */
+const SHORTEST_COURSE = 2.9;
 
 /** One pillar: a stepped plinth, a shaft of slab courses of uneven height, a stepped capital. True vertical, clean edged. */
 function pillarCourses(ctx: SketchContext, side: -1 | 1, dark: boolean, top: number): Course[] {
@@ -423,8 +423,8 @@ function pillarCourses(ctx: SketchContext, side: -1 | 1, dark: boolean, top: num
   const shaftTop = top - 8;
   const heights: number[] = [];
   for (let sum = y; sum < shaftTop;) {
-    let h = rng() < 0.3 ? 5 + 2.2 * rng() : 2.9 + 1.5 * rng();
-    if (shaftTop - sum - h < 2.9) h = shaftTop - sum;
+    let h = rng() < 0.3 ? 5 + 2.2 * rng() : SHORTEST_COURSE + 1.5 * rng();
+    if (shaftTop - sum - h < SHORTEST_COURSE) h = shaftTop - sum;
     heights.push(h);
     sum += h;
   }
@@ -475,43 +475,49 @@ function templeSlabs(lay: Layout, spec: TempleSpec, gap: number): Temple {
 
 /**
  * The courses a pillar draws on a small card. The print's would be about a millimetre tall there, their joints a
- * hair apart: too fine for the pen to hold apart, and too shallow to take the dark pillar's rings. So the shaft keeps
- * `S` of its joints (`scaledCount` by length, an even spread over their seeded order) and each course it draws is
- * about as tall on paper as the print's; a step whose ledge over the next is narrower than the smallest feature joins
- * the wider step beside it. The seeded courses themselves never change.
+ * hair apart: too fine for the pen to hold apart, and too shallow to take the dark pillar's rings. So the shaft's
+ * seeded courses join, bottom up, until each course it draws is as tall on paper as the print's shortest (the last,
+ * if it falls short, joins the one below it); a step whose ledge over the next is narrower than the smallest feature
+ * joins the wider step beside it. At tabloid every course is drawn; the seeded courses themselves never change.
  */
 export function drawnCourses(courses: Course[]): Course[] {
-  const shaft = courses.filter(c => c.widen === 0);
-  const keep = scaledCount(shaft.length, SHAFT_FLOOR, 'length') / shaft.length;
+  const height = (run: Course[]) => run[run.length - 1].y + run[run.length - 1].h - run[0].y;
+  const shaft = (run: Course[] | undefined) => run !== undefined && run[0].widen === 0;
   const runs: Course[][] = [];
-  courses.forEach((c, i) => {
-    const prev = courses[i - 1];
-    const joined = prev !== undefined && (prev.widen === 0 && c.widen === 0 ? !evenlyKept(shaft.indexOf(c), keep)
+  for (const c of courses) {
+    const run = runs[runs.length - 1], prev = run?.[run.length - 1];
+    const joined = prev !== undefined && (prev.widen === 0 && c.widen === 0 ? height(run) * S < SHORTEST_COURSE
       : prev.widen > 0 && c.widen > 0 && Math.abs(prev.widen - c.widen) / 2 * S < MIN_FEATURE);
-    if (joined) runs[runs.length - 1].push(c);
+    if (joined) run.push(c);
     else runs.push([c]);
-  });
-  return runs.map(run => {
-    const last = run[run.length - 1];
-    return { ...run[0], h: last.y + last.h - run[0].y, widen: Math.max(...run.map(c => c.widen)), face: run.every(c => c.face) };
-  });
+  }
+  const top = runs.findLastIndex(shaft);
+  if (top > 0 && shaft(runs[top - 1]) && height(runs[top]) * S < SHORTEST_COURSE) runs.splice(top - 1, 2, [...runs[top - 1], ...runs[top]]);
+  return runs.map(run => run.length === 1 ? run[0] : { ...run[0], h: height(run), widen: Math.max(...run.map(c => c.widen)), face: run.every(c => c.face) });
+}
+
+/** A joint's gap as a card draws it, in tabloid page millimetres: the print's on paper (`COURSE_GAP` at tabloid). */
+export const drawnGap = (): number => COURSE_GAP / S;
+
+/** The lintel's courses as a card draws them: one whose face would be shallower on paper than the smallest feature (the cap, on a small card) joins the course below. */
+export function drawnLintel(courses: LintelCourse[]): LintelCourse[] {
+  const out: LintelCourse[] = [];
+  for (const c of courses) {
+    const below = out[out.length - 1];
+    if (below && (c.h - drawnGap()) * S < MIN_FEATURE) out[out.length - 1] = { ...below, h: c.y + c.h - below.y };
+    else out.push(c);
+  }
+  return out;
 }
 
 /**
  * The temple a card draws: at tabloid, the seeded one. On a smaller card each pillar draws its `drawnCourses`, the
- * lintel's cap course joins the beam where its face would be shallower than the smallest feature, and every joint
- * keeps the print's gap on paper.
+ * lintel its `drawnLintel`, and every joint keeps the print's gap on paper.
  */
 export function drawnTemple(lay: Layout, spec: TempleSpec): Temple {
   if (FORMAT.tabloid) return templeSlabs(lay, spec, COURSE_GAP);
-  const gap = COURSE_GAP / S;
-  const lintel: LintelCourse[] = [];
-  for (const c of spec.lintel.courses) {
-    const below = lintel[lintel.length - 1];
-    if (below && (c.h - gap) * S < MIN_FEATURE) lintel[lintel.length - 1] = { ...below, h: c.y + c.h - below.y };
-    else lintel.push(c);
-  }
-  return templeSlabs(lay, { pillars: spec.pillars.map(p => ({ ...p, courses: drawnCourses(p.courses) })), lintel: { ...spec.lintel, courses: lintel } }, gap);
+  const pillars = spec.pillars.map(p => ({ ...p, courses: drawnCourses(p.courses) }));
+  return templeSlabs(lay, { pillars, lintel: { ...spec.lintel, courses: drawnLintel(spec.lintel.courses) } }, drawnGap());
 }
 
 /** A floor joint: its world x, its seeded dashes, and their cell along it, in tabloid page millimetres. */
