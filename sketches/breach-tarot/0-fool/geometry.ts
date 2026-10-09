@@ -3,14 +3,14 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, scaledCount } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, halo, layoutLength, scaledCount } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
+import { horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -37,7 +37,6 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * quiet flat echo of XIX's sun is the card's flat mark.
  */
 /** The card's depth raster at tabloid; on any other page, the format's. */
-const TABLOID_RASTER = { width: 1118, height: 1728 };
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FIGURE = 24;
@@ -63,10 +62,7 @@ export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
  * the Fool's world is laid out with. At tabloid it is `foolCamera`.
  */
 export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  return horizonCamera({
-    fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 3000,
-    page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
-  });
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: EYE, near: 8, far: 3000 });
 }
 
 /**

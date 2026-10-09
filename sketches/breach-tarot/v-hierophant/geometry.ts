@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
@@ -10,7 +10,7 @@ import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { atPage, fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
+import { atPage, fitDepthRange, horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -34,7 +34,6 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * crowd into the gate and the thread where it is narrower than the pen can part are drawn as one line.
  */
 /** The card's depth raster at tabloid; on any other page, the format's. */
-const TABLOID_RASTER = { width: 1118, height: 1728 };
 /** How many times finer each way the thread's depth test is on a small card (see `drawHierophant`); the raster leaves room for it. */
 const THREAD_OVERSAMPLE = 4;
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, THREAD_OVERSAMPLE);
@@ -58,10 +57,7 @@ export function gateCamera(ctx: SketchContext): THREE.PerspectiveCamera {
  * the card's world is laid out with. At tabloid it is `gateCamera`.
  */
 export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  return horizonCamera({
-    fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
-  });
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: EYE, near: 8, far: 4000 });
 }
 
 type Piece = { slab: Slab; kind: 'wing' | 'pier' | 'cap' | 'lintel'; side: number; course: number; sealed?: boolean };

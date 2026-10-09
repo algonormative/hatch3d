@@ -256,6 +256,9 @@ export function rasterFor(format: Format, tabloidW: number, tabloidH: number, ov
   return { W, H, MM_X: page.width / W, MM_Y: page.height / H };
 }
 
+/** The depth raster the Breach cards render at on tabloid, in pixels: the size their `depthRaster` calls start from. */
+export const TABLOID_RASTER = { width: 1118, height: 1728 } as const;
+
 /** This process's depth raster for a card whose tabloid raster is `tabloidW × tabloidH` (see `rasterFor`). */
 export const depthRaster = (tabloidW: number, tabloidH: number, oversample = 1): Raster => rasterFor(FORMAT, tabloidW, tabloidH, oversample);
 

@@ -6,7 +6,9 @@ import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
 import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
-import { horizonCamera, pageOf } from '../../sketches/kit/perspective.ts';
+import { horizonCamera, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
+import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
+import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const page = { width: 279.4, height: 431.8 };
@@ -220,5 +222,21 @@ describe('sketch kit: flat fills', () => {
       expect(Math.abs(s)).toBeLessThanOrEqual(bar.l / 2 - 1.6 + 1e-9);
       expect(Math.abs(t)).toBeLessThanOrEqual(bar.h / 2 - 1.6 + 1e-9);
     }
+  });
+});
+
+describe('sketch kit: shared card helpers', () => {
+  it('builds a level camera in tabloid\'s frame: its horizon on tabloid\'s line, its lens as given', () => {
+    const cam = tabloidFrameCamera({ fov: 54, eye: 6, near: 8, far: 4000 });
+    expect(cam.position.toArray()).toEqual([0, 6, 0]);
+    expect([cam.fov, cam.near, cam.far]).toEqual([54, 8, 4000]);
+    const horizon = pageOf(cam, new THREE.Vector3(0, 6, -1000), TABLOID_PAGE);
+    expect(horizon.x).toBeCloseTo(TABLOID_PAGE.width / 2, 6);
+    expect(horizon.y).toBeCloseTo(TABLOID_HORIZON_Y, 6);
+    // The same camera `horizonCamera` makes from tabloid's page, raster and horizon; near defaults as there.
+    const by = horizonCamera({ fov: 54, eye: [0, 6, 0], target: [0, 6, -100], far: 4000, page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false });
+    const plain = tabloidFrameCamera({ fov: 54, eye: 6, far: 4000 });
+    expect(plain.near).toBe(0.5);
+    expect(plain.projectionMatrix.equals(by.projectionMatrix) && plain.matrixWorldInverse.equals(by.matrixWorldInverse)).toBe(true);
   });
 });

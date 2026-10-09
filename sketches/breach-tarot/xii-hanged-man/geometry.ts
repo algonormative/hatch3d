@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabEdges, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, type HelixStroke } from '../../kit/helix.ts';
@@ -11,7 +11,7 @@ import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks, circlePath } from '../../kit/fills.ts';
 import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
+import { horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -32,7 +32,6 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * small slabs are trimmed to their outlines, and the phrase moves to the bottom band.
  */
 /** The card's depth raster at tabloid; on any other page, the format's. */
-const TABLOID_RASTER = { width: 1118, height: 1728 };
 const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
@@ -51,10 +50,7 @@ export function plumbCamera(ctx: SketchContext): THREE.PerspectiveCamera {
  * the card's world is laid out with. At tabloid it is `plumbCamera`.
  */
 export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
-  return horizonCamera({
-    fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
-    page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
-  });
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: EYE, near: 8, far: 4000 });
 }
 
 export interface PlumbWorld {

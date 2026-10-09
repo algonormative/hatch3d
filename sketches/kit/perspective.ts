@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Point } from '../../src/sketch/types.ts';
-import { PAGE, fitFov } from './format.ts';
+import { TABLOID_PAGE } from '../phase-garden/poster.ts';
+import { PAGE, TABLOID_HORIZON_Y, TABLOID_RASTER, fitFov } from './format.ts';
 
 /** A page size in millimetres. */
 export interface PageSize { width: number; height: number }
@@ -39,6 +40,31 @@ export function horizonCamera(spec: HorizonCameraSpec): THREE.PerspectiveCamera 
   view.updateProjectionMatrix();
   view.updateMatrixWorld();
   return view;
+}
+
+/** A level camera in tabloid's frame: where it stands and looks, and its lens. */
+export interface FrameCameraSpec {
+  /** Vertical field of view, degrees: kept as given, whatever the fit. */
+  fov: number;
+  /** Eye height above the ground, world units. The camera stands at the origin and looks level, down -z. */
+  eye: number;
+  near?: number;
+  far: number;
+  /** The depth raster; default `TABLOID_RASTER`. */
+  depth?: { width: number; height: number };
+}
+
+/**
+ * A card's camera in tabloid's frame: tabloid's page, depth raster and horizon, and its field of view whatever the fit.
+ * A card lays its seeded world out with it, so every size and fit builds the same world, to the bit, and draws it with
+ * its own camera (`horizonCamera` on the format's page). The two are the same camera at tabloid. Positions picked on
+ * the page (`onGround`, `atPage`, `pageOf`) are then tabloid's, and take `TABLOID_PAGE`.
+ */
+export function tabloidFrameCamera(spec: FrameCameraSpec): THREE.PerspectiveCamera {
+  return horizonCamera({
+    fov: spec.fov, eye: [0, spec.eye, 0], target: [0, spec.eye, -100], near: spec.near, far: spec.far,
+    page: TABLOID_PAGE, depth: spec.depth ?? TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false,
+  });
 }
 
 /** Where a world point lands on the page, in millimetres. */
