@@ -295,6 +295,40 @@ describe('Breach Tarot format', () => {
     }
   });
 
+  it('narrows a long name to the card’s width, with and without the phrase, and sets a short one as it is', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
+    const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches', path));
+    const probe = (name: string, phrase: string) => `import { cardFrame } from ${kit('breach-tarot/card.ts')};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'carbon', color: '#111111', width: 0.25 }, { id: 'lettering', color: '#111111', width: 0.13 }], controls: [],
+        draw() { return cardFrame('II', ${JSON.stringify(name)}, { phrase: { text: ${JSON.stringify(phrase)} } }); } };`;
+    const narrow = { width: 34, height: 60 };
+    const g = formatFor(targetPage(TABLOID_PAGE, narrow));
+    // The name's lettering inside the card's width, with the phrase's side inset (6% of the width) of paper either side.
+    const inset = 0.06 * (g.card.x1 - g.card.x0) - 0.01;
+    const nameXs = (r: Awaited<ReturnType<typeof renderSketch>>) =>
+      r.parts.find(part => part.id === 'card-frame')!.paths.slice(4).flat().filter(p => p.y > g.card.y1).map(p => p.x);
+    for (const phrase of ['', 'there is a direction you cannot point']) {
+      await writeFile(join(dir, 'long.ts'), probe('THE HIGH PRIESTESS', phrase));
+      const xs = nameXs(await renderSketch({ entry: join(dir, 'long.ts'), finishing: { page: narrow } }));
+      expect(xs.length, `phrase '${phrase}'`).toBeGreaterThan(0);
+      expect(Math.min(...xs)).toBeGreaterThanOrEqual(g.card.x0 + inset);
+      expect(Math.max(...xs)).toBeLessThanOrEqual(g.card.x1 - inset);
+    }
+    // A name that fits keeps the frame's own height: its lettering is as tall on the narrow card as on a 70 x 120 one.
+    await writeFile(join(dir, 'short.ts'), probe('SUN', ''));
+    const height = (r: Awaited<ReturnType<typeof renderSketch>>, card: typeof g.card) => {
+      const ys = r.parts.find(part => part.id === 'card-frame')!.paths.slice(4).flat().filter(p => p.y > card.y1).map(p => p.y);
+      return Math.max(...ys) - Math.min(...ys);
+    };
+    const wide = { width: 70, height: 120 };
+    const [onNarrow, onWide] = await Promise.all([
+      renderSketch({ entry: join(dir, 'short.ts'), finishing: { page: narrow } }),
+      renderSketch({ entry: join(dir, 'short.ts'), finishing: { page: wide } }),
+    ]);
+    expect(height(onNarrow, g.card)).toBeCloseTo(height(onWide, formatFor(targetPage(TABLOID_PAGE, wide)).card), 3);
+  });
+
   it('draws in a card’s preferred fit where the render names none, an explicit fit winning, and refuses it once the format has loaded', async () => {
     dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
     const kit = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches/kit', path));

@@ -39,6 +39,18 @@ const BAND_CLEAR = 0.2;
 const MIN_LETTER = 0.75 * LEGIBLE_MM;
 /** Lettering `height` tall in a band with `room` for it: as it is, else as tall as the room, else none (0). */
 const fitted = (height: number, room: number): number => height <= room ? height : room >= MIN_LETTER ? room : 0;
+/**
+ * Cathedral lettering narrowed to the card's width, as the phrase is: as set if it fits, else tracked tighter, then
+ * set smaller. At tabloid every numeral and name fits as set.
+ */
+const toWidth = (text: string, height: number, tracking: number): { height: number; tracking: number } => {
+  if (!(height > 0)) return { height: 0, tracking };
+  const room = (CARD.x1 - CARD.x0) * (1 - 2 * PHRASE_INSET);
+  const width = (h: number, t: number): number => measureStrokeText(text, { face: 'cathedral', height: h, tracking: t });
+  if (width(height, tracking) <= room) return { height, tracking };
+  const tight = Math.min(tracking, 1.2), w = width(height, tight);
+  return w <= room ? { height, tracking: tight } : { height: height * room / w, tracking: tight };
+};
 
 /**
  * Numeral above, name below, each between a pair of fine rules. When the format puts the phrase in the band
@@ -54,12 +66,15 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
   const rule = (y: number): Point[] => [{ x: CARD.x0, y }, { x: CARD.x1, y }];
   const paths: Point[][] = [rule(CARD.y0), rule(CARD.y0 - gap), rule(CARD.y1), rule(CARD.y1 + gap)];
   const numeralHeight = fitted(above.height, CARD.y0 - gap - CARD.top - 2 * BAND_CLEAR);
-  if (numeralHeight) paths.push(...centred(numeral, (CARD.top + CARD.y0 - gap) / 2, numeralHeight, above.tracking));
+  const numeralSet = toWidth(numeral, numeralHeight, above.tracking);
+  if (numeralHeight && numeralSet.height >= MIN_LETTER) {
+    paths.push(...centred(numeral, (CARD.top + CARD.y0 - gap) / 2, numeralSet.height, numeralSet.tracking));
+  }
   // The bottom band's depth for lettering, from the second rule to the card's edge, less the paper either side.
   const depth = CARD.bottom - (CARD.y1 + gap) - 2 * BAND_CLEAR;
   const nameAlone = (): Part[] => {
-    const height = fitted(below.height, depth);
-    if (height) paths.push(...centred(name, (CARD.y1 + gap + CARD.bottom) / 2, height, below.tracking));
+    const height = fitted(below.height, depth), set = toWidth(name, height, below.tracking);
+    if (height && set.height >= MIN_LETTER) paths.push(...centred(name, (CARD.y1 + gap + CARD.bottom) / 2, set.height, set.tracking));
     return [{ id: 'card-frame', pen, paths }];
   };
   const phrase = PHRASE === 'band' && options.phrase && options.phrase.count !== 0 ? options.phrase.text.trim() : '';
@@ -78,7 +93,8 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
   // from the name's cap line to the phrase's descenders (3/8 of its height), centred in the band. A band too
   // shallow for both (a card too small for the format's bands) halves the lead, then sets both smaller, down to
   // `MIN_LETTER`.
-  let nameHeight = below.height, lead = setLead * style.height / phraseHeight;
+  const nameSet = toWidth(name, below.height, below.tracking);
+  let nameHeight = nameSet.height, lead = setLead * style.height / phraseHeight;
   const block = () => nameHeight + lead + style.height * 11 / 8;
   if (block() > depth) lead /= 2;
   if (block() > depth) {
@@ -87,7 +103,7 @@ export function cardFrame(numeral: string, name: string, options: FrameOptions =
   }
   if (Math.min(nameHeight, style.height) < MIN_LETTER) return nameAlone();
   const top = (CARD.y1 + gap + CARD.bottom) / 2 - block() / 2;
-  paths.push(...centred(name, top + nameHeight / 2, nameHeight, below.tracking));
+  paths.push(...centred(name, top + nameHeight / 2, nameHeight, nameSet.tracking));
   const width = measureStrokeText(phrase, style);
   const set = strokeText(phrase, (CARD.x0 + CARD.x1) / 2 - width / 2, top + nameHeight + lead, style);
   return [{ id: 'card-frame', pen, paths }, { id: 'card-phrase', pen: options.phrase!.pen ?? 'lettering', paths: set }];

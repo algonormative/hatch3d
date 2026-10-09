@@ -18,7 +18,8 @@
     "center": "none",
     "mergeSameColor": false,
     "vpype": {
-      "mergeTolerance": 0.1
+      "mergeTolerance": 0.1,
+      "minLength": 0.1
     }
   },
   "pieces": [

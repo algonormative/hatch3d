@@ -90,7 +90,7 @@ export function atLeast(strokes: Stroke[], view: THREE.Camera, dash: number): St
     if (st.points.length !== 2 || !(dash > 0)) return st;
     const [a, b] = st.points, pa = pageOf(view, a), pb = pageOf(view, b);
     const length = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-    if (!(length < dash)) return st;
+    if (!(length > 0) || !(length < dash)) return st;
     const mid = a.clone().add(b).multiplyScalar(0.5), k = dash / length;
     return { ...st, points: [mid.clone().lerp(a, k), mid.clone().lerp(b, k)] };
   });
@@ -105,7 +105,7 @@ export function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Mach
   const line = lidLine(plate, gap), lidDepth = FORMAT.tabloid ? M.lidDepth : height - line;
   // The panels carry the phrase's words. Where the format sets the phrase in the band they would stand empty, large
   // frames in the machine: they are blades like the rest there.
-  const panels = PHRASE === 'art';
+  const panels = FORMAT.tabloid || PHRASE === 'art';
   // The opening of the C at the front, in radians of the ring: about a quarter, as on the Cray-1.
   const open = n(ctx, 'machineOpen', 1.55, 0.1, 2.4);
   const inner = R * M.inner, rm = (R + inner) / 2;

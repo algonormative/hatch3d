@@ -245,10 +245,10 @@ function streams(ctx: SketchContext, centre: THREE.Vector3): Strand[] {
   }));
 }
 
-/** Night: engraved hatch over the sky, knocked out round everything that shines. Its ruling is a tone, kept on paper. */
 /** The night's ruling: its pitch on paper, a tone kept at every size. */
 const nightPitch = (ctx: SketchContext): number => tolerance(1.25 - 0.45 * n(ctx, 'night', 0.5, 0, 1));
 
+/** Night: engraved hatch over the sky, knocked out round everything that shines. Its ruling is a tone, kept on paper. */
 function night(ctx: SketchContext, covered: (p: Point) => boolean): Point[][][] {
   const pitch = nightPitch(ctx);
   const out: Point[][][] = [[], []];
