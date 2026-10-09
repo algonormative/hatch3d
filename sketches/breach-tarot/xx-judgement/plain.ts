@@ -2,13 +2,18 @@ import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n, smooth } from '../../kit/params.ts';
-import { pageOf } from '../../kit/perspective.ts';
-import { CARD, HORIZON_Y } from '../card.ts';
+import { pageOf, type PageSize } from '../../kit/perspective.ts';
+import { TABLOID_CARD, TABLOID_HORIZON_Y } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /**
  * The plain: stone boxes set in the ground in a grid (part cemetery, part server floor), turned on
  * the diagonal so the rows run away to the horizon. Each is a tray with a lid; every lid is lifting
  * at once, hinged on its own edge, wide open near and only cracking far.
+ *
+ * The plain is the card's seeded world, laid out in tabloid's frame: `view` is the world camera (`worldCamera` in
+ * geometry.ts), and every page test that decides what stands (a lid let down off the horizon's open edges, a box or a
+ * fragment outside the card) is made on tabloid's page, card and horizon, so every size and fit builds the same plain.
  */
 export const BOX = { w: 4.3, l: 7.8, wall: 0.66, high: 1.45, floor: 0.27, lid: 0.55, over: 0.18, gap: 0.04 };
 
@@ -80,12 +85,12 @@ export function vaultCorners(v: Vault): THREE.Vector3[] {
   return out;
 }
 
-export function pageBox(view: THREE.Camera, pts: THREE.Vector3[]): { x0: number; x1: number; y0: number; y1: number } | null {
+export function pageBox(view: THREE.Camera, pts: THREE.Vector3[], page: PageSize = TABLOID_PAGE): { x0: number; x1: number; y0: number; y1: number } | null {
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const p of pts) {
     const behind = p.clone().applyMatrix4(view.matrixWorldInverse).z >= -1;
     if (behind) return null;
-    const q: Point = pageOf(view, p);
+    const q: Point = pageOf(view, p, page);
     x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y);
   }
   return { x0, x1, y0, y1 };
@@ -126,8 +131,8 @@ export function plain(ctx: SketchContext, view: THREE.PerspectiveCamera, keepCle
       const trial = buildVault(id, x, z, turn, Math.max(a2, THREE.MathUtils.degToRad(3)), 'far', lidTone);
       const box = pageBox(view, vaultCorners(trial));
       if (!box) break;
-      if (box.x1 < CARD.x0 - 12 || box.x0 > CARD.x1 + 12 || box.y1 < CARD.y0 - 10 || box.y0 > CARD.y1 + 80) break;
-      if (box.y0 < HORIZON_Y + 2 && (box.x0 < CARD.x0 + edge || box.x1 > CARD.x1 - edge)) continue;
+      if (box.x1 < TABLOID_CARD.x0 - 12 || box.x0 > TABLOID_CARD.x1 + 12 || box.y1 < TABLOID_CARD.y0 - 10 || box.y0 > TABLOID_CARD.y1 + 80) break;
+      if (box.y0 < TABLOID_HORIZON_Y + 2 && (box.x0 < TABLOID_CARD.x0 + edge || box.x1 > TABLOID_CARD.x1 - edge)) continue;
       v = trial;
       break;
     }
@@ -194,7 +199,7 @@ export function fragments(ctx: SketchContext, view: THREE.PerspectiveCamera, vau
       s.tone = 0.4;
       if (all.some(o => inside(p, o, Math.max(w, d) * 0.8)) || !clear(p)) continue;
       const box = pageBox(view, [p]);
-      if (!box || box.x0 < CARD.x0 + 6 || box.x0 > CARD.x1 - 6 || box.y0 < CARD.y0 + 6) continue;
+      if (!box || box.x0 < TABLOID_CARD.x0 + 6 || box.x0 > TABLOID_CARD.x1 - 6 || box.y0 < TABLOID_CARD.y0 + 6) continue;
       out.push(s);
     }
   }
