@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { clearBands, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -35,12 +35,6 @@ const { W, H, MM_X, MM_Y } = depthRaster(559, 864, 2);
 const W2 = 2 * W, H2 = 2 * H;
 const MM2_X = PAGE.width / W2, MM2_Y = PAGE.height / H2;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
-/**
- * The smallest feature this format draws as a shape, in millimetres on paper: a flat band narrower than this is
- * drawn as its centreline, a paving stone shallower than this is left out. Tabloid is the authored format: its
- * print keeps everything it has.
- */
-const FEATURE = FORMAT.tabloid ? 0 : MIN_FEATURE;
 /** tower() pushes the ground last: the plinth, 18 × 9 paving stones and 7 pieces of debris. */
 const GROUND_COUNT = 1 + 18 * 9 + 7;
 
@@ -225,7 +219,6 @@ function forkedBolt(ctx: SketchContext, half: number): Channel[] {
 
 /** The fewest branches a smaller card keeps off the bolt's main channel, so it still forks. */
 const BRANCH_FLOOR = 4;
-const GOLDEN = 0.6180339887498949;
 
 /**
  * Which of the bolt's channels a card draws. Branching is a density: the branches off each channel are
@@ -240,7 +233,7 @@ function boltShown(bolt: Channel[]): boolean[] {
   bolt.forEach((ch, k) => {
     const off = forks.get(k) ?? [];
     const keep = off.length ? scaledCount(off.length, ch.order === 0 ? BRANCH_FLOOR : 0, 'length') / off.length : 1;
-    off.forEach((c, i) => { shown[c] = shown[k] && (keep >= 1 || (i * GOLDEN) % 1 < keep); });
+    off.forEach((c, i) => { shown[c] = shown[k] && evenlyKept(i, keep); });
   });
   return shown;
 }
@@ -315,7 +308,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   const deep = (s: Slab) => s.z + s.d / 2 > view.position.z - 1 ? Infinity
     : pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z + s.d / 2)).y - pageOf(view, new THREE.Vector3(s.x, s.y + s.h / 2, s.z - s.d / 2)).y;
   const ground = all.slice(all.length - GROUND_COUNT).filter(s => (s.role !== 'debris' || Math.hypot(s.x - M.x, s.z - M.z) > footprint + Math.max(s.w, s.d) / 2)
-    && (s.role !== 'stub' || FEATURE === 0 || deep(s) >= FEATURE));
+    && (s.role !== 'stub' || MIN_FEATURE === 0 || deep(s) >= MIN_FEATURE));
   const m = machine(ctx, view);
   const light = rakingLight(ctx);
   // The machine takes the Machine study's light, high and from the front left, so its faces read square on.
@@ -471,7 +464,8 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
         return;
       }
     });
-    if (titleSettings(ctx).enabled) keep(planSlogans(one({ sloganCount: 0 }), offered.filter(f => !usedIds.has(f.id)), env, 'machine-title'));
+    // The title goes with the phrase: where the format sets the phrase in the band, the machine carries neither.
+    if (PHRASE === 'art' && titleSettings(ctx).enabled) keep(planSlogans(one({ sloganCount: 0 }), offered.filter(f => !usedIds.has(f.id)), env, 'machine-title'));
     for (const points of slogans.strokes) strokes.push({ ink: settings.pen as Ink, group: 'slogan', family: 'text', points });
     for (const points of slogans.titleStrokes) strokes.push({ ink: 'lettering', group: 'title', family: 'text', points });
     // A face that carries a word drops its coloured field and its ticks, so the word sits on clean metal.
@@ -526,7 +520,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
     if (clock) {
       const box = { x0: CARD.x0, x1: CARD.x1, y0: cy - amp - layoutLength(4), y1: cy + amp + layoutLength(4) };
       // A band narrower than the smallest feature is drawn as its centreline.
-      const marks = 2 * clockHalf < FEATURE ? [wave] : bandMarks(wave, clockHalf, box, { pitch: tolerance(0.8), angle: Math.PI / 4 });
+      const marks = 2 * clockHalf < MIN_FEATURE ? [wave] : bandMarks(wave, clockHalf, box, { pitch: tolerance(0.8), angle: Math.PI / 4 });
       for (const path of marks) {
         for (const inside of clipWindow(path)) for (const piece of keepAlong(inside, p => !standing(p) && !inBolt(p, halo(0.8)), 0.12)) buckets.add('clock-carbon', piece, true);
       }
@@ -553,7 +547,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
       const kept = spans.filter(([a, b]) => b - a >= layoutLength(ch.parent < 0 ? 12 : 5));
       const slack = layoutLength(1.5);
       const onSpan = (q: Point) => { const s = nearest(ch.path, ls, q).t * total; return kept.some(([a, b]) => s > a - slack && s < b + slack); };
-      for (const path of channelMarks(ch, CARD, tolerance(0.6), Math.PI / 6, tolerance(0.5), FEATURE)) {
+      for (const path of channelMarks(ch, CARD, tolerance(0.6), Math.PI / 6, tolerance(0.5), MIN_FEATURE)) {
         for (const piece of keepAlong(path, p => !standing(p) && onSpan(p) && (ch.parent < 0 || !inChannel(ch.parent, p, halo(0.3))), 0.15)) if (piece.length > 1) boltPaths.push(piece);
       }
     });

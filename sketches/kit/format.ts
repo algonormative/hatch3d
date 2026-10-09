@@ -41,10 +41,14 @@ import { TABLOID_PAGE, TALL_ART } from '../phase-garden/poster.ts';
  *   - a pitch, gap, dash or minimum length, a lettering size: real millimetres, `tolerance(0.62)` where it could
  *     fall under the pen floor; a knockout halo: `halo(2.2)`;
  *   - a count that is really density: `scaledCount(80, 24)` (by the window's area), `scaledCount(80, 24, 'length')`
- *     (by `S`, for things spaced along a length that scales with the card, like rays round a sun);
- *   - a feature smaller than `MIN_FEATURE` millimetres on paper: draw it as an outline or a single line, or drop it;
+ *     (by `S`, for things spaced along a length that scales with the card, like rays round a sun); to keep that many
+ *     of a seeded set, `evenlyKept(i, kept / total)` on each one's seeded index;
+ *   - a feature smaller than `MIN_FEATURE` millimetres on paper (0 at tabloid): draw it as an outline or a single
+ *     line, or drop it;
  *   - a page length fed to a gradient tuned on tabloid: back in tabloid millimetres as `length / S`.
- * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`.
+ * The phrase: where `PHRASE` is `band` the card draws no words in the art and passes its phrase to `cardFrame`. A title
+ * (`titleEnabled`) is lettered in the art with the phrase, so where the phrase leaves the art (`band`, `none`) the
+ * card carries no title; the band has no room for one.
  * Check the result against the card's tabloid print with the density probe: `denserThan` in `kit/density.ts`, or
  * `npm run -s density -- small/result.json --against tabloid/result.json`. The Fool is the worked example.
  */
@@ -78,13 +82,15 @@ export interface Format {
   pens: FormatPen[];
   /** Closest two parallel strokes may sit on the paper: twice the widest art pen. */
   minSpacing: number;
+  /** Smallest feature drawn as a shape, in millimetres on paper: 0 at tabloid, where the print keeps all it has. */
+  minFeature: number;
   phrase: PhrasePlacement;
 }
 
 /** Smallest cap height the lettering pen keeps legible, in millimetres. */
 export const LEGIBLE_MM = 1.6;
-/** Smallest feature drawn as a shape, in millimetres on paper: anything smaller is drawn as an outline or a single line, or dropped. */
-export const MIN_FEATURE = 1;
+/** Smallest feature a format other than tabloid draws as a shape, in millimetres on paper. */
+const FEATURE_MM = 1;
 /** The finest depth raster any format uses, in millimetres per pixel. */
 const RASTER_MM = 0.25;
 /** The CPU depth buffer's pixel budget (`MAX_PIXELS` in src/sketch/depth-buffer.ts). */
@@ -105,7 +111,7 @@ export const TABLOID_FORMAT: Format = {
   card: TABLOID_CARD,
   horizonY: TABLOID_CARD.y0 + 0.6 * (TABLOID_CARD.y1 - TABLOID_CARD.y0),
   frame: { rule: 1.2, numeral: { height: 8, tracking: 2.2 }, name: { height: 6.5, tracking: 3.2 }, phraseHeight: 2.2 },
-  pens: pensOf(0.25, 0.13), minSpacing: 0.5, phrase: 'art',
+  pens: pensOf(0.25, 0.13), minSpacing: 0.5, minFeature: 0, phrase: 'art',
 };
 
 const sameSize = (a: { width: number; height: number }, b: { width: number; height: number }) => a.width === b.width && a.height === b.height;
@@ -157,7 +163,7 @@ export function formatFor(page: Page, options: FormatOptions = {}): Format {
     card, horizonY: card.y0 + 0.6 * (card.y1 - card.y0),
     // The band's double rule scales with the card, but stays far enough apart to print as two lines.
     frame: { rule: Math.max(frame.rule * s, 1.5 * minSpacing), numeral: sized(frame.numeral), name: sized(frame.name), phraseHeight: LEGIBLE_MM },
-    pens, minSpacing, phrase,
+    pens, minSpacing, minFeature: FEATURE_MM, phrase,
   };
 }
 
@@ -177,6 +183,11 @@ export const PITCH_SCALE: number = FORMAT.pitchScale;
 export const SHEET = FORMAT.sheet;
 export const PENS: readonly FormatPen[] = FORMAT.pens;
 export const MIN_SPACING: number = FORMAT.minSpacing;
+/**
+ * Smallest feature this format draws as a shape, in millimetres on paper: anything smaller is drawn as an outline or
+ * a single line, or dropped. 0 at tabloid, so a card's gate on it is a no-op there.
+ */
+export const MIN_FEATURE: number = FORMAT.minFeature;
 export const PHRASE: PhrasePlacement = FORMAT.phrase;
 
 export interface Raster { W: number; H: number; MM_X: number; MM_Y: number }
@@ -220,8 +231,11 @@ export const layoutLength = (mm: number): number => identity ? mm : mm * S;
 export const layoutX = (x: number): number => identity ? x : PAGE.width / 2 + (x - TABLOID_CENTRE_X) * S;
 /** A page y authored on tabloid, measured from the horizon. */
 export const layoutY = (y: number): number => identity ? y : HORIZON_Y + (y - TABLOID_FORMAT.horizonY) * S;
-/** A tolerance in real millimetres, never below the pen floor (by default the format's minimum spacing). */
-export const tolerance = (mm: number, floor = MIN_SPACING): number => identity ? mm : Math.max(mm, floor);
+/**
+ * A tolerance in real millimetres, never below the pen floor (by default the format's minimum spacing). At tabloid
+ * with its own pens it is the identity; a `pen` option on a tabloid page sets the floor there too.
+ */
+export const tolerance = (mm: number, floor = MIN_SPACING): number => identity && MIN_SPACING === TABLOID_FORMAT.minSpacing ? mm : Math.max(mm, floor);
 /** A knockout halo authored in tabloid millimetres: scaled with the card, never under 0.5 mm. */
 export const halo = (mm: number): number => identity ? mm : Math.max(0.5, S * mm);
 /**
@@ -232,6 +246,14 @@ export const halo = (mm: number): number => identity ? mm : Math.max(0.5, S * mm
 export function scaledCount(n: number, floor: number, per: 'area' | 'length' = 'area'): number {
   return identity ? n : Math.max(floor, Math.round(n * (per === 'area' ? AREA : S)));
 }
+const GOLDEN = (Math.sqrt(5) - 1) / 2;
+/**
+ * Whether the `index`-th of a seeded set is among an even spread of a `keep` fraction of it (all of it at 1 or
+ * more). Key it on an index the seeded world fixes (an item's place in its generation, not in a list filtered by
+ * size), and the kept sets nest: a smaller card keeps a subset of what a larger one shows. With `scaledCount`:
+ * `evenlyKept(i, scaledCount(total, floor) / total)`.
+ */
+export const evenlyKept = (index: number, keep: number): boolean => keep >= 1 || (index * GOLDEN) % 1 < keep;
 /** A vertical field of view, in degrees, under the format's fit: unchanged for `height`, widened for `width` so tabloid's width still fits. */
 export function fitFov(deg: number): number {
   if (identity || FIT === 'height') return deg;

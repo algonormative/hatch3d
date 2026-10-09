@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { PAGE, depthRaster, scaledCount } from '../../kit/format.ts';
+import { PAGE, depthRaster, evenlyKept, scaledCount } from '../../kit/format.ts';
 import { towerSlabs } from '../../breach-cathedral-tower/geometry.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -89,7 +89,6 @@ function pour(ctx: SketchContext): Strand[] {
 
 /** The fewest raindrops (of the whole fall, most of it hidden or off the card) a smaller card keeps, so it still storms. */
 const RAIN_FLOOR = 300;
-const GOLDEN = 0.6180339887498949;
 
 /**
  * The storm: slanted rain on a backdrop plane behind the tower, so the depth pass keeps it behind
@@ -120,7 +119,7 @@ export function storm(ctx: SketchContext): Stroke[] {
     }
   }
   const keep = out.length ? scaledCount(out.length, RAIN_FLOOR, 'length') / out.length : 1;
-  return keep >= 1 ? out : out.filter((_, i) => (i * GOLDEN) % 1 < keep);
+  return keep >= 1 ? out : out.filter((_, i) => evenlyKept(i, keep));
 }
 
 /**

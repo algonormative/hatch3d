@@ -8,7 +8,7 @@ import { CARD as CARD_OF_CARDS, HORIZON_Y as HORIZON_OF_CARDS, cardFrame } from 
 import { targetPage } from '../sketch/render-target.ts';
 import {
   AREA, CARD, FORMAT, FRAME, HORIZON_Y, MIN_FEATURE, PAGE, PITCH_SCALE, SHEET, TABLOID_CARD, TABLOID_FORMAT, TABLOID_HORIZON_Y,
-  assertFormatPage, depthRaster, fitFov, formatFor, halo, layoutLength, layoutX, layoutY, rasterFor, scaledCount, tolerance,
+  assertFormatPage, depthRaster, evenlyKept, fitFov, formatFor, halo, layoutLength, layoutX, layoutY, rasterFor, scaledCount, tolerance,
 } from '../../sketches/kit/format.ts';
 
 let dir: string | undefined;
@@ -51,7 +51,9 @@ describe('Breach Tarot format', () => {
     expect(TABLOID_CARD).toBe(CARD);
     expect(TABLOID_HORIZON_Y).toBe(HORIZON_Y);
     expect(AREA).toBe(1);
-    expect(MIN_FEATURE).toBe(1);
+    // The print keeps every feature it has.
+    expect(MIN_FEATURE).toBe(0);
+    expect(TABLOID_FORMAT.minFeature).toBe(0);
     for (const v of [0, 7, 80, 112.5]) expect(scaledCount(v, 16)).toBe(v);
     expect(scaledCount(80, 16, 'length')).toBe(80);
     // The phrase stays in the art at tabloid: the frame ignores one passed to it.
@@ -89,12 +91,27 @@ describe('Breach Tarot format', () => {
     expect(f.frame.numeral.tracking).toBe(2.2);
     expect(f.frame.name.tracking).toBe(3.2);
     expect(f.frame.rule).toBe(0.75);
+    expect(f.minFeature).toBe(1);
     const wide = formatFor(page, { fit: 'width', pen: 0.1 });
     expect(wide.s).toBeCloseTo(70 / 279.4, 12);
     expect(wide.minSpacing).toBeCloseTo(0.2, 12);
     expect(wide.pens.find(pen => pen.id === 'carbon')!.width).toBe(0.1);
     expect(() => formatFor(page, { fit: 'diagonal' })).toThrow(/fit/);
     expect(() => formatFor(page, { colour: 'red' })).toThrow(/Unknown format option/);
+  });
+
+  it('keeps an even spread of a seeded set, and a smaller share keeps a subset of a larger one', () => {
+    const kept = (keep: number) => Array.from({ length: 200 }, (_, i) => i).filter(i => evenlyKept(i, keep));
+    expect(kept(1)).toHaveLength(200);
+    expect(kept(1.5)).toHaveLength(200);
+    for (const [small, large] of [[0.1, 0.3], [0.3, 0.31], [0.05, 0.9]]) {
+      const a = kept(small), b = new Set(kept(large));
+      expect(Math.abs(a.length - 200 * small)).toBeLessThanOrEqual(2);
+      for (const i of a) expect(b.has(i)).toBe(true);
+    }
+    // Even: every run of 20 in the set keeps at least one when a tenth is kept.
+    const tenth = new Set(kept(0.1));
+    for (let start = 0; start < 200; start += 20) expect(Array.from({ length: 20 }, (_, k) => start + k).some(i => tenth.has(i)), `from ${start}`).toBe(true);
   });
 
   it('puts the card’s edge on an explicit page margin, and says so when the card cannot fit', () => {
@@ -239,6 +256,21 @@ describe('Breach Tarot format', () => {
         expect(p.y).toBeLessThanOrEqual((above ? g.card.y0 - g.frame.rule : g.card.bottom) - clear);
       }
     }
+  });
+
+  it('takes the pen floor from a pen option on a tabloid page too, and leaves the preset alone', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-format-'));
+    const entry = join(dir, 'probe.ts');
+    // A page-aware probe: a line as long as tolerance(0.3), in tenths.
+    await writeFile(entry, `import { tolerance } from ${JSON.stringify(resolve(import.meta.dirname, '../../sketches/kit/format.ts'))};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [],
+        draw() { return [{ id: 'floor', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 20 + 10 * tolerance(0.3), y: 20 }]] }]; } };`);
+    const page = { width: 279.4, height: 431.8, margin: 18 };
+    const [preset, thick] = await Promise.all([renderSketch({ entry, finishing: { page } }), renderSketch({ entry, finishing: { page }, format: { pen: 0.35 } })]);
+    const end = (r: typeof preset) => r.parts[0].paths[0][1].x;
+    expect(end(preset)).toBeCloseTo(23, 3);
+    expect(end(thick)).toBeCloseTo(27, 3);
   });
 
   it('renders the Tower, with its double-resolution machine pass, on a 12 x 18 in page', async () => {

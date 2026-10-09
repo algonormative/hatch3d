@@ -84,15 +84,19 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
     await writeFile(probeEntry, `import { shownDebris, sky, starCamera } from ${JSON.stringify(resolve('sketches/breach-tarot/xvii-star/geometry.ts'))};
       const at = s => [{ x: 42 + s.x, y: 20 + s.y }, { x: 43 + s.x, y: 110 + s.z }];
       export default { name: 'star-sky', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
-        pens: [{ id: 'ink', color: '#111111', width: 0.25 }], controls: [],
+        pens: [{ id: 'ink', color: '#111111', width: 0.25 }],
+        controls: [{ type: 'slider', id: 'constellation', label: 'Constellation', default: 0.5, min: 0, max: 1, step: 0.01 }],
         draw(ctx) {
           const view = starCamera(ctx), s = sky(ctx, view);
           return [{ id: 'star', pen: 'ink', paths: s.star.map(at) }, { id: 'words', pen: 'ink', paths: s.words.map(at) },
             { id: 'debris', pen: 'ink', paths: s.debris.map(at) }, { id: 'shown', pen: 'ink', paths: shownDebris(s.debris, view).map(at) }];
         } };`);
     const solids = (result: RenderResult, id: string) => result.parts.find(part => part.id === id)?.paths ?? [];
-    const [print, ...small] = await Promise.all([
+    const a5 = { width: 148, height: 210 };
+    const [print, larger, sparse, full, ...small] = await Promise.all([
       renderSketch({ entry: probeEntry, seed: 2 }),
+      renderSketch({ entry: probeEntry, seed: 2, finishing: { page: a5 } }),
+      ...[0, 1].map(constellation => renderSketch({ entry: probeEntry, seed: 2, params: { constellation }, finishing: { page } })),
       ...fits.map(fit => renderSketch({ entry: probeEntry, seed: 2, finishing: { page }, ...(fit === 'width' ? { format: { fit } } : {}) })),
     ]);
     expect(solids(print, 'debris').length).toBeGreaterThan(40);
@@ -104,12 +108,18 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
         expect(here.length, id).toBe(there.length);
         here.forEach((path, i) => expect(near(path, there[i]), `${id} ${i}`).toBe(true));
       }
-      // A constellation, not the print's crowd: about the format's count of the fragments the print seeded.
+      // A constellation, not the print's crowd: the format's share of the fragments the print seeded, less any too
+      // small or outside the sky; and a subset of what a larger card (A5) shows.
       const shown = solids(result, 'shown');
-      expect(shown.length).toBeGreaterThanOrEqual(CONSTELLATION_FLOOR - 2);
+      expect(shown.length).toBeGreaterThanOrEqual(CONSTELLATION_FLOOR - 4);
       expect(shown.length).toBeLessThanOrEqual(CONSTELLATION_FLOOR + 2);
       for (const path of shown) expect(solids(result, 'debris').some(seeded => near(path, seeded))).toBe(true);
+      for (const path of shown) expect(solids(larger, 'shown').some(kept => near(path, kept))).toBe(true);
     }
+    expect(solids(larger, 'shown').length).toBeGreaterThan(solids(small[0], 'shown').length);
+    // The constellation control still sets how many show on a small card.
+    expect(solids(sparse, 'shown').length).toBeLessThan(solids(small[0], 'shown').length);
+    expect(solids(full, 'shown').length).toBeGreaterThan(solids(small[0], 'shown').length);
   }, 120_000);
 
   it('still reads as the Star: the star where the print has it, the streams pouring from under it to the water, the glitter path beneath it, every fragment haloed', async () => {

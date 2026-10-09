@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -42,9 +42,8 @@ export interface Sky { star: Slab[]; debris: Slab[]; words: Slab[]; centre: THRE
 const placed = (p: Point): Point => ({ x: layoutX(p.x), y: layoutY(p.y) });
 /** A page y back in tabloid's frame (measured from the horizon), for a pattern tuned on tabloid's page. */
 const tabloidY = (y: number): number => FORMAT.tabloid ? y : TABLOID_HORIZON_Y + (y - HORIZON_Y) / S;
-/** The fewest fragments a smaller card keeps in its sky, so the constellation still reads. */
+/** The fewest fragments a smaller card keeps in its sky at the `constellation` default, so the constellation still reads. */
 export const CONSTELLATION_FLOOR = 16;
-const GOLDEN = 0.6180339887498949;
 
 /**
  * The sky's solids. They are placed in tabloid's frame (its page, card and horizon) and carried to the format's
@@ -120,21 +119,25 @@ export function pageExtent(view: THREE.Camera, s: Slab): { x: number; y: number;
   return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0) };
 }
 
+/** The fragments the sky seeds at the `constellation` control's default. */
+const SEEDED_DEFAULT = 45;
+
 /**
  * The debris a card draws: every fragment the sky seeded, at tabloid. The fragments are a density, so where the
- * format's count of them (`scaledCount`, by the art window's area, never under `CONSTELLATION_FLOOR`) is below the
- * seeded number, those smaller on paper than `MIN_FEATURE` or outside the sky are left out, and the rest thinned to
- * that count as an even spread. The seeded sky itself never changes.
+ * format's count of them (`scaledCount`, by the art window's area, never under a floor of `CONSTELLATION_FLOOR` at
+ * the control's default, in proportion to it otherwise) is below the seeded number, the sky keeps that share of its
+ * fragments as an even spread over their seeded order (so a smaller card keeps a subset of what a larger one shows),
+ * less those smaller on paper than `MIN_FEATURE` or outside the sky. The seeded sky itself never changes.
  */
 export function shownDebris(debris: Slab[], view: THREE.Camera): Slab[] {
-  const target = scaledCount(debris.length, CONSTELLATION_FLOOR);
+  const target = scaledCount(debris.length, Math.round(CONSTELLATION_FLOOR * debris.length / SEEDED_DEFAULT));
   if (target >= debris.length) return debris;
-  const candidates = debris.filter(s => {
+  const keep = target / debris.length;
+  return debris.filter((s, i) => {
+    if (!evenlyKept(i, keep)) return false;
     const e = pageExtent(view, s);
     return e.size >= MIN_FEATURE && e.x > CARD.x0 && e.x < CARD.x1 && e.y > CARD.y0 && e.y < HORIZON_Y;
   });
-  const keep = target / candidates.length;
-  return candidates.filter((_, i) => (i * GOLDEN) % 1 < keep);
 }
 
 /**
@@ -289,7 +292,7 @@ export function drawStar(ctx: SketchContext): Part[] {
     const env = { view, depth, width: W, height: H, bias: 0.0014, mmPerPx: MM_Y,
       art: { x0: CARD.x0 / MM_X, x1: CARD.x1 / MM_X, y0: CARD.y0 / MM_Y, y1: HORIZON_Y / MM_Y } };
     // The phrase, lettered on the word fragments; or, where the format sets it in the band, under the card's name
-    // instead. The fragments that carry it on the print stay as pale there.
+    // instead. The fragments that carry it on the print stay as pale there. The title goes with the phrase: none then.
     const settings = sloganSettings(ctx);
     const slogans: SloganPlan = PHRASE === 'art'
       ? planSloganAttempts(ctx, env, Array.from({ length: 8 }, (_, k) => ({ surfaces: () => surfaces, salt: k === 0 ? undefined : `slogan-${k}` })))
@@ -312,8 +315,8 @@ export function drawStar(ctx: SketchContext): Part[] {
       begin: stroke => {
         const text = stroke.family === 'text';
         const key = `${stroke.group}-${stroke.ink}`;
-        // Off tabloid, what a face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped.
-        const min = !FORMAT.tabloid && stroke.family === 'hatch' ? MIN_FEATURE : undefined;
+        // What a face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped (none at tabloid).
+        const min = stroke.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
         return runs => {
           for (const run of runs) {
             for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y), { ...CARD, y1: HORIZON_Y - halo(0.5) })) add(key, inside, text, min);

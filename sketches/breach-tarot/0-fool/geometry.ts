@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, halo, layoutLength, scaledCount } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, scaledCount } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -47,7 +47,6 @@ const CELL = 20, THICK = 2.2, COURSE = 2.5, COPING = 0.7;
 const FACET_MM_PER_UNIT = 8.3;
 /** The fewest loose blocks (fallen, or in the air) a smaller card keeps, so the collapse still reads. */
 const LOOSE_FLOOR = 60;
-const GOLDEN = 0.6180339887498949;
 
 /** The card's camera, on the format's page. */
 export function foolCamera(ctx: SketchContext): THREE.PerspectiveCamera {
@@ -378,7 +377,7 @@ export function drawFool(ctx: SketchContext): Part[] {
   const keepLoose = looseCount ? scaledCount(looseCount, LOOSE_FLOOR, 'length') / looseCount : 1;
   let loose = 0;
   for (const w of built) for (const sl of w.slabs) {
-    if (keepLoose < 1 && isLoose(sl) && (loose++ * GOLDEN) % 1 >= keepLoose) continue;
+    if (isLoose(sl) && !evenlyKept(loose++, keepLoose)) continue;
     allSlabs.push(sl);
     const scale = FACET_MM_PER_UNIT / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
     const pageSize = Math.max(sl.w, sl.h) * mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
