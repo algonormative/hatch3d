@@ -151,6 +151,12 @@ describe('Breach Tarot: IV The Emperor at 70 x 120 mm', () => {
       const nearest = Math.min(...sky.map(p => Math.hypot(p.x - head.x, p.y - head.y)));
       expect(nearest / (95 * s)).toBeGreaterThan(0.4);
       expect(nearest / (95 * s)).toBeLessThan(0.75);
+      // The helix keeps off the censor bar by its knockout halo (1.4 mm in tabloid, scaled with the card, never under 0.5 mm):
+      // its nearest stroke comes no nearer the bar than that, nor much further than the scaled halo plus four tenths of a millimetre.
+      let nearBar = Infinity;
+      for (const p of points(result, 'helix-')) for (const q of points(result, 'bar-')) nearBar = Math.min(nearBar, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(nearBar, `${fit} helix to bar`).toBeGreaterThan(0.45);
+      expect(nearBar, `${fit} helix to bar`).toBeLessThan(Math.max(0.5, 1.4 * s) + 0.4);
     }
   }, 120_000);
 
@@ -182,10 +188,15 @@ describe('Breach Tarot: IV The Emperor at 70 x 120 mm', () => {
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 2 }), ...fits.map(render)]);
     const master = probe(print);
-    for (const result of small) {
+    for (const [k, result] of small.entries()) {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
+      // The throne's outline is trimmed on a small card (kit/slabs.ts' `SlabTrim`): untrimmed, its back edges and sliver faces
+      // ran the throne to 707-714 mm of card; trimmed, it is 650-660 mm.
+      const throne = result.parts.filter(part => part.id === 'throne-carbon').flatMap(part => part.paths)
+        .reduce((sum, path) => sum + path.slice(1).reduce((l, q, i) => l + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0), 0);
+      expect(throne, `${fits[k]} throne outline`).toBeLessThan(685);
       // The suit is thinned where its lines crowd (thin.ts): unthinned, its planes, the pinstripe beside each plane
       // edge and the outline ran together over half its length (49-56%, against the print's 30%).
       const figure = report.parts.find(part => part.id === 'figure-carbon')!;
