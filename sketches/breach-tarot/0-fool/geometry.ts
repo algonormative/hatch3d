@@ -383,7 +383,10 @@ export function drawFool(ctx: SketchContext): Part[] {
     const pageSize = Math.max(sl.w, sl.h) * mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z));
     const outline = pageSize < 1.5;
     const group = sl.role === 'fallen' || sl.role === 'debris' ? 'collapse' : 'maze';
-    for (const st of facetStrokes(sl, light, eye, outline, scale)) strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
+    // Off tabloid a loose block's outline is trimmed (kit/slabs.ts): at this size its back edges and sliver faces would
+    // double it, and the rising cloud would read as a scribble.
+    const trim = isLoose(sl) ? { view } : undefined;
+    for (const st of facetStrokes(sl, light, eye, outline, scale, trim)) strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
   }
   // The knot sits on the throat, just above the buttoned collar, so the tie leaves from the neck itself.
   const knot = s.at('neck').lerp(s.at('head'), n(ctx, 'knot', 0.55, 0, 1)).addScaledVector(s.axes('neck').z, 0.55);

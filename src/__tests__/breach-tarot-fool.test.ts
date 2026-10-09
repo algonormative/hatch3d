@@ -212,6 +212,10 @@ describe('Breach Tarot: 0 The Fool at 70 x 120 mm', () => {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
+      // The loose blocks are trimmed for the small card (kit/slabs.ts' `SlabTrim`): untrimmed, their back edges and
+      // sliver faces doubled their outlines, and over a third of the collapse ran too close (35-36%, in either fit).
+      const collapse = report.parts.find(part => part.id === 'collapse-carbon')!;
+      expect(collapse.share, describeDensity(report)).toBeLessThan(0.28);
     }
     // The negative control: the print scaled down onto the card, as a sketch that is not page-aware is, its
     // hatch and cloth pitches shrinking with it.
