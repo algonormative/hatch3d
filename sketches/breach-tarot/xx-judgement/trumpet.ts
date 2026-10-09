@@ -266,8 +266,11 @@ export function trumpet(ctx: SketchContext, world: THREE.PerspectiveCamera, view
   for (const st of strands) for (const h of strandStrokes(ctx, st, bend, sv, density, minMm, printMm, tMax, u => width(curveAt(u)) < 3)) {
     for (const run of cutAt(h.points, centre, axis)) strokes.push({ ...h, points: run.map(p => p.clone().multiplyScalar(1 / S)) });
   }
+  // The ribbons' solids, for the hidden-line test and the paper round the horn. A turn of the bell spans a score of their
+  // steps along, whose chords cut inside its curve by a tenth of a millimetre or more on a small card, as much as half the
+  // halo there: off tabloid they are stepped as finely as the edges are traced.
   const meshes = strands.map(st => {
-    const g = buildSurfaceMesh((u, v) => bend(strandPoint(st, u * tMax, 2 * v - 1)), {}, 480, 8);
+    const g = buildSurfaceMesh((u, v) => bend(strandPoint(st, u * tMax, 2 * v - 1)), {}, FORMAT.tabloid ? 480 : 1200, 8);
     const pos = g.getAttribute('position'), index = g.getIndex()!;
     const kept: number[] = [];
     const vv = new THREE.Vector3();
