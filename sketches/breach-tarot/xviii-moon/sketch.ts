@@ -1,3 +1,4 @@
+import './prefers.ts';
 import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { assertFormatPage } from '../../kit/format.ts';

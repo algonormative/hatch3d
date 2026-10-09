@@ -3,6 +3,7 @@ import type { SketchContext } from '../../../src/sketch/types.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
 import { atPage } from '../../kit/perspective.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /** How far off the moon hangs, in world units: far behind everything that stands. */
 export const MOON_DIST = 4000;
@@ -28,7 +29,7 @@ export interface Crescent {
 export function crescent(ctx: SketchContext, view: THREE.PerspectiveCamera, focal: number): Crescent {
   const rng = ctx.random('moon-crescent');
   const page = { x: n(ctx, 'moonX', 178, 120, 245), y: n(ctx, 'moonY', 108, 55, 160) };
-  const centre = atPage(view, page, MOON_DIST);
+  const centre = atPage(view, page, MOON_DIST, TABLOID_PAGE);
   const unit = centre.distanceTo(view.position) / focal;
   const R = n(ctx, 'moonSize', 50, 25, 55) * unit;
   // Local frame: z toward the eye, y up, x to the right; then turned on its upright and tipped back.

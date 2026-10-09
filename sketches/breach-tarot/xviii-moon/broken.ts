@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
+import { TABLOID_CARD } from '../../kit/format.ts';
 import { atPage, pageOf } from '../../kit/perspective.ts';
-import { CARD } from '../card.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /**
  * The moon broken: a small, far rock cracked into a few big pieces that have drifted a little apart,
@@ -56,10 +57,14 @@ function segmentGap(a0: THREE.Vector3, a1: THREE.Vector3, b0: THREE.Vector3, b1:
   return best;
 }
 
+/**
+ * The broken moon, laid out in tabloid's frame: `view` is the card's world camera (on tabloid's page, raster and
+ * horizon) and `focal` its focal length in tabloid millimetres, so every size and fit hangs the same moon.
+ */
 export function broken(ctx: SketchContext, view: THREE.PerspectiveCamera, focal: number): Broken {
   const rng = ctx.random('moon-broken');
   const page = { x: n(ctx, 'brokenX', 178, 120, 240), y: n(ctx, 'brokenY', 108, 70, 160) };
-  const centre = atPage(view, page, BROKEN_DIST);
+  const centre = atPage(view, page, BROKEN_DIST, TABLOID_PAGE);
   const unit = centre.distanceTo(view.position) / focal;
   const R = n(ctx, 'brokenSize', 25, 15, 40) * unit;
   const zc = view.position.clone().sub(centre).normalize();
@@ -116,7 +121,10 @@ export function broken(ctx: SketchContext, view: THREE.PerspectiveCamera, focal:
   const piercers: Slab[] = [];
   const segs: [THREE.Vector3, THREE.Vector3, number][] = [];
   const reach = n(ctx, 'pierceReach', 1, 0.3, 2.5);
-  const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x > CARD.x0 + 6 && q.x < CARD.x1 - 6 && q.y > CARD.y0 + 6 && q.y < n(ctx, 'debrisFloor', 176, 140, 240); };
+  const inCard = (p: THREE.Vector3) => {
+    const q = pageOf(view, p, TABLOID_PAGE);
+    return q.x > TABLOID_CARD.x0 + 6 && q.x < TABLOID_CARD.x1 - 6 && q.y > TABLOID_CARD.y0 + 6 && q.y < n(ctx, 'debrisFloor', 176, 140, 240);
+  };
   // A slab that would touch one already driven is tried again, a few times, at a new angle and depth.
   for (let k = 0, tries = 0; k < count && tries < count * 8; tries++) {
     const a = heading + (rng() < 0.5 ? -1 : 1) * odd * (0.3 + 0.7 * rng());

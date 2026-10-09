@@ -2,13 +2,18 @@ import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
-import { atPage, pageOf } from '../../kit/perspective.ts';
-import { CARD, HORIZON_Y } from '../card.ts';
+import { TABLOID_CARD, TABLOID_HORIZON_Y } from '../../kit/format.ts';
+import { atPage as atPageOn, pageOf as pageOfOn } from '../../kit/perspective.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /**
  * The Moon card's towers as the howl: the strike broke the moon, the broken moon's pull tears at the land, and
  * the two towers answer it as the wild and the tame. Built from the towers as they stand (their feet, widths and
  * heights); the pool's false city is untouched.
+ *
+ * Everything here is laid out in tabloid's frame: `view` is the card's world camera (tabloid's page, raster and
+ * horizon), the moon's mark is on tabloid's page, and the culls are tabloid's card, so every size and fit builds the
+ * same wolf, stream, dog and stakes.
  */
 export type TowerForm = 'stack' | 'howl' | 'column';
 
@@ -20,7 +25,12 @@ export interface TowerSet {
   ground?: THREE.BufferGeometry[];
 }
 
-/** What the howl needs of the moon: where it hangs on the sheet and how big, and the line its slabs are driven along. */
+/** A world point on tabloid's page, through the world camera. */
+const pageOf = (view: THREE.Camera, p: THREE.Vector3) => pageOfOn(view, p, TABLOID_PAGE);
+/** The world point at a tabloid page position, `dist` from the world camera's eye. */
+const atPage = (view: THREE.Camera, p: { x: number; y: number }, dist: number) => atPageOn(view, p, dist, TABLOID_PAGE);
+
+/** What the howl needs of the moon: where it hangs on tabloid's sheet and how big, and the line its slabs are driven along. */
 export interface MoonMark { page: { x: number; y: number }; radius: number; volley: Slab[] }
 
 /** The slab's three axes, as world unit vectors. */
@@ -124,7 +134,7 @@ function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], f
   const others = far;
   const moonClear = (s: Slab) => {
     const q = pageOf(view, new THREE.Vector3(s.x, s.y, s.z));
-    return Math.hypot(q.x - moon.page.x, q.y - moon.page.y) > moon.radius + 8 && q.y > CARD.y0 + 8 && q.y < HORIZON_Y - 6 && q.x > CARD.x0 + 6 && q.x < CARD.x1 - 6;
+    return Math.hypot(q.x - moon.page.x, q.y - moon.page.y) > moon.radius + 8 && q.y > TABLOID_CARD.y0 + 8 && q.y < TABLOID_HORIZON_Y - 6 && q.x > TABLOID_CARD.x0 + 6 && q.x < TABLOID_CARD.x1 - 6;
   };
   for (let k = 0; k < count; k++) {
     const draws = Array.from({ length: 9 }, () => rng());
@@ -187,7 +197,7 @@ function howl(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[], f
     }
     const down = (cross.y + Wd * 0.05) / -best.y;
     let up = Wd * (1.1 + 0.5 * rng());
-    const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x < CARD.x1 - 14 && q.y > CARD.y0 + 6; };
+    const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x < TABLOID_CARD.x1 - 14 && q.y > TABLOID_CARD.y0 + 6; };
     while (up > Wd * 0.4 && !inCard(cross.clone().addScaledVector(best, -up))) up -= Wd * 0.05;
     const w = Wd * (0.1 + 0.03 * rng()), t = w * 0.5;
     const stake = spear(cross.clone().addScaledVector(best, -up), best, 0, up + down, w, t, (rng() - 0.5) * 0.4, 900 + i);
@@ -278,7 +288,7 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[],
   const placedW: Slab[] = [...seated];
   const moonClear = (s: Slab) => {
     const q = pageOf(view, new THREE.Vector3(s.x, s.y, s.z));
-    return Math.hypot(q.x - moon.page.x, q.y - moon.page.y) > moon.radius + 8 && q.y > CARD.y0 + 8 && q.y < HORIZON_Y - 6 && q.x > CARD.x0 + 6 && q.x < CARD.x1 - 6;
+    return Math.hypot(q.x - moon.page.x, q.y - moon.page.y) > moon.radius + 8 && q.y > TABLOID_CARD.y0 + 8 && q.y < TABLOID_HORIZON_Y - 6 && q.x > TABLOID_CARD.x0 + 6 && q.x < TABLOID_CARD.x1 - 6;
   };
   // Courses go up one after another along the curve: the first nearly stacked, a hairline apart; then each gap a
   // little wider than the last, each course a little smaller and turned a little further, with only a small slip
@@ -364,7 +374,7 @@ function column(ctx: SketchContext, view: THREE.PerspectiveCamera, near: Slab[],
     const down = cross.y / -best.y + bury;
     // Up toward the sky as far as the card allows.
     let up = Wd * n(ctx, 'stakeReach', 3, 0.8, 6);
-    const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x < CARD.x1 - 6 && q.y > CARD.y0 + 8; };
+    const inCard = (p: THREE.Vector3) => { const q = pageOf(view, p); return q.x < TABLOID_CARD.x1 - 6 && q.y > TABLOID_CARD.y0 + 8; };
     while (up > Wd * 0.6 && !inCard(cross.clone().addScaledVector(best, -up))) up -= Wd * 0.04;
     const w = Wd * (0.09 + 0.03 * dogRng()), t = w * 0.5;
     const stake = spear(cross.clone().addScaledVector(best, -up), best, 0, up + down, w, t, (dogRng() - 0.5) * 0.4, 900 + i);

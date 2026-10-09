@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
-import { PAGE } from '../../kit/format.ts';
+import { PAGE, TABLOID_HORIZON_Y, tolerance } from '../../kit/format.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { onGround, pageOf } from '../../kit/perspective.ts';
-import { HORIZON_Y } from '../card.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /**
  * The path as the helix: one flat ribbon road lying on the ground, from under the water to the horizon.
@@ -50,12 +50,14 @@ export interface RoadPlan {
  * The road in plan. Its centre is laid on the sheet: from the spit at `x0` it swings in S-bends that
  * shrink exactly as the ground recedes, so on the ground they are bends of one width, and it ends at
  * `pathEnd`, just under the horizon. Turns sit at the bends' crossings, where the road runs straightest.
+ * It is laid out in tabloid's frame: `view` is the card's world camera and `shore` the bank on tabloid's page, so
+ * every size and fit lays the same road.
  */
 export function roadPlan(ctx: SketchContext, view: THREE.PerspectiveCamera, shore: (x: number) => number, eye: number): RoadPlan {
   const x0 = n(ctx, 'pathX', 150, 110, 190);
   const y0 = shore(x0);
-  const d0 = y0 - HORIZON_Y;
-  const kEnd = (n(ctx, 'pathEnd', 252.5, 251, 270) - HORIZON_Y) / d0;
+  const d0 = y0 - TABLOID_HORIZON_Y;
+  const kEnd = (n(ctx, 'pathEnd', 252.5, 251, 270) - TABLOID_HORIZON_Y) / d0;
   const xv = n(ctx, 'pathVanish', 162, 110, 200);
   const swing = n(ctx, 'pathBend', 55, 0, 140);
   const bends = n(ctx, 'pathBends', 3.5, 1.5, 6);
@@ -65,9 +67,9 @@ export function roadPlan(ctx: SketchContext, view: THREE.PerspectiveCamera, shor
   const pageAt = (u: number): Point => {
     const k = kOf(u);
     // The swing eases in from nothing, so the road comes straight up out of the water before it bends.
-    return { x: xv + k * ((x0 - xv) - swing * smooth(0, 0.18, u) * Math.sin(Math.PI * bends * Math.max(0, u))), y: HORIZON_Y + d0 * k };
+    return { x: xv + k * ((x0 - xv) - swing * smooth(0, 0.18, u) * Math.sin(Math.PI * bends * Math.max(0, u))), y: TABLOID_HORIZON_Y + d0 * k };
   };
-  const centre = (u: number) => onGround(view, pageAt(u));
+  const centre = (u: number) => onGround(view, pageAt(u), TABLOID_PAGE);
   const across = (u: number) => {
     const a = centre(u - 0.002), b = centre(u + 0.002);
     const t = b.sub(a).setY(0).normalize();
@@ -87,6 +89,8 @@ export function roadPlan(ctx: SketchContext, view: THREE.PerspectiveCamera, shor
  * The road's strokes in world space, in the kit's inks. Each face's strokes are kept only where that
  * face is up; its laminations thin in nested powers of two as the road narrows on the sheet (toward
  * the horizon, and where it turns on edge), and its ribs keep at least `ribGap` millimetres apart.
+ * `view` is the card's own camera: the laminations and ribs keep their millimetres on this card's paper, never
+ * closer than the pens hold apart, so a smaller card draws fewer of them.
  */
 export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, plan: RoadPlan): HelixStroke[] {
   const strands = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0 } }).map(flatStrand);
@@ -96,7 +100,7 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
   const sight = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.1, 100);
   const lift = n(ctx, 'pathLift', 0.05, 0, 1) * plan.half;
   const tilt = n(ctx, 'pathTwistLift', 0.35, 0, 1);
-  const minGap = n(ctx, 'pathLamination', 0.75, 0.4, 2);
+  const minGap = tolerance(n(ctx, 'pathLamination', 0.75, 0.4, 2));
   const ribGap = n(ctx, 'pathRibGap', 6, 0.5, 12);
   const contours = Math.max(6, Math.round(2 * 1.05 * 0.95 / 0.09));
   const uOf = (t: number) => plan.u0 + t * (1 - plan.u0);

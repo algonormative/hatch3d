@@ -3,6 +3,7 @@ import type { SketchContext } from '../../../src/sketch/types.ts';
 import { solid, type Slab } from '../../kit/slabs.ts';
 import { n } from '../../kit/params.ts';
 import { atPage } from '../../kit/perspective.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { MOON_DIST } from './crescent.ts';
 
 /**
@@ -47,7 +48,7 @@ function square(a: THREE.Vector3, hint: THREE.Vector3): [THREE.Vector3, THREE.Ve
 export function station(ctx: SketchContext, view: THREE.PerspectiveCamera, focal: number): Station {
   const rng = ctx.random('moon-station');
   const page = { x: n(ctx, 'stationX', 176, 120, 240), y: n(ctx, 'stationY', 128, 80, 170) };
-  const centre = atPage(view, page, MOON_DIST);
+  const centre = atPage(view, page, MOON_DIST, TABLOID_PAGE);
   const unit = centre.distanceTo(view.position) / focal;
   const R = n(ctx, 'stationSize', 50, 35, 65) * unit;
   // The view's frame at the moon: z toward the eye, y up the sheet, x across it.
