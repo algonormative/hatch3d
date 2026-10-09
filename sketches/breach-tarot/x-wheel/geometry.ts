@@ -31,9 +31,9 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * tower, in order round the wheel, so reading it means going round.
  *
  * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`wheelWorld`), and the
- * card's own camera draws it: the slabs' outlines trimmed and their hatch at the print's pitch on paper, a finer depth
- * test, the helix's narrow strands as single lines, the sky's ruling and the halos held or scaled on paper, and the
- * phrase in the bottom band. It prefers its width (`prefers.ts`).
+ * card's own camera draws it: the slabs' outlines trimmed and their hatch at the print's pitch on paper, the falling
+ * towers' dark faces ruled, a finer depth test, the helix's narrow strands as single lines, the sky's ruling and the
+ * halos held or scaled on paper, and the phrase in the bottom band. It prefers its width (`prefers.ts`).
  */
 /**
  * How many times finer each way than the card's raster the depth test runs (`fineDepth`): 1 at tabloid. On a small card a
