@@ -172,7 +172,7 @@ describe('Breach Tarot: III The Empress at 70 x 120 mm', () => {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
-      // A far plant a row behind another gives way to it (clearance.ts): drawn as on the print, its sliver of outline
+      // A far plant a row behind another gives way to it (`Clearance`, kit/page.ts): drawn as on the print, its sliver of outline
       // ran beside the nearer one closer than the pens hold apart, on four seeds of five well past the print's share.
       const far = report.parts.find(part => part.id === 'far-carbon')!;
       expect(far.drawn).toBeGreaterThan(20);

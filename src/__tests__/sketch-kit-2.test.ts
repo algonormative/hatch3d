@@ -10,7 +10,7 @@ import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../.
 import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { thinParallel } from '../../sketches/kit/density.ts';
-import { reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
+import { Clearance, reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
 import { PartBuckets, fineDepth } from '../../sketches/kit/strokes.ts';
 import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
@@ -368,5 +368,26 @@ describe('sketch kit: shared card helpers', () => {
     // A path that carries on from where another ends keeps its line; one the limit apart does too.
     expect(thinParallel([line(0, 10, 0), line(10.5, 20, 0.1)], 0.5)[1]).toHaveLength(1);
     expect(thinParallel([line(0, 10, 0), line(0, 10, 0.5)], 0.5)[1]).toHaveLength(1);
+  });
+
+  it('keeps paper clear round the marks drawn so far: a point within the gap of any registered mark is near', () => {
+    const clear = new Clearance(1);
+    expect(clear.near({ x: 5, y: 0 })).toBe(false);
+    clear.add([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
+    // Along the whole mark, not just its ends or its vertices; strictly under the gap; past its end by the gap.
+    for (const x of [0, 2.53, 5.03, 9.97]) expect(clear.near({ x, y: 0.9 })).toBe(true);
+    expect(clear.near({ x: 5, y: 1 })).toBe(false);
+    expect(clear.near({ x: 5, y: -2.5 })).toBe(false);
+    expect(clear.near({ x: 10.9, y: 0 })).toBe(true);
+    expect(clear.near({ x: 11.2, y: 0 })).toBe(false);
+    expect(clear.near({ x: -0.5, y: -0.5 })).toBe(true);
+    // A mark of one point, or none; and a sparser sampling step leaves gaps a point can slip through.
+    clear.add([{ x: 20, y: 20 }]);
+    clear.add([]);
+    expect(clear.near({ x: 20.5, y: 20 })).toBe(true);
+    const sparse = new Clearance(0.5, 4);
+    sparse.add([{ x: 0, y: 0 }, { x: 8, y: 0 }]);
+    expect(sparse.near({ x: 2, y: 0 })).toBe(false);
+    expect(sparse.near({ x: 4.2, y: 0 })).toBe(true);
   });
 });

@@ -8,14 +8,13 @@ import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { Clearance, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { Clearance } from './clearance.ts';
 
 /**
  * III The Empress: there will always be more. No figure: abundance as a crop that grew into a
