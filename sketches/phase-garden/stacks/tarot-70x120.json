@@ -24,7 +24,26 @@
   },
   "pieces": [
     { "name": "0-fool", "title": "Breach Tarot: 0 The Fool, 70 x 120 mm", "sketch": "sketches/breach-tarot/0-fool/sketch.ts", "seed": 1 },
+    { "name": "i-magician", "title": "Breach Tarot: I The Magician, 70 x 120 mm", "sketch": "sketches/breach-tarot/i-magician/sketch.ts", "seed": 1 },
+    { "name": "ii-high-priestess", "title": "Breach Tarot: II The High Priestess, 70 x 120 mm", "sketch": "sketches/breach-tarot/ii-high-priestess/sketch.ts", "seed": 2 },
+    { "name": "iii-empress", "title": "Breach Tarot: III The Empress, 70 x 120 mm", "sketch": "sketches/breach-tarot/iii-empress/sketch.ts", "seed": 2 },
+    { "name": "iv-emperor", "title": "Breach Tarot: IV The Emperor, 70 x 120 mm", "sketch": "sketches/breach-tarot/iv-emperor/sketch.ts", "seed": 2 },
+    { "name": "v-hierophant", "title": "Breach Tarot: V The Hierophant, 70 x 120 mm", "sketch": "sketches/breach-tarot/v-hierophant/sketch.ts", "seed": 2 },
+    { "name": "vi-lovers", "title": "Breach Tarot: VI The Lovers, 70 x 120 mm", "sketch": "sketches/breach-tarot/vi-lovers/sketch.ts", "seed": 2 },
+    { "name": "vii-chariot", "title": "Breach Tarot: VII The Chariot, 70 x 120 mm", "sketch": "sketches/breach-tarot/vii-chariot/sketch.ts", "seed": 2 },
+    { "name": "viii-strength", "title": "Breach Tarot: VIII Strength, 70 x 120 mm", "sketch": "sketches/breach-tarot/viii-strength/sketch.ts", "seed": 2 },
+    { "name": "ix-hermit", "title": "Breach Tarot: IX The Hermit, 70 x 120 mm", "sketch": "sketches/breach-tarot/ix-hermit/sketch.ts", "seed": 1 },
+    { "name": "x-wheel", "title": "Breach Tarot: X Wheel of Fortune, 70 x 120 mm", "sketch": "sketches/breach-tarot/x-wheel/sketch.ts", "seed": 2 },
+    { "name": "xi-justice", "title": "Breach Tarot: XI Justice, 70 x 120 mm", "sketch": "sketches/breach-tarot/xi-justice/sketch.ts", "seed": 3 },
+    { "name": "xii-hanged-man", "title": "Breach Tarot: XII The Hanged Man, 70 x 120 mm", "sketch": "sketches/breach-tarot/xii-hanged-man/sketch.ts", "seed": 3 },
+    { "name": "xiii-death", "title": "Breach Tarot: XIII Death, 70 x 120 mm", "sketch": "sketches/breach-tarot/xiii-death/sketch.ts", "seed": 1 },
+    { "name": "xiv-temperance", "title": "Breach Tarot: XIV Temperance, 70 x 120 mm", "sketch": "sketches/breach-tarot/xiv-temperance/sketch.ts", "seed": 1 },
+    { "name": "xv-devil", "title": "Breach Tarot: XV The Devil, 70 x 120 mm", "sketch": "sketches/breach-tarot/xv-devil/sketch.ts", "seed": 1 },
     { "name": "xvi-tower", "title": "Breach Tarot: XVI The Tower, 70 x 120 mm", "sketch": "sketches/breach-tarot/xvi-tower/sketch.ts", "seed": 2 },
-    { "name": "xvii-star", "title": "Breach Tarot: XVII The Star, 70 x 120 mm", "sketch": "sketches/breach-tarot/xvii-star/sketch.ts", "seed": 2 }
+    { "name": "xvii-star", "title": "Breach Tarot: XVII The Star, 70 x 120 mm", "sketch": "sketches/breach-tarot/xvii-star/sketch.ts", "seed": 2 },
+    { "name": "xviii-moon", "title": "Breach Tarot: XVIII The Moon, 70 x 120 mm", "sketch": "sketches/breach-tarot/xviii-moon/sketch.ts", "seed": 1 },
+    { "name": "xix-sun", "title": "Breach Tarot: XIX The Sun, 70 x 120 mm", "sketch": "sketches/breach-tarot/xix-sun/sketch.ts", "seed": 1 },
+    { "name": "xx-judgement", "title": "Breach Tarot: XX Judgement, 70 x 120 mm", "sketch": "sketches/breach-tarot/xx-judgement/sketch.ts", "seed": 1 },
+    { "name": "xxi-world", "title": "Breach Tarot: XXI The World, 70 x 120 mm", "sketch": "sketches/breach-tarot/xxi-world/sketch.ts", "seed": 3 }
   ]
 }
