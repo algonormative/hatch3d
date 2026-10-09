@@ -22,6 +22,7 @@
     "art-match": "tsx cli/art-match.ts",
     "baselines": "tsx cli/baselines.ts",
     "sheet": "tsx cli/sheet.ts",
+    "print-export": "tsx cli/print-export.ts",
     "plot-core:build": "npm run build --prefix packages/plot-core",
     "plot-host:build": "npm run plot-core:build && npm run build --prefix packages/plot-host",
     "plot-host:smoke": "npm run plot-host:build && npm run smoke --prefix packages/plot-host",

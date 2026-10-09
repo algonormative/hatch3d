@@ -1,0 +1,26 @@
+{
+  "title": "Breach Tarot, print (MakePlayingCards 2.75 x 4.75 in)",
+  "out": ".sketch-output/finalize/tarot-print",
+  "edition": 1,
+  "page": {
+    "width": 69.85,
+    "height": 120.65,
+    "margin": 6.75
+  },
+  "border": {
+    "style": "simple",
+    "pen": "carbon",
+    "inset": 5.25,
+    "contentGap": 1.25
+  },
+  "defaults": {
+    "palette": "phase-garden",
+    "center": "none",
+    "mergeSameColor": false
+  },
+  "pieces": [
+    { "name": "0-fool", "title": "Breach Tarot: 0 The Fool, print", "sketch": "sketches/breach-tarot/0-fool/sketch.ts", "seed": 1 },
+    { "name": "xvi-tower", "title": "Breach Tarot: XVI The Tower, print", "sketch": "sketches/breach-tarot/xvi-tower/sketch.ts", "seed": 2 },
+    { "name": "xvii-star", "title": "Breach Tarot: XVII The Star, print", "sketch": "sketches/breach-tarot/xvii-star/sketch.ts", "seed": 2 }
+  ]
+}

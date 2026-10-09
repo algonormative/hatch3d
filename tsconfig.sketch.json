@@ -29,6 +29,8 @@
     "cli/baselines.ts",
     "cli/sheet.ts",
     "cli/density.ts",
+    "cli/print-export.ts",
+    "cli/print-export/**/*.ts",
     "cli/sketch/**/*.ts",
     "src/sketch/**/*.ts",
     "src/utils/clip.ts",
