@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import * as THREE from 'three';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import { CARD, HORIZON_Y } from '../../sketches/breach-tarot/card.ts';
-import { shear } from '../../sketches/breach-tarot/xvi-tower/geometry.ts';
+import { shear, towerCamera } from '../../sketches/breach-tarot/xvi-tower/geometry.ts';
+import { atLeast } from '../../sketches/breach-tarot/xvi-tower/machine.ts';
+import { pageOf } from '../../sketches/kit/perspective.ts';
+import { sketchContext } from './helpers/sketch-context.ts';
 import { denserThan, densityProbe, describeDensity } from '../../sketches/kit/density.ts';
 import { formatFor, type CardRect, type Fit } from '../../sketches/kit/format.ts';
 import { clipToRect } from '../../sketches/kit/page.ts';
@@ -148,6 +154,8 @@ describe('Breach Tarot: XVI The Tower at 70 x 120 mm', () => {
   const formatOf = (fit: Fit) => formatFor(targetPage(TABLOID_PAGE, page), { fit });
   const frameOf = (fit: Fit): Frame => { const f = formatOf(fit); return { card: f.card, horizonY: f.horizonY, s: f.s }; };
   const probe = (parts: readonly Part[], result: RenderResult) => densityProbe(parts, { penWidth: pen => result.metadata.pens.find(p => p.id === pen)!.width });
+  let dir: string | undefined;
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
   it('replays in both fits, draws the scene in the art window, no words on the machine, and the phrase in the band', async () => {
     for (const fit of fits) {
@@ -206,6 +214,72 @@ describe('Breach Tarot: XVI The Tower at 70 x 120 mm', () => {
       expect(drops(small[k].parts)).toBeGreaterThan(0.1 * drops(print.parts));
     }
   }, 120_000);
+
+  it('keeps the print’s machine on a small card: no empty panels, a lid in the print’s proportion, raindrops not specks', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hatch3d-tower-'));
+    const probeEntry = join(dir, 'probe.ts');
+    const tower = (path: string) => JSON.stringify(resolve(import.meta.dirname, '../../sketches/breach-tarot/xvi-tower', path));
+    // A page-aware probe: the machine as the format builds it, read as counts (panels, lid blades, all blades, courses
+    // of one column) and its blades' plate and gap in world units.
+    await writeFile(probeEntry, `import { blades, machine } from ${tower('machine.ts')};
+      import { towerCamera } from ${tower('geometry.ts')};
+      export default { name: 'probe', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
+        pens: [{ id: 'ink', color: '#111111', width: 0.3 }], controls: [],
+        draw(ctx) {
+          const view = towerCamera(ctx), m = machine(ctx, view), { plate, gap } = blades(view);
+          const stacked = m.kind.map((k, i) => i).filter(i => m.kind[i] !== 'bench' && m.column[i] === 0);
+          const courses = stacked.reduce((n, i) => n + (m.kind[i] === 'panel' ? 2 : 1), 0);
+          // Each pair of numbers a point, a tenth of each inside the card's margin (the runner clips to it).
+          const at = (x, y) => ({ x: 20 + x / 10, y: 20 + y / 10 });
+          return [{ id: 'counts', pen: 'ink', paths: [[at(0, 0), at(m.kind.filter(k => k === 'panel').length, m.lid.size), at(m.solids.length, courses), at(plate, gap)]] }];
+        } };`);
+    const read = (result: RenderResult) => {
+      const [, [panels, lid], [, courses], [plate, gap]] = result.parts[0].paths[0].map(p => [10 * (p.x - 20), 10 * (p.y - 20)]);
+      const height = (n: number) => n * plate + (n - 1) * gap, lidCourses = Math.round(lid) / 12;
+      return { panels: Math.round(panels), lid: Math.round(lid), courses: Math.round(courses), height, lidHeight: height(lidCourses), bodyHeight: height(Math.round(courses) - lidCourses) };
+    };
+    const [print, ...small] = await Promise.all([
+      renderSketch({ entry: probeEntry, seed: 2 }),
+      ...fits.map(fit => renderSketch({ entry: probeEntry, seed: 2, finishing: { page }, format: { fit } })),
+    ]);
+    const tabloid = read(print);
+    // The print: panels for the phrase's words, and a lid of three courses of twenty.
+    expect(tabloid.panels).toBeGreaterThan(0);
+    expect(tabloid.lid).toBe(3 * 12);
+    for (const result of small) {
+      const m = read(result);
+      // The phrase is in the band, so no panel stands empty: they are blades like the rest.
+      expect(m.panels).toBe(0);
+      // Its blades merged into fewer, thicker courses, the lid takes as many as come nearest the print's lid in height:
+      // one of nine, against the print's three of twenty, rather than two that would make it half again as tall.
+      expect(m.courses).toBe(9);
+      expect(m.lid).toBe(12);
+      expect(Math.abs(m.height(1) - tabloid.lidHeight)).toBeLessThan(Math.abs(m.height(2) - tabloid.lidHeight));
+      expect(m.lidHeight / m.bodyHeight).toBeGreaterThan(0.5 * tabloid.lidHeight / tabloid.bodyHeight);
+      expect(m.lidHeight / m.bodyHeight).toBeLessThan(1.5 * tabloid.lidHeight / tabloid.bodyHeight);
+    }
+    // A raindrop shorter on paper than the floor falls that long instead, about its middle; a longer one is left alone.
+    const view = towerCamera(sketchContext(2));
+    const drop = (y: number, length: number) => ({ ink: 'carbon' as const, group: 'storm', family: 'hatch' as const, points: [new THREE.Vector3(0, y, -32), new THREE.Vector3(-0.32 * length, y + length, -32)] });
+    const onPaper = (st: ReturnType<typeof drop>) => { const [a, b] = st.points.map(q => pageOf(view, q)); return { length: Math.hypot(b.x - a.x, b.y - a.y), mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } }; };
+    const [short, long] = [drop(10, 0.05), drop(20, 3)];
+    const [shortAfter, longAfter] = atLeast([short, long], view, 1.5);
+    expect(onPaper(short).length).toBeLessThan(0.5);
+    expect(onPaper(shortAfter).length).toBeCloseTo(1.5, 6);
+    expect(onPaper(shortAfter).mid.x).toBeCloseTo(onPaper(short).mid.x, 6);
+    expect(onPaper(shortAfter).mid.y).toBeCloseTo(onPaper(short).mid.y, 6);
+    expect(longAfter).toBe(long);
+    expect(atLeast([short], view, 0)[0]).toBe(short);
+    // On the card no drop is a speck: none shorter than the smallest feature, 1 mm.
+    for (const result of await Promise.all(fits.map(render))) {
+      const lengths = result.parts.filter(part => part.id.startsWith('storm-')).flatMap(part => part.paths)
+        .map(path => path.slice(1).reduce((sum, q, i) => sum + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0));
+      expect(lengths.length).toBeGreaterThan(30);
+      expect(Math.min(...lengths)).toBeGreaterThanOrEqual(1);
+      // The low rain is still there, lengthened to the floor rather than dropped.
+      expect(lengths.filter(l => Math.abs(l - 1.5) < 0.01).length).toBeGreaterThan(15);
+    }
+  });
 
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card is; its blade courses hold the pen floor', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 2 }), ...fits.map(render)]);

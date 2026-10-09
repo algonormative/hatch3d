@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, PITCH_SCALE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { clearBands, planSlogans, sloganSettings, titleSettings, type SloganSurface } from '../../kit/lettering.ts';
@@ -28,6 +28,10 @@ import { storm, tower, towerCamera } from './geometry.ts';
  * behind the machine its status ticks go dark (`machineTicks`). There is no tear: the bolt no
  * longer crosses anything that could slip. The clock the machine ran on, a hatched square wave
  * across the sky, can come too (`machineClock`).
+ *
+ * On a small card (`kit/format.ts`) the blades merge into fewer, thicker courses that hold the pen floor; the lid takes
+ * as many of them as come nearest the print's lid and rises as far; the panels, empty with the phrase in the band, are
+ * blades; and the rain's shortest drops are lengthened to the floor rather than printed as specks.
  */
 /** The card's depth raster, within budget for the machine's pass at twice its size. */
 const { W, H, MM_X, MM_Y } = depthRaster(559, 864, 2);
@@ -35,6 +39,8 @@ const { W, H, MM_X, MM_Y } = depthRaster(559, 864, 2);
 const W2 = 2 * W, H2 = 2 * H;
 const MM2_X = PAGE.width / W2, MM2_Y = PAGE.height / H2;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
+/** The shortest raindrop a small card draws, as a multiple of the format's smallest feature: shorter ones print as specks. */
+const RAIN_DASH = 1.5;
 /** tower() pushes the ground last: the plinth, 18 × 9 paving stones and 7 pieces of debris. */
 const GROUND_COUNT = 1 + 18 * 9 + 7;
 
@@ -44,7 +50,7 @@ const M = {
   lidDepth: 2.2, lidGap: 2.8, lidClear: 1.2, helixRadius: 1.5, helixWidth: 1.2,
 };
 
-type Machine = { solids: Slab[]; kind: ('blade' | 'panel' | 'bench')[]; column: number[]; lid: Set<number>; core: THREE.Vector3; lidCentre: THREE.Vector3 };
+export type Machine = { solids: Slab[]; kind: ('blade' | 'panel' | 'bench')[]; column: number[]; lid: Set<number>; core: THREE.Vector3; lidCentre: THREE.Vector3 };
 
 /**
  * The machine's blades as the format draws them: tabloid's plate and gap; or, where the gap between two blades
@@ -60,12 +66,43 @@ export function blades(view: THREE.PerspectiveCamera): { plate: number; gap: num
   return { plate: merged * M.plate + (merged - 1) * M.gap, gap, merged };
 }
 
-/** The supercomputer: wedge columns of blades in a C, a few double blades for panels, the bench ring, and the top lifted off as one lid. */
-function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Machine {
+/**
+ * Where the lid comes away: the height above which a blade belongs to it. On tabloid, `lidDepth` below the top (three
+ * courses). Where the blades are merged into fewer, thicker courses, the lid takes as many of the top courses as come
+ * nearest the print's lid in height, so the lid and the body keep the print's proportion; the line falls midway
+ * between the lid's lowest course and the body's highest.
+ */
+export function lidLine(plate: number, gap: number): number {
+  if (FORMAT.tabloid) return M.height - M.lidDepth;
+  const tops: number[] = [];
+  for (let y = plate / 2 + 0.05; y + plate / 2 < M.height; y += plate + gap) tops.push(y + plate / 2);
+  const print = 3 * M.plate + 2 * M.gap;
+  let courses = 1;
+  for (let k = 2; k < tops.length; k++) if (Math.abs(k * plate + (k - 1) * gap - print) < Math.abs(courses * plate + (courses - 1) * gap - print)) courses = k;
+  return (tops[tops.length - courses - 1] + tops[tops.length - courses]) / 2;
+}
+
+/** Two-point strokes shorter on paper than `dash` millimetres, lengthened to it about their middle; the rest as they are. */
+export function atLeast(strokes: Stroke[], view: THREE.Camera, dash: number): Stroke[] {
+  return strokes.map(st => {
+    const [a, b] = st.points, pa = pageOf(view, a), pb = pageOf(view, b);
+    const length = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    if (st.points.length !== 2 || !(length < dash)) return st;
+    const mid = a.clone().add(b).multiplyScalar(0.5), k = dash / length;
+    return { ...st, points: [mid.clone().lerp(a, k), mid.clone().lerp(b, k)] };
+  });
+}
+
+/** The supercomputer: wedge columns of blades in a C, a few double blades for panels (where the words go), the bench ring, and the top lifted off as one lid. */
+export function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Machine {
   const rng = ctx.random('tower-card-machine');
   const lidAmount = n(ctx, 'lid', 0.5, 0, 1);
   const { R, height, columns } = M;
   const { plate, gap } = blades(view);
+  const line = lidLine(plate, gap), lidDepth = FORMAT.tabloid ? M.lidDepth : height - line;
+  // The panels carry the phrase's words. Where the format sets the phrase in the band they would stand empty, large
+  // frames in the machine: they are blades like the rest there.
+  const panels = PHRASE === 'art';
   // The opening of the C at the front, in radians of the ring: about a quarter, as on the Cray-1.
   const open = n(ctx, 'machineOpen', 1.55, 0.1, 2.4);
   const inner = R * M.inner, rm = (R + inner) / 2;
@@ -83,14 +120,14 @@ function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Machine {
     // A double blade every so often, staggered column to column: the panels the words are cut into.
     const phase = Math.floor(rng() * 5);
     for (let y = plate / 2 + 0.05, k = 0; y + plate / 2 < height; k++) {
-      const panel = k > 3 && (k + phase) % 5 === 0 && y + 1.5 * plate + gap < height - M.lidDepth;
+      const panel = panels && k > 3 && (k + phase) % 5 === 0 && y + 1.5 * plate + gap < line;
       const h = panel ? 2 * plate + gap : plate;
       const yc = y - plate / 2 + h / 2;
       const s = solid(base.x + u.x * rm, yc, base.z + u.z * rm, chord, h, R - inner, 0, 'stack');
       s.ry = a;
       s.tone = M.tone;
       const id = add(s, panel ? 'panel' : 'blade');
-      if (yc + h / 2 > height - M.lidDepth) lid.add(id);
+      if (yc + h / 2 > line) lid.add(id);
       y += h + gap;
     }
     // The bench: a low base and a cushion round the outside of each column.
@@ -102,8 +139,11 @@ function machine(ctx: SketchContext, view: THREE.PerspectiveCamera): Machine {
     add(lower, 'bench'); add(cushion, 'bench');
   }
   // The lid: the top courses come away as one rigid piece, floating centred over the machine, tipped a little.
-  const pivot = new THREE.Vector3(base.x, height - M.lidDepth / 2, base.z);
-  const lidCentre = pivot.clone().setY(height + M.lidGap * (0.5 + lidAmount) + M.lidDepth / 2);
+  // It rises as far above where it came away as the print's does, so the band between it and the body keeps the
+  // print's depth however many courses it took.
+  const pivot = new THREE.Vector3(base.x, height - lidDepth / 2, base.z);
+  const lifted = FORMAT.tabloid ? height : line + M.lidDepth;
+  const lidCentre = pivot.clone().setY(lifted + M.lidGap * (0.5 + lidAmount) + lidDepth / 2);
   const lean = rng() < 0.5 ? 1 : -1;
   const tip = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.04 + 0.1 * lidAmount, 0, lean * (0.03 + 0.08 * lidAmount) * (0.8 + 0.4 * rng()), 'XYZ'));
   for (const id of lid) {
@@ -341,7 +381,9 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
   // Ground strokes: the paving in outline, plinth and debris hatched, and the storm behind.
   const groundStrokes: Stroke[] = [];
   for (const s of ground) for (const st of facetStrokes(s, light, eye, s.role === 'stub')) groundStrokes.push({ ...st, group: 'system' });
-  groundStrokes.push(...storm(ctx));
+  // On a small card a raindrop shorter on paper than `RAIN_DASH` features falls that long instead, so the rain keeps its
+  // count and tone; what a standing thing leaves of one under a feature is dropped. (The print's drops are all longer.)
+  groundStrokes.push(...atLeast(storm(ctx), view, RAIN_DASH * MIN_FEATURE));
 
   // Machine strokes, each owned by its solid; the status ticks on every blade's outer face.
   const strokes: Stroke[] = [];
@@ -488,7 +530,8 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
 
     const buckets = new PartBuckets();
     const removeHidden = ctx.params.occlusion !== false;
-    const put = (key: string, run: Point[], text: boolean) => { for (const kept of clipWindow(run)) buckets.add(key, kept, text); };
+    const put = (key: string, run: Point[], text: boolean, min?: number) => { for (const kept of clipWindow(run)) buckets.add(key, kept, text, min); };
+    const rainMin = MIN_FEATURE || undefined;
     projectStrokes(groundStrokes, { view, depth, width: W, height: H }, {
       hidden: () => removeHidden,
       pieces: c => bandsA.length === 0 ? [c] : clearBands(c, bandsA, MM_Y),
@@ -497,7 +540,7 @@ export function drawMachineTower(ctx: SketchContext): Part[] {
           const pts = scalePoints(run, MM_X, MM_Y);
           // The bolt and the clock are flat marks over the rain: it parts round them.
           const pieces = st.group === 'storm' ? keepAlong(pts, p => !inBolt(p, halo(0.6)) && !(clock && sideOf(wave, p).dist < clockHalf + halo(1.2)), 0.2) : [pts];
-          for (const piece of pieces) put(`${st.group}-${st.ink}`, piece, false);
+          for (const piece of pieces) put(`${st.group}-${st.ink}`, piece, false, st.group === 'storm' ? rainMin : undefined);
         }
       },
     });
