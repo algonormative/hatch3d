@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { facetStrokes, faceDarkness, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, faceDarkness, slabMatrix, solid, type FacetStroke, type Slab, type SlabTrim } from '../../kit/slabs.ts';
 import { clamp } from '../../kit/params.ts';
 
 /**
@@ -78,10 +78,10 @@ export function buildTower(spec: TowerSpec): Tower {
  * A slab drawn in the raking-light hatch, calmed and in carbon only. The outline always shows; the
  * contour rings and the diagonal fields come only on the faces the light leaves darker than `calm`
  * (0..1), so lit faces stay blank paper and the hatch follows the light. Each stroke belongs to the
- * face whose plane it lies in.
+ * face whose plane it lies in. `trim` draws the outline for a small card (`facetStrokes`; nothing at tabloid).
  */
-export function calmFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch: number, calm: number): FacetStroke[] {
-  const strokes = facetStrokes(sl, light, eye, outlineOnly, pitch);
+export function calmFacets(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch: number, calm: number, trim?: SlabTrim): FacetStroke[] {
+  const strokes = facetStrokes(sl, light, eye, outlineOnly, pitch, trim);
   if (outlineOnly) return strokes.map(st => ({ ...st, ink: 'carbon' as const }));
   const m = slabMatrix(sl);
   const centre = new THREE.Vector3(sl.x, sl.y, sl.z);

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
-import { helixStrands, strandPoint, strandStrokes } from '../../kit/helix.ts';
+import { helixStrands, narrowStrands, ribbonEdges, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
+import { MIN_FEATURE } from '../../kit/format.ts';
 import { clamp, smooth } from '../../kit/params.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import type { Stroke } from '../../kit/types.ts';
@@ -109,13 +110,23 @@ export function winding(spine: Spine, o: Ribbon) {
 export interface Strand { strokes: Stroke[]; mesh: THREE.BufferGeometry }
 
 /**
+ * A strand's helix strokes as the card draws them. Given the card's own camera (`view`, off tabloid), a ribbon narrower
+ * on the page than the smallest feature is drawn by its line (`narrowStrands`: strand a's spine, strand b's midline):
+ * its edges would print as one blot and its laminations as specks. The two lines still wind round each other.
+ */
+function drawn(strokes: HelixStroke[], view?: THREE.Camera): Stroke[] {
+  return (view ? narrowStrands(strokes, view) : strokes).map(h => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
+}
+
+/**
  * One strand of the kit's twin helix laid along a spine. Built as `helixAlong` builds a strand (upright
  * in its own space, then bent onto the curve), but only strand `which` is kept, and it is turned by
  * `phaseTurns` so that where the two spines share a tail the two strands sit a half turn apart, as in
  * the full helix. The kit's wiggles are fixed in world units, so everything is built `scale` times
- * larger, seen by a camera moved out to match, and scaled back.
+ * larger, seen by a camera moved out to match, and scaled back. Off tabloid, `view` (the card's camera) decides
+ * whether the ribbon is narrow enough to draw by its line (`drawn`).
  */
-export function strand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, o: Ribbon, phaseTurns: number, scale: number): Strand {
+export function strand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, o: Ribbon, phaseTurns: number, scale: number, view?: THREE.Camera): Strand {
   const start = spine.pts[0];
   const length = spine.length;
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
@@ -134,8 +145,23 @@ export function strand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, 
   // Only the wound part is kept: from the meeting point on, where the two strands wind as one helix. Before it, the
   // strand is a thread along the lead-in, and the lead-in is drawn by `leadStrand` as a ribbon.
   const arcOf = (p: THREE.Vector3) => w.curveAt(clamp((p.y - start.y) / length, 0, 1)) * length;
+  const raw = strandStrokes(st, 0.8, 0.12, ctx, bigView);
   const strokes: Stroke[] = [];
-  for (const h of strandStrokes(st, 0.8, 0.12, ctx, bigView)) {
+  if (view && MIN_FEATURE) {
+    // Off tabloid the wound part keeps its roles, so the kit can measure the ribbon there: its two edges and strand a's
+    // spine, traced at the same samples, are cut where the spine is wound, so they stay sample for sample.
+    const edges = ribbonEdges(raw, raw[0].group), traced = edges ? edges[0].points.length : 0;
+    const woundAt = Array.from({ length: traced }, (_, i) => arcOf(strandPoint(st, i / (traced - 1), 0)) >= spine.join);
+    const wound: HelixStroke[] = [];
+    for (const h of raw) {
+      const shared = (h.role === 'edge' || h.role === 'spine') && h.points.length === traced;
+      let run: THREE.Vector3[] = [];
+      const flush = () => { if (run.length > 1) wound.push({ ...h, points: run }); run = []; };
+      h.points.forEach((p, i) => { if (shared ? woundAt[i] : arcOf(p) >= spine.join) run.push(bend(p).multiplyScalar(1 / scale)); else flush(); });
+      flush();
+    }
+    strokes.push(...drawn(wound, view));
+  } else for (const h of raw) {
     let run: THREE.Vector3[] = [];
     const flush = () => { if (run.length > 1) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: run }); run = []; };
     for (const p of h.points) { if (arcOf(p) >= spine.join) run.push(bend(p).multiplyScalar(1 / scale)); else flush(); }
@@ -177,9 +203,10 @@ export function leadRoll(bigView: THREE.Camera, spine: Spine, scale: number): nu
  * The lead-in of one lover: a thin flat ribbon along its own smooth arc, from the tower top to the meeting
  * point, in the strand's native inks. It is the same strand of the kit's twin helix, laid on the arc
  * unwound (no turns) with no radius, so it keeps its width and does not coil. It narrows at both ends, and
- * is turned about the arc by `roll` (`leadRoll`) to show the most of its width to the eye.
+ * is turned about the arc by `roll` (`leadRoll`) to show the most of its width to the eye. Off tabloid, `view` (the
+ * card's camera) decides whether it is narrow enough to draw by its line (`drawn`).
  */
-export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, width: number, scale: number, roll: number): Strand {
+export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spine, which: 0 | 1, width: number, scale: number, roll: number, view?: THREE.Camera): Strand {
   const start = spine.pts[0];
   const length = spine.length;
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.08 } });
@@ -190,7 +217,7 @@ export function leadStrand(ctx: SketchContext, bigView: THREE.Camera, spine: Spi
     const fr = spine.frame(s);
     return spine.at(s).addScaledVector(fr.normal, p.x - start.x).addScaledVector(fr.binormal, p.z - start.z - 0.25);
   };
-  const strokes: Stroke[] = strandStrokes(st, 0.8, 0.12, ctx, bigView).map(h => ({ ink: h.ink, group: 'helix', family: 'membrane' as const, points: h.points.map(p => bend(p).multiplyScalar(1 / scale)) }));
+  const strokes = drawn(strandStrokes(st, 0.8, 0.12, ctx, bigView).map(h => ({ ...h, points: h.points.map(p => bend(p).multiplyScalar(1 / scale)) })), view && MIN_FEATURE ? view : undefined);
   const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8).scale(1 / scale, 1 / scale, 1 / scale);
   return { strokes, mesh };
 }

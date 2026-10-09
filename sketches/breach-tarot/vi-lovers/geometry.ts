@@ -3,18 +3,18 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
+import { figureBands, figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
 import { roundedPocket } from './pocket.ts';
 import { shadowOf } from './shadows.ts';
 import { Spine, leadRoll, leadStrand, strand, winding, type Ribbon } from './strands.ts';
@@ -34,9 +34,28 @@ import { buildTower, calmFacets, coursePattern, type Piece, type Tower } from '.
  * The sky is a light ruling knocked out round what stands in it. The phrase is cut into the towers'
  * course faces word by word: `wants` on the near tower and `want` on the far one sit at mirrored
  * places, slightly off.
+ *
+ * On a smaller card (`kit/format.ts`) it is the same world, laid out in tabloid's frame (`loversWorld`) and drawn
+ * with the card's own camera, so the towers, the lovers and the strands scale with the card and the hands keep their
+ * gap. The sky's ruling and the shadows' hatch keep their pitch on paper; the towers' outlines are trimmed; the
+ * strands, too narrow to draw as ribbons, are their lines, still winding round each other; the lovers have fewer
+ * bands and a finer depth test; the halos scale with a floor; the phrase moves to the band.
  */
-/** The card's depth raster at tabloid; on any other page, the format's. */
-const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
+/**
+ * How much finer than the card's raster the lovers' own depth test is: at tabloid the card's own; on a smaller card,
+ * where each lover floats a dozen or so millimetres tall, four times as fine each way, so their outlines are tested at
+ * the detail they are drawn at.
+ */
+const FIGURE_OVERSAMPLE = FORMAT.tabloid ? 1 : 4;
+/** The card's depth raster at tabloid; on any other page, the format's, with room for the lovers' finer one. */
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FIGURE_OVERSAMPLE);
+/**
+ * The shortest piece the card keeps of a tower's lines (the slivers the courses in front, or a lover's pocket, cut
+ * them into) and of a tower's shadow (the scraps the lovers' shadows cut off): scenery on the print, so they scale with
+ * the card, never under the smallest feature (a tower's shadow is a few millimetres deep on a small card, and the
+ * print's 3.5 mm would leave none of it). A piece of a lover's shadow hatch shorter than 1.5 mm is a speck at any size.
+ */
+const SHORTEST = { slab: Math.max(layoutLength(2), MIN_FEATURE), towerShadow: Math.max(layoutLength(3.5), MIN_FEATURE), loverShadow: tolerance(1.5) };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 const FACET_MM_PER_UNIT = 7.2;
@@ -200,10 +219,11 @@ export function drawLovers(ctx: SketchContext): Part[] {
 
   // The strands' strokes are spaced on this card's paper, so they take this card's camera, moved out as they were built.
   const bigView = grownView(view, S);
-  const strandA = strand(ctx, bigView, spineA, 0, ribbon, 0, S);
-  const strandB = strand(ctx, bigView, spineB, 1, ribbon, world.phaseB, S);
-  const leadRibbonA = leadStrand(ctx, bigView, world.leadA, 0, world.leadWidth, S, world.rollA);
-  const leadRibbonB = leadStrand(ctx, bigView, world.leadB, 1, world.leadWidth, S, world.rollB);
+  // A ribbon narrower on this card's paper than the smallest feature is drawn by its line (none at tabloid).
+  const strandA = strand(ctx, bigView, spineA, 0, ribbon, 0, S, view);
+  const strandB = strand(ctx, bigView, spineB, 1, ribbon, world.phaseB, S, view);
+  const leadRibbonA = leadStrand(ctx, bigView, world.leadA, 0, world.leadWidth, S, world.rollA, view);
+  const leadRibbonB = leadStrand(ctx, bigView, world.leadB, 1, world.leadWidth, S, world.rollB, view);
 
   const lit = (_p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.9 * (1 - Math.max(0, normal.dot(light))) ** 1.3 + 0.04, 0, 1);
   const env = { forward, density: 0.4, dark: lit, screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; } };
@@ -212,14 +232,15 @@ export function drawLovers(ctx: SketchContext): Part[] {
   for (const tower of [near, far]) for (const { sl } of tower.pieces) {
     const centre = new THREE.Vector3(sl.x, sl.y, sl.z);
     const band = bandOf(centre);
-    for (const st of calmFacets(sl, light, eye, Math.max(sl.w, sl.h) * mmPerUnit(centre) < 1.5, FACET_MM_PER_UNIT / mmPerUnit(centre), n(ctx, 'calm', 0.4, 0, 1))) {
+    // Off tabloid the outlines are trimmed (kit/slabs.ts): no back edges, and faces narrower than the smallest feature folded in.
+    for (const st of calmFacets(sl, light, eye, Math.max(sl.w, sl.h) * mmPerUnit(centre) < 1.5, FACET_MM_PER_UNIT / mmPerUnit(centre), n(ctx, 'calm', 0.4, 0, 1), { view })) {
       placed.push({ ink: st.ink, group: tower.id, family: st.family, points: st.points, band, kind: 'slab' });
     }
   }
   for (const s of [strandA, strandB, leadRibbonA, leadRibbonB]) for (const st of s.strokes) for (const piece of chunk(st.points, 12)) {
     placed.push({ ...st, points: piece, band: bandOf(piece[Math.floor(piece.length / 2)]), kind: 'helix' });
   }
-  for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env)) {
+  for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env, figureBands())) {
     // Each lover draws into parts of its own, so the page can tell the two apart.
     placed.push({ ...st, group: st.group === 'figure-edge' ? `${side}-edge` : side, band: bandOf(st.points[Math.floor(st.points.length / 2)]), kind: 'figure' });
   }
@@ -295,21 +316,29 @@ export function drawLovers(ctx: SketchContext): Part[] {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
     const onGlyph = glyphMask(glyphPaths, halo(0.9));
-    const buckets = new PartBuckets(0.4);
+    // Every ordinary path goes through the reducer at the card's scale (`reduceAtScale`: the print's reducer at tabloid),
+    // so the small lovers and the strands keep their curves.
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
+    const loversDepth = FIGURE_OVERSAMPLE > 1 ? fineDepth(geometries, oversampledView(view, FIGURE_OVERSAMPLE), { W, H, MM_X, MM_Y }, FIGURE_OVERSAMPLE) : undefined;
     for (let band = 0; band < BAND_EDGES.length - 1; band++) for (const kind of Object.keys(SLACK) as (keyof typeof SLACK)[]) {
       const mine = placed.filter(s => s.band === band && s.kind === kind);
       if (!mine.length) continue;
-      projectStrokes(mine, { view, depth: depthBuffer, width: W, height: H, bias: biasOf(band, SLACK[kind]) }, {
+      const bias = biasOf(band, SLACK[kind]);
+      // The lovers off tabloid against their finer depth pass; everything else against the card's.
+      const fine = kind === 'figure' ? loversDepth : undefined;
+      const [mmX, mmY] = fine ? [fine.mmX, fine.mmY] : [MM_X, MM_Y];
+      projectStrokes(mine, fine ? { ...fine.env, bias } : { view, depth: depthBuffer, width: W, height: H, bias }, {
         // Slivers of a tower's lines that the courses in front, or a lover's pocket, cut up are dropped.
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), kind === 'slab' ? p => !loverPocket(p) : undefined, kind === 'slab' ? 2 : undefined); },
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, mmX, mmY), kind === 'slab' ? p => !loverPocket(p) : undefined, kind === 'slab' ? SHORTEST.slab : undefined); },
       });
     }
 
     // The shadows: thrown back across the ground, hatched flat on the sheet. A tower's shadow is a lighter tone (one family, a
     // sparse second) and keeps clear of the lovers and of the towers; each lover's own, darker and crossed, starts at its feet.
+    // The spread keeps its millimetres on paper: it lets the hatch, whose pitch keeps its millimetres, catch a thin arm.
     const spread = n(ctx, 'shadowSpread', 0.8, 0, 2);
     const towerShade = meshCoverage([shadowGeos[0]], view, PAGE, 0, 4);
     const leftShade = meshCoverage([shadowGeos[1]], view, PAGE, spread, 4), rightShade = meshCoverage([shadowGeos[2]], view, PAGE, spread, 4);
@@ -332,10 +361,10 @@ export function drawLovers(ctx: SketchContext): Part[] {
       }
     };
     const cross = tilt - THREE.MathUtils.degToRad(100);
-    hatch('shadow-carbon', 3.5, [[tilt, step], [cross, step * 3]], p => towerShade(p) && !loverShade(p) && !standing(p) && !loverPocket(p));
+    hatch('shadow-carbon', SHORTEST.towerShadow, [[tilt, step], [cross, step * 3]], p => towerShade(p) && !loverShade(p) && !standing(p) && !loverPocket(p));
     // Each lover's own shadow in its own part; where the two overlap the left one draws it.
-    hatch('shadow-left-carbon', 1.5, [[tilt, step], [cross, step * 1.5]], p => leftShade(p) && !standing(p) && !onLover(p));
-    hatch('shadow-right-carbon', 1.5, [[tilt, step], [cross, step * 1.5]], p => rightShade(p) && !leftShade(p) && !standing(p) && !onLover(p));
+    hatch('shadow-left-carbon', SHORTEST.loverShadow, [[tilt, step], [cross, step * 1.5]], p => leftShade(p) && !standing(p) && !onLover(p));
+    hatch('shadow-right-carbon', SHORTEST.loverShadow, [[tilt, step], [cross, step * 1.5]], p => rightShade(p) && !leftShade(p) && !standing(p) && !onLover(p));
 
     // The sky: a light ruling, thinning and breaking as it comes down to the horizon, knocked out round everything standing in it.
     // The ruling and its breaks keep their millimetres on paper, so a small card keeps the print's tones in fewer rules.
