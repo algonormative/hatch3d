@@ -234,12 +234,12 @@ export function drawEmperor(ctx: SketchContext): Part[] {
   // an edge (see `figureRank`). At tabloid the suit is drawn as it always was.
   const look: Look = FORMAT.tabloid ? SUIT : { ...SUIT, cloth: CLOTH_TAG, accent: CLOTH_TAG };
   const figureRank = new Map<Stroke, number>();
-  const push = (list: ClothStroke[], group: string, outline = false) => {
+  const push = (list: ClothStroke[], group: string) => {
     for (const st of list) {
       if (look === SUIT) { strokes.push({ ink: st.ink, group, family: st.family ?? 'hatch', points: st.points }); continue; }
       const cloth = st.ink === CLOTH_TAG;
       const stroke: Stroke = { ink: 'carbon', group, family: cloth ? 'hatch' : 'edge', points: st.points };
-      figureRank.set(stroke, outline ? 0 : cloth ? 2 : 1);
+      figureRank.set(stroke, st.role === 'outline' ? 0 : cloth ? 2 : 1);
       strokes.push(stroke);
     }
   };
@@ -265,7 +265,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
   };
   for (const t of fig.hands) blunt(t, env);
   for (const t of fig.shoes) blunt(t, shoeEnv);
-  for (const t of [body.trunk, ...limbs, ...fig.hands, ...fig.shoes]) push(silhouettes(t, env, { ink: 'carbon', group: 'figure' }), 'figure', true);
+  for (const t of [body.trunk, ...limbs, ...fig.hands, ...fig.shoes]) push(silhouettes(t, env, { ink: 'carbon', group: 'figure' }), 'figure');
   for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
 
   // Slabs (throne, cubes): the raking hatch lit from the head, quieter the nearer they stand to it;

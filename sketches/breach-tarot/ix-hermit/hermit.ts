@@ -85,7 +85,7 @@ export function buildLantern(ctx: SketchContext, view: THREE.PerspectiveCamera, 
 /**
  * What each of the figure's strokes draws, for a small card that thins them (`thinRanked`) in that order: the
  * `outline` (limbs, cloak, hood and staff), the `rim` of the hood's opening, the cloak's `fold`s, the contour `ring`s,
- * and the dark `hollow` in the hood.
+ * and the dark `hollow` in the hood. The kit tags the first, third and fourth (`ClothStroke.role`); the card tags the others.
  */
 export type FigureRole = 'outline' | 'rim' | 'fold' | 'ring' | 'hollow';
 
@@ -150,23 +150,22 @@ export function hermitFigure(ctx: SketchContext, view: THREE.PerspectiveCamera, 
   const foot = new THREE.Vector3(grip.x + ahead.x, stand.y, grip.z + ahead.z), topAt = foot.clone().setY(stand.y + 1.12 * H);
   const staff = new Tube('staff', [foot, foot.clone().lerp(topAt, 0.5), topAt], [[0, r, r], [1, r, r]], new THREE.Vector3(0, 0, 1), 1, [0, 0], undefined, 6);
 
-  // The strokes' groups name their role (`FigureRole`); every one is drawn in the figure's group.
-  const edge = { ink: 'carbon' as const, group: 'outline', family: 'hatch' as const };
-  const rings: Look = { ...look, figure: 'ring', contour: 'outline' }, folds: Look = { ...look, figure: 'fold', contour: 'outline' };
+  // The kit tags each stroke with its role (`FigureRole`); every one is drawn in the figure's group.
+  const edge = { ink: 'carbon' as const, group: 'figure', family: 'hatch' as const };
   const cloth: ClothStroke[] = [
     // The arms are plain outlines; the body and legs under the cloak keep their rings.
-    ...[body.trunk, ...body.limbs].flatMap(t => [...(t.id.startsWith('arm') ? [] : contourTube(t, env, rings, 0.6)), ...silhouettes(t, env, edge)]),
-    ...drapeStrokes(cloak, env, folds),
+    ...[body.trunk, ...body.limbs].flatMap(t => [...(t.id.startsWith('arm') ? [] : contourTube(t, env, look, 0.6)), ...silhouettes(t, env, edge)]),
+    ...drapeStrokes(cloak, env, look),
     // The hood is mostly paper: its outline, a few rings where it turns from the light, the rim of its opening and the dark hollow.
-    ...contourTube(hood, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, rings, 0.5), ...silhouettes(hood, env, edge),
-    { ink: 'carbon', group: 'rim', family: 'hatch', points: rim },
-    ...hollow.map((points): ClothStroke => ({ ink: 'carbon', group: 'hollow', family: 'hatch', points })),
+    ...contourTube(hood, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, look, 0.5), ...silhouettes(hood, env, edge),
+    { ink: 'carbon', group: 'figure', family: 'hatch', role: 'rim', points: rim },
+    ...hollow.map((points): ClothStroke => ({ ink: 'carbon', group: 'figure', family: 'hatch', role: 'hollow', points })),
     ...silhouettes(staff, env, edge),
   ];
   const headless: Body = { ...body, head: undefined };
   return {
     strokes: cloth.map(st => ({ ink: st.ink, group: 'figure', family: st.family ?? 'hatch', points: st.points })),
-    roles: cloth.map(st => st.group as FigureRole),
+    roles: cloth.map(st => st.role as FigureRole),
     meshes: [...bodyMeshes(headless, 0.8), drapeMesh(cloak), hood.mesh(80, 32), staff.mesh(40, 24)],
   };
 }

@@ -55,9 +55,13 @@ export function stride(spacing: number, min = MIN_MM): number {
 export const TIER = [0.1, 0.42, 0.66];
 export const tierOf = (j: number) => (j % 4 === 0 ? 0 : j % 2 === 0 ? 1 : 2);
 
-/** Collect contiguous runs of samples that pass `keep` into strokes. */
-export function runs(points: THREE.Vector3[], keep: boolean[], ink: Ink, group: string, out: ClothStroke[], family?: Family) {
-  const make = (pts: THREE.Vector3[]): ClothStroke => family ? { ink, group, family, points: pts } : { ink, group, points: pts };
+/** Collect contiguous runs of samples that pass `keep` into strokes, each tagged with `role` where one is named. */
+export function runs(points: THREE.Vector3[], keep: boolean[], ink: Ink, group: string, out: ClothStroke[], family?: Family, role?: string) {
+  const make = (pts: THREE.Vector3[]): ClothStroke => {
+    const st: ClothStroke = family ? { ink, group, family, points: pts } : { ink, group, points: pts };
+    if (role) st.role = role;
+    return st;
+  };
   let run: THREE.Vector3[] = [];
   for (let i = 0; i < points.length; i++) {
     if (keep[i]) run.push(points[i]);

@@ -5,8 +5,13 @@ import { clamp, smooth } from '../params.ts';
 
 const TAU = Math.PI * 2;
 
-/** A world-space stroke from the mannequin parts. `family` is set only when the caller asks for one. */
-export type ClothStroke = { ink: Ink; group: string; family?: Family; points: THREE.Vector3[]; owner?: number };
+/**
+ * A world-space stroke from the mannequin parts. `family` is set only when the caller asks for one. `role` is what the
+ * stroke draws, for a card that ranks or thins its strokes by kind: the kit sets `outline` on `silhouettes`' curves (and on
+ * `drapeStrokes`' neckline, hem, opening and silhouette), `ring` on `contourTube`'s rings and plane edges, and `fold` on
+ * `drapeStrokes`' fall hatch and creases. A card's own strokes may name their own; the other makers leave it unset.
+ */
+export type ClothStroke = { ink: Ink; group: string; family?: Family; points: THREE.Vector3[]; owner?: number; role?: string };
 
 /** A section key along a tube: `u` is the position on the spine, `rx` and `ry` the section radii. */
 export type Key = [u: number, rx: number, ry: number];
@@ -109,7 +114,7 @@ export function silhouettes(t: Tube, env: ViewEnv, style: SilhouetteStyle = {}):
   type Track = { v: number; pts: THREE.Vector3[]; last: number };
   let tracks: Track[] = [];
   const close = (tr: Track) => {
-    if (tr.pts.length > 1) out.push(family ? { ink, group, family, points: tr.pts } : { ink, group, points: tr.pts });
+    if (tr.pts.length > 1) out.push(family ? { ink, group, family, points: tr.pts, role: 'outline' } : { ink, group, points: tr.pts, role: 'outline' });
   };
   for (let i = 0; i <= NU; i++) {
     const u = i / NU;

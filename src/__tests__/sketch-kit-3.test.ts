@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { TABLOID_FORMAT, formatFor, printFine } from '../../sketches/kit/format.ts';
 import { thinParallel, thinRanked } from '../../sketches/kit/density.ts';
+import { contourTube } from '../../sketches/kit/mannequin/body.ts';
+import { drape, drapeStrokes } from '../../sketches/kit/mannequin/drape.ts';
 import { figureBands, flowBody, ribbonStrokes } from '../../sketches/kit/mannequin/gesture.ts';
-import { LOOK } from '../../sketches/kit/mannequin/hatch.ts';
+import { LOOK, type Look } from '../../sketches/kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton } from '../../sketches/kit/mannequin/skeleton.ts';
+import { Tube, silhouettes } from '../../sketches/kit/mannequin/tube.ts';
+import { sketchContext } from './helpers/sketch-context.ts';
 
 const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
 
@@ -94,5 +98,47 @@ describe('sketch kit: shared card helpers, batch 3', () => {
     expect(figureBands(formatFor({ width: 70, height: 120 }, { fit: 'width' }))).toEqual({ trunk: 2, limb: 1 });
     expect(figureBands(formatFor({ width: 20, height: 34 }))).toEqual({ trunk: 1, limb: 1 });
     expect(figureBands(formatFor({ width: 200, height: 350 }))).toEqual({ trunk: 5, limb: 3 });
+  });
+
+  describe('the role a mannequin stroke carries', () => {
+    const body = flowBody(poseSkeleton(POSES.stand));
+    const env = { forward: new THREE.Vector3(0, 0, -1), density: 0.4, dark: () => 0.95, screen: (p: THREE.Vector3) => ({ x: 5 * p.x, y: -5 * p.y }) };
+    // Each of the look's two groups apart, so a stroke's group says which of them drew it.
+    const look: Look = { ...LOOK, figure: 'cloth-group', contour: 'outline-group' };
+
+    it('tags a tube\'s silhouettes `outline`, whatever style they are drawn in', () => {
+      const tube = new Tube('post', [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 2, 0)], [[0, 1, 1], [1, 1, 1]], new THREE.Vector3(1, 0, 0), 1);
+      const plain = silhouettes(tube, env), styled = silhouettes(tube, env, { ink: 'carbon', group: 'edge', family: 'edge' });
+      expect(plain.length).toBeGreaterThan(1);
+      expect(styled).toHaveLength(plain.length);
+      for (const st of [...plain, ...styled]) expect(st.role).toBe('outline');
+    });
+
+    it('tags a tube\'s rings `ring`, and a faceted tube\'s plane edges with them', () => {
+      const rings = contourTube(body.trunk, env, look);
+      expect(rings.length).toBeGreaterThan(5);
+      for (const st of rings) expect(st.role).toBe('ring');
+      const faceted = new Tube('post', [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 2, 0)], [[0, 1, 1], [1, 1, 1]], new THREE.Vector3(1, 0, 0), 1, [0, 0], undefined, 6);
+      const edges = contourTube(faceted, env, { ...look, crease: 'acid' }).filter(st => st.ink === 'acid');
+      expect(edges).toHaveLength(6);
+      for (const st of edges) expect(st.role).toBe('ring');
+    });
+
+    it('tags a drape\'s fall hatch and creases `fold` and its neckline, hem, opening and silhouette `outline`', () => {
+      const cloak = drape(body, { rng: sketchContext(3).random('cloak'), attach: 'shoulders', length: 0.95, folds: 9, depth: 0.1, flare: 0.07, gap: 0.015 * body.skeleton.height, open: 1.2 });
+      const strokes = drapeStrokes(cloak, env, look);
+      expect(strokes.length).toBeGreaterThan(20);
+      // The look's cloth group draws the hatch and creases, its contour group everything that bounds the cloth.
+      expect(new Set(strokes.map(st => st.group))).toEqual(new Set(['cloth-group', 'outline-group']));
+      for (const st of strokes) expect(st.role).toBe(st.group === 'cloth-group' ? 'fold' : 'outline');
+    });
+
+    it('leaves the role of every other stroke unset: a ribbon figure\'s bands carry none, its silhouettes `outline`', () => {
+      const strokes = ribbonStrokes({ ...body, head: undefined }, env, look, { bands: 3, lines: 4 });
+      expect(strokes.some(st => st.group === 'cloth-group')).toBe(true);
+      expect(strokes.some(st => st.group === 'outline-group')).toBe(true);
+      for (const st of strokes) expect(st.role).toBe(st.group === 'outline-group' ? 'outline' : undefined);
+      expect(strokes.filter(st => st.group === 'cloth-group').every(st => !('role' in st))).toBe(true);
+    });
   });
 });

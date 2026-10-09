@@ -99,7 +99,7 @@ export function bodyMeshes(b: Body, detail = 1): THREE.BufferGeometry[] {
   return [mesh(b.trunk), ...b.limbs.map(mesh), ...(b.head ? [mesh(b.head)] : []), ...b.blocks.map(slabGeometry)];
 }
 
-/** Cross-contour rings round a tube, as many as its tone asks for: the bare body's hatch. */
+/** Cross-contour rings round a tube, as many as its tone asks for: the bare body's hatch. Its strokes are `ring`s (`ClothStroke.role`). */
 export function contourTube(t: Tube, env: ToneEnv, look: Look = LOOK, spacing = 0.3): ClothStroke[] {
   const out: ClothStroke[] = [];
   const R = Math.max(8, Math.round(t.length / spacing)) * 4;
@@ -116,12 +116,12 @@ export function contourTube(t: Tube, env: ToneEnv, look: Look = LOOK, spacing = 
       const s = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + 1 / R, v)));
       keep.push(i % s === 0 && env.dark(p, t.normal(u, v)) > TIER[tier]);
     }
-    runs(pts, keep, i % 8 === 0 ? look.accent : look.cloth, look.figure, out, look.family);
+    runs(pts, keep, i % 8 === 0 ? look.accent : look.cloth, look.figure, out, look.family, 'ring');
   }
   // A faceted body shows its plane edges, end to end.
   if (t.facets >= 3) for (let f = 0; f < t.facets; f++) {
     const pts = Array.from({ length: 121 }, (_, i) => t.point(i / 120, f / t.facets, 0.004));
-    out.push({ ink: look.crease, group: look.figure, family: look.family, points: pts });
+    out.push({ ink: look.crease, group: look.figure, family: look.family, points: pts, role: 'ring' });
   }
   return out;
 }
