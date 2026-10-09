@@ -14,7 +14,7 @@ import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { figureBands, figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
+import { figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
 import { roundedPocket } from './pocket.ts';
 import { shadowOf } from './shadows.ts';
 import { Spine, leadRoll, leadStrand, strand, winding, type Ribbon } from './strands.ts';
@@ -240,7 +240,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
   for (const s of [strandA, strandB, leadRibbonA, leadRibbonB]) for (const st of s.strokes) for (const piece of chunk(st.points, 12)) {
     placed.push({ ...st, points: piece, band: bandOf(piece[Math.floor(piece.length / 2)]), kind: 'helix' });
   }
-  for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env, figureBands())) {
+  for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env)) {
     // Each lover draws into parts of its own, so the page can tell the two apart.
     placed.push({ ...st, group: st.group === 'figure-edge' ? `${side}-edge` : side, band: bandOf(st.points[Math.floor(st.points.length / 2)]), kind: 'figure' });
   }

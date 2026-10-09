@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, pageExtent, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -17,7 +17,7 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { ELONGATED, gesture } from '../../kit/mannequin/gesture.ts';
 import { POSES, poseSkeleton, withPose, type JointName, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { bodyFigure, figureMeshes, figureStrokes, type Bands } from './figure.ts';
+import { bodyFigure, figureMeshes, figureStrokes } from './figure.ts';
 
 /**
  * I The Magician: the power, not the costume. A very small figure, a few scratches just enough to
@@ -255,13 +255,6 @@ export const FIELD_FLOOR = 0.4;
 /** The share of `lines` field lines a card draws, as an even spread over their seeded order: all of them at tabloid. */
 export const fieldShare = (lines: number): number => lines ? scaledCount(lines, Math.round(FIELD_FLOOR * lines), 'length') / lines : 1;
 
-/**
- * The figure's ribbon bands on a smaller card: the print's (six round the trunk, the kit's four round a limb) scaled
- * with the card, never under one, so each band keeps its width on paper and there are fewer of them, as a ruling keeps
- * its pitch. Undefined at tabloid, where the figure keeps the print's.
- */
-export const figureBands = (): Bands | undefined => FORMAT.tabloid ? undefined : { trunk: Math.max(1, Math.round(6 * S)), limb: Math.max(1, Math.round(4 * S)) };
-
 export function drawMagician(ctx: SketchContext): Part[] {
   const view = magicianCamera(ctx);
   const eye = view.position.clone();
@@ -436,7 +429,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
         fitDepthRange(figView, figGeos);
         const fine = fineDepth(figGeos, figView, { W, H, MM_X, MM_Y }, m);
         const biasAt = (tol: number) => tol * figView.far * figView.near / ((figView.far - figView.near) * (eye.z - place.z) ** 2);
-        const lines = figureStrokes(fig, env, figureBands());
+        const lines = figureStrokes(fig, env);
         // An outline runs along the edge where the surface turns away from the eye, so its depth changes fastest there: it gets more slack than the hatch.
         for (const edge of [false, true]) {
           projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { ...fine.env, bias: biasAt(edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK) }, {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { bodyMeshes, contourTube, type Body } from '../../kit/mannequin/body.ts';
-import { ELONGATED, flowBody, ribbonStrokes, squareRef } from '../../kit/mannequin/gesture.ts';
+import { ELONGATED, figureBands, flowBody, ribbonStrokes, squareRef } from '../../kit/mannequin/gesture.ts';
 import { LOOK, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { poseSkeleton, type Pose, type Side, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { Tube, type ClothStroke, type Key, type ViewEnv } from '../../kit/mannequin/tube.ts';
@@ -81,21 +81,14 @@ function headOutline(head: Tube, screen: ToneEnv['screen'], look: Look): ClothSt
   return { ink: look.edge, group: look.contour, family: 'hatch', points: [...ring, ring[0]].map(q => q.p) };
 }
 
-/** The ribbons' bands round the trunk and round each limb (the print's: six, and the kit's four on a limb). */
-export interface Bands { trunk: number; limb: number }
-
 /**
  * Plain contour hatch that follows the form: long bands run the length of each limb and wind slowly
  * round it, their lines coming in where the light leaves them dark, with an outline; the head is a
- * blank egg, thinly ringed, outlined by its hull, with no face. With `bands`, each tube gets that many
- * bands (a figure a few millimetres tall on a small card, whose bands would otherwise crowd); without, the print's.
+ * blank egg, thinly ringed, outlined by its hull, with no face. Its bands are the print's at tabloid and fewer on a
+ * smaller card (`figureBands`), where a figure a few millimetres tall would crowd them.
  */
-export function figureStrokes(f: Figure, env: ToneEnv & ViewEnv, bands?: Bands): Stroke[] {
-  const ribbon = { fill: 0.58, twist: 0.3, lines: 6 };
-  // Each tube on its own as the trunk of a body, so it takes the band count given it.
-  const out: ClothStroke[] = bands
-    ? [f.body.trunk, ...f.body.limbs].flatMap(t => ribbonStrokes({ ...f.body, trunk: t, limbs: [], head: undefined }, env, FIGURE_LOOK, { ...ribbon, bands: t === f.body.trunk ? bands.trunk : bands.limb }))
-    : ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { bands: 6, ...ribbon });
+export function figureStrokes(f: Figure, env: ToneEnv & ViewEnv): Stroke[] {
+  const out: ClothStroke[] = ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { fill: 0.58, twist: 0.3, lines: 6, bands: figureBands() });
   const head = f.body.head!;
   out.push(...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, FIGURE_LOOK, f.skeleton.height * 0.012),
     headOutline(head, env.screen, FIGURE_LOOK));

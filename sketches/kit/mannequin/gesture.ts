@@ -3,6 +3,7 @@ import { LOOK, TIER, perpendicular, runs, stride, tierOf, type Look, type ToneEn
 import type { Body } from './body.ts';
 import type { JointAngles, JointName, Pose, Proportions, Side, Skeleton } from './skeleton.ts';
 import { Tube, silhouettes, type ClothStroke, type Key, type ViewEnv } from './tube.ts';
+import { FORMAT, type Format } from '../format.ts';
 
 /**
  * Stylized, flowing figures over the stiff reference skeleton. Three layers, each optional:
@@ -143,9 +144,12 @@ export function flowBody(s: Skeleton, o: FlowOptions = {}): Body {
   return { skeleton: s, trunk, limbs, head, blocks: [] };
 }
 
+/** The bands of a ribbon figure tube by tube: round the trunk, round each limb, and round the head (default five). */
+export interface RibbonBands { trunk: number; limb: number; head?: number }
+
 export interface RibbonOptions {
-  /** Bands round the trunk; limbs carry a little over half as many, the head five. */
-  bands?: number;
+  /** Bands round the trunk; limbs carry a little over half as many, the head five. Or a count for each kind of tube (`RibbonBands`). */
+  bands?: number | RibbonBands;
   /** Share of each band's slot that is cloth; the rest is a paper gap. */
   fill?: number;
   /** Turns each band winds round its tube over the tube's length. */
@@ -164,7 +168,9 @@ export function ribbonStrokes(b: Body, env: ToneEnv & ViewEnv, look: Look = LOOK
   const fill = o.fill ?? 0.62, twist = o.twist ?? 0.22, L = o.lines ?? 8, bands = o.bands ?? 9;
   const wrap = (v: number) => ((v % 1) + 1) % 1;
   for (const t of [b.trunk, ...b.limbs, ...(b.head ? [b.head] : [])]) {
-    const K = t === b.trunk ? bands : t === b.head ? 5 : Math.max(4, Math.round(bands * 0.55));
+    const K = typeof bands === 'number'
+      ? t === b.trunk ? bands : t === b.head ? 5 : Math.max(4, Math.round(bands * 0.55))
+      : t === b.trunk ? bands.trunk : t === b.head ? bands.head ?? 5 : bands.limb;
     const steps = Math.max(160, Math.round(t.length / 0.04));
     const turn = t.hand * twist;
     for (let band = 0; band < K; band++) for (let j = 0; j <= L; j++) {
@@ -186,3 +192,12 @@ export function ribbonStrokes(b: Body, env: ToneEnv & ViewEnv, look: Look = LOOK
   }
   return out;
 }
+
+/**
+ * The ribbons' bands for a bare figure that is small on its card: the print's six round the trunk and the kit's four round
+ * a limb (what `ribbonStrokes` gives at `bands: 6`), scaled with the card and never under one, so each band keeps its width on
+ * paper and there are fewer of them, as a ruling keeps its pitch. The plain `6` at tabloid, where the figure keeps the
+ * print's. Hand it to `ribbonStrokes` as `bands`; the `format` is this process's unless a test names one.
+ */
+export const figureBands = (format: Format = FORMAT): number | RibbonBands =>
+  format.tabloid ? 6 : { trunk: Math.max(1, Math.round(6 * format.s)), limb: Math.max(1, Math.round(4 * format.s)) };

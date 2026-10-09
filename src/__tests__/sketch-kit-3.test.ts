@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { TABLOID_FORMAT, formatFor, printFine } from '../../sketches/kit/format.ts';
 import { thinParallel, thinRanked } from '../../sketches/kit/density.ts';
+import { figureBands, flowBody, ribbonStrokes } from '../../sketches/kit/mannequin/gesture.ts';
+import { LOOK } from '../../sketches/kit/mannequin/hatch.ts';
+import { POSES, poseSkeleton } from '../../sketches/kit/mannequin/skeleton.ts';
 
 const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
 
@@ -60,5 +64,35 @@ describe('sketch kit: shared card helpers, batch 3', () => {
     expect(across.runs[0][0].x).toBe(0);
     // Nothing in, nothing out.
     expect(thinRanked([], 0.5)).toEqual([]);
+  });
+
+  it('counts a ribbon figure\'s bands tube by tube, as a body ribboned a tube at a time would, and the numeric count as it always was', () => {
+    const body = flowBody(poseSkeleton(POSES.stand));
+    const env = { forward: new THREE.Vector3(0, 0, -1), density: 0.4, dark: () => 0.95, screen: (p: THREE.Vector3) => ({ x: 5 * p.x, y: -5 * p.y }) };
+    const ribbon = { fill: 0.58, twist: 0.3, lines: 6 };
+    const of = (b: typeof body, bands: number | { trunk: number; limb: number; head?: number }) => ribbonStrokes(b, env, LOOK, { ...ribbon, bands });
+    const headless = { ...body, head: undefined };
+    // Three bands round the trunk and two round each limb, in one call: each tube on its own as the trunk of a body, in the same order.
+    const together = of(headless, { trunk: 3, limb: 2 });
+    const apart = [body.trunk, ...body.limbs].flatMap(t => of({ ...body, trunk: t, limbs: [], head: undefined }, t === body.trunk ? 3 : 2));
+    expect(together.length).toBeGreaterThan(100);
+    expect(together).toEqual(apart);
+    expect(of(headless, { trunk: 3, limb: 4 })).not.toEqual(together);
+    expect(of(headless, { trunk: 4, limb: 2 })).not.toEqual(together);
+    // A single number is the trunk's count, a limb's a little over half of it (at least four), the head's five: as before.
+    expect(of(body, 6)).toEqual(of(body, { trunk: 6, limb: 4, head: 5 }));
+    expect(of(body, 9)).toEqual(of(body, { trunk: 9, limb: 5 }));
+    expect(of(body, { trunk: 6, limb: 4 })).toEqual(of(body, { trunk: 6, limb: 4, head: 5 }));
+    expect(of(body, { trunk: 6, limb: 4, head: 2 })).not.toEqual(of(body, { trunk: 6, limb: 4 }));
+  }, 60_000);
+
+  it('gives a small figure the print\'s bands scaled with the card and never under one, and the print\'s own at tabloid', () => {
+    expect(figureBands()).toBe(6);
+    expect(figureBands(TABLOID_FORMAT)).toBe(6);
+    // 70 x 120: s is 0.278 by height and 0.251 by width.
+    expect(figureBands(formatFor({ width: 70, height: 120 }))).toEqual({ trunk: 2, limb: 1 });
+    expect(figureBands(formatFor({ width: 70, height: 120 }, { fit: 'width' }))).toEqual({ trunk: 2, limb: 1 });
+    expect(figureBands(formatFor({ width: 20, height: 34 }))).toEqual({ trunk: 1, limb: 1 });
+    expect(figureBands(formatFor({ width: 200, height: 350 }))).toEqual({ trunk: 5, limb: 3 });
   });
 });

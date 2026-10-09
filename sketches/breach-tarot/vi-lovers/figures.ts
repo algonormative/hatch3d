@@ -1,11 +1,10 @@
 import * as THREE from 'three';
 import { bodyMeshes, contourTube, type Body } from '../../kit/mannequin/body.ts';
-import { ELONGATED, flowBody, gesture, ribbonStrokes } from '../../kit/mannequin/gesture.ts';
+import { ELONGATED, figureBands, flowBody, gesture, ribbonStrokes } from '../../kit/mannequin/gesture.ts';
 import { LOOK, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton, withPose, type JointAngles, type JointName, type Pose, type Side, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { silhouettes, type ClothStroke, type ViewEnv } from '../../kit/mannequin/tube.ts';
 import type { Stroke } from '../../kit/types.ts';
-import { FORMAT, S } from '../../kit/format.ts';
 
 /**
  * The two lovers as small figures floating in the air: the kit's mannequin, bare, in plain carbon, a
@@ -100,28 +99,14 @@ export const footOf = (f: Figure): THREE.Vector3 => f.skeleton.at('pelvis').setY
 /** The figure's closed surfaces, for the depth pass and its coverage masks. */
 export const figureMeshes = (f: Figure): THREE.BufferGeometry[] => bodyMeshes(f.body, 0.7);
 
-/** The ribbons' bands round the trunk and round each limb (the print's: six, and the kit's four on a limb). */
-export interface Bands { trunk: number; limb: number }
-
-/**
- * The lovers' bands on a small card: the print's (six round the trunk, four round a limb) scaled with the card, never
- * under one, so each band keeps its width on paper and there are fewer of them, as a ruling keeps its pitch. Undefined
- * at tabloid, where the lovers keep the print's.
- */
-export const figureBands = (): Bands | undefined => FORMAT.tabloid ? undefined : { trunk: Math.max(1, Math.round(6 * S)), limb: Math.max(1, Math.round(4 * S)) };
-
 /**
  * Plain contour hatch that follows the form: long bands run the length of each limb and wind slowly
  * round it, their lines coming in where the light leaves them dark, with an outline; the head is a
- * blank egg, thinly ringed, with no face and no cross. With `bands`, each tube gets that many bands (a lover a
- * few millimetres tall on a small card, whose bands would otherwise crowd); without, the print's.
+ * blank egg, thinly ringed, with no face and no cross. Its bands are the print's at tabloid and fewer on a smaller card
+ * (`figureBands`), where a lover a few millimetres tall would crowd them.
  */
-export function figureStrokes(f: Figure, env: ToneEnv & ViewEnv, bands?: Bands): Stroke[] {
-  const ribbon = { fill: 0.58, twist: 0.3, lines: 6 };
-  // Each tube on its own as the trunk of a body, so it takes the band count given it.
-  const out: ClothStroke[] = bands
-    ? [f.body.trunk, ...f.body.limbs].flatMap(t => ribbonStrokes({ ...f.body, trunk: t, limbs: [], head: undefined }, env, FIGURE_LOOK, { ...ribbon, bands: t === f.body.trunk ? bands.trunk : bands.limb }))
-    : ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { bands: 6, ...ribbon });
+export function figureStrokes(f: Figure, env: ToneEnv & ViewEnv): Stroke[] {
+  const out: ClothStroke[] = ribbonStrokes({ ...f.body, head: undefined }, env, FIGURE_LOOK, { fill: 0.58, twist: 0.3, lines: 6, bands: figureBands() });
   const head = f.body.head!;
   out.push(...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.35) }, FIGURE_LOOK, f.skeleton.height * 0.012),
     ...silhouettes(head, env, { ink: FIGURE_LOOK.edge, group: FIGURE_LOOK.contour, family: 'hatch' }));
