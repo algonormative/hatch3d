@@ -15,7 +15,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { BIAS_FLOOR, PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, chunkPolyline, fineEnv, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { BOX, fragments, plain, seams, type Vault } from './plain.ts';
@@ -66,13 +66,8 @@ export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return tabloidFrameCamera({ fov: n(ctx, 'fov', 56, 36, 75), eye: n(ctx, 'eye', 8, 3, 14), near: 8, far: 1500 });
 }
 
-/** Split long polylines so each piece sits in one depth band. */
-function chunk(points: THREE.Vector3[], max = 20): THREE.Vector3[][] {
-  if (points.length <= max + 2) return [points];
-  const out: THREE.Vector3[][] = [];
-  for (let i = 0; i < points.length - 1; i += max) out.push(points.slice(i, Math.min(points.length, i + max + 1)));
-  return out;
-}
+/** The helix is cut so each piece sits in one depth band: pieces of this many points, a line of up to one more left whole. */
+const HELIX_PIECE = 21;
 
 /** A solid tube along the horn's axis: what the sky is knocked out round. */
 function hornTube(horn: Trumpet): THREE.BufferGeometry {
@@ -308,7 +303,7 @@ export function drawJudgement(ctx: SketchContext): Part[] {
     const helixMin = sceneMin(n(ctx, 'helixFragment', 5, 0.4, 12));
     // Each stroke is tested at its own depth: strokes are split into pieces and banded by distance.
     const bands = new Map<string, { list: Stroke[]; d: number; slack: number; band: number }>();
-    for (const st of strokes) for (const piece of (st.group === 'helix' ? chunk(st.points) : [st.points])) {
+    for (const st of strokes) for (const piece of (st.group === 'helix' ? chunkPolyline(st.points, HELIX_PIECE, 1) : [st.points])) {
       const mid = piece[Math.floor(piece.length / 2)];
       const d = depthOf(mid), band = Math.round(Math.log(d) / Math.log(1.12));
       const key = `${st.group}|${band}`;

@@ -11,7 +11,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { BIAS_FLOOR, PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, chunkPolyline, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
@@ -86,13 +86,6 @@ function grownView(view: THREE.PerspectiveCamera, k: number): THREE.PerspectiveC
   big.position.multiplyScalar(k); big.near *= k; big.far *= k;
   big.updateProjectionMatrix(); big.updateMatrixWorld(true);
   return big;
-}
-
-/** A polyline cut into runs of at most `size` points, each sharing its end point with the next. */
-function chunk<T>(points: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < points.length - 1; i += size - 1) out.push(points.slice(i, Math.min(points.length, i + size)));
-  return out;
 }
 
 type Placed = Stroke & { band: number; kind: keyof typeof SLACK };
@@ -237,7 +230,7 @@ export function drawLovers(ctx: SketchContext): Part[] {
       placed.push({ ink: st.ink, group: tower.id, family: st.family, points: st.points, band, kind: 'slab' });
     }
   }
-  for (const s of [strandA, strandB, leadRibbonA, leadRibbonB]) for (const st of s.strokes) for (const piece of chunk(st.points, 12)) {
+  for (const s of [strandA, strandB, leadRibbonA, leadRibbonB]) for (const st of s.strokes) for (const piece of chunkPolyline(st.points, 12)) {
     placed.push({ ...st, points: piece, band: bandOf(piece[Math.floor(piece.length / 2)]), kind: 'helix' });
   }
   for (const [side, lover] of [['left', lovers.left], ['right', lovers.right]] as const) for (const st of figureStrokes(lover, env)) {

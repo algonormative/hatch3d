@@ -144,3 +144,16 @@ export function hiddenBias(view: THREE.PerspectiveCamera, slack: number, d: numb
   const bias = slack * view.far * view.near / ((view.far - view.near) * d * d);
   return floor === undefined ? bias : Math.max(floor, bias);
 }
+
+/**
+ * A polyline cut into runs of at most `size` points, each sharing its end point with the next: so that each run lies in
+ * one depth band, or short enough for a hidden-line test to keep its slack. A polyline of at most `size + whole` points is
+ * left uncut when `whole` is given (and is returned as it is, however short); without it every polyline is cut by the one
+ * rule, and one of fewer than two points gives no run.
+ */
+export function chunkPolyline<T>(points: T[], size: number, whole?: number): T[][] {
+  if (whole !== undefined && points.length <= size + whole) return [points];
+  const out: T[][] = [];
+  for (let i = 0; i < points.length - 1; i += size - 1) out.push(points.slice(i, Math.min(points.length, i + size)));
+  return out;
+}

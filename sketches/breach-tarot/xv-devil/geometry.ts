@@ -11,7 +11,7 @@ import { keepAlong, meshCoverage, reduceAtScale, straightened } from '../../kit/
 import { clamp } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, oversampledView, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
+import { PartBuckets, chunkPolyline, fineEnv, hiddenBias, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { type DoorPiece } from './doors.ts';
@@ -58,13 +58,6 @@ export function devilCamera(ctx: SketchContext): THREE.PerspectiveCamera {
     fov: param(ctx, 'fov'), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
-}
-
-/** A polyline cut into runs of at most `size` points, each sharing its end point with the next. */
-function chunk<T>(points: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < points.length - 1; i += size - 1) out.push(points.slice(i, Math.min(points.length, i + size)));
-  return out;
 }
 
 type Candidate = { sl: Slab };
@@ -232,7 +225,7 @@ export function drawDevil(ctx: SketchContext): Part[] {
     // pieces, each would fall under the shortest piece kept and the line would break into dashes. It keeps its curve: reduced
     // only where its points lie on a line (`straightened`), as the buckets' reducer would cut a turn of the twist to a corner.
     const bands = new Map<number, Stroke[]>();
-    leashes.forEach((leash, i) => { for (const st of leash.strokes) for (const piece of FORMAT.tabloid ? chunk(st.points, 12) : [st.points]) {
+    leashes.forEach((leash, i) => { for (const st of leash.strokes) for (const piece of FORMAT.tabloid ? chunkPolyline(st.points, 12) : [st.points]) {
       const band = Math.floor((eye.z - piece[Math.floor(piece.length / 2)].z) / 3);
       bands.set(band, [...(bands.get(band) ?? []), { ink: st.ink, group: i === 0 ? 'leash-left' : 'leash-right', family: 'membrane', points: piece }]);
     } });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { TABLOID_FORMAT, formatFor, maskRes } from '../../sketches/kit/format.ts';
-import { BIAS_FLOOR, hiddenBias } from '../../sketches/kit/strokes.ts';
+import { BIAS_FLOOR, chunkPolyline, hiddenBias } from '../../sketches/kit/strokes.ts';
 
 describe('sketch kit: shared card helpers, batch 4', () => {
   it('rasters a knockout mask at the print\'s resolution in the world: 3 at tabloid, 3 / s on a smaller card, and the base is a parameter', () => {
@@ -35,5 +35,25 @@ describe('sketch kit: shared card helpers, batch 4', () => {
     expect(far).toBeLessThan(BIAS_FLOOR);
     expect(hiddenBias(view, 0.01, 3000, BIAS_FLOOR)).toBe(BIAS_FLOOR);
     expect(hiddenBias(view, 1, 10, BIAS_FLOOR)).toBe(hiddenBias(view, 1, 10));
+  });
+
+  it('cuts a polyline into runs of at most `size` points that share their ends, and leaves a short one whole only when told to', () => {
+    const line = Array.from({ length: 10 }, (_, i) => i);
+    // Ten points in runs of four: 0-3, 3-6, 6-9, and every point is in a run, each end shared with the next run.
+    expect(chunkPolyline(line, 4)).toEqual([[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]]);
+    // The last run is the short one: eleven points leave a two-point run.
+    expect(chunkPolyline([...line, 10], 4)).toEqual([[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9], [9, 10]]);
+    // A polyline that fits in one run is that run; a point is no run.
+    expect(chunkPolyline([0, 1, 2], 4)).toEqual([[0, 1, 2]]);
+    expect(chunkPolyline([0], 4)).toEqual([]);
+    expect(chunkPolyline([], 4)).toEqual([]);
+    // With `whole`, up to `size + whole` points stay uncut (the same array), where without it the extra point makes a run of two.
+    const five = [0, 1, 2, 3, 4];
+    expect(chunkPolyline(five, 4)).toEqual([[0, 1, 2, 3], [3, 4]]);
+    expect(chunkPolyline(five, 4, 1)[0]).toBe(five);
+    expect(chunkPolyline(five, 4, 1)).toEqual([five]);
+    expect(chunkPolyline([...five, 5], 4, 1)).toEqual([[0, 1, 2, 3], [3, 4, 5]]);
+    // A short polyline is returned as it is under `whole`, a single point included.
+    expect(chunkPolyline([7], 4, 1)).toEqual([[7]]);
   });
 });
