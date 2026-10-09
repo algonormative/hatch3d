@@ -66,8 +66,8 @@ export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
 /**
  * The Empress's world: the growth field, the wind and the crop it bends. The crop is planted with `worldCamera`, in
  * tabloid's frame (its culls and course counts are measured on tabloid's paper), so every size and fit builds the
- * same world, to the bit. The wind's curve and surfaces are the camera's own at any size; `view` (the card's camera)
- * only draws its strokes.
+ * same world, to the bit. The wind's curve and surfaces do not depend on the camera; `view` (the card's camera) only
+ * draws its strokes.
  */
 export function empressWorld(ctx: SketchContext, view: THREE.PerspectiveCamera): { wind: Wind; plants: Plant[]; ticks: THREE.Vector3[][] } {
   const field = fieldOf(ctx);
@@ -575,7 +575,7 @@ export function drawEmpress(ctx: SketchContext): Part[] {
         // Scraps are dropped: ground rules under 3 mm and far outlines and ticks under 1.6 mm, which the plants in front
         // cut up. Real millimetres on any card: a scrap is as short on paper whatever the size. Off tabloid a piece of the
         // crop shorter than the smallest feature goes too (`MIN_FEATURE` is 0 at tabloid): a speck of a face's hatch, or a
-        // stub of a course's edge where the plants in front cut it, which on a small card is a third of its print length.
+        // stub of a course's edge where the plants in front cut it, which on a small card is about a quarter of its print length.
         begin: st => runs => {
           const min = st.group === 'ground' ? tolerance(3) : st.group === 'far' ? tolerance(1.6) : st.group === 'crop' ? MIN_FEATURE || undefined : undefined;
           const exact = st.group === 'wind' && smoothWind;
