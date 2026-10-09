@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
@@ -690,8 +690,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     });
     const nearGlyph = glyphMask(glyphPaths, layoutLength(2.4));
     const nearHalo = (p: Point) => p.x > column.x0 - layoutLength(2.5) && p.x < column.x1 + layoutLength(2.5) && p.y < cableEnd + layoutLength(3);
-    // Off tabloid, a scrap of a face's hatch shorter than the smallest feature is a speck, not shading.
-    const shortest = (st: Stroke) => (st.family === 'hatch' && MIN_FEATURE) || undefined;
+    // Off tabloid, a scrap of a face's hatch shorter than the smallest feature is a speck, not shading (`hatchMin`).
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
       begin: st => runs => {
         for (const run of runs) for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y))) {
@@ -705,7 +704,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
             // hatch is shading, but its stray ticks are noise; on the pale pillar and the lintel
             // every short piece is a sliver of an edge-on face, so all of them go.
             if (st.group === 'dark' ? inVeil(piece[0], layoutLength(4)) && len < layoutLength(1.8) : len < layoutLength(2) || (inVeil(piece[0], layoutLength(6)) && len < layoutLength(3.4))) continue;
-            buckets.add(`${st.group}-${st.ink}`, piece, false, shortest(st));
+            buckets.add(`${st.group}-${st.ink}`, piece, false, hatchMin(st.family));
           }
         }
       },

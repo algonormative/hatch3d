@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, pageExtent, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -393,10 +393,9 @@ export function drawMagician(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && !onMark(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
-    // What a block face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped (nothing at tabloid).
-    const speck = (family: Stroke['family']) => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
+    // What a block face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped (`hatchMin`, nothing at tabloid).
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => !inPocket(p), st.group === 'blocks' ? speck(st.family) : undefined); },
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => !inPocket(p), st.group === 'blocks' ? hatchMin(st.family) : undefined); },
     });
     projectStrokes(field, { view, depth: depthBuffer, width: W, height: H }, {
       begin: (st, i) => runs => { if (drawn(st)) for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), veilLine(st, i) ? () => true : p => !inPocket(p)); },

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, helixStrands, ribbonEdges, ribbonWidths, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
@@ -1039,8 +1039,8 @@ export function drawHierophant(ctx: SketchContext): Part[] {
         for (const run of runs) {
           const key = `${st.group}-${st.ink}`, page = scalePoints(run, MM_X, MM_Y);
           if (MIN_FEATURE && st.family === 'edge') edges.push({ key, run: page });
-          // On a small card a scrap of hatch or ring shorter than a feature on paper is a speck: dropped.
-          else add(key, page, p => !helixClear(p), st.family === 'hatch' ? MIN_FEATURE || undefined : undefined);
+          // On a small card a scrap of hatch or ring shorter than a feature on paper is a speck: dropped (`hatchMin`).
+          else add(key, page, p => !helixClear(p), hatchMin(st.family));
         }
       },
     });

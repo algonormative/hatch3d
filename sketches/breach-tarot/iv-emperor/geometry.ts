@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -418,8 +418,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], keep?: (p: Point) => boolean, min?: number) => {
       for (const piece of pieces(run, keep)) buckets.add(key, piece, false, min);
     };
-    // Off tabloid a piece of hatch shorter than the smallest feature is a speck, and is dropped.
-    const shortestHatch = MIN_FEATURE || undefined;
+    // Off tabloid a piece of hatch shorter than the smallest feature is a speck, and is dropped (`hatchMin`).
 
     // Hidden lines: each slab with up to half a unit of slack at its own distance; the figure and the
     // helix with slack in proportion to the figure.
@@ -437,7 +436,7 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     // On a small card the figure's pieces wait for `thinParallel`, ranked: the outline, then the planes and seams, then the cloth.
     const figurePieces: { key: string; piece: Point[]; min?: number; rank: number }[] = [];
     const receive = (st: Stroke) => (runs2: { x: number; y: number }[][]) => {
-      const key = `${st.group}-${st.ink}`, min = st.family === 'hatch' ? shortestHatch : undefined, rank = figureRank.get(st);
+      const key = `${st.group}-${st.ink}`, min = hatchMin(st.family), rank = figureRank.get(st);
       for (const run of runs2) {
         const page = scalePoints(run, MM_X, MM_Y);
         if (rank === undefined) add(key, page, st.group === 'helix' ? onCoil : undefined, min);

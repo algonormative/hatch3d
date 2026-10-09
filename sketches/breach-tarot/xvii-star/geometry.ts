@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, layoutLength, layoutX, layoutY, scaledCount, tabloidY, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, depthRaster, evenlyKept, halo, hatchMin, layoutLength, layoutX, layoutY, scaledCount, tabloidY, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, pageExtent, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -127,12 +127,6 @@ export function shownDebris(debris: Slab[], view: THREE.Camera): Slab[] {
     return e.size >= MIN_FEATURE && e.x > CARD.x0 && e.x < CARD.x1 && e.y > CARD.y0 && e.y < HORIZON_Y;
   });
 }
-
-/**
- * The shortest piece of a stroke the sky keeps, in millimetres: what a face's hatch leaves shorter than the smallest
- * feature is a speck, not shading, and is dropped (nothing at tabloid); other strokes keep the buckets' own minimum.
- */
-export const shortestKept = (family: Stroke['family']): number | undefined => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
 
 /** Two helix streams pour from below the star down into the water. */
 function streams(ctx: SketchContext, centre: THREE.Vector3): Strand[] {
@@ -260,7 +254,7 @@ export function drawStar(ctx: SketchContext): Part[] {
       begin: stroke => {
         const text = stroke.family === 'text';
         const key = `${stroke.group}-${stroke.ink}`;
-        const min = shortestKept(stroke.family);
+        const min = hatchMin(stroke.family);
         return runs => {
           for (const run of runs) {
             for (const inside of clipWindow(scalePoints(run, MM_X, MM_Y), { ...CARD, y1: HORIZON_Y - halo(0.5) })) add(key, inside, text, min);

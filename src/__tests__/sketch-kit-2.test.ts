@@ -7,7 +7,7 @@ import {
 } from '../../sketches/kit/lettering.ts';
 import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
 import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
-import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
+import { MIN_FEATURE, TABLOID_HORIZON_Y, TABLOID_RASTER, hatchMin } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
 import { thinParallel } from '../../sketches/kit/density.ts';
 import { Clearance, insideRing, reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
@@ -403,5 +403,10 @@ describe('sketch kit: shared card helpers', () => {
     expect([p(1.5, 2), p(6.5, 2)].map(q => insideRing(eight, q))).toEqual([true, true]);
     expect([p(4, 3.5), p(4, 0.5), p(-1, 2), p(9, 2)].map(q => insideRing(eight, q))).toEqual([false, false, false, false]);
     expect(insideRing([], p(1, 1))).toBe(false);
+  });
+
+  it('sets no shortest piece of hatch at tabloid, whatever the stroke (the small card\'s is pinned by the Star\'s 70 x 120 test)', () => {
+    expect(MIN_FEATURE).toBe(0);
+    for (const family of ['hatch', 'edge', 'membrane', 'text']) expect(hatchMin(family)).toBeUndefined();
   });
 });

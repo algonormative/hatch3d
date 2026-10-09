@@ -82,7 +82,8 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
     const probeEntry = join(dir, 'probe.ts');
     // A page-aware probe: each of the sky's solids as a short path that encodes its world centre, from (42 + x, 20 + y)
     // to (43 + x, 110 + z), inside the margin of either page; and the debris the format draws.
-    await writeFile(probeEntry, `import { shortestKept, shownDebris, sky, starCamera } from ${JSON.stringify(resolve('sketches/breach-tarot/xvii-star/geometry.ts'))};
+    await writeFile(probeEntry, `import { hatchMin } from ${JSON.stringify(resolve('sketches/kit/format.ts'))};
+      import { shownDebris, sky, starCamera } from ${JSON.stringify(resolve('sketches/breach-tarot/xvii-star/geometry.ts'))};
       const at = s => [{ x: 42 + s.x, y: 20 + s.y }, { x: 43 + s.x, y: 110 + s.z }];
       export default { name: 'star-sky', page: { width: 279.4, height: 431.8, margin: 18 }, pageAware: true,
         pens: [{ id: 'ink', color: '#111111', width: 0.25 }],
@@ -91,7 +92,7 @@ describe('Breach Tarot: XVII The Star at 70 x 120 mm', () => {
           const view = starCamera(ctx), s = sky(ctx, view);
           return [{ id: 'star', pen: 'ink', paths: s.star.map(at) }, { id: 'words', pen: 'ink', paths: s.words.map(at) },
             { id: 'debris', pen: 'ink', paths: s.debris.map(at) }, { id: 'shown', pen: 'ink', paths: shownDebris(s.debris, view).map(at) },
-            { id: 'speck', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 21, y: 20 + 10 * (shortestKept('hatch') ?? 0) }]] }];
+            { id: 'speck', pen: 'ink', paths: [[{ x: 20, y: 20 }, { x: 21, y: 20 + 10 * (hatchMin('hatch') ?? 0) }]] }];
         } };`);
     const solids = (result: RenderResult, id: string) => result.parts.find(part => part.id === id)?.paths ?? [];
     const a5 = { width: 148, height: 210 };

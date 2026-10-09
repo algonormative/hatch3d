@@ -3,7 +3,7 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, layoutLength, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { faceDarkness, facetStrokes, slabEdges, slabGeometry, slabMatrix, solid, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands } from '../../kit/helix.ts';
@@ -354,10 +354,9 @@ export function drawHangedMan(ctx: SketchContext): Part[] {
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && !onRing(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
-    // Off tabloid a scrap of a face's hatch shorter than the smallest feature is a speck, and dropped (the print keeps all).
-    const shortest = (family: Stroke['family']) => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
+    // Off tabloid a scrap of a face's hatch shorter than the smallest feature is a speck, and dropped (`hatchMin`; the print keeps all).
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H }, {
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, shortest(st.family)); },
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), undefined, hatchMin(st.family)); },
     });
     // The sky: a ruled night, densest at the top and opening toward the horizon, knocked out round
     // everything standing in it, broken in the 64-step rhythm as it thins. The ruling and its breaks keep their

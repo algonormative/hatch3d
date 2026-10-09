@@ -229,6 +229,12 @@ export const MIN_SPACING: number = FORMAT.minSpacing;
  * a single line, or dropped. 0 at tabloid, so a card's gate on it is a no-op there.
  */
 export const MIN_FEATURE: number = FORMAT.minFeature;
+/**
+ * The shortest piece of a stroke a format keeps, as `PartBuckets.add`'s `min`: for a face's hatch (`family` `'hatch'`)
+ * `MIN_FEATURE`, since a piece shorter than a feature is a speck, not shading; for any other stroke `undefined`, the
+ * buckets' own minimum. `undefined` for all of them at tabloid, where the print keeps all it has.
+ */
+export const hatchMin = (family: string): number | undefined => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
 export const PHRASE: PhrasePlacement = FORMAT.phrase;
 
 export interface Raster { W: number; H: number; MM_X: number; MM_Y: number }
