@@ -9,6 +9,8 @@ import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, slab
 import { horizonCamera, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
 import { TABLOID_HORIZON_Y, TABLOID_RASTER } from '../../sketches/kit/format.ts';
 import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
+import { reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
+import { PartBuckets } from '../../sketches/kit/strokes.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const page = { width: 279.4, height: 431.8 };
@@ -238,5 +240,37 @@ describe('sketch kit: shared card helpers', () => {
     const plain = tabloidFrameCamera({ fov: 54, eye: 6, far: 4000 });
     expect(plain.near).toBe(0.5);
     expect(plain.projectionMatrix.equals(by.projectionMatrix) && plain.matrixWorldInverse.equals(by.matrixWorldInverse)).toBe(true);
+  });
+
+  it('reduces a path at the card\'s scale: the print\'s reducer at 1, finer on a small card, and a bucket takes it as its reducer', () => {
+    // A 3 mm circle in 0.1 mm steps: `simplify` cuts its corners; on a 0.25 scale card the reducer keeps its curve.
+    const ring = Array.from({ length: 189 }, (_, i) => ({ x: 3 * Math.cos(i / 188 * Math.PI * 2), y: 3 * Math.sin(i / 188 * Math.PI * 2) }));
+    expect(reduceAtScale(ring, 1)).toEqual(simplify(ring));
+    const small = reduceAtScale(ring, 0.25);
+    expect(small.length).toBeGreaterThan(simplify(ring).length * 2);
+    expect(small[0]).toBe(ring[0]);
+    expect(small[small.length - 1]).toBe(ring[ring.length - 1]);
+    expect(small.every(p => ring.includes(p))).toBe(true);
+    expect(reduceAtScale(ring.slice(0, 2), 0.25)).toEqual(ring.slice(0, 2));
+    // `PartBuckets` takes a reducer for its ordinary paths; an exact path skips it, and the default is `simplify`.
+    const keepEnds = (pts: { x: number; y: number }[]) => [pts[0], pts[pts.length - 1]];
+    const line = [{ x: 0, y: 0 }, { x: 1, y: 0.5 }, { x: 2, y: 0 }, { x: 3, y: 0.5 }];
+    const custom = new PartBuckets(0.4, { reduce: keepEnds }), plain = new PartBuckets(0.4);
+    custom.add('a', line); custom.add('b', line, true); plain.add('a', line);
+    expect(custom.get('a')).toEqual([[line[0], line[3]]]);
+    expect(custom.get('b')).toEqual([line]);
+    expect(plain.get('a')).toEqual([simplify(line)]);
+  });
+
+  it('straightens a path to its corners and curves, and measures a point to a segment', () => {
+    const p = (x: number, y: number) => ({ x, y });
+    expect(straightened([p(0, 0), p(1, 0), p(2, 0), p(2, 1)])).toEqual([p(0, 0), p(2, 0), p(2, 1)]);
+    expect(straightened([p(0, 0), p(1, 0.01), p(2, 0)])).toEqual([p(0, 0), p(2, 0)]);
+    expect(straightened([p(0, 0), p(1, 0.05), p(2, 0)])).toHaveLength(3);
+    expect(straightened([p(0, 0), p(1, 0.05), p(2, 0)], 0.1)).toHaveLength(2);
+    expect(straightened([p(0, 0), p(1, 1)])).toEqual([p(0, 0), p(1, 1)]);
+    expect(segDist(p(1, 1), p(0, 0), p(2, 0))).toBe(1);
+    expect(segDist(p(-3, 4), p(0, 0), p(2, 0))).toBe(5);
+    expect(segDist(p(3, 0), p(1, 1), p(1, 1))).toBeCloseTo(Math.hypot(2, 1), 12);
   });
 });

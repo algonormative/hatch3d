@@ -9,7 +9,7 @@ import { facetStrokes, pageExtent, slabGeometry, solid, type Slab } from '../../
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask, groundWord, sloganSettings } from '../../kit/lettering.ts';
 import { bandMarks } from '../../kit/fills.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
@@ -55,24 +55,6 @@ const SHORTEST = 0.4;
  * they are drawn at (at the card's raster a limb is four pixels across and its outline broke up).
  */
 const FIGURE_OVERSAMPLE = FORMAT.tabloid ? 1 : 4;
-
-/**
- * The plotted-path reducer (`simplify` in kit/page.ts) at the card's scale: a point is dropped where it neither turns
- * nor stretches the line by the reducer's tabloid thresholds scaled with the card (its 1.4 mm span by `S`, its turn's
- * 0.15 mm² by `S²`). Unscaled, that stride is a large share of a small card's curves and turned the figure, the
- * lemniscate and the flame into polygons. Only used off tabloid.
- */
-export function reduceAtScale(points: Point[], scale = S): Point[] {
-  if (points.length < 3) return points;
-  const span = 1.4 * scale, turn = 0.15 * scale * scale;
-  const out = [points[0]];
-  for (let i = 1; i < points.length - 1; i++) {
-    const a = out[out.length - 1], b = points[i], c = points[i + 1];
-    if (Math.hypot(b.x - a.x, b.y - a.y) > span || Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)) > turn) out.push(b);
-  }
-  out.push(points[points.length - 1]);
-  return out;
-}
 
 export function magicianCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
@@ -415,11 +397,10 @@ export function drawMagician(ctx: SketchContext): Part[] {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
     const onGlyph = glyphMask(glyphPaths, halo(0.6));
-    const buckets = new PartBuckets(SHORTEST);
-    // Off tabloid every path goes through the reducer at the card's scale (`reduceAtScale`), and keeps what it leaves.
-    const put = (key: string, path: Point[], min?: number) => FORMAT.tabloid ? buckets.add(key, path, false, min) : buckets.add(key, reduceAtScale(path), true, min ?? SHORTEST);
+    // Every ordinary path goes through the reducer at the card's scale (`reduceAtScale`: the print's reducer at tabloid).
+    const buckets = new PartBuckets(SHORTEST, { reduce: reduceAtScale });
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && !onMark(p) && extra(p), 0.15)) put(key, piece, min);
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && !onMark(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
     // What a block face's hatch leaves shorter than the smallest feature is a speck, not shading: dropped (nothing at tabloid).
     const speck = (family: Stroke['family']) => family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined;
@@ -508,7 +489,7 @@ export function drawMagician(ctx: SketchContext): Part[] {
     projectStrokes(rows, { view, depth: depthBuffer, width: W, height: H }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), p => !onCrack(p) && !inPocket(p)); },
     });
-    for (const path of markPaths) for (const inside of clipWindow(path)) put('mark-carbon', inside);
+    for (const path of markPaths) for (const inside of clipWindow(path)) buckets.add('mark-carbon', inside);
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['ground', 'cracks', 'blocks', 'field', 'helix', 'figure', 'mark', 'slogan'], INKS);
     const solidThings = meshCoverage(geometries, view, PAGE, halo(0.4));

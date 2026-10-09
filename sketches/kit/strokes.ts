@@ -14,23 +14,33 @@ export const MIN_EXACT_LENGTH_MM = 0.05;
 /** Scale a run of points (for example depth pixels to page millimetres). */
 export const scalePoints = (run: Point[], sx: number, sy: number): Point[] => run.map(p => ({ x: p.x * sx, y: p.y * sy }));
 
+export interface PartBucketsOptions {
+  /**
+   * How an ordinary path (not `exact`) is reduced before its length is checked; default `simplify`. A card that draws
+   * curves small passes one that scales with the card: `reduceAtScale`, or `straightened` (kit/page.ts).
+   */
+  reduce?: (points: Point[]) => Point[];
+}
+
 /**
  * Paths gathered under `${group}-${ink}` keys, reduced and length-filtered as they come in, then
  * emitted as Parts in a fixed group × ink order.
  */
 export class PartBuckets {
   private readonly buckets = new Map<string, Point[][]>();
+  private readonly reduce: (points: Point[]) => Point[];
 
   /** `min` is the default shortest ordinary path; call sites override it per path. */
-  constructor(private readonly min = MIN_LENGTH_MM) {}
+  constructor(private readonly min = MIN_LENGTH_MM, options: PartBucketsOptions = {}) { this.reduce = options.reduce ?? simplify; }
 
   /**
-   * Add a path. Unless `exact` (glyph curves, flat marks: every point kept) it is first simplified.
+   * Add a path. Unless `exact` (glyph curves, flat marks: every point kept) it is first reduced (`simplify`, or the
+   * constructor's `reduce`).
    * Paths of one point, or no longer than `min` (default: the constructor's, or 0.05 mm when exact),
    * are dropped. Returns whether the path was kept.
    */
   add(key: string, path: Point[], exact = false, min?: number): boolean {
-    const reduced = exact ? path : simplify(path);
+    const reduced = exact ? path : this.reduce(path);
     if (reduced.length > 1 && pathLength(reduced) > (min ?? (exact ? MIN_EXACT_LENGTH_MM : this.min))) {
       if (!this.buckets.has(key)) this.buckets.set(key, []);
       this.buckets.get(key)!.push(reduced);

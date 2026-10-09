@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Point } from '../../src/sketch/types.ts';
-import { PAGE } from './format.ts';
+import { PAGE, S } from './format.ts';
 
 /** Page-space path helpers shared by the Breach sketches. */
 
@@ -46,6 +46,55 @@ export function simplify(points: Point[]): Point[] {
   }
   out.push(points[points.length - 1]);
   return out;
+}
+
+/**
+ * `simplify` at a card's scale: a point is dropped where it neither turns nor stretches the line by the reducer's
+ * tabloid thresholds scaled with the card (its 1.4 mm span by `scale`, its 0.15 mm² turn by `scale²`). Left at
+ * tabloid's, that stride is a large share of a small card's curves, and turns rims, rings and figures into polygons.
+ * `scale` defaults to the format's `S`, and at 1 (tabloid) this is `simplify` itself. Hand it to `PartBuckets` as its
+ * `reduce` option, off tabloid or not, and every ordinary path a card adds is reduced this way.
+ */
+export function reduceAtScale(points: Point[], scale = S): Point[] {
+  if (scale === 1) return simplify(points);
+  if (points.length < 3) return points;
+  const span = 1.4 * scale, turn = 0.15 * scale * scale;
+  const out = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = out[out.length - 1], b = points[i], c = points[i + 1];
+    if (Math.hypot(b.x - a.x, b.y - a.y) > span || Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)) > turn) out.push(b);
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+/** The distance from `p` to the segment `a`-`b`. */
+export const segDist = (p: Point, a: Point, b: Point): number => {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+};
+
+/**
+ * A path less the points that lie on the line between their neighbours, within `eps` millimetres (Ramer-Douglas-Peucker):
+ * the gentlest reducer, which keeps every curve's shape at any scale. Hand it to `PartBuckets` as `reduce` for a card
+ * whose curves must stay curves (a cable, a ring).
+ */
+export function straightened(path: Point[], eps = 0.02): Point[] {
+  if (path.length < 3) return path;
+  const keep = new Uint8Array(path.length);
+  keep[0] = keep[path.length - 1] = 1;
+  const spans: [number, number][] = [[0, path.length - 1]];
+  while (spans.length) {
+    const [i, j] = spans.pop()!;
+    let worst = eps, at = -1;
+    for (let k = i + 1; k < j; k++) {
+      const d = segDist(path[k], path[i], path[j]);
+      if (d > worst) { worst = d; at = k; }
+    }
+    if (at >= 0) { keep[at] = 1; spans.push([i, at], [at, j]); }
+  }
+  return path.filter((_, k) => keep[k]);
 }
 
 /** Total length of a polyline. */

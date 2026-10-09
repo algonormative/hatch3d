@@ -9,7 +9,7 @@ import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Facet
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { helixAlong, type HelixStroke } from '../../kit/helix.ts';
 import { bandMarks } from '../../kit/fills.ts';
-import { keepAlong, meshCoverage, pathLength } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, pathLength, segDist, straightened } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
@@ -100,30 +100,6 @@ function shadowOf(p: TessPose): Point[] {
     const m = p.lz / (p.lz - Z);
     return { x: p.lx + (X - p.lx) * m, y: p.ly + (Y - p.ly) * m };
   });
-}
-
-const segDist = (p: Point, a: Point, b: Point): number => {
-  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
-  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
-};
-
-/** A path less the points that lie on the line between their neighbours, within `eps` millimetres (Ramer-Douglas-Peucker). */
-export function straightened(path: Point[], eps = 0.02): Point[] {
-  if (path.length < 3) return path;
-  const keep = new Uint8Array(path.length);
-  keep[0] = keep[path.length - 1] = 1;
-  const spans: [number, number][] = [[0, path.length - 1]];
-  while (spans.length) {
-    const [i, j] = spans.pop()!;
-    let worst = eps, at = -1;
-    for (let k = i + 1; k < j; k++) {
-      const d = segDist(path[k], path[i], path[j]);
-      if (d > worst) { worst = d; at = k; }
-    }
-    if (at >= 0) { keep[at] = 1; spans.push([i, at], [at, j]); }
-  }
-  return path.filter((_, k) => keep[k]);
 }
 
 const cross2 = (o: Point, a: Point, b: Point) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
@@ -686,13 +662,12 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
     }
     const onGlyph = glyphMask(glyphPaths, halo(0.6));
 
-    const buckets = new PartBuckets(0.4);
-    // Off tabloid a path is reduced only where its points lie on a line, and kept as it is: the buckets' own reducer
-    // drops any turn within 1.4 mm of the last point it kept, which on a small card cuts the corners off every course and
-    // ring and turns the cable into a zigzag. At tabloid, the buckets' reducer, as the print was drawn.
-    const put = (key: string, path: Point[], min?: number) => FORMAT.tabloid ? buckets.add(key, path, false, min) : buckets.add(key, straightened(path), true, min ?? 0.4);
+    // Off tabloid a path is reduced only where its points lie on a line (`straightened`), and kept as it is: the buckets'
+    // own reducer drops any turn within 1.4 mm of the last point it kept, which on a small card cuts the corners off every
+    // course and ring and turns the cable into a zigzag. At tabloid, the buckets' reducer, as the print was drawn.
+    const buckets = new PartBuckets(0.4, FORMAT.tabloid ? {} : { reduce: straightened });
     const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, step = 0.15) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => extra(p), step)) put(key, piece);
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => extra(p), step)) buckets.add(key, piece);
     };
 
     // The temple, hatched by its light. The accent is the veil's alone, so every pillar mark is carbon;
@@ -749,7 +724,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
             // hatch is shading, but its stray ticks are noise; on the pale pillar and the lintel
             // every short piece is a sliver of an edge-on face, so all of them go.
             if (st.group === 'dark' ? inVeil(piece[0], layoutLength(4)) && len < layoutLength(1.8) : len < layoutLength(2) || (inVeil(piece[0], layoutLength(6)) && len < layoutLength(3.4))) continue;
-            put(`${st.group}-${st.ink}`, piece, shortest(st));
+            buckets.add(`${st.group}-${st.ink}`, piece, false, shortest(st));
           }
         }
       },
@@ -819,7 +794,7 @@ export function drawHighPriestess(ctx: SketchContext): Part[] {
       const near = pageOf(view, new THREE.Vector3(joint.x, 0, -14));
       const cell = layoutLength(joint.cell);
       for (const piece of clipWindow([far, near])) {
-        for (const run of keepAlong(piece, (p, at) => joint.dashes[Math.floor(at / cell) % 64] && !solids(p) && !inVeil(p, halo(1)), 0.2)) put('floor-carbon', run, layoutLength(5));
+        for (const run of keepAlong(piece, (p, at) => joint.dashes[Math.floor(at / cell) % 64] && !solids(p) && !inVeil(p, halo(1)), 0.2)) buckets.add('floor-carbon', run, false, layoutLength(5));
       }
     }
 
