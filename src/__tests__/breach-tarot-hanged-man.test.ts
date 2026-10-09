@@ -110,7 +110,7 @@ describe('Breach Tarot: XII The Hanged Man at 70 x 120 mm', () => {
   it('still reads as the Hanged Man: one true vertical down the middle to the bob, its point in the ring, the towers standing on the horizon either side under a ruled sky', async () => {
     for (const fit of fits) {
       const result = await render(fit);
-      const { card, horizonY } = formatOf(fit);
+      const { card, horizonY, s } = formatOf(fit);
       const centre = (card.x0 + card.x1) / 2;
       const mean = (ps: Point[], k: 'x' | 'y') => ps.reduce((sum, p) => sum + p[k], 0) / ps.length;
       const bob = box(points(result, 'bob-')), ring = box(points(result, 'ring-')), helix = box(points(result, 'line-vermilion'));
@@ -138,6 +138,13 @@ describe('Breach Tarot: XII The Hanged Man at 70 x 120 mm', () => {
       expect(city.filter(p => p.x < centre).length / city.length).toBeGreaterThan(0.3);
       expect(city.filter(p => p.x > centre).length / city.length).toBeGreaterThan(0.3);
       expect(Math.max(...points(result, 'sky-').map(p => p.y))).toBeLessThan(horizonY);
+      // The sky stops short of the towers and the bob by their knockout halo (1.1 mm in tabloid, scaled with the card, never
+      // under 0.5 mm). The halo is measured on a raster, so a clean ruling stands a little under the floor: no ruling comes
+      // nearer than about 0.35 mm, nor further than the scaled halo and a tenth of a millimetre.
+      let nearSolid = Infinity;
+      for (const p of points(result, 'sky-')) for (const q of [...points(result, 'city-'), ...points(result, 'bob-')]) nearSolid = Math.min(nearSolid, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(nearSolid, `${fit} sky to towers and bob`).toBeGreaterThan(0.35);
+      expect(nearSolid, `${fit} sky to towers and bob`).toBeLessThan(Math.max(0.5, 1.1 * s) + 0.1);
     }
   }, 120_000);
 
@@ -162,10 +169,15 @@ describe('Breach Tarot: XII The Hanged Man at 70 x 120 mm', () => {
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 3 }), ...fits.map(render)]);
     const master = probe(print);
-    for (const result of small) {
+    for (const [k, result] of small.entries()) {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
+      // The towers' outlines are trimmed on a small card (kit/slabs.ts' `SlabTrim`): untrimmed, their back edges and sliver
+      // faces ran the outline to 4,900-5,300 mm of card; trimmed, it is 3,400-3,600 mm.
+      const outline = result.parts.filter(part => part.id === 'city-carbon').flatMap(part => part.paths)
+        .reduce((sum, path) => sum + path.slice(1).reduce((l, q, i) => l + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0), 0);
+      expect(outline, `${fits[k]} tower outlines`).toBeLessThan(4300);
     }
     // The negative control: the print scaled down onto the card, as a sketch that is not page-aware is, its sky ruling,
     // the bob's hatch and the ring's band shrinking with it.
