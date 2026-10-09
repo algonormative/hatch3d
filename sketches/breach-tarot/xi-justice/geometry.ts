@@ -3,13 +3,14 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh, projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { MIN_FEATURE, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, layoutX, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, faceDarkness, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
-import { helixStrands, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
+import { helixStrands, ribbonEdges, ribbonMidline, strandPoint, strandStrokes, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { clipToRect, keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -24,8 +25,14 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * running out along each arm and hanging, over the end, as that pan's chain. The sky is a light
  * ruling knocked out round all of it; the horizon runs open to both edges. The words are cut into
  * the blocks of the heap and the courses of the column.
+ *
+ * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`justiceWorld`), and the
+ * card's own camera draws it, so the beam stays level and its shadow tips by the print's angle. The hatch, the sky's
+ * ruling and the shadow's keep their pitch on paper; the knockouts scale with the card; the slabs are trimmed to their
+ * outlines; and the phrase moves to the bottom band.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** The card's depth raster at tabloid; on any other page, the format's. */
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 6;
 /** Hidden-line slack for slabs, in world units. */
@@ -34,11 +41,20 @@ const SLAB_SLACK = 0.3;
 const HELIX_SCALE = 4;
 const GAP = 0.12;
 
+/** The card's camera, on the format's page. */
 export function justiceCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 54, 36, 75), eye: [0, EYE, 0], target: [0, EYE, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the balance is laid out with, from its controls in tabloid's page millimetres. At tabloid it is `justiceCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: EYE, near: 8, far: 4000 });
 }
 
 /** Which side the short arm (and the heap) is on: -1 left of the column, +1 right. */
@@ -49,7 +65,7 @@ function shortSide(ctx: SketchContext): number {
   return ctx.random('justice-side')() < 0.5 ? -1 : 1;
 }
 
-/** Everything the balance is placed by, in page millimetres, with the converters to world units. */
+/** Everything the balance is placed by, in tabloid's page millimetres, with the converters to world units. */
 export interface Layout {
   D: number; U: number; f: number;
   /** +1 when mirrored from the default (short arm on the left). */
@@ -62,12 +78,13 @@ export interface Layout {
   xOf: (mm: number) => number; hOf: (mm: number) => number;
 }
 
+/** The layout, in tabloid's frame: `view` is `worldCamera`. */
 export function layoutOf(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
   const D = n(ctx, 'dist', 30, 24, 90);
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const f = TABLOID_PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
   const U = D / f;
   const mirror = shortSide(ctx) < 0 ? 1 : -1;
-  const flipX = (mm: number) => mirror > 0 ? mm : PAGE.width - mm;
+  const flipX = (mm: number) => mirror > 0 ? mm : TABLOID_PAGE.width - mm;
   // The chains hang at spanL (the short arm's pan) and spanR (the long arm's); the pivot divides the span by `ratio`.
   const spanL = n(ctx, 'spanL', 64, 40, 100), spanR = n(ctx, 'spanR', 236, 200, 252);
   const ratio = n(ctx, 'ratio', 2.4, 1.6, 4);
@@ -81,8 +98,8 @@ export function layoutOf(ctx: SketchContext, view: THREE.PerspectiveCamera): Lay
     D, U, f, mirror, pivotX: xs[1], shortX: xs[0], longX: xs[2],
     beamL: Math.min(xs[3], xs[4]), beamR: Math.max(xs[3], xs[4]), beamY, beamH,
     panTop: beamY + beamH / 2 + drop, panThick,
-    xOf: mm => (mm - PAGE.width / 2) * U,
-    hOf: mm => EYE - (mm - HORIZON_Y) * U,
+    xOf: mm => (mm - TABLOID_PAGE.width / 2) * U,
+    hOf: mm => EYE - (mm - TABLOID_HORIZON_Y) * U,
   };
 }
 
@@ -279,32 +296,62 @@ interface CordOptions {
  * One strand of the kit's twin helix laid along its own curve, built `HELIX_SCALE` times the size and
  * brought back. `scaleAt` widens the strand's offset and ribbon with arc length (the double helix
  * opens as it rises); the shared part of the two strands' curves is the same line, so there the
- * strands interleave as the full double helix.
+ * strands interleave as the full double helix. `along` gives each stroke's points their place along the curve (0 to 1).
  */
 function strandAlong(ctx: SketchContext, view: THREE.PerspectiveCamera, pts: THREE.Vector3[], index: 0 | 1, o: CordOptions, scaleAt: (s: number) => number) {
-  const S = HELIX_SCALE;
+  const grow = HELIX_SCALE;
   const sv = view.clone();
-  sv.position.multiplyScalar(S); sv.near *= S; sv.far *= S;
+  sv.position.multiplyScalar(grow); sv.near *= grow; sv.far *= grow;
   sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
-  const curve = new THREE.CatmullRomCurve3(pts.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
+  const curve = new THREE.CatmullRomCurve3(pts.map(p => p.clone().multiplyScalar(grow)), false, 'centripetal');
   const start = curve.getPointAt(0);
   const length = curve.getLength();
   const frames = curve.computeFrenetFrames(400, false);
-  const r = o.radius * S;
+  const r = o.radius * grow;
   const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: 0.35 } });
   const st = {
     ...template[index], x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: r + r * 0.3 * index, depth: 1,
-    width: r * 0.95 - r * 0.12 * index, swell: 0, centre: -1e3, turns: length / (o.pitch * S),
+    width: r * 0.95 - r * 0.12 * index, swell: 0, centre: -1e3, turns: length / (o.pitch * grow),
   };
   const bend = (p: THREE.Vector3): THREE.Vector3 => {
     const u = clamp((p.y - start.y) / length, 0, 1);
     const k = Math.min(400, Math.round(u * 400));
-    const sc = scaleAt(u * length / S);
+    const sc = scaleAt(u * length / grow);
     return curve.getPointAt(u).addScaledVector(frames.normals[k], (p.x - start.x) * sc).addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * sc);
   };
-  const strokes: HelixStroke[] = strandStrokes(st, 0.5, 0.3, ctx, sv).map(h => ({ ...h, points: h.points.map(q => bend(q).multiplyScalar(1 / S)) }));
-  const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8).scale(1 / S, 1 / S, 1 / S);
-  return { strokes, mesh, length: length / S };
+  const made = strandStrokes(st, 0.5, 0.3, ctx, sv);
+  const strokes: HelixStroke[] = made.map(h => ({ ...h, points: h.points.map(q => bend(q).multiplyScalar(1 / grow)) }));
+  const along = made.map(h => h.points.map(q => clamp((q.y - start.y) / length, 0, 1)));
+  const mesh = buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8).scale(1 / grow, 1 / grow, 1 / grow);
+  return { strokes, along, mesh, length: length / grow };
+}
+
+/**
+ * A cord whose last stretch, the pan's chain, is a ribbon narrower on this card's paper than the smallest feature: there
+ * its two edges run closer than the pen can hold apart, and its laminations and ribs are specks. Off tabloid that stretch
+ * is drawn by one line down the ribbon's middle, in its edges' ink, and every stroke of the strand stops where it starts;
+ * the ribbon above it, wide enough, keeps all it draws. The stretch is measured by the ribbon's own width (its edges'
+ * distance, at this card's millimetres per unit), not as it shows, so a twist seen edge-on along the beam stays a ribbon.
+ * The strokes as they are at tabloid (`MIN_FEATURE` 0), or where the ribbon is wide to its end.
+ */
+function narrowChain(strokes: HelixStroke[], along: number[][], mmPerUnit: (p: THREE.Vector3) => number): HelixStroke[] {
+  const edges = MIN_FEATURE && strokes.length ? ribbonEdges(strokes, strokes[0].group) : undefined;
+  if (!edges) return strokes;
+  const [a, b] = edges, at = along[strokes.indexOf(a)];
+  let cut = Math.min(a.points.length, b.points.length);
+  while (cut > 0 && a.points[cut - 1].distanceTo(b.points[cut - 1]) * mmPerUnit(a.points[cut - 1]) < MIN_FEATURE) cut--;
+  if (cut > a.points.length - 2) return strokes;
+  const from = at[cut];
+  const out: HelixStroke[] = [];
+  strokes.forEach((h, k) => {
+    let run: THREE.Vector3[] = [];
+    const flush = () => { if (run.length > 1) out.push({ ...h, points: run }); run = []; };
+    h.points.forEach((p, j) => { if (along[k][j] < from) run.push(p); else flush(); });
+    flush();
+  });
+  // The chain's line starts a sample above the cut, where the edges stop.
+  out.push({ ...a, role: 'spine', points: ribbonMidline(edges).slice(Math.max(0, cut - 1)) });
+  return out;
 }
 
 /**
@@ -317,11 +364,11 @@ function cordRoutes(ctx: SketchContext, L: Layout, bal: Balance): { routes: { pt
   const lean = n(ctx, 'lean', 0, -60, 60) * -L.mirror;
   const R = n(ctx, 'corner', 11, 5, 20);
   const top = -30;
-  // A page position at depth z: the world point that lands there (the chain drifts back behind the
+  // A page position (tabloid's) at depth z: the world point that lands there (the chain drifts back behind the
   // load, so it must be placed by where it shows, not by where it is).
   const P = (xmm: number, ymm: number, z: number) => {
     const k = -z / L.f;
-    return new THREE.Vector3((xmm - PAGE.width / 2) * k, EYE - (ymm - HORIZON_Y) * k, z);
+    return new THREE.Vector3((xmm - TABLOID_PAGE.width / 2) * k, EYE - (ymm - TABLOID_HORIZON_Y) * k, z);
   };
   const zf = bal.chainFront, zb = bal.chainBack;
   const px = L.pivotX;
@@ -390,11 +437,28 @@ interface HatchSpec {
 }
 
 /**
+ * A face's width on the card's paper: the area of its four corners (in order, on the page) over its longest side, in
+ * millimetres. (kit/slabs.ts' `faceWidth`, which is private there.)
+ */
+function paperWidth(view: THREE.Camera, corners: THREE.Vector3[]): number {
+  const quad = corners.map(c => pageOf(view, c));
+  let area = 0, longest = 0;
+  for (let k = 0; k < 4; k++) {
+    const p0 = quad[k], p1 = quad[(k + 1) % 4];
+    area += p0.x * p1.y - p1.x * p0.y;
+    longest = Math.max(longest, Math.hypot(p1.x - p0.x, p1.y - p0.y));
+  }
+  return Math.abs(area) / 2 / longest;
+}
+
+/**
  * Plain, light-driven hatch for the faces of a slab that see the eye: parallel lines at the finest
  * pitch, of which a nested power-of-two share is kept where the face is lighter, so the density
  * follows the light across the face with no rings and no steps. Returns world-space polylines.
+ * Off tabloid a face narrower on the card's paper (`view`) than the smallest feature is left unhatched: the trimmed
+ * outline (`facetStrokes`' `trim`) has folded it in.
  */
-function faceHatch(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, mm: number, o: HatchSpec): THREE.Vector3[][] {
+function faceHatch(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, mm: number, o: HatchSpec, view: THREE.Camera): THREE.Vector3[][] {
   const out: THREE.Vector3[][] = [];
   const m = slabMatrix(sl);
   const rot = new THREE.Matrix4().extractRotation(m);
@@ -410,6 +474,7 @@ function faceHatch(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, mm: numbe
     const normal = c0.clone().normalize().applyMatrix4(rot);
     const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
     if (eye.clone().sub(centre).dot(normal) <= 0) continue;
+    if (MIN_FEATURE && paperWidth(view, [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => c0.clone().addScaledVector(U0, u).addScaledVector(V0, v).applyMatrix4(m))) < MIN_FEATURE) continue;
     const a = U0.length(), b = V0.length();
     const margin = 0.16;
     const ia = a - margin, ib = b - margin;
@@ -483,14 +548,16 @@ interface Shadow { polygons: P2[][]; frame: P2[][] }
 /**
  * The shadow of the balance on the ground, light from high behind it so the shadow falls toward the
  * eye, and then not the truth: the beam's shadow is tipped about its pivot by `tilt` degrees on the
- * sheet, the short arm's end (the heap) down, and the pans and their loads hang from its ends.
+ * sheet, the short arm's end (the heap) down, and the pans and their loads hang from its ends. The tilt and the
+ * centring are measured on tabloid's sheet (`view` is `worldCamera`), so every size casts the same shadow; the card's
+ * camera keeps its angle on paper.
  */
 function castShadow(ctx: SketchContext, view: THREE.PerspectiveCamera, L: Layout, bal: Balance): Shadow {
   const lz = n(ctx, 'reach', 0.4, 0.1, 0.8);
   const hBeam = L.hOf(L.beamY);
   const kS = (L.D - lz * hBeam) / L.f;
   const wide = wideOf(view);
-  const onPage = (v: P2) => pageOf(wide, new THREE.Vector3(v.x, 0, v.z));
+  const onPage = (v: P2) => pageOf(wide, new THREE.Vector3(v.x, 0, v.z), TABLOID_PAGE);
   const target = n(ctx, 'tilt', 11, 0, 25) * Math.PI / 180;
   const userShift = n(ctx, 'shadowShift', 0, -40, 40);
   const cast = (sl: Slab, flat: (v: THREE.Vector3) => P2): P2[] => {
@@ -539,35 +606,52 @@ function castShadow(ctx: SketchContext, view: THREE.PerspectiveCamera, L: Layout
   let shift = 0;
   for (let i = 0; i < 4; i++) {
     const xs = build(shift).frame.flatMap(poly => poly.map(v => onPage(v).x));
-    shift += (CARD.x0 + CARD.x1) / 2 - (Math.min(...xs) + Math.max(...xs)) / 2;
+    shift += (TABLOID_CARD.x0 + TABLOID_CARD.x1) / 2 - (Math.min(...xs) + Math.max(...xs)) / 2;
   }
   return build(shift + userShift);
+}
+
+/** The card's world: the layout, the balance, the cords' routes and the shadow on the ground. */
+export interface JusticeWorld { L: Layout; bal: Balance; cords: ReturnType<typeof cordRoutes>; shadow: Shadow }
+
+/**
+ * The card's world, laid out in tabloid's frame with `worldCamera` and tabloid's page millimetres, so every size and fit
+ * builds the same world, to the bit; each card's own camera then draws it.
+ */
+export function justiceWorld(ctx: SketchContext): JusticeWorld {
+  const camera = worldCamera(ctx);
+  const L = layoutOf(ctx, camera);
+  const bal = buildBalance(ctx, L);
+  return { L, bal, cords: cordRoutes(ctx, L, bal), shadow: castShadow(ctx, camera, L, bal) };
 }
 
 export function drawJustice(ctx: SketchContext): Part[] {
   const view = justiceCamera(ctx);
   const eye = view.position.clone();
-  const L = layoutOf(ctx, view);
-  const mmPerUnit = (p: THREE.Vector3) => L.f / Math.max(1, eye.z - p.z);
-  const bal = buildBalance(ctx, L);
+  // The world, the same at every size; this card's camera draws it, and its hatch keeps its pitch on this card's paper.
+  const { L, bal, cords: { routes, rise }, shadow } = justiceWorld(ctx);
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const light = new THREE.Vector3(0.5, 0.5, 0.55).normalize();
   const backlight = new THREE.Vector3(-0.25, 0.55, -0.8).normalize();
 
   const strokes: Stroke[] = [];
-  const pitch = n(ctx, 'hatch', 0.7, 0.5, 2);
+  const pitch = tolerance(n(ctx, 'hatch', 0.7, 0.5, 2));
+  // Off tabloid every outline is trimmed (kit/slabs.ts): no back edges, and a face narrower on paper than the smallest
+  // feature (the heap's undersides, the pans' edges) folded into it and left unhatched.
   for (const pc of bal.pieces) {
     const sl = pc.slab, at = new THREE.Vector3(sl.x, sl.y, sl.z);
     const mm = mmPerUnit(at);
     const lamp = pc.light === 'dark' ? backlight : light;
-    for (const st of facetStrokes(sl, lamp, eye, true)) strokes.push({ ink: 'carbon', group: pc.group, family: st.family, points: st.points });
+    for (const st of facetStrokes(sl, lamp, eye, true, undefined, { view })) strokes.push({ ink: 'carbon', group: pc.group, family: st.family, points: st.points });
     const spec: HatchSpec = pc.light === 'dark'
       ? { minMM: pitch, angle: 0.62, gradient: 0.2, bias: 0, cross: pc.group === 'pile' }
       : { minMM: pitch, angle: 0.62, gradient: n(ctx, 'gradient', 1.1, 0, 2), bias: 0.12, cross: false };
-    for (const pts of faceHatch(sl, lamp, eye, mm, spec)) strokes.push({ ink: 'carbon', group: pc.group, family: 'hatch', points: pts });
+    for (const pts of faceHatch(sl, lamp, eye, mm, spec, view)) strokes.push({ ink: 'carbon', group: pc.group, family: 'hatch', points: pts });
   }
 
-  // The cord: the shared rise is one curve, the strands part at the beam.
-  const { routes, rise } = cordRoutes(ctx, L, bal);
+  // The cord: the shared rise is one curve, the strands part at the beam. Its lamination is spaced on this card's
+  // paper, so it takes this card's camera.
   const flare = n(ctx, 'flare', 3, 1, 4);
   const opts: CordOptions = { radius: n(ctx, 'cord', 0.28, 0.1, 0.5), pitch: n(ctx, 'cordPitch', 3.2, 1.5, 8), flare, length: rise };
   const riseLen = rise * L.U;
@@ -582,7 +666,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
     };
     return strandAlong(ctx, view, pts, i as 0 | 1, opts, scaleAt);
   });
-  for (const c of cords) for (const h of c.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
+  for (const c of cords) for (const h of narrowChain(c.strokes, c.along, mmPerUnit)) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
 
   const slabGeos = bal.pieces.map(p => slabGeometry(p.slab));
   const geometries = [...slabGeos, ...cords.map(c => c.mesh)];
@@ -591,12 +675,16 @@ export function drawJustice(ctx: SketchContext): Part[] {
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
     const nearP = view.near, farP = view.far;
     const bias = Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * L.D * L.D));
-    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1.1, 0.3, 3));
-    const cordClear = meshCoverage(cords.map(c => c.mesh), view, PAGE, n(ctx, 'cordHalo', 3, 1, 8));
+    // The knockouts round what stands and round the cord scale with the card (never under half a millimetre), on a mask
+    // as fine for the card as the print's is for the print (3 cells to the millimetre there): at 3 a millimetre a small
+    // card's halos would round to the same two cells, and the cord's glow be no wider than a solid's knockout.
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)), 3 / S);
+    const cordClear = meshCoverage(cords.map(c => c.mesh), view, PAGE, halo(n(ctx, 'cordHalo', 3, 1, 8)), 3 / S);
 
-    // The phrase: each word cut into the front of a block of the heap or a course of the column.
+    // The phrase: each word cut into the front of a block of the heap or a course of the column. Or, where the format
+    // sets it in the band, under the card's name instead.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('justice-words');
     const style = { face: settings.face, height: settings.size };
     const textStrokes: THREE.Vector3[][] = [];
@@ -638,7 +726,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
         const ww = wmm * unit, hh = style.height * unit;
         if (ww > sl.w - 3.4 * unit || hh > sl.h * 0.7) continue;
         const here = pageOf(view, at);
-        if (placed.some(q => Math.hypot(q.x - here.x, q.y - here.y) < 18)) continue;
+        if (placed.some(q => Math.hypot(q.x - here.x, q.y - here.y) < layoutLength(18))) continue;
         const x0 = -ww / 2 + (wrng() - 0.5) * (sl.w - ww - 3.4 * unit) * 0.8, y0 = hh / 2 + (wrng() - 0.5) * (sl.h - hh) * 0.4;
         const word3 = strokeText(word, 0, 0, style).map(path => path.map(q => new THREE.Vector3(x0 + q.x * unit, y0 - q.y * unit, sl.d / 2 + 0.03).applyMatrix4(m)));
         if (!visible(word3)) continue;
@@ -652,25 +740,28 @@ export function drawJustice(ctx: SketchContext): Part[] {
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.8);
+    const onGlyph = glyphMask(glyphPaths, halo(0.8));
     const heapTop = Math.min(...bal.pile.flatMap(pc => {
       const m = slabMatrix(pc.slab);
       return [-1, 1].flatMap(sx => [-1, 1].map(sz => pageOf(view, new THREE.Vector3(sx * pc.slab.w / 2, pc.slab.h / 2, sz * pc.slab.d / 2).applyMatrix4(m)).y));
     }));
-    const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
+    // Curves are reduced at the card's scale (the helix stays a helix, not a polygon); identity at tabloid.
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
+    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
+    const chainX = layoutX(L.shortX), chainReach = layoutLength(9);
+    // Off tabloid a scrap of a face's hatch shorter than the smallest feature is a speck, and dropped (`hatchMin`; the print keeps all).
     projectStrokes(strokes, { view, depth: depthBuffer, width: W, height: H, bias }, {
       begin: st => runs => {
         // The heap's chain hangs behind it: below the heap's top it is cut, so no sliver shows through a gap between blocks.
-        const extra = st.group === 'helix' ? (p: Point) => !(p.y > heapTop && Math.abs(p.x - L.shortX) < 9) : undefined;
-        for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), extra);
+        const extra = st.group === 'helix' ? (p: Point) => !(p.y > heapTop && Math.abs(p.x - chainX) < chainReach) : undefined;
+        for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), extra, hatchMin(st.family));
       },
     });
 
-    // The shadow: flat hatch on the ground, no outline, kept to the shadow's own shape and clear of what stands.
-    const shadow = castShadow(ctx, view, L, bal);
+    // The shadow: flat hatch on the ground, no outline, kept to the shadow's own shape and clear of what stands. Its
+    // pitch holds on paper.
     const wide = wideOf(view);
     const meshOf = (poly: P2[]) => {
       const pos: number[] = [];
@@ -683,10 +774,12 @@ export function drawJustice(ctx: SketchContext): Part[] {
     const beamGeo = meshOf(shadow.polygons[1]);
     const restGeos = shadow.polygons.filter((_, i) => i !== 1).map(meshOf);
     try {
-      const inBeam = meshCoverage([beamGeo], wide, PAGE, 0, 4);
-      const inRest = meshCoverage(restGeos, wide, PAGE, 0, 4);
-      const pageBox = { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + 2, y1: CARD.y1 };
-      const ang = n(ctx, 'shadowAngle', 0, -60, 60) * Math.PI / 180, step = n(ctx, 'shadowPitch', 0.95, 0.5, 2);
+      // The shadow's shape on a mask as fine for the card as the print's (4 cells to the millimetre there), so its rows
+      // end where the print's do.
+      const inBeam = meshCoverage([beamGeo], wide, PAGE, 0, 4 / S);
+      const inRest = meshCoverage(restGeos, wide, PAGE, 0, 4 / S);
+      const pageBox = { x0: CARD.x0, x1: CARD.x1, y0: HORIZON_Y + layoutLength(2), y1: CARD.y1 };
+      const ang = n(ctx, 'shadowAngle', 0, -60, 60) * Math.PI / 180, step = tolerance(n(ctx, 'shadowPitch', 0.95, 0.5, 2));
       const cx = (pageBox.x0 + pageBox.x1) / 2, cy = (pageBox.y0 + pageBox.y1) / 2, reach = 400;
       const ux = Math.cos(ang), uy = Math.sin(ang);
       for (let o = -reach; o <= reach; o += step) {
@@ -702,12 +795,13 @@ export function drawJustice(ctx: SketchContext): Part[] {
     }
 
     // The sky: a light ruling that thins and breaks as it comes down to the horizon, knocked out
-    // round what stands in it and well clear of the cord.
+    // round what stands in it and well clear of the cord. The ruling and its breaks keep their millimetres on paper,
+    // so a small card keeps the print's tones in fewer rules.
     const reachSky = n(ctx, 'sky', 0.45, 0, 1);
-    const pitch = n(ctx, 'skyPitch', 1.4, 0.8, 5);
+    const pitch = tolerance(n(ctx, 'skyPitch', 1.4, 0.8, 5));
     const pattern = barPattern(ctx.random('justice-sky'), 0.86);
-    const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
-    if (reachSky > 0) for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += pitch) {
+    const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1);
+    if (reachSky > 0) for (let y = skyTop + tolerance(0.3), i = 0; y < skyBottom; i++, y += pitch) {
       const t = (y - skyTop) / (skyBottom - skyTop);
       const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
       const limit = [1, 0.72, 0.5, 0.28][tier];
@@ -721,7 +815,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'shadow-beam', 'shadow', 'column', 'beam', 'pans', 'pile', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
-    parts.push(...cardFrame('XI', 'JUSTICE'));
+    parts.push(...cardFrame('XI', 'JUSTICE', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
