@@ -12,8 +12,10 @@ import { figureBands, flowBody, ribbonStrokes } from '../../sketches/kit/mannequ
 import { LOOK, type Look } from '../../sketches/kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton } from '../../sketches/kit/mannequin/skeleton.ts';
 import { Tube, silhouettes } from '../../sketches/kit/mannequin/tube.ts';
-import { facetStrokes, ruledFaces, slabFaceNormal, slabMatrix, solid } from '../../sketches/kit/slabs.ts';
-import { horizonCamera } from '../../sketches/kit/perspective.ts';
+import { facetStrokes, ruledFaces, slabFaceNormal, slabGeometry, slabMatrix, solid } from '../../sketches/kit/slabs.ts';
+import { horizonCamera, oversampledView } from '../../sketches/kit/perspective.ts';
+import { fineDepth, fineEnv } from '../../sketches/kit/strokes.ts';
+import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
@@ -220,4 +222,23 @@ describe('sketch kit: shared card helpers, batch 3', () => {
     expect(at(small, 'mins').y).toBeCloseTo(5 * 120 / 431.8, 3);
     expect(at(small, 'tiny').x).toBeCloseTo(1, 3);
   }, 120_000);
+
+  it('takes a card\'s own depth pass as the fine one at 1, and renders the finer pass at any other', () => {
+    const page = { width: 279.4, height: 431.8 };
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 40, height: 62 }, horizonY: 300 });
+    const slabs = [solid(0, 2, -30, 8, 6, 2, 0, 'stack')].map(slabGeometry);
+    const raster = { W: 40, H: 62, MM_X: page.width / 40, MM_Y: page.height / 62 };
+    const own = { view, depth: renderDepthBufferCPU(slabs, view, 40, 62), width: 40, height: 62 };
+    // At 1 the card's own env comes back as it is: the same object, not a second render, and the raster's own millimetres.
+    const same = fineEnv(slabs, view, own, raster, 1);
+    expect(same.env).toBe(own);
+    expect([same.mmX, same.mmY]).toEqual([raster.MM_X, raster.MM_Y]);
+    // At 4 it is `fineDepth`'s: a depth pass four times the raster, from the camera given, and a quarter of the millimetres per pixel.
+    const finer = oversampledView(view, 4);
+    const fine = fineEnv(slabs, finer, own, raster, 4);
+    expect(fine.env).not.toBe(own);
+    expect([fine.env.width, fine.env.height, fine.env.view]).toEqual([160, 248, finer]);
+    expect(fine.env.depth.depthData).toEqual(fineDepth(slabs, finer, raster, 4).env.depth.depthData);
+    expect([fine.mmX, fine.mmY]).toEqual([raster.MM_X / 4, raster.MM_Y / 4]);
+  });
 });

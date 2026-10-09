@@ -12,7 +12,7 @@ import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { atPage, fitDepthRange, horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -991,7 +991,7 @@ export function drawHierophant(ctx: SketchContext): Part[] {
     // pass `THREAD_OVERSAMPLE` times finer each way, as fine in the world as the print's.
     const fine = FORMAT.tabloid ? 1 : THREAD_OVERSAMPLE;
     const threadEnv = (view: THREE.PerspectiveCamera, geos: THREE.BufferGeometry[], depth: typeof depthW) =>
-      fine === 1 ? { view, depth, width: W, height: H } : fineDepth(geos, view, { W, H, MM_X, MM_Y }, fine).env;
+      fineEnv(geos, view, { view, depth, width: W, height: H }, { W, H, MM_X, MM_Y }, fine).env;
     const collect = (st: Stroke) => (runs: { x: number; y: number }[][]) => { for (const run of runs) for (const kept of unmasked(st, scalePoints(run, MM_X / fine, MM_Y / fine))) helixRuns.push({ key: `helix-${st.ink}`, run: kept }); };
     // A thin strand's centre line is no surface of its own: tested against the strands' surfaces it would break up
     // wherever the other strand passes a hair in front, so it skips the depth test (the far thread is still hidden

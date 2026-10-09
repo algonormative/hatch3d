@@ -121,3 +121,12 @@ export function fineDepth(geometries: THREE.BufferGeometry[], view: THREE.Camera
   const width = raster.W * m, height = raster.H * m;
   return { env: { view, depth: renderDepthBufferCPU(geometries, view, width, height), width, height, bias }, mmX: raster.MM_X / m, mmY: raster.MM_Y / m };
 }
+
+/**
+ * `fineDepth` for a card that already has the depth pass of `geometries` at its own raster (`own`, the `ProjectEnv` it tests
+ * its scenery against): at `m` of 1 (tabloid) that pass is the one wanted, so it is used as it is, and the depth is not
+ * rendered a second time; at any other `m` the finer pass is rendered, as `fineDepth` does. Spread `env` to add a `bias`.
+ */
+export function fineEnv(geometries: THREE.BufferGeometry[], view: THREE.Camera, own: ProjectEnv, raster: Raster, m: number): { env: ProjectEnv; mmX: number; mmY: number } {
+  return m === 1 ? { env: own, mmX: raster.MM_X, mmY: raster.MM_Y } : fineDepth(geometries, view, raster, m);
+}

@@ -11,7 +11,7 @@ import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import type { Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
@@ -218,9 +218,8 @@ export function drawHermit(ctx: SketchContext): Part[] {
     }
 
     // The hermit and his lantern are a few millimetres tall on a small card: there they are hidden-line tested against a
-    // depth pass `FIGURE_OVERSAMPLE` times finer each way (`fineDepth`), so their edges hold; at tabloid, the card's own.
-    const fine = FORMAT.tabloid ? { env: { view, depth, width: W, height: H }, mmX: MM_X, mmY: MM_Y }
-      : fineDepth(geometries, view, { W, H, MM_X, MM_Y }, FIGURE_OVERSAMPLE);
+    // depth pass `FIGURE_OVERSAMPLE` times finer each way (`fineEnv`), so their edges hold; at tabloid, the card's own.
+    const fine = fineEnv(geometries, view, { view, depth, width: W, height: H }, { W, H, MM_X, MM_Y }, FIGURE_OVERSAMPLE);
     // The hermit, in plain carbon, with the slack the figure cards use. Off tabloid a scrap of his rings or of the hood's
     // hollow shorter than the smallest feature is a speck, and dropped.
     const k = figH / 24;
