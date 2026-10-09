@@ -39,6 +39,15 @@ describe('Breach Tarot: III The Empress', () => {
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThanOrEqual(0.6 * (CARD.x1 - CARD.x0));
     expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(0.15 * (CARD.y1 - CARD.y0));
   }, 60_000);
+
+  // A wide swing or a steep near slope used to carry the wind's path to or behind the eye, and the render threw on NaN points.
+  it.each([{ windSwing: 30 }, { windSlope: -30 }, { windSwing: 30, windSlope: -30, windDepth: 18 }])('renders the wind at its extremes %j', async params => {
+    const result = await renderSketch({ entry, seed: 2, params });
+    expect(result.diagnostics).toEqual([]);
+    const wind = result.parts.filter(p => p.id.startsWith('wind-')).flatMap(p => p.paths).flat();
+    expect(wind.length).toBeGreaterThan(0);
+    for (const p of wind) expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+  }, 60_000);
 });
 
 describe('Breach Tarot: III The Empress at 70 x 120 mm', () => {
@@ -201,5 +210,11 @@ describe('Breach Tarot: III The Empress at 70 x 120 mm', () => {
     const shrunk = { ...print, parts: print.parts.map(part => ({ ...part, paths: part.paths.map(path => path.map(p => ({ x: p.x * k, y: p.y * k }))) })) };
     const denser = denserThan(probe(shrunk), master).map(p => p.id);
     for (const id of ['sky-carbon', 'crop-carbon', 'wind-violet']) expect(denser).toContain(id);
+  }, 120_000);
+
+  it('renders the wind at its extremes on the card', async () => {
+    const result = await renderSketch({ entry, seed: 2, finishing: { page }, format: { fit: 'height' }, params: { windSwing: 30 }, timeoutMs: 120_000 });
+    expect(result.diagnostics).toEqual([]);
+    expect(points(result, 'wind-').length).toBeGreaterThan(0);
   }, 120_000);
 });

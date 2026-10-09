@@ -32,6 +32,8 @@ const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'le
 const FACET_MM_PER_UNIT = 8.3;
 /** The nearest row of plants, in world units from the eye. */
 const NEAR = 22;
+/** The nearest the wind's path may come to the eye, in world units: far inside the nearest plant, short of the eye itself. */
+const MIN_WIND_DEPTH = 0.1;
 /** Hidden-line slack for slabs, in world units (these plants are a third the size of the cathedral's slabs, so a third of its 0.6). */
 const SLAB_SLACK = 0.1;
 /** Depth bands: each gets its own bias, so the slack is the same distance in the world near and far. */
@@ -171,13 +173,15 @@ export function windRibbon(ctx: SketchContext, view: THREE.PerspectiveCamera, fi
     const r = dir * (i / count * 2 - 1) * 0.44;
     const frac = (r + 0.287) / 0.574;
     const w = Math.sin(2 * Math.PI * frac + psi);
-    const d = depth + slope * (frac - 0.5) - swing * w;
+    // Held in front of the camera: a wide swing or a steep slope on a near wind would otherwise carry the ribbon to or
+    // behind the eye (d <= 0), where the field's log goes to NaN. The crop is sampled no nearer than that either.
+    const d = Math.max(MIN_WIND_DEPTH, depth + slope * (frac - 0.5) - swing * w);
     return { x: r * d, d, w };
   });
   // The crop's typical height round each point: a row either side and a furrow either side.
   const tallest = at.map(p => {
     let sum = 0, k = 0;
-    for (const dx of [-spacing, 0, spacing]) for (const dd of [-row, 0, row]) { sum += coursesFor(field.growth(p.x + dx, p.d + dd)) * MEAN_COURSE; k++; }
+    for (const dx of [-spacing, 0, spacing]) for (const dd of [-row, 0, row]) { sum += coursesFor(field.growth(p.x + dx, Math.max(MIN_WIND_DEPTH, p.d + dd))) * MEAN_COURSE; k++; }
     return sum / k;
   });
   const smoothed = tallest.map((_, i) => {
