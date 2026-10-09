@@ -3,22 +3,25 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { FORMAT, MIN_FEATURE, MIN_SPACING, PAGE, PHRASE, S, TABLOID_CARD, TABLOID_RASTER, depthRaster, evenlyKept, fitFov, halo, layoutLength, layoutY, printFine, scaledCount, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
-import { helixAlong } from '../../kit/helix.ts';
+import { helixAlong, type AlongOptions, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { boltEmblem, discEmblem, starEmblem, sunEmblem } from '../../kit/emblems.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { circlePath, discHatch } from '../../kit/fills.ts';
+import { thinRanked } from '../../kit/density.ts';
+import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { atPage, fitDepthRange, onGround, pageOf } from '../../kit/perspective.ts';
+import { atPage, fitDepthRange, onGround, pageOf, type PageSize } from '../../kit/perspective.ts';
 import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { bigSuit, bigSuitMeshes, bigSuitStrokes } from '../../kit/mannequin/big-suit.ts';
-import { bodyMeshes, contourTube } from '../../kit/mannequin/body.ts';
+import { bigSuit, bigSuitMeshes, bigSuitStrokes, type BigSuit } from '../../kit/mannequin/big-suit.ts';
+import { bodyMeshes, contourTube, type Body } from '../../kit/mannequin/body.ts';
 import { ELONGATED, flowBody, gesture } from '../../kit/mannequin/gesture.ts';
 import { LOOK } from '../../kit/mannequin/hatch.ts';
 import { grip } from '../../kit/mannequin/pieces.ts';
-import { POSES, poseSkeleton, withPose } from '../../kit/mannequin/skeleton.ts';
+import { POSES, poseSkeleton, withPose, type Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { CARD, cardFrame, clipWindow } from '../card.ts';
 import { chartresPlan, type P2, type Plan } from './labyrinth.ts';
@@ -37,34 +40,71 @@ import { chartresPlan, type P2, type Plan } from './labyrinth.ts';
  * detail gathers where his light falls off. His tie is the helix, climbing out of the centre and
  * flaring as it rises, with clear paper round it. The phrase is cut into the near walls, a word to a
  * ring, read walking inward; the first set's four marks keep the old card's four corners.
+ *
+ * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`worldOf`): the same walls,
+ * the same blocks settling, the same tie, and the same choice of where the print draws every brick. The card's own
+ * camera is the print's scaled with the card (`cardCamera`). A wall a millimetre deep on paper cannot carry its
+ * courses: each is drawn as one line along its crest, broken under a settling coping, and the print's brick detail
+ * becomes the joints of its first course down the wall's face, a share of them, where the print draws its bricks;
+ * the rim's blocks and the settling copings are trimmed outlines. The shadows keep their pitch on paper, the
+ * knockouts scale with the card, the corner marks keep their corners, and the phrase moves to the bottom band.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/** How many times finer than the card's raster its depth pass runs: 1 at tabloid. */
+const FINE = printFine();
+/** The card's depth raster at tabloid; on any other page, the format's, with room for `FINE`. */
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 /** Circuit pitch (path plus wall), and the masonry, in the Fool's block sizes. */
 const PITCH = 10, THICK = 2.0, COURSE = 2.2, COPING = 0.6;
 /** The innermost ring wall a word is cut into (wall 10 lies between circuits 10 and 11). */
 const CIRCUITS_INNER = 10;
 const FACET_MM_PER_UNIT = 8.3;
+/** The fewest joints a small card keeps, so the masonry still shows where the print draws it. */
+const JOINT_FLOOR = 60;
 
 export interface WorldView { view: THREE.PerspectiveCamera; centre: THREE.Vector3 }
 
-/** Above the labyrinth, looking down at `tilt`, sized so the rim spans the card and centred where wanted. */
-export function worldCamera(ctx: SketchContext, plan: Plan): WorldView {
+/** The framing, in tabloid's frame: the lens, the distance that spans the rim across the card, and where the centre lands. */
+function framing(ctx: SketchContext, plan: Plan): { fov: number; dist: number; cy: number } {
   const rim = plan.wall(0) + PITCH;
   const fov = n(ctx, 'fov', 45, 25, 75);
-  const f = PAGE.height / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+  const f = TABLOID_PAGE.height / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+  const dist = f * rim / (n(ctx, 'fit', 0.94, 0.6, 1.05) * (TABLOID_CARD.x1 - TABLOID_CARD.x0) / 2);
+  const cy = TABLOID_CARD.y0 + n(ctx, 'centreY', 0.64, 0.3, 0.85) * (TABLOID_CARD.y1 - TABLOID_CARD.y0);
+  return { fov, dist, cy };
+}
+
+/** Above the labyrinth, `dist` from its centre, looking down at `tilt`, the centre landing at page y `cy`. */
+function overhead(ctx: SketchContext, fov: number, dist: number, cy: number, page: PageSize, raster: { width: number; height: number }): WorldView {
   const tilt = THREE.MathUtils.degToRad(n(ctx, 'tilt', 40, 20, 90));
-  const dist = f * rim / (n(ctx, 'fit', 0.94, 0.6, 1.05) * (CARD.x1 - CARD.x0) / 2);
   const centre = new THREE.Vector3(0, 0, -dist);
   // A loose depth range for now: drawWorld fits it to the scene before the depth pass.
-  const view = new THREE.PerspectiveCamera(fov, W / H, 2, 6000);
+  const view = new THREE.PerspectiveCamera(fov, raster.width / raster.height, 2, 6000);
   view.position.set(0, dist * Math.sin(tilt), -dist + dist * Math.cos(tilt));
   view.lookAt(centre);
-  const cy = CARD.y0 + n(ctx, 'centreY', 0.64, 0.3, 0.85) * (CARD.y1 - CARD.y0);
-  view.setViewOffset(W, H, 0, -(cy - PAGE.height / 2) / (PAGE.height / H), W, H);
+  view.setViewOffset(raster.width, raster.height, 0, -(cy - page.height / 2) / (page.height / raster.height), raster.width, raster.height);
   view.updateProjectionMatrix();
   view.updateMatrixWorld();
   return { view, centre };
+}
+
+/**
+ * Above the labyrinth, looking down at `tilt`, sized so the rim spans the card and centred where wanted: in tabloid's
+ * frame (its page, card and raster), the camera the world is laid out with. At tabloid it is `cardCamera`.
+ */
+export function worldCamera(ctx: SketchContext, plan: Plan): WorldView {
+  const { fov, dist, cy } = framing(ctx, plan);
+  return overhead(ctx, fov, dist, cy, TABLOID_PAGE, TABLOID_RASTER);
+}
+
+/**
+ * The card's own camera, on the format's page: the print's eye and aim, its lens widened with the fit (`fitFov`) and its
+ * centre placed as a layout position (`layoutY`), so the card is the print scaled by `S` about the window's centre line
+ * and the horizon. `height` keeps the print's vertical framing and crops the rim's sides; `width` keeps the whole rim.
+ */
+export function cardCamera(ctx: SketchContext, plan: Plan): WorldView {
+  const { fov, dist, cy } = framing(ctx, plan);
+  return overhead(ctx, fitFov(fov), dist, layoutY(cy), PAGE, { width: W, height: H });
 }
 
 /** Plan to world: the plan's +Y (the entrance side) faces the eye. */
@@ -128,17 +168,62 @@ function lunations(c: THREE.Vector3, plan: Plan): Slab[] {
   return out;
 }
 
-export function drawWorld(ctx: SketchContext): Part[] {
+export type FigureMode = 'arrived' | 'fool' | 'dancer';
+
+/**
+ * The card's world: the labyrinth and its blocks, the last copings settling, the Fool at the centre, his light, his tie's
+ * curve, and where the print draws every brick and where it only indicates the walls. It is laid out in tabloid's frame,
+ * with `worldCamera` and tabloid's page millimetres, so every size and fit builds the same world, to the bit; each card's
+ * own camera then draws it. The figure's and the helix's meshes are the caller's to dispose.
+ */
+export interface World {
+  plan: Plan;
+  /** The camera the world is laid out with (tabloid's frame). */
+  camera: WorldView;
+  centre: THREE.Vector3;
+  courses: number;
+  slabs: Slab[];
+  /** The rim's lunations are `slabs[lunationStart]` on. */
+  lunationStart: number;
+  /** Each wall's plan path and the slabs it was built of, `slabs[from]` up to `to`. */
+  walls: { path: P2[]; from: number; to: number }[];
+  mode: FigureMode;
+  height: number;
+  skeleton: Skeleton;
+  body: Body;
+  suit: BigSuit | null;
+  figureMeshes: THREE.BufferGeometry[];
+  /** His light, a glow above his head. */
+  glow: THREE.Vector3;
+  /** His tie's curve, through the knot at his throat and up the card, and the helix laid along it. */
+  curve: THREE.CatmullRomCurve3;
+  helixOptions: AlongOptions;
+  /** The helix as `worldCamera` draws it (the card's own at tabloid): its strokes and its meshes. */
+  helix: { strokes: HelixStroke[]; meshes: THREE.BufferGeometry[] };
+  /** The clear paper round the helix and the figure on tabloid's sheet. */
+  helixCover: (p: Point) => boolean;
+  figureCover: (p: Point) => boolean;
+  /** How much brick detail the print draws at a point: 0 where it only indicates the walls, 1 where it draws every brick. */
+  detailAt: (p: THREE.Vector3) => number;
+  /** Whether the print draws a block (by its index in `slabs`). */
+  drawn: (sl: Slab, index: number) => boolean;
+}
+
+export function worldOf(ctx: SketchContext): World {
   const plan = chartresPlan(PITCH);
-  const { view, centre } = worldCamera(ctx, plan);
+  const camera = worldCamera(ctx, plan);
+  const { view, centre } = camera;
   const eye = view.position.clone();
-  const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-  const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.distanceTo(p)) * fovT);
   const rng = ctx.random('world-walls');
   const courses = Math.round(n(ctx, 'courses', 2, 1, 4));
 
   const slabs: Slab[] = [];
-  for (const w of plan.walls) slabs.push(...wallSlabs(rng, centre, w, courses));
+  const walls: World['walls'] = [];
+  for (const w of plan.walls) {
+    const from = slabs.length;
+    slabs.push(...wallSlabs(rng, centre, w, courses));
+    walls.push({ path: w, from, to: slabs.length });
+  }
   const lunationStart = slabs.length;
   slabs.push(...lunations(centre, plan));
 
@@ -146,7 +231,7 @@ export function drawWorld(ctx: SketchContext): Part[] {
   // pinstripe as card 0, now fitted, and the construction cross on his blank face drawn solid at last.
   // He stands in the World's stance, one leg crossed behind, arms open, and his tie is the helix.
   // (Also: `fool`, the big suit as he started; `dancer`, a bare figure whose hand lets the helix go.)
-  const mode = ctx.params.figure === 'fool' || ctx.params.figure === 'dancer' ? ctx.params.figure : 'arrived';
+  const mode: FigureMode = ctx.params.figure === 'fool' || ctx.params.figure === 'dancer' ? ctx.params.figure : 'arrived';
   const suited = mode !== 'dancer';
   const height = n(ctx, 'figureHeight', 56, 30, 90);
   const pose = withPose(gesture(POSES.dance, mode === 'arrived' ? { push: 1.0, arc: -4, sway: 5, wring: 8 } : { push: 1.2, arc: -8, sway: 6, wring: 14 }),
@@ -156,43 +241,12 @@ export function drawWorld(ctx: SketchContext): Part[] {
   // The light is his: a glow just above his head, so every wall is lit on the side that faces the
   // centre and throws its shadow outward, longest at the rim.
   const glow = centre.clone().add(new THREE.Vector3(0, n(ctx, 'glow', 1.5, 1.05, 4) * height, 0));
-  const toGlow = (p: THREE.Vector3) => glow.clone().sub(p).normalize();
   const suit = suited ? bigSuit(s, mode === 'fool' ? { size: 1.6, feet: body.limbs } : { size: n(ctx, 'suitSize', 1.05, 1, 1.6), feet: body.limbs, cuff: 0 }) : null;
-  const forward = new THREE.Vector3();
-  view.getWorldDirection(forward);
-  const env = {
-    forward, density: n(ctx, 'density', 0.4, 0, 1),
-    screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; },
-    dark: (p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.95 - 0.95 * Math.max(0, normal.dot(toGlow(p))), 0, 1),
-  };
-  const head = body.head!;
-  const dashed = (pts: THREE.Vector3[]): ClothStroke[] => {
-    const out: ClothStroke[] = [];
-    let run: THREE.Vector3[] = [], at = 0;
-    for (let i = 0; i < pts.length; i++) {
-      if (i) at += pts[i].distanceTo(pts[i - 1]);
-      if (at % 0.5 < 0.3) run.push(pts[i]);
-      else { if (run.length > 1) out.push({ ink: 'carbon', group: 'contour', points: run }); run = []; }
-    }
-    if (run.length > 1) out.push({ ink: 'carbon', group: 'contour', points: run });
-    return out;
-  };
-  const shoes = { ...LOOK, cloth: 'carbon' as const, accent: 'carbon' as const };
-  const figure: ClothStroke[] = [
-    ...(suit ? bigSuitStrokes(suit, env, LOOK, { motley: false, wind: null }) : []),
-    ...body.limbs.flatMap(t => [...contourTube(t, env, suited && t.id.startsWith('leg') ? shoes : LOOK), ...silhouettes(t, env, { ink: LOOK.edge, group: LOOK.contour })]),
-    ...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.45) }, LOOK),
-    // Seen from above the crown faces us, and the tube silhouette (traced along the head's length)
-    // misses it: the outline is the hull of the head's projected surface instead, exact for an egg.
-    headOutline(head, view),
-    ...[Array.from({ length: 61 }, (_, i) => head.point(0.12 + 0.8 * i / 60, 0.25, 0.02)), Array.from({ length: 41 }, (_, i) => head.point(0.5, 0.25 + 0.17 * (i / 20 - 1), 0.02))]
-      .flatMap(line => mode === 'arrived' ? [{ ink: 'carbon' as const, group: 'contour', points: line }] : dashed(line)),
-  ];
   const figureMeshes = [...bodyMeshes(body, 0.8), ...(suit ? bigSuitMeshes(suit) : [])];
 
   // The helix: his tie, knotted at the throat, down his shirt front, then out past his shoulder and
   // up out of the centre in a lazy S to the top of the card, opening as it climbs. It keeps clear of
-  // his face.
+  // his face. Its course is set on tabloid's sheet.
   const k = height / 24;
   const knot = suited ? s.at('neck').lerp(s.at('head'), 0.55).addScaledVector(s.axes('neck').z, 0.55) : grip(s, 'r').at;
   const chest = s.axes('chest');
@@ -202,26 +256,28 @@ export function drawWorld(ctx: SketchContext): Part[] {
       knot.clone().addScaledVector(chest.z, 1.8 * k).addScaledVector(chest.x, side * 2.6 * k).addScaledVector(chest.y, -1.2 * k),
       knot.clone().addScaledVector(chest.z, 1.4 * k).addScaledVector(chest.x, side * 5.5 * k).addScaledVector(chest.y, 1.5 * k)]
     : [knot];
-  const start = pageOf(view, knot);
+  const start = pageOf(view, knot, TABLOID_PAGE);
   const reach = eye.distanceTo(knot) * 0.9;
   const sway = n(ctx, 'helixSway', 1, -1.5, 1.5);
-  const top = CARD.y0 - 12;
+  const top = TABLOID_CARD.y0 - 12;
   const control = [[0.16, 30], [0.36, -18], [0.6, 22], [0.82, -12], [1, 4]] as const;
-  const curvePts = [...near, ...control.map(([t, dx]) => atPage(view, { x: start.x + sway * dx, y: start.y + (top - start.y) * t }, reach))];
-  const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(curvePts, false, 'centripetal'), {
+  const curvePts = [...near, ...control.map(([t, dx]) => atPage(view, { x: start.x + sway * dx, y: start.y + (top - start.y) * t }, reach, TABLOID_PAGE))];
+  const curve = new THREE.CatmullRomCurve3(curvePts, false, 'centripetal');
+  const helixOptions: AlongOptions = {
     radius: height / 24, width: height / 26, pitch: height * 0.4,
     taper: n(ctx, 'taper', 30, 1, 60), flare: n(ctx, 'flare', 2.2, 1, 5), pitchGrowth: n(ctx, 'pitchGrowth', 0.3, 0, 1),
-  });
+  };
+  const helix = helixAlong(ctx, view, curve, helixOptions);
 
-  // Clear paper round the helix and round the figure: nothing behind them comes near their lines.
-  const helixCover = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'helixClear', 1.4, 0, 4));
-  const figureCover = meshCoverage(figureMeshes, view, PAGE, n(ctx, 'figureClear', 1.7, 0.5, 6));
+  // Clear paper round the helix and round the figure, on tabloid's sheet: nothing behind them comes near their lines.
+  const helixCover = meshCoverage(helix.meshes, view, TABLOID_PAGE, n(ctx, 'helixClear', 1.4, 0, 4));
+  const figureCover = meshCoverage(figureMeshes, view, TABLOID_PAGE, n(ctx, 'figureClear', 1.7, 0.5, 6));
 
-  // Where the walls are only indicated (see below): above `quietFrom` on the sheet, fading to full
+  // Where the walls are only indicated (see `drawn`): above `quietFrom` on the sheet, fading to full
   // detail by `quietTo`.
-  const centrePage = pageOf(view, centre);
+  const centrePage = pageOf(view, centre, TABLOID_PAGE);
   const quietFrom = centrePage.y + n(ctx, 'quietFrom', 12, -60, 100), quietTo = centrePage.y + n(ctx, 'quietTo', 48, -40, 140);
-  const detailAt = (p: THREE.Vector3) => smooth(quietFrom, quietTo, pageOf(view, p).y);
+  const detailAt = (p: THREE.Vector3) => smooth(quietFrom, quietTo, pageOf(view, p, TABLOID_PAGE).y);
   // The last blocks, still settling: a few copings hang a little above the gaps they are about to
   // close. Their own random stream, so the walls never move with them.
   const settle = ctx.random('world-settle');
@@ -229,7 +285,7 @@ export function drawWorld(ctx: SketchContext): Part[] {
   const wanted = Math.round(n(ctx, 'settling', 6, 0, 24));
   for (let tries = 0, moved = 0; moved < wanted && tries < 400; tries++) {
     const sl = copings[Math.floor(settle() * copings.length)];
-    const at = pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z));
+    const at = pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z), TABLOID_PAGE);
     // Somewhere it can be seen: on the near half where blocks are drawn largest and every brick is
     // drawn (an indicated wall's coping line would run over the empty slot), off the helix and the
     // figure, and not crowding another.
@@ -241,20 +297,6 @@ export function drawWorld(ctx: SketchContext): Part[] {
     moved++;
   }
 
-  // The flat mark: the first set's four marks in the corners, where the old card keeps its four
-  // living creatures, each by its sign: the Star (Aquarius) for the angel, Death (Scorpio) for the
-  // eagle, the Sun for the lion, and the Tower for the bull.
-  const inset = n(ctx, 'cornerInset', 20, 10, 40), mark = n(ctx, 'cornerSize', 9, 4, 18);
-  const corners = [
-    { key: 'emblem-ultramarine', c: { x: CARD.x0 + inset, y: CARD.y0 + inset }, paths: starEmblem },
-    { key: 'emblem-carbon', c: { x: CARD.x1 - inset, y: CARD.y0 + inset }, paths: discEmblem },
-    { key: 'emblem-carbon', c: { x: CARD.x0 + inset, y: CARD.y1 - inset }, paths: boltEmblem },
-    { key: 'emblem-vermilion', c: { x: CARD.x1 - inset, y: CARD.y1 - inset }, paths: sunEmblem },
-  ];
-  const onEmblem = (p: Point) => corners.some(({ c }) => Math.hypot(p.x - c.x, p.y - c.y) < mark * 1.45 + 2);
-
-  const strokes: Stroke[] = [];
-  for (const st of figure) strokes.push({ ink: st.ink, group: st.group === 'contour' ? 'figure-edge' : 'figure', family: st.family ?? 'hatch', points: st.points });
   // Sketched, not surveyed. The near side keeps every brick. Toward the figure and beyond, the walls
   // are only indicated: their coping and foot drawn as continuous lines, and a few clusters of bricks
   // kept where a smooth noise runs high, the way a drawing hints at masonry instead of outlining every
@@ -287,69 +329,265 @@ export function drawWorld(ctx: SketchContext): Part[] {
     const share = Math.min(0.95, indication * 2.6 * (falloff(sl) / dimmest) ** 2.4);
     return d >= 0.999 || cluster(sl.x, sl.z) > (1 - share) * (1 - d);
   };
-  slabs.forEach((sl, index) => {
-    if (!drawn(sl, index)) return;
-    const at = new THREE.Vector3(sl.x, sl.y, sl.z);
-    const pageSize = Math.max(sl.w, sl.h) * mmPerUnit(at);
-    for (const st of facetStrokes(sl, toGlow(at), eye, pageSize < 1.5, FACET_MM_PER_UNIT / mmPerUnit(at))) strokes.push({ ink: st.ink, group: 'walls', family: st.family, points: st.points });
-  });
-  // The indicated walls: the coping's top edges and its lower edge, and the wall's foot, as unbroken
-  // lines wherever the wall is quiet, and a closed end where a quiet wall stops.
-  const wallTop = courses * COURSE, lip = (THICK + 0.5) / 2;
-  for (const w of plan.walls) {
-    const dense: P2[] = [w[0]];
-    for (let i = 1; i < w.length; i++) {
-      const a = w[i - 1], b = w[i], steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 2));
-      for (let k = 1; k <= steps; k++) dense.push({ x: a.x + (b.x - a.x) * k / steps, y: a.y + (b.y - a.y) * k / steps });
+  return {
+    plan, camera, centre, courses, slabs, lunationStart, walls, mode, height, skeleton: s, body, suit, figureMeshes, glow,
+    curve, helixOptions, helix, helixCover, figureCover, detailAt, drawn,
+  };
+}
+
+type Ranked = Stroke & { rank?: number };
+
+/**
+ * The walls on a small card, where a wall is a millimetre deep on paper and its courses a third of one. Each wall is one
+ * line along its crest (rank 0), broken where a coping has lifted away to settle. The print's brick detail is a density:
+ * the joints of a wall's first course, run down both its faces from the coping to the foot (the depth pass keeps the face
+ * that sees the eye), for an even share (`keep`) of the blocks the print draws brick by brick (rank 2); and each wall's
+ * ends, closed the same way. The rim's lunations and the settling copings are their trimmed outlines (rank 1).
+ */
+function smallWalls(world: World, view: THREE.Camera, eye: THREE.Vector3, mmPerUnit: (p: THREE.Vector3) => number, keep: number): Ranked[] {
+  const { slabs, centre, courses, lunationStart, drawn, glow } = world;
+  const out: Ranked[] = [];
+  const wallTop = courses * COURSE, crest = wallTop + COPING;
+  const face = THICK / 2 + 0.02;
+  const edge = (rank: number, points: THREE.Vector3[]) => out.push({ ink: 'carbon', group: 'walls', family: 'edge', points, rank });
+  for (const { path, from, to } of world.walls) {
+    const lifted = slabs.slice(from, to).filter(sl => sl.role === 'debris');
+    const dense: P2[] = [path[0]];
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i], steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 2));
+      for (let j = 1; j <= steps; j++) dense.push({ x: a.x + (b.x - a.x) * j / steps, y: a.y + (b.y - a.y) * j / steps });
     }
-    const normal = (i: number) => {
-      const a = dense[Math.max(0, i - 1)], b = dense[Math.min(dense.length - 1, i + 1)];
-      const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      return { x: -(b.y - a.y) / l, y: (b.x - a.x) / l };
-    };
-    const quiet = dense.map(q => detailAt(toWorld(centre, q, wallTop / 2)) < 0.5);
-    for (const [off, y] of [[lip, wallTop + COPING], [-lip, wallTop + COPING], [lip, wallTop], [-lip, wallTop], [THICK / 2, 0.03], [-THICK / 2, 0.03]] as const) {
-      let run: THREE.Vector3[] = [];
-      const flush = () => { if (run.length > 1) strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: run }); run = []; };
-      dense.forEach((q, i) => {
-        if (!quiet[i]) { flush(); return; }
-        const nm = normal(i);
-        run.push(toWorld(centre, { x: q.x + nm.x * off, y: q.y + nm.y * off }, y));
-      });
-      flush();
+    // The crest, where a coping still lies on it.
+    let run: THREE.Vector3[] = [];
+    const flush = () => { if (run.length > 1) edge(0, run); run = []; };
+    for (const q of dense) {
+      const w = toWorld(centre, q, crest);
+      if (lifted.some(sl => Math.hypot(w.x - sl.x, w.z - sl.z) < sl.w / 2)) { flush(); continue; }
+      run.push(w);
     }
+    flush();
+    // Its ends, down both faces.
     for (const end of [0, dense.length - 1]) {
-      if (!quiet[end]) continue;
-      const q = dense[end], nm = normal(end);
-      const at = (off: number, y: number) => toWorld(centre, { x: q.x + nm.x * off, y: q.y + nm.y * off }, y);
-      strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: [at(-lip, wallTop + COPING), at(lip, wallTop + COPING)] });
-      for (const off of [-THICK / 2, THICK / 2]) strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: [at(off, 0.03), at(off, wallTop + COPING)] });
+      const q = dense[end], o = dense[end === 0 ? 1 : end - 1];
+      const l = Math.hypot(q.x - o.x, q.y - o.y) || 1, nx = -(q.y - o.y) / l, ny = (q.x - o.x) / l;
+      for (const sgn of [-1, 1]) edge(2, [toWorld(centre, { x: q.x + sgn * nx * face, y: q.y + sgn * ny * face }, 0.03), toWorld(centre, { x: q.x + sgn * nx * face, y: q.y + sgn * ny * face }, wallTop)]);
     }
   }
-  for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
+  slabs.forEach((sl, index) => {
+    const at = new THREE.Vector3(sl.x, sl.y, sl.z);
+    if (index >= lunationStart || sl.role === 'debris') {
+      const toGlow = glow.clone().sub(at).normalize();
+      for (const st of facetStrokes(sl, toGlow, eye, true, FACET_MM_PER_UNIT / mmPerUnit(at), { view })) edge(1, st.points);
+      return;
+    }
+    // A joint: the start of a first-course block the print draws, down both faces.
+    if (sl.role !== 'stack' || Math.abs(sl.y - COURSE / 2) > 1e-6 || !drawn(sl, index) || !evenlyKept(index, keep)) return;
+    const dir = new THREE.Vector3(Math.cos(sl.ry), 0, -Math.sin(sl.ry)), normal = new THREE.Vector3(Math.sin(sl.ry), 0, Math.cos(sl.ry));
+    const end = at.clone().addScaledVector(dir, -sl.w / 2).setY(0);
+    for (const sgn of [-1, 1]) {
+      const foot = end.clone().addScaledVector(normal, sgn * face);
+      edge(2, [foot.clone().setY(0.03), foot.clone().setY(wallTop)]);
+    }
+  });
+  return out;
+}
 
-  const geometries = [...slabs.map(slabGeometry), ...figureMeshes, ...helix.meshes];
+/** How many of the print's first-course blocks a small card keeps a joint for: a share by the card's scale (`'length'`). */
+function jointShare(world: World): number {
+  let total = 0;
+  world.slabs.forEach((sl, index) => {
+    if (index < world.lunationStart && sl.role === 'stack' && Math.abs(sl.y - COURSE / 2) <= 1e-6 && world.drawn(sl, index)) total++;
+  });
+  return total ? scaledCount(total, JOINT_FLOOR, 'length') / total : 1;
+}
+
+/**
+ * A corner mark, as `kit/emblems.ts` draws it, at a small card's size: a feature narrower than `MIN_FEATURE` drawn as its
+ * line. The star's spikes are their centre lines and its hub goes; the sun's straight rays are their centre lines, its
+ * twisting rays one strand each, and a rim smaller than the feature goes. The disc and the bolt keep their hatch, which is
+ * in real millimetres. The paths as the kit draws them at tabloid, or where every feature is wide enough.
+ */
+function cornerMark(kind: 'star' | 'disc' | 'bolt' | 'sun', c: Point, r: number): Point[][] {
+  if (kind === 'disc') {
+    const paths = discEmblem(c, r);
+    // The core's two rules, 0.6 mm apart, then its hatch 0.9 mm in (kit/fills.ts' `hatchedDisc`), the halo ring and the
+    // two ticks. Off tabloid the rules' band is under the feature: the core is one outline, hatched out to it, so it still
+    // prints black.
+    if (!(0.6 < MIN_FEATURE)) return paths;
+    const core = 0.58 * r;
+    return [circlePath(c, core), ...discHatch(c, core - MIN_SPACING / 2, [[Math.PI / 4, 0.55], [-Math.PI / 4, 0.8]]), ...paths.slice(-3)];
+  }
+  if (kind === 'bolt') return boltEmblem(c, r);
+  if (kind === 'star') {
+    const paths = starEmblem(c, r);
+    // The hub, then each spike's two sides and its centre line (kit/emblems.ts); a spike 0.26 r across.
+    return 0.26 * r < MIN_FEATURE ? paths.filter(path => path.length === 2) : paths;
+  }
+  const paths = sunEmblem(c, r);
+  if (!(0.14 * r < MIN_FEATURE)) return paths;
+  // Three rims, then twelve rays: a straight ray a closed outline 0.14 r across at its foot, a twisting one two strands.
+  const out: Point[][] = [];
+  const disc = 0.46 * r;
+  [disc, disc - 0.6, disc - 1.2].forEach((radius, i) => { if (radius >= MIN_FEATURE / 2) out.push(paths[i]); });
+  let i = 3;
+  for (let k = 0; k < 12; k++) {
+    if (k % 2 === 0) {
+      const ray = paths[i++];
+      out.push([{ x: (ray[0].x + ray[3].x) / 2, y: (ray[0].y + ray[3].y) / 2 }, { x: (ray[1].x + ray[2].x) / 2, y: (ray[1].y + ray[2].y) / 2 }]);
+    } else {
+      out.push(paths[i + 1]);
+      i += 2;
+    }
+  }
+  return out;
+}
+
+export function drawWorld(ctx: SketchContext): Part[] {
+  const world = worldOf(ctx);
+  const { plan, centre, slabs, courses, glow, body, suit, mode, figureMeshes } = world;
+  const { view } = cardCamera(ctx, plan);
+  const eye = view.position.clone();
+  const fovT = Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  const mmPerUnit = (p: THREE.Vector3) => PAGE.height / (2 * Math.max(1, eye.distanceTo(p)) * fovT);
+  const toGlow = (p: THREE.Vector3) => glow.clone().sub(p).normalize();
+  const suited = mode !== 'dancer';
+  const forward = new THREE.Vector3();
+  view.getWorldDirection(forward);
+  const env = {
+    forward, density: n(ctx, 'density', 0.4, 0, 1),
+    screen: (p: THREE.Vector3) => { const q = pageOf(view, p); return { x: q.x, y: q.y }; },
+    dark: (p: THREE.Vector3, normal: THREE.Vector3) => clamp(0.95 - 0.95 * Math.max(0, normal.dot(toGlow(p))), 0, 1),
+  };
+  const head = body.head!;
+  const dashed = (pts: THREE.Vector3[]): ClothStroke[] => {
+    const out: ClothStroke[] = [];
+    let run: THREE.Vector3[] = [], at = 0;
+    for (let i = 0; i < pts.length; i++) {
+      if (i) at += pts[i].distanceTo(pts[i - 1]);
+      if (at % 0.5 < 0.3) run.push(pts[i]);
+      else { if (run.length > 1) out.push({ ink: 'carbon', group: 'contour', points: run }); run = []; }
+    }
+    if (run.length > 1) out.push({ ink: 'carbon', group: 'contour', points: run });
+    return out;
+  };
+  const shoes = { ...LOOK, cloth: 'carbon' as const, accent: 'carbon' as const };
+  const figure: ClothStroke[] = [
+    ...(suit ? bigSuitStrokes(suit, env, LOOK, { motley: false, wind: null }) : []),
+    ...body.limbs.flatMap(t => [...contourTube(t, env, suited && t.id.startsWith('leg') ? shoes : LOOK), ...silhouettes(t, env, { ink: LOOK.edge, group: LOOK.contour })]),
+    ...contourTube(head, { ...env, dark: (p, nrm) => Math.max(0, env.dark(p, nrm) - 0.45) }, LOOK),
+    // Seen from above the crown faces us, and the tube silhouette (traced along the head's length)
+    // misses it: the outline is the hull of the head's projected surface instead, exact for an egg.
+    headOutline(head, view),
+    ...[Array.from({ length: 61 }, (_, i) => head.point(0.12 + 0.8 * i / 60, 0.25, 0.02)), Array.from({ length: 41 }, (_, i) => head.point(0.5, 0.25 + 0.17 * (i / 20 - 1), 0.02))]
+      .flatMap(line => mode === 'arrived' ? [{ ink: 'carbon' as const, group: 'contour', points: line }] : dashed(line)),
+  ];
+
+  // The helix, as this card's camera draws it: its laminations keep their spacing on this card's paper. (Its meshes are
+  // the world's.)
+  let helixStrokes = world.helix.strokes;
+  if (!FORMAT.tabloid) {
+    const own = helixAlong(ctx, view, world.curve, world.helixOptions);
+    for (const g of own.meshes) g.dispose();
+    helixStrokes = own.strokes;
+  }
+
+  // Clear paper round the helix and round the figure: nothing behind them comes near their lines. On a small card the
+  // halos scale with it, on masks as fine as the print's.
+  const helixCover = FORMAT.tabloid ? world.helixCover : meshCoverage(world.helix.meshes, view, PAGE, halo(n(ctx, 'helixClear', 1.4, 0, 4)), 3 / S);
+  const figureCover = FORMAT.tabloid ? world.figureCover : meshCoverage(figureMeshes, view, PAGE, halo(n(ctx, 'figureClear', 1.7, 0.5, 6)), 3 / S);
+
+  // The flat mark: the first set's four marks in the corners, where the old card keeps its four
+  // living creatures, each by its sign: the Star (Aquarius) for the angel, Death (Scorpio) for the
+  // eagle, the Sun for the lion, and the Tower for the bull. Their places and size scale with the card.
+  const inset = layoutLength(n(ctx, 'cornerInset', 20, 10, 40)), mark = layoutLength(n(ctx, 'cornerSize', 9, 4, 18));
+  const corners = [
+    { key: 'emblem-ultramarine', c: { x: CARD.x0 + inset, y: CARD.y0 + inset }, kind: 'star' as const },
+    { key: 'emblem-carbon', c: { x: CARD.x1 - inset, y: CARD.y0 + inset }, kind: 'disc' as const },
+    { key: 'emblem-carbon', c: { x: CARD.x0 + inset, y: CARD.y1 - inset }, kind: 'bolt' as const },
+    { key: 'emblem-vermilion', c: { x: CARD.x1 - inset, y: CARD.y1 - inset }, kind: 'sun' as const },
+  ];
+  const keepOff = mark * 1.45 + halo(2);
+  const onEmblem = (p: Point) => corners.some(({ c }) => Math.hypot(p.x - c.x, p.y - c.y) < keepOff);
+
+  const strokes: Ranked[] = [];
+  for (const st of figure) strokes.push({ ink: st.ink, group: st.group === 'contour' ? 'figure-edge' : 'figure', family: st.family ?? 'hatch', points: st.points });
+  if (FORMAT.tabloid) {
+    // Every brick the print draws, in the raking hatch of his light.
+    slabs.forEach((sl, index) => {
+      if (!world.drawn(sl, index)) return;
+      const at = new THREE.Vector3(sl.x, sl.y, sl.z);
+      const pageSize = Math.max(sl.w, sl.h) * mmPerUnit(at);
+      for (const st of facetStrokes(sl, toGlow(at), eye, pageSize < 1.5, FACET_MM_PER_UNIT / mmPerUnit(at))) strokes.push({ ink: st.ink, group: 'walls', family: st.family, points: st.points });
+    });
+    // The indicated walls: the coping's top edges and its lower edge, and the wall's foot, as unbroken
+    // lines wherever the wall is quiet, and a closed end where a quiet wall stops.
+    const wallTop = courses * COURSE, lip = (THICK + 0.5) / 2;
+    for (const w of plan.walls) {
+      const dense: P2[] = [w[0]];
+      for (let i = 1; i < w.length; i++) {
+        const a = w[i - 1], b = w[i], steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 2));
+        for (let k = 1; k <= steps; k++) dense.push({ x: a.x + (b.x - a.x) * k / steps, y: a.y + (b.y - a.y) * k / steps });
+      }
+      const normal = (i: number) => {
+        const a = dense[Math.max(0, i - 1)], b = dense[Math.min(dense.length - 1, i + 1)];
+        const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        return { x: -(b.y - a.y) / l, y: (b.x - a.x) / l };
+      };
+      const quiet = dense.map(q => world.detailAt(toWorld(centre, q, wallTop / 2)) < 0.5);
+      for (const [off, y] of [[lip, wallTop + COPING], [-lip, wallTop + COPING], [lip, wallTop], [-lip, wallTop], [THICK / 2, 0.03], [-THICK / 2, 0.03]] as const) {
+        let run: THREE.Vector3[] = [];
+        const flush = () => { if (run.length > 1) strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: run }); run = []; };
+        dense.forEach((q, i) => {
+          if (!quiet[i]) { flush(); return; }
+          const nm = normal(i);
+          run.push(toWorld(centre, { x: q.x + nm.x * off, y: q.y + nm.y * off }, y));
+        });
+        flush();
+      }
+      for (const end of [0, dense.length - 1]) {
+        if (!quiet[end]) continue;
+        const q = dense[end], nm = normal(end);
+        const at = (off: number, y: number) => toWorld(centre, { x: q.x + nm.x * off, y: q.y + nm.y * off }, y);
+        strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: [at(-lip, wallTop + COPING), at(lip, wallTop + COPING)] });
+        for (const off of [-THICK / 2, THICK / 2]) strokes.push({ ink: 'carbon', group: 'walls', family: 'edge', points: [at(off, 0.03), at(off, wallTop + COPING)] });
+      }
+    }
+  } else strokes.push(...smallWalls(world, view, eye, mmPerUnit, jointShare(world)));
+  for (const h of helixStrokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
+
+  const geometries = [...slabs.map(slabGeometry), ...figureMeshes, ...world.helix.meshes];
   // Small blocks hide their own back edges only if the depth range fits the scene.
   fitDepthRange(view, geometries);
   try {
-    const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: { x: number; y: number }[], keep: (p: { x: number; y: number }) => boolean) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, keep, 0.15)) buckets.add(key, piece);
+    // The depth pass, `FINE` times the card's raster each way (once at tabloid): on a small card a wall is a few pixels
+    // of the card's raster deep, and its crest and joints would fray against it.
+    const DW = W * FINE, DH = H * FINE, PX = MM_X / FINE, PY = MM_Y / FINE;
+    const depth = renderDepthBufferCPU(geometries, view, DW, DH);
+    // On a small card the rings would turn polygons under the reducer's 1.4 mm stride: it scales with the card.
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
+    // Off tabloid the scene (the walls and the shadows) and the figure are collected and thinned by rank, each on its own,
+    // before they are kept (see below).
+    const pending: { key: string; piece: Point[]; rank: number; figure: boolean }[] = [];
+    const add = (key: string, run: { x: number; y: number }[], keep: (p: { x: number; y: number }) => boolean, rank?: number, figure = false) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, keep, 0.15)) {
+        if (rank === undefined) buckets.add(key, piece);
+        else pending.push({ key, piece, rank, figure });
+      }
     };
     const open = (p: Point) => !helixCover(p) && !figureCover(p) && !onEmblem(p);
 
     // The phrase, cut into the outer faces of the near walls, a word to a wall, from the rim inward
-    // in walking order and staggered left and right: reading it walks you to the centre.
+    // in walking order and staggered left and right: reading it walks you to the centre. Where the
+    // format sets it in the band, under the card's name instead.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('world-words');
     const textStrokes: THREE.Vector3[][] = [];
     const style = { face: settings.face, height: settings.size };
     const wallTop = courses * COURSE;
     const visible = (lines3: THREE.Vector3[][]) => {
       let total = 0, seen = 0;
-      const count = (hidden: boolean, addTo: (k2: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth, width: W, height: H }, {
+      const count = (hidden: boolean, addTo: (k2: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth, width: DW, height: DH }, {
         hidden: () => hidden, begin: () => runs => { for (const r2 of runs) addTo(r2.length); },
       });
       count(false, k2 => { total += k2; });
@@ -390,10 +628,10 @@ export function drawWorld(ctx: SketchContext): Part[] {
       }
     });
     const glyphPaths: Point[][] = [];
-    for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
-      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
+    for (const l of projectPolylinesClipped(textStrokes, view, DW, DH).polylines) for (const c of clipProjectedPolyline(l, DW, DH)) {
+      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), PX, PY)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.6);
+    const onGlyph = glyphMask(glyphPaths, halo(0.6));
     const clear = (p: Point) => open(p) && !onGlyph(p);
 
     // Each family gets its hidden-line tolerance in world units, turned into window depth at its
@@ -406,16 +644,19 @@ export function drawWorld(ctx: SketchContext): Part[] {
     const figureTol = n(ctx, 'figureSlack', 1.2, 0, 4);
     for (const [family, tol, at] of [['figure', figureTol, centre], ['rest', 0.6, centre]] as const) {
       const mine = strokes.filter(st => (st.group.startsWith('figure') || st.group === 'helix') === (family === 'figure'));
-      projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(tol, at) }, {
+      projectStrokes(mine, { view, depth, width: DW, height: DH, bias: biasAt(tol, at) }, {
         begin: st => runs => {
           const keep = st.group === 'helix' || st.group.startsWith('figure') ? () => true : clear;
-          for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), keep);
+          // A small card's figure is thinned too, each pen among its own lines (the helix keeps its own spacing).
+          const figure = st.group.startsWith('figure');
+          const rank = FORMAT.tabloid ? undefined : figure ? 0 : st.rank;
+          for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, PX, PY), keep, rank, figure);
         },
       });
     }
 
     // Shadows: every block cast from the glow onto the floor, hatched in rows across the ground; the
-    // depth pass hides the rows under the walls in front of them.
+    // depth pass hides the rows under the walls in front of them. The rows keep their pitch on paper.
     const shadows = slabs.map(sl => {
       const g2 = slabGeometry(sl);
       const pos = g2.getAttribute('position');
@@ -432,7 +673,8 @@ export function drawWorld(ctx: SketchContext): Part[] {
     const rows: Stroke[] = [];
     const yTop = pageOf(view, toWorld(centre, { x: 0, y: -(plan.wall(0) + 2 * PITCH) })).y;
     const yBot = Math.min(CARD.y1, pageOf(view, toWorld(centre, { x: 0, y: plan.wall(0) + 2 * PITCH })).y);
-    for (let y = yTop, k2 = 0; y < yBot; y += n(ctx, 'shadowPitch', 0.62, 0.4, 1.5), k2++) {
+    const rowPitch = tolerance(n(ctx, 'shadowPitch', 0.62, 0.4, 1.5));
+    for (let y = yTop, k2 = 0; y < yBot; y += rowPitch, k2++) {
       const z = onGround(view, { x: PAGE.width / 2, y }).z;
       const spans: [number, number][] = [];
       for (const { poly, z0, z1 } of shadows) {
@@ -449,14 +691,22 @@ export function drawWorld(ctx: SketchContext): Part[] {
       for (const sp of spans) { const last = merged[merged.length - 1]; if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]); else merged.push([...sp]); }
       for (const [x0, x1] of merged) rows.push({ ink: k2 % 4 === 0 ? 'ultramarine' : 'carbon', group: 'shadow', family: 'hatch', points: [new THREE.Vector3(x0, 0.03, z), new THREE.Vector3(x1, 0.03, z)] });
     }
-    projectStrokes(rows, { view, depth, width: W, height: H }, {
-      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y), clear); },
+    // On a small card the rows give way to the walls (rank 3).
+    const shadowRank = FORMAT.tabloid ? undefined : 3;
+    projectStrokes(rows, { view, depth, width: DW, height: DH }, {
+      begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, PX, PY), clear, shadowRank); },
     });
+    // A small card's scene and figure, thinned: of two stretches closer than the pens hold apart, the crests keep their
+    // line, then the rim's blocks and the settling copings, then the joints, then the shadow rows. The figure is thinned
+    // pen by pen, in the order it is drawn: at a few millimetres tall, thinning his cloth against his outline left him a
+    // red stick, where pen by pen he keeps his pinstripes.
+    const layers = [pending.filter(p => !p.figure), ...[...new Set(pending.filter(p => p.figure).map(p => p.key))].map(key => pending.filter(p => p.figure && p.key === key))];
+    for (const layer of layers) for (const { item, runs } of thinRanked(layer, MIN_SPACING)) for (const piece of runs) buckets.add(item.key, piece);
 
-    for (const { key, c, paths } of corners) for (const path of paths(c, mark)) for (const inside of clipWindow(path)) buckets.add(key, inside);
+    for (const { key, c, kind } of corners) for (const path of cornerMark(kind, c, mark)) for (const inside of clipWindow(path)) buckets.add(key, inside);
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['walls', 'shadow', 'figure', 'figure-edge', 'helix', 'emblem', 'slogan'], INKS);
-    parts.push(...cardFrame('XXI', 'THE WORLD'));
+    parts.push(...cardFrame('XXI', 'THE WORLD', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
