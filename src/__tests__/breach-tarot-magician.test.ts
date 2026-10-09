@@ -243,10 +243,13 @@ describe('Breach Tarot: I The Magician at 70 x 120 mm', () => {
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card is', async () => {
     const [print, ...small] = await Promise.all([renderSketch({ entry, seed: 1 }), ...fits.map(fit => render(fit))]);
     const master = probe(print);
-    for (const result of small) {
+    for (const [k, result] of small.entries()) {
       const report = probe(result);
       expect(denserThan(report, master), describeDensity(report)).toEqual([]);
       expect(report.share).toBeLessThan(master.share);
+      // The blocks' outlines are trimmed on a small card (kit/slabs.ts' `SlabTrim`): untrimmed, their back edges and sliver
+      // faces doubled them, and the blocks' crowded share ran to 0.50-0.53 (0.42-0.44 trimmed, in either fit).
+      expect(report.parts.find(part => part.id === 'blocks-carbon')!.share, `${fits[k]} blocks`).toBeLessThan(0.47);
     }
     // The negative control: the print scaled down onto the card, as a sketch that is not page-aware is, its ruling,
     // hatch, flame and figure shrinking with it.
