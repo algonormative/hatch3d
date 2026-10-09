@@ -3,15 +3,16 @@ import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
 import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
-import { facetStrokes, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
+import { FORMAT, MIN_FEATURE, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
 import type { HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { twinHelix, type StrandPlan } from './helix.ts';
@@ -28,14 +29,28 @@ import { buildVessel, type Vessel } from './vessel.ts';
  * vessel, clear of the vessel's edge) while the other goes into the vessel's mouth. The sky is
  * lightly ruled and knocked out round everything in it; the phrase is cut into the vessels'
  * courses, word by word.
+ *
+ * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`temperanceWorld`), and the
+ * card's own camera draws it: the vessels' slabs trimmed to their outlines, the helix's laminations spaced on the card's
+ * paper, the halos scaled, the rulings of sky and water and the paving's crowding limit kept in millimetres on paper, and
+ * the phrase moved to the bottom band.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/**
+ * How many times finer each way the vessels' and the helix's hidden-line test runs on a small card (`printFine`): a pixel
+ * of the card's raster spans several times the world a tabloid pixel does, and the courses' edges and the ribbons fray.
+ */
+const FINE = printFine();
+/** The card's depth raster at tabloid; on any other page, the format's, with room for the finer one. */
+const { W, H, MM_X, MM_Y } = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
 const PW = PAGE.width;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
+/** The pitch, in millimetres on paper, of the raking-light hatch's contour rings on its darkest faces (0.075 × 8.3). */
+const RULE_MM = 0.62;
 /** The helix is built this many times the size and brought back: the kit's wiggles are fixed in world units. */
 const S = 4;
 
+/** The card's camera, on the format's page. */
 export function temperanceCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const eye = n(ctx, 'eye', 6, 3, 12);
   return horizonCamera({
@@ -44,37 +59,58 @@ export function temperanceCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   });
 }
 
-const focalOf = (view: THREE.PerspectiveCamera) => PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
-/** The world point at page position `p`, `t` units in front of the eye. */
-const worldAt = (view: THREE.PerspectiveCamera, p: Point, t: number) =>
-  new THREE.Vector3((p.x - PW / 2) * t / focalOf(view), view.position.y + (HORIZON_Y - p.y) * t / focalOf(view), -t);
+/**
+ * The same camera in tabloid's frame (its page, raster and horizon, and its field of view whatever the fit): the one
+ * the card's world is laid out with. At tabloid it is `temperanceCamera`.
+ */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  return tabloidFrameCamera({ fov: n(ctx, 'fov', 54, 36, 75), eye: n(ctx, 'eye', 6, 3, 12), near: 8, far: 4000 });
+}
 
-/** Where the shoreline lies across the ground: its x on the ground plane at depth t. Land is to its left. */
+const focalOf = (view: THREE.PerspectiveCamera, page: { height: number } = PAGE) => page.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+/** The world point at tabloid page position `p`, `t` units in front of the eye of the world camera `view`. */
+const worldAt = (view: THREE.PerspectiveCamera, p: Point, t: number) =>
+  new THREE.Vector3((p.x - TABLOID_PAGE.width / 2) * t / focalOf(view, TABLOID_PAGE), view.position.y + (TABLOID_HORIZON_Y - p.y) * t / focalOf(view, TABLOID_PAGE), -t);
+
+/**
+ * Where the shoreline lies across the ground: its x on the ground plane at depth t. Land is to its left. Laid out in
+ * tabloid's frame: `view` is `worldCamera`, and the controls are tabloid page positions.
+ */
 function shoreline(ctx: SketchContext, view: THREE.PerspectiveCamera): (t: number) => number {
-  const f = focalOf(view);
+  const f = focalOf(view, TABLOID_PAGE);
   const rng = ctx.random('temperance-shore');
   const p1 = rng() * 6.28, p2 = rng() * 6.28;
   const vanish = n(ctx, 'shoreVanish', 92, 40, 200), foot = n(ctx, 'shoreFoot', 250, 150, 330);
-  const tFoot = f * view.position.y / (CARD.y1 - HORIZON_Y - 1);
-  const k = (vanish - PW / 2) / f;
-  const x0 = (foot - PW / 2) * tFoot / f;
+  const tFoot = f * view.position.y / (TABLOID_CARD.y1 - TABLOID_HORIZON_Y - 1);
+  const k = (vanish - TABLOID_PAGE.width / 2) / f;
+  const x0 = (foot - TABLOID_PAGE.width / 2) * tFoot / f;
   const wobble = n(ctx, 'shoreWobble', 5, 0, 14);
   // A line that vanishes at `vanish`, bent a little: the bend is the same size on the sheet at any depth.
   return t => x0 + k * (t - tFoot) + wobble * t / f * (0.7 * Math.sin(2.6 * Math.log(t) + p1) + 0.35 * Math.sin(6.1 * Math.log(t) + p2));
 }
 
-interface Layout {
+export interface TemperanceWorld {
   near: Vessel; far: Vessel;
   /** The helix's two strands. */
   plans: StrandPlan[];
   scaleAt: (p: THREE.Vector3) => number;
+  /** The shoreline's x on the ground at depth t. */
+  shoreX: (t: number) => number;
+  /** The paving: each course's distance from the eye (near to far), a course's depth, and the joints between each course and the next. */
+  paving: { rows: number[]; course: number; joints: { sp: number; off: number }[] };
 }
 
-function layout(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
-  const f = focalOf(view), eye = view.position.y;
-  const rimHeight = (rimY: number, depth: number) => eye + (HORIZON_Y - rimY) * depth / f - 0;
+/**
+ * The card's world: the two vessels, the helix's course between their rims and over them, the shore and the paving. It
+ * is laid out in tabloid's frame, with `worldCamera` and tabloid's page millimetres, so every size and fit builds the
+ * same world, to the bit; each card's own camera then draws it.
+ */
+export function temperanceWorld(ctx: SketchContext): TemperanceWorld {
+  const view = worldCamera(ctx);
+  const f = focalOf(view, TABLOID_PAGE), eye = view.position.y;
+  const rimHeight = (rimY: number, depth: number) => eye + (TABLOID_HORIZON_Y - rimY) * depth / f - 0;
   const nearDepth = n(ctx, 'nearDepth', 100, 45, 140), farDepth = n(ctx, 'farDepth', 190, 150, 600);
-  const nearX = (n(ctx, 'nearX', 74, 30, 120) - PW / 2) * nearDepth / f, farX = (n(ctx, 'farX', 214, 170, 250) - PW / 2) * farDepth / f;
+  const nearX = (n(ctx, 'nearX', 74, 30, 120) - TABLOID_PAGE.width / 2) * nearDepth / f, farX = (n(ctx, 'farX', 214, 170, 250) - TABLOID_PAGE.width / 2) * farDepth / f;
   const nearHeight = rimHeight(n(ctx, 'nearRim', 92, 50, 150), nearDepth), farHeight = rimHeight(n(ctx, 'farRim', 190, 120, 240), farDepth);
   const near = buildVessel(ctx, {
     x: nearX, z: -nearDepth, height: nearHeight, width: n(ctx, 'nearWidth', 10, 5, 16), yaw: n(ctx, 'nearYaw', -0.5, -1.2, 1.2),
@@ -96,12 +132,12 @@ function layout(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
   // The strand's winding is laid out on the spill it was first approved with (`laidOnN`), so nothing else about
   // the helix moves; its last stretch is re-routed (`spillN`) to run down the near vessel's front face, clear of
   // the vessel's left edge: it crosses the lip's front edge and hangs `spillOut` units in front of the face,
-  // `spillSlide` millimetres across from the face's middle.
+  // `spillSlide` millimetres (on the print) across from the face's middle.
   const laidOnN = [above(near, 4.0, hN * 0.9), above(near, 2.4, hN + 3.4), above(near, -2.5, hN + 6.4), above(near, -9, hN + 8.0), above(near, -14, hN + 8.3)];
   const spillOut = n(ctx, 'spillOut', 4.8, 4, 9), drop = n(ctx, 'spillDrop', 8, 4, 16);
-  const faceMiddle = pageOf(view, near.axis.clone().addScaledVector(near.front, hN).setY(near.rim)).x + n(ctx, 'spillSlide', -6, -20, 20);
+  const faceMiddle = pageOf(view, near.axis.clone().addScaledVector(near.front, hN).setY(near.rim), TABLOID_PAGE).x + n(ctx, 'spillSlide', -6, -20, 20);
   const handAt = (s: number, up: number) => near.axis.clone().addScaledVector(near.front, hN + spillOut).addScaledVector(near.right, s).setY(near.rim + up);
-  const slide0 = pageOf(view, handAt(0, 0)).x, slide1 = pageOf(view, handAt(1, 0)).x;
+  const slide0 = pageOf(view, handAt(0, 0), TABLOID_PAGE).x, slide1 = pageOf(view, handAt(1, 0), TABLOID_PAGE).x;
   const along = (faceMiddle - slide0) / (slide1 - slide0);
   const spillN = [
     near.axis.clone().addScaledVector(near.front, hN * 0.5).addScaledVector(near.right, along * 0.5).setY(near.rim + 6.0),
@@ -125,7 +161,17 @@ function layout(ctx: SketchContext, view: THREE.PerspectiveCamera): Layout {
   ];
   const depthK = n(ctx, 'helixDepth', 0.4, 0, 1);
   const scaleAt = (p: THREE.Vector3) => (clamp(-p.z, 40, 400) / nearDepth) ** depthK;
-  return { near, far, plans, scaleAt };
+
+  // The paving's courses, from the bottom of the print's window to where they would crowd under `pavingEnd` apart on the
+  // print, and each course's slab width and stagger.
+  const depthAt = (y: number) => f * eye / (y - TABLOID_HORIZON_Y);
+  const course = n(ctx, 'courseDepth', 4, 2.5, 8);
+  const tFoot = depthAt(TABLOID_CARD.y1 - 0.5), tEnd = Math.sqrt(f * eye * course / n(ctx, 'pavingEnd', 1.1, 0.6, 3));
+  const rows: number[] = [];
+  for (let t = tFoot * 1.04; t < tEnd; t += course) rows.push(t);
+  const slabRng = ctx.random('temperance-slabs');
+  const joints = rows.slice(1).map(() => { const sp = 5 + 3.5 * slabRng(), off = slabRng() * sp; return { sp, off }; });
+  return { near, far, plans, scaleAt, shoreX: shoreline(ctx, view), paving: { rows, course, joints } };
 }
 
 export function drawTemperance(ctx: SketchContext): Part[] {
@@ -133,24 +179,37 @@ export function drawTemperance(ctx: SketchContext): Part[] {
   const eye = view.position.clone();
   const f = focalOf(view);
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
-  const { near, far, plans, scaleAt } = layout(ctx, view);
-  const shoreX = shoreline(ctx, view);
+  // The world, the same at every size; this card's camera draws it.
+  const { near, far, plans, scaleAt, shoreX, paving } = temperanceWorld(ctx);
 
+  // The helix's laminations are spaced for a ribbon `helixLamination` wide on the print; on a small card the ribbon is
+  // that much narrower on paper, so the spacing is measured on the card's paper and holds its millimetres there.
   const helix = twinHelix(ctx, view, plans, {
     radius: n(ctx, 'helixRadius', 1.8, 0.5, 3) * S, width: n(ctx, 'helixRadius', 1.8, 0.5, 3) * S * n(ctx, 'helixWidth', 0.75, 0.3, 1.4),
     pitch: n(ctx, 'helixPitch', 12, 4, 30) * S, spread: n(ctx, 'helixRadius', 1.8, 0.5, 3) * S * 0.3, narrow: n(ctx, 'helixRadius', 1.8, 0.5, 3) * S * 0.12,
-    twist: n(ctx, 'helixTwist', 0.3, 0, 1), density: n(ctx, 'helixDensity', 0.6, 0, 1), scaleAt, tip: n(ctx, 'helixTip', 1.4, 0.3, 4) * S, lamination: n(ctx, 'helixLamination', 9, 3, 30), S,
+    twist: n(ctx, 'helixTwist', 0.3, 0, 1), density: n(ctx, 'helixDensity', 0.6, 0, 1), scaleAt, tip: n(ctx, 'helixTip', 1.4, 0.3, 4) * S,
+    lamination: layoutLength(n(ctx, 'helixLamination', 9, 3, 30)), S,
   });
   const helixStrokes: Stroke[] = helix.strokes.map((h: HelixStroke) => ({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points }));
 
   const light = new THREE.Vector3(n(ctx, 'lightX', -0.6, -1, 1), n(ctx, 'lightY', 0.35, 0.1, 1), n(ctx, 'lightZ', 0.72, 0.2, 1.5)).normalize();
   const vessels: [string, Vessel][] = [['near', near], ['far', far]];
   const strokes: Stroke[] = [];
+  // Under 1.5 mm on this card's paper a slab is an outline; its hatch keeps its pitch on paper. Off tabloid every outline
+  // is trimmed (kit/slabs.ts): no back edges, and faces narrower than the smallest feature folded into it, so the courses
+  // don't double their edges. There the dark faces are ruled (`ruledFaces`) in place of their rings and hatch: a course is
+  // two or three millimetres tall on a small card, where the hatch fits a ring and leaves the face paper, and the vessels'
+  // shaded sides would print as light as their lit ones.
   for (const [group, v] of vessels) for (const sl of v.slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
-    for (const st of facetStrokes(sl, light, eye, Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5, FACET_MM_PER_UNIT / mmPerUnit(at))) {
-      strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
+    const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
+    let made = facetStrokes(sl, light, eye, outline, FACET_MM_PER_UNIT / mmPerUnit(at), { view });
+    const ruled = FORMAT.tabloid || outline ? [] : ruledFaces(sl, light, view, tolerance(RULE_MM) / mmPerUnit(at));
+    if (ruled.length) {
+      const faces = new Set(ruled.map(st => st.face));
+      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
     }
+    for (const st of made) strokes.push({ ink: st.ink, group, family: st.family, points: st.points });
   }
 
   const slabsOf = (v: Vessel) => v.slabs.map(slabGeometry);
@@ -159,23 +218,27 @@ export function drawTemperance(ctx: SketchContext): Part[] {
   try {
     fitDepthRange(view, geometries);
     const depth = renderDepthBufferCPU(geometries, view, W, H);
+    // The vessels and the helix are tested against a depth pass `FINE` times finer each way (`fineEnv`); at tabloid, the card's own.
+    const fine = fineEnv(geometries, view, { view, depth, width: W, height: H }, { W, H, MM_X, MM_Y }, FINE);
     const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2), helixSlack = n(ctx, 'helixSlack', 0.4, 0.1, 2);
 
-    const knock = n(ctx, 'knockout', 1.1, 0.3, 3);
+    // The halos are the print's, scaled with the card and never under half a millimetre (`halo`).
+    const knock = halo(n(ctx, 'knockout', 1.1, 0.3, 3));
     const nearCover = meshCoverage(nearGeos, view, PAGE, knock);
     const farCover = meshCoverage(farGeos, view, PAGE, knock);
     const solids = (p: Point) => nearCover(p) || farCover(p);
-    const helixCover = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'helixKnockout', 1.0, 0.3, 3));
+    const helixCover = meshCoverage(helix.meshes, view, PAGE, halo(n(ctx, 'helixKnockout', 1.0, 0.3, 3)));
     // Where the helix hangs in front of a vessel it only clears a thin margin of the vessel's own lines.
-    const helixTight = meshCoverage(helix.meshes, view, PAGE, 0.5);
-    const helixClear = meshCoverage(helix.meshes, view, PAGE, n(ctx, 'skyClear', 2.6, 0.5, 6));
+    const helixTight = meshCoverage(helix.meshes, view, PAGE, halo(0.5));
+    const helixClear = meshCoverage(helix.meshes, view, PAGE, halo(n(ctx, 'skyClear', 2.6, 0.5, 6)));
 
     // The phrase: each word cut into a front face of one vessel, going from one to the other and
     // down: it, goes, both, ways. A word is placed on the course nearest its target share of the
-    // vessel's height that is wide enough and wholly in view.
+    // vessel's height that is wide enough and wholly in view. Where the format sets the phrase in the band, the art
+    // carries no words.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const style = { face: settings.face, height: settings.size };
     const wrng = ctx.random('temperance-words');
     const textStrokes: THREE.Vector3[][] = [];
@@ -211,26 +274,29 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
       glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.6);
+    const onGlyph = glyphMask(glyphPaths, halo(0.6));
 
-    const buckets = new PartBuckets(0.4);
+    // Paths are reduced at the card's scale (`reduceAtScale`): at tabloid's stride the helix's ribbons and the shore turn
+    // into polygons on a small card.
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
     const add = (key: string, run: Point[], keep: (p: Point) => boolean = () => true, min?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && keep(p), 0.15)) buckets.add(key, piece, false, min);
     };
 
     const farEdges: Point[][] = [];
     // The vessels, each with hidden-line slack in world units at its own distance; the paper round the
-    // helix is clear of their hatch where it hangs in front of them.
+    // helix is clear of their hatch where it hangs in front of them. Off tabloid a scrap of a face's hatch shorter than
+    // the smallest feature is a speck, and dropped (`hatchMin`; the print keeps all).
     for (const [group, v] of vessels) {
       const mine = strokes.filter(st => st.group === group);
       const d = eye.distanceTo(v.axis.clone().setY(v.rim / 2));
-      projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(slack, d) }, {
+      projectStrokes(mine, { ...fine.env, bias: biasAt(slack, d) }, {
         begin: st => runs => {
           for (const run of runs) {
-            const page = scalePoints(run, MM_X, MM_Y);
+            const page = scalePoints(run, fine.mmX, fine.mmY);
             // The far vessel's outlines are kept: the water gives them back upside down.
             if (group === 'far' && st.family === 'edge') farEdges.push(page);
-            add(`${st.group}-${st.ink}`, page, p => !helixTight(p), 0.9);
+            add(`${st.group}-${st.ink}`, page, p => !helixTight(p), hatchMin(st.family) ?? 0.9);
           }
         },
       });
@@ -242,8 +308,8 @@ export function drawTemperance(ctx: SketchContext): Part[] {
       bands.set(band, [...(bands.get(band) ?? []), st]);
     }
     for (const [band, mine] of bands) {
-      projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(helixSlack, band * 40 + 20) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+      projectStrokes(mine, { ...fine.env, bias: biasAt(helixSlack, band * 40 + 20) }, {
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY)); },
       });
     }
 
@@ -255,7 +321,9 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     // broken near the horizon where it shimmers; knocked out round whatever stands in it.
     // The far vessel stands in the water, and the water gives it back: its outlines upside down below the
     // waterline, courses and all, bent a little by the ripple and broken where the ripples cross it, fading
-    // with depth; the water ruling inside it thins to its blue lines. A quiet note.
+    // with depth; the water ruling inside it thins to its blue lines. A quiet note. The ruling, the ripples and the
+    // reflection's gap from the waterline keep their millimetres on paper, so a small card keeps the print's tone and
+    // ripples a few rules deep; the reflection's bend scales with the card.
     const waterline = pageOf(view, far.axis).y;
     const farBody = meshCoverage(farGeos, view, PAGE, 0);
     const rippleRng = ctx.random('temperance-ripples');
@@ -264,16 +332,16 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     const farTop = Math.min(...farEdges.flat().map(p => p.y));
     const mirrorReach = Math.max(1, waterline - farTop);
     const ripple = (y: number) => 0.6 * Math.sin(y * 1.55 + rp1) + 0.4 * Math.sin(y * 3.9 + rp2);
-    const mirrored = (y: number) => y > waterline + 0.4 && ripple(y) < rippleCut - 1.7 * Math.min(1, (y - waterline) / mirrorReach) ** 1.1;
-    const bend = (y: number) => 0.8 * Math.sin(y * 1.1);
+    const mirrored = (y: number) => y > waterline + tolerance(0.4) && ripple(y) < rippleCut - 1.7 * Math.min(1, (y - waterline) / mirrorReach) ** 1.1;
+    const bend = (y: number) => layoutLength(0.8) * Math.sin(y * 1.1);
     const reflected = (p: Point) => mirrored(p.y) && farBody({ x: p.x - bend(p.y), y: 2 * waterline - p.y });
     const pattern = barPattern(ctx.random('temperance-water'), 0.9);
-    const pitch = n(ctx, 'waterPitch', 0.62, 0.5, 1.4);
+    const pitch = tolerance(n(ctx, 'waterPitch', 0.62, 0.5, 1.4));
     const bottom = CARD.y1;
-    for (let y = HORIZON_Y + 0.7, i = 0; y < bottom; i++) {
+    for (let y = HORIZON_Y + tolerance(0.7), i = 0; y < bottom; i++) {
       const t = (y - HORIZON_Y) / (bottom - HORIZON_Y);
       const ink = i % 4 === 0 ? 'ultramarine' : 'carbon';
-      add(`water-${ink}`, [{ x: shoreAt(y) + 0.5, y }, { x: CARD.x1, y }],
+      add(`water-${ink}`, [{ x: shoreAt(y) + halo(0.5), y }, { x: CARD.x1, y }],
         p => !solids(p) && !helixCover(p) && (t > 0.3 || pattern[Math.floor((p.x - CARD.x0) / 3.2 + i) % 64]) && (i % 4 === 0 || !reflected(p)));
       y += pitch * (1 + 0.55 * t ** 1.3);
     }
@@ -283,37 +351,40 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     }
     // The land is paved: slabs laid in courses across the ground, each course its own width of slab and
     // its joints staggered against the course before, every joint running up to the shore and cut by it. The
-    // courses end where they would crowd under a millimetre apart, so the land opens toward the horizon.
-    const slabRng = ctx.random('temperance-slabs');
-    const course = n(ctx, 'courseDepth', 4, 2.5, 8);
-    const tFoot = depthAt(CARD.y1 - 0.5), tEnd = Math.sqrt(f * eye.y * course / n(ctx, 'pavingEnd', 1.1, 0.6, 3));
-    const rows: number[] = [];
-    for (let t = tFoot * 1.04; t < tEnd; t += course) rows.push(t);
+    // courses end where they would crowd under a millimetre apart on this card's paper, so the land opens toward the
+    // horizon (nearer to the eye on a small card).
+    const { rows, course, joints } = paving;
+    const tEnd = Math.sqrt(f * eye.y * course / tolerance(n(ctx, 'pavingEnd', 1.1, 0.6, 3)));
+    const laid = rows.filter(t => t < tEnd);
     const yOf = (t: number) => HORIZON_Y + f * eye.y / t;
     const onLand = (p: Point) => !isWater(p) && !solids(p);
-    rows.forEach((t, k) => {
+    laid.forEach((t, k) => {
       const y = yOf(t);
       add('land-carbon', [{ x: CARD.x0, y }, { x: CARD.x1, y }], onLand);
-      if (k + 1 >= rows.length) return;
-      const t2 = rows[k + 1], y2 = yOf(t2);
-      const sp = 5 + 3.5 * slabRng(), off = slabRng() * sp;
+      if (k + 1 >= laid.length) return;
+      const t2 = laid[k + 1], y2 = yOf(t2);
+      const { sp, off } = joints[k];
       for (let X = -40 * sp + off; X < 40 * sp; X += sp) {
         add('land-carbon', [{ x: PW / 2 + f * X / t, y }, { x: PW / 2 + f * X / t2, y: y2 }], onLand);
       }
     });
-    // The shore: a line and its beach, down the diagonal.
+    // The shore: a line and its beach, down the diagonal, the beach widening toward us. Both follow the print's shore,
+    // scaled with the card; where the beach is narrower across than the smallest feature it is left out, and the shore is
+    // its line alone (none of it on a 70 × 120 card, where it would print as one thick line).
     const shore: Point[] = [];
-    for (let y = HORIZON_Y + 1; y <= bottom; y += 1.5) shore.push({ x: shoreAt(y), y });
+    for (let y = HORIZON_Y + layoutLength(1); y <= bottom; y += layoutLength(1.5)) shore.push({ x: shoreAt(y), y });
     add('shore-carbon', shore);
-    add('shore-carbon', shore.map(p => ({ x: p.x - 1.4 - 1.2 * (p.y - HORIZON_Y) / (bottom - HORIZON_Y), y: p.y })), p => !solids(p));
+    const beach = (y: number) => layoutLength(1.4) + layoutLength(1.2) * (y - HORIZON_Y) / (bottom - HORIZON_Y);
+    add('shore-carbon', shore.map(p => ({ x: p.x - layoutLength(1.4) - layoutLength(1.2) * (p.y - HORIZON_Y) / (bottom - HORIZON_Y), y: p.y })),
+      p => !solids(p) && beach(p.y) >= MIN_FEATURE);
 
     // The sky: the deck's light ruling, full lines at the top that thin and break as they come down to
-    // the horizon, knocked out round the vessels and well clear of the helix.
+    // the horizon, knocked out round the vessels and well clear of the helix. Its pitch holds on paper.
     const reachSky = n(ctx, 'sky', 0.5, 0, 1);
     if (reachSky > 0) {
       const skyPattern = barPattern(ctx.random('temperance-sky'), 0.86);
-      const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1;
-      for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++, y += n(ctx, 'skyPitch', 1.3, 0.8, 2.5)) {
+      const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1);
+      for (let y = skyTop + tolerance(0.3), i = 0; y < skyBottom; i++, y += tolerance(n(ctx, 'skyPitch', 1.3, 0.8, 2.5))) {
         const t = (y - skyTop) / (skyBottom - skyTop);
         const tier = i % 8 === 0 ? 0 : i % 4 === 0 ? 1 : i % 2 === 0 ? 2 : 3;
         const deep = i % 16 === 0;
@@ -329,7 +400,7 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'water', 'reflect', 'land', 'shore', 'near', 'far', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p) && !helixCover(p), 0.3) });
-    parts.push(...cardFrame('XIV', 'TEMPERANCE'));
+    parts.push(...cardFrame('XIV', 'TEMPERANCE', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of geometries) geo.dispose();
