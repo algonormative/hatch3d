@@ -12,7 +12,7 @@ import { Clearance, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { MIN_LENGTH_MM, PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, MIN_LENGTH_MM, PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -490,11 +490,10 @@ export function drawEmpress(ctx: SketchContext): Part[] {
     fitDepthRange(view, geometries);
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
     // Window-depth bias for a slack of SLAB_SLACK world units at the middle of a band.
-    const nearP = view.near, farP = view.far;
     const biasOf = (band: number) => {
       const lo = BAND_EDGES[band], hi = Number.isFinite(BAND_EDGES[band + 1]) ? BAND_EDGES[band + 1] : lo * 1.4;
       const d = Math.sqrt(Math.max(lo, 8) * hi);
-      return Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * d * d));
+      return hiddenBias(view, SLAB_SLACK, d, BIAS_FLOOR);
     };
     const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));
     // The wind keeps a wider margin of clear paper than the crop, so the ribbon never touches the ruled sky.

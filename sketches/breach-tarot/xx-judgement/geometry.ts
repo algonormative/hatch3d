@@ -15,7 +15,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { BOX, fragments, plain, seams, type Vault } from './plain.ts';
@@ -207,8 +207,7 @@ export function drawJudgement(ctx: SketchContext): Part[] {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
     // The boxes and the horn are tested against a depth pass `FINE` times finer each way (`fineEnv`); at tabloid, the card's own.
     const fine = fineEnv(geometries, view, { view, depth, width: W, height: H }, { W, H, MM_X, MM_Y }, FINE);
-    const nearP = view.near, farP = view.far;
-    const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
+    const biasAt = (d: number, slack: number) => hiddenBias(view, slack, d, BIAS_FLOOR);
     // The halos are the print's, scaled with the card and never under half a millimetre (`halo`).
     const solids = meshCoverage([...geometries, tube], view, PAGE, halo(n(ctx, 'knockout', 1.4, 0.3, 3)), MASK_RES);
     // Paper round each fragment, so what is behind it does not show through.

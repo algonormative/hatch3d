@@ -12,7 +12,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { twinHelix, type StrandPlan } from './helix.ts';
@@ -220,7 +220,6 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     const depth = renderDepthBufferCPU(geometries, view, W, H);
     // The vessels and the helix are tested against a depth pass `FINE` times finer each way (`fineEnv`); at tabloid, the card's own.
     const fine = fineEnv(geometries, view, { view, depth, width: W, height: H }, { W, H, MM_X, MM_Y }, FINE);
-    const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2), helixSlack = n(ctx, 'helixSlack', 0.4, 0.1, 2);
 
     // The halos are the print's, scaled with the card and never under half a millimetre (`halo`).
@@ -290,7 +289,7 @@ export function drawTemperance(ctx: SketchContext): Part[] {
     for (const [group, v] of vessels) {
       const mine = strokes.filter(st => st.group === group);
       const d = eye.distanceTo(v.axis.clone().setY(v.rim / 2));
-      projectStrokes(mine, { ...fine.env, bias: biasAt(slack, d) }, {
+      projectStrokes(mine, { ...fine.env, bias: hiddenBias(view, slack, d) }, {
         begin: st => runs => {
           for (const run of runs) {
             const page = scalePoints(run, fine.mmX, fine.mmY);
@@ -308,7 +307,7 @@ export function drawTemperance(ctx: SketchContext): Part[] {
       bands.set(band, [...(bands.get(band) ?? []), st]);
     }
     for (const [band, mine] of bands) {
-      projectStrokes(mine, { ...fine.env, bias: biasAt(helixSlack, band * 40 + 20) }, {
+      projectStrokes(mine, { ...fine.env, bias: hiddenBias(view, helixSlack, band * 40 + 20) }, {
         begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY)); },
       });
     }

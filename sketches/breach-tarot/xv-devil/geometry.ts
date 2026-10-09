@@ -11,7 +11,7 @@ import { keepAlong, meshCoverage, reduceAtScale, straightened } from '../../kit/
 import { clamp } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, oversampledView, pageOf } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineEnv, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { type DoorPiece } from './doors.ts';
@@ -133,7 +133,6 @@ export function drawDevil(ctx: SketchContext): Part[] {
     const fineView = oversampledView(view, FINE);
     const figureEnv = fineEnv(geometries, fineView, card.env, raster, FINE);
     const ropeEnv = fineEnv([...pillarGeos, ...doorGeos, ...figureGeos], fineView, { view, depth: ropeDepth, width: W, height: H }, raster, FINE);
-    const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slabSlack = param(ctx, 'slabSlack');
     const solids = meshCoverage(geometries, view, PAGE, halo(param(ctx, 'knockout')));
     const pocket = meshCoverage(figureGeos, view, PAGE, halo(param(ctx, 'pocket')));
@@ -147,7 +146,7 @@ export function drawDevil(ctx: SketchContext): Part[] {
     const textStrokes: THREE.Vector3[][] = [];
     const visible = (lines3: THREE.Vector3[][], d: number) => {
       let total = 0, seen = 0;
-      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth, width: W, height: H, bias: biasAt(slabSlack, d) }, {
+      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth, width: W, height: H, bias: hiddenBias(view, slabSlack, d) }, {
         hidden: () => hidden, begin: () => runs => { for (const r of runs) addTo(r.length); },
       });
       count(false, k => { total += k; });
@@ -209,7 +208,7 @@ export function drawDevil(ctx: SketchContext): Part[] {
       if (!strokes.length) return;
       const { keep, min = () => undefined, at = card, rank, reduce } = o;
       const pending: { key: string; piece: Point[]; min?: number; rank: number }[] = [];
-      projectStrokes(strokes, { ...at.env, bias: biasAt(tol, d) }, {
+      projectStrokes(strokes, { ...at.env, bias: hiddenBias(view, tol, d) }, {
         begin: st => runs => {
           for (const run of runs) {
             const key = `${st.group}-${st.ink}`, page = scalePoints(run, at.mmX, at.mmY);

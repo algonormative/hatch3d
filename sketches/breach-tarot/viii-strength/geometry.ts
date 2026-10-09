@@ -13,7 +13,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { atPage, fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { bodyMeshes, contourTube } from '../../kit/mannequin/body.ts';
 import { ELONGATED, flowBody, gesture } from '../../kit/mannequin/gesture.ts';
@@ -534,7 +534,6 @@ export function drawStrength(ctx: SketchContext): Part[] {
   try {
     fitDepthRange(view, geometries);
     const fine = fineDepth([...geometries, ...core], view, { W, H, MM_X, MM_Y }, OVERSAMPLE), px = fine.env;
-    const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.6, 0.1, 2);
 
     // Page masks: where the wall stands, where the helix lies, and the pocket of clear paper round the person.
@@ -653,7 +652,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     }
     for (const [i, mine] of bySlab) {
       const sl = slabs[i];
-      projectStrokes(mine, { ...px, bias: biasAt(slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      projectStrokes(mine, { ...px, bias: hiddenBias(view, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         // Off tabloid a scrap of a face's hatch shorter than the smallest feature is a speck, and dropped (`hatchMin`).
         begin: st => runs => { for (const run of runs) addWall(st.family === 'edge' ? 0 : 1, `${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), p => !inPocket(p), hatchMin(st.family)); },
       });
@@ -674,7 +673,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     // cells: the paper kept round it is measured from its drawn lines too (none at tabloid, where the surfaces suffice).
     const helixRuns: Point[][] = [];
     for (const [slackOf, banded] of [[helixSlack, bands], [helixSlack + STRAND_SAG, lineBands]] as const) for (const [band, mine] of banded) {
-      projectStrokes(mine, { ...px, bias: biasAt(slackOf, band * 60 + 30) }, {
+      projectStrokes(mine, { ...px, bias: hiddenBias(view, slackOf, band * 60 + 30) }, {
         begin: st => runs => {
           for (const run of runs) {
             const page = scalePoints(run, fine.mmX, fine.mmY);
@@ -690,7 +689,7 @@ export function drawStrength(ctx: SketchContext): Part[] {
     // its pieces are thinned as the wall's are, its outline first, then its bands or rings.
     const figureSlack = n(ctx, 'figureSlack', 1.2, 0.1, 3) * k;
     const person: Ranked[] = [];
-    projectStrokes(figureStrokes, { ...px, bias: biasAt(figureSlack, eye.distanceTo(stand)) }, {
+    projectStrokes(figureStrokes, { ...px, bias: hiddenBias(view, figureSlack, eye.distanceTo(stand)) }, {
       begin: st => runs => { for (const run of runs) ranked(person, figureEdge.has(st) ? 0 : 1, `${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY)); },
     });
     thinInto(person);

@@ -11,7 +11,7 @@ import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, pathLength, reduceAtScale } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
-import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineEnv, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import type { Skeleton } from '../../kit/mannequin/skeleton.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
@@ -117,7 +117,6 @@ export function drawHermit(ctx: SketchContext): Part[] {
   try {
     fitDepthRange(view, geometries);
     const depth = renderDepthBufferCPU(geometries, view, W, H);
-    const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
 
     // Page masks: everything that stands, the mountain alone, and a pocket of clear paper round the hermit and his lantern.
     // They are drawn at the print's resolution in the world (3 pixels per tabloid millimetre, `3 / S` here), so a small
@@ -205,7 +204,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     for (const [owner, mine] of bySlab) {
       const sl = slabs[owner];
       const ids = mine.map(m => m.id);
-      projectStrokes(mine.map(m => m.st), { view, depth, width: W, height: H, bias: biasAt(slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      projectStrokes(mine.map(m => m.st), { view, depth, width: W, height: H, bias: hiddenBias(view, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         begin: (st, index) => runs => {
           const id = ids[index];
           for (const run of runs) add('peak-carbon', scalePoints(run, MM_X, MM_Y), (p, at) => {
@@ -229,7 +228,7 @@ export function drawHermit(ctx: SketchContext): Part[] {
     // hollow shorter than the smallest feature is a speck, and dropped.
     const k = figH / 24;
     const figureSlack = n(ctx, 'figureSlack', 1.2, 0.1, 3) * k;
-    projectStrokes(figure.strokes, { ...fine.env, bias: biasAt(figureSlack, eye.distanceTo(stand)) }, {
+    projectStrokes(figure.strokes, { ...fine.env, bias: hiddenBias(view, figureSlack, eye.distanceTo(stand)) }, {
       begin: (st, i) => runs => {
         const role = figure.roles[i], min = role === 'ring' || role === 'hollow' ? hatchMin(st.family) : undefined;
         for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), undefined, min, RANK[role]);
@@ -240,11 +239,11 @@ export function drawHermit(ctx: SketchContext): Part[] {
     const lanternSlack = n(ctx, 'lanternSlack', 0.15, 0.03, 1);
     const lanternD = eye.distanceTo(lantern.centre);
     const frame = lanternFrame(lantern, new THREE.Vector3(0, 1, 0), eye, view);
-    projectStrokes(frame, { ...fine.env, bias: biasAt(lanternSlack, lanternD) }, {
+    projectStrokes(frame, { ...fine.env, bias: hiddenBias(view, lanternSlack, lanternD) }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), undefined, undefined, RANK.lantern); },
     });
     // A strand narrower on this card's paper than the smallest feature is drawn as its line (`narrowStrands`; none at tabloid).
-    projectStrokes(narrowStrands(lantern.strokes, view).map(h => ({ ink: h.ink, group: 'helix', points: h.points })), { ...fine.env, bias: biasAt(lanternSlack, lanternD) }, {
+    projectStrokes(narrowStrands(lantern.strokes, view).map(h => ({ ink: h.ink, group: 'helix', points: h.points })), { ...fine.env, bias: hiddenBias(view, lanternSlack, lanternD) }, {
       begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, fine.mmX, fine.mmY), undefined, 0.15); },
     });
     for (const { item, runs } of thinRanked(pending ?? [], MIN_SPACING)) for (const piece of runs) buckets.add(item.key, piece, false, item.min);

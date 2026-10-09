@@ -14,7 +14,7 @@ import { keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { toneField, type Look, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { contourTube } from '../../kit/mannequin/body.ts';
@@ -420,7 +420,6 @@ export function drawEmperor(ctx: SketchContext): Part[] {
 
     // Hidden lines: each slab with up to half a unit of slack at its own distance; the figure and the
     // helix with slack in proportion to the figure.
-    const biasAt = (tol: number, d: number) => tol * view.far * view.near / ((view.far - view.near) * d * d);
     const bySlab = new Map<number, Stroke[]>();
     const rest: Stroke[] = [];
     for (const st of strokes) {
@@ -445,10 +444,10 @@ export function drawEmperor(ctx: SketchContext): Part[] {
     for (const [i, mine] of bySlab) {
       const sl = slabs[i];
       const tol = Math.max(0.12, Math.min(0.5 * Math.max(1, k / 4), 0.25 * Math.min(sl.w, sl.h, sl.d)));
-      projectStrokes(mine, { view, depth, width: W, height: H, bias: biasAt(tol, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, { begin: receive });
+      projectStrokes(mine, { view, depth, width: W, height: H, bias: hiddenBias(view, tol, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, { begin: receive });
     }
     const figureAt = head.centre.clone().lerp(anchor, 0.5);
-    projectStrokes(rest, { view, depth, width: W, height: H, bias: biasAt(n(ctx, 'figureSlack', 0.45, 0.05, 2) * k, eye.distanceTo(figureAt)) }, { begin: receive });
+    projectStrokes(rest, { view, depth, width: W, height: H, bias: hiddenBias(view, n(ctx, 'figureSlack', 0.45, 0.05, 2) * k, eye.distanceTo(figureAt)) }, { begin: receive });
     // A limb on a small card is a few millimetres across: its planes, the pinstripe beside each plane edge and the
     // outline crowd into one band of ink. Where a line runs beside one that ranks above it, closer than the pens
     // hold apart, that stretch of it is left out.

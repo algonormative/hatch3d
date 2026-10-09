@@ -14,7 +14,7 @@ import { densify, keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.
 import { clamp, n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, onGround, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { restPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints, type ProjectEnv } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { roadPlan, roadStrokes, type RoadPlan } from './road.ts';
@@ -410,7 +410,6 @@ export function drawMoon(ctx: SketchContext): Part[] {
     const fineC = fineDepth(moonGeos, viewC, RASTER, FINE);
     // The rock's own lines are hidden only by the blocks built into it.
     const fineB = base ? fineDepth(blockGeos, viewC, RASTER, FINE) : fineC;
-    const biasOf = (v: THREE.PerspectiveCamera, tol: number, d: number) => tol * v.far * v.near / ((v.far - v.near) * d * d);
     const slack = n(ctx, 'slabSlack', 0.5, 0.1, 2) * K;
 
     // The phrase: one word to a face. Five on the towers that stand, zigzagging down the card; the last two in the water, on the tower that is only there.
@@ -465,10 +464,10 @@ export function drawMoon(ctx: SketchContext): Part[] {
         if (!word3) continue;
         if (side === 'water') {
           const flipped = word3.map(l => l.map(mirrorPoint));
-          if (!visible(flipped, fineM.env, biasOf(viewM, slack, eye.distanceTo(new THREE.Vector3(sl.x, -sl.y, sl.z))))) continue;
+          if (!visible(flipped, fineM.env, hiddenBias(viewM, slack, eye.distanceTo(new THREE.Vector3(sl.x, -sl.y, sl.z))))) continue;
           waterText.push(...flipped);
         } else {
-          if (!visible(word3, fineR.env, biasOf(viewR, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))))) continue;
+          if (!visible(word3, fineR.env, hiddenBias(viewR, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))))) continue;
           textStrokes.push(...word3);
         }
         used.add(sl);
@@ -536,7 +535,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     for (const st of strokes) bySlab.set(st.owner!, [...(bySlab.get(st.owner!) ?? []), st]);
     for (const [i, mine] of bySlab) {
       const sl = standing[i];
-      projectStrokes(mine, { ...fineR.env, bias: biasOf(viewR, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      projectStrokes(mine, { ...fineR.env, bias: hiddenBias(viewR, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         begin: st => runs => { for (const run of runs) addTo(`${st.group}-${st.ink}`, scalePoints(run, fineR.mmX, fineR.mmY), () => true, hatchMin(st.family)); },
       });
     }
@@ -547,7 +546,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     viewT.far = 1.2 * Math.max(...road.flatMap(st => st.points.map(p => eye.z - p.z)));
     viewT.updateProjectionMatrix();
     const fineT = fineDepth([...standGeos, ...ground], viewT, RASTER, FINE);
-    projectStrokes(road, { ...fineT.env, bias: biasOf(viewT, slack, 200) }, {
+    projectStrokes(road, { ...fineT.env, bias: hiddenBias(viewT, slack, 200) }, {
       begin: st => runs => { for (const run of runs) addTo(`helix-${st.ink}`, scalePoints(run, fineT.mmX, fineT.mmY), p => p.y < shore(p.x) - 0.2); },
     });
     // The city in the water: the same hatch, upside down, inside the pool only, rippled band by band.
@@ -555,7 +554,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
     for (const st of echoes) echoBySlab.set(st.owner!, [...(echoBySlab.get(st.owner!) ?? []), st]);
     for (const [i, mine] of echoBySlab) {
       const sl = inWater[i];
-      projectStrokes(mine, { ...fineM.env, bias: biasOf(viewM, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      projectStrokes(mine, { ...fineM.env, bias: hiddenBias(viewM, slack, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         begin: st => runs => {
           for (const run of runs) for (const inside of clipWindow(scalePoints(run, fineM.mmX, fineM.mmY))) {
             for (const piece of keepAlong(inside, p => !onGlyph(p) && inPool(p), 0.15)) {
@@ -583,7 +582,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
       // thickness of slack; the hatch keeps the block's own.
       const passes: [Stroke[], number][] = FORMAT.tabloid || moon ? [[mine, tol]]
         : [[mine.filter(st => st.family === 'edge'), Math.max(tol, 2 * least)], [mine.filter(st => st.family !== 'edge'), tol]];
-      for (const [list, slackHere] of passes) projectStrokes(list, { ...fineC.env, bias: biasOf(viewC, slackHere, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
+      for (const [list, slackHere] of passes) projectStrokes(list, { ...fineC.env, bias: hiddenBias(viewC, slackHere, eye.distanceTo(new THREE.Vector3(sl.x, sl.y, sl.z))) }, {
         begin: st => runs => {
           for (const run of runs) for (const inside of clipWindow(scalePoints(run, fineC.mmX, fineC.mmY))) {
             if (st.family === 'edge') blockEdges.push(inside);
@@ -644,7 +643,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
           trace(ring.map(q => q.clone().normalize()), () => true, d => shards.pieceOf(d.clone().multiplyScalar(shards.surface(d)).add(nudge).normalize()), 0.002);
         }
       }
-      projectStrokes(lines3.map(points => ({ points })), { ...fineC.env, bias: biasOf(viewC, 0.02 * shards.radius, eye.distanceTo(shards.centre)) }, {
+      projectStrokes(lines3.map(points => ({ points })), { ...fineC.env, bias: hiddenBias(viewC, 0.02 * shards.radius, eye.distanceTo(shards.centre)) }, {
         begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, fineC.mmX, fineC.mmY), p => !clear(p) && !solids(p)); },
       });
     }
@@ -696,7 +695,7 @@ export function drawMoon(ctx: SketchContext): Part[] {
           lines3.push({ pts: Array.from({ length: 25 }, (_, i) => onRock(base, rimAt(sunA - 1.1 + 2.2 * i / 24, r), 0.002)) });
         }
       }
-      projectStrokes(lines3.map(l => ({ points: l.pts })), { ...fineB.env, bias: biasOf(viewC, 0.01 * base.radius, eye.distanceTo(base.centre)) }, {
+      projectStrokes(lines3.map(l => ({ points: l.pts })), { ...fineB.env, bias: hiddenBias(viewC, 0.01 * base.radius, eye.distanceTo(base.centre)) }, {
         begin: () => runs => { for (const run of runs) addTo('rock-carbon', scalePoints(run, fineB.mmX, fineB.mmY), p => !clear(p) && !solids(p)); },
       });
     }

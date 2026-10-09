@@ -12,7 +12,7 @@ import { keepAlong, meshCoverage, pathLength, reduceAtScale, type Rect } from '.
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera, type PageSize } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -948,11 +948,10 @@ export function drawChariot(ctx: SketchContext): Part[] {
     const depthBuffer = fine.env.depth, DW = fine.env.width, DH = fine.env.height, DX = fine.mmX, DY = fine.mmY;
     // The helix is tested only against the slabs, not its own ribbons, which only broke it up.
     const slabDepth = fineDepth(slabGeos, view, raster, FINE).env.depth;
-    const nearP = view.near, farP = view.far;
     const biasOf = (band: number, slack: number) => {
       const lo = BAND_EDGES[band], hi = Number.isFinite(BAND_EDGES[band + 1]) ? BAND_EDGES[band + 1] : lo * 1.4;
       const dd = Math.sqrt(Math.max(lo, 8) * hi);
-      return Math.max(3e-5, (slack < 0 ? groundSlack(-slack, dd) : slack) * nearP * farP / ((farP - nearP) * dd * dd));
+      return hiddenBias(view, slack < 0 ? groundSlack(-slack, dd) : slack, dd, BIAS_FLOOR);
     };
     // The halos are the print's, scaled with the card (`halo`), never under half a millimetre.
     const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));

@@ -11,7 +11,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 import { figureMeshes, figureStrokes, footOf, meeting, type Figure } from './figures.ts';
@@ -253,11 +253,10 @@ export function drawLovers(ctx: SketchContext): Part[] {
   try {
     fitDepthRange(view, geometries);
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
-    const nearP = view.near, farP = view.far;
     const biasOf = (band: number, slack: number) => {
       const lo = BAND_EDGES[band], hi = Number.isFinite(BAND_EDGES[band + 1]) ? BAND_EDGES[band + 1] : lo * 1.2;
       const d = Math.sqrt(lo * hi);
-      return Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
+      return hiddenBias(view, slack, d, BIAS_FLOOR);
     };
     const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1.1, 0.3, 3)));
     // Each lover's own clear pocket of paper: nothing of the towers or the sky comes near its lines. A halo: it scales with the card.

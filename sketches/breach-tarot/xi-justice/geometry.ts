@@ -12,7 +12,7 @@ import { clipToRect, keepAlong, meshCoverage, reduceAtScale } from '../../kit/pa
 import { clamp, n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -739,8 +739,7 @@ export function drawJustice(ctx: SketchContext): Part[] {
   try {
     fitDepthRange(view, geometries);
     const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
-    const nearP = view.near, farP = view.far;
-    const bias = Math.max(3e-5, SLAB_SLACK * nearP * farP / ((farP - nearP) * L.D * L.D));
+    const bias = hiddenBias(view, SLAB_SLACK, L.D, BIAS_FLOOR);
     // The knockouts round what stands and round the cord scale with the card (never under half a millimetre), on a mask
     // as fine for the card as the print's is for the print (3 cells to the millimetre there): at 3 a millimetre a small
     // card's halos would round to the same two cells, and the cord's glow be no wider than a solid's knockout.

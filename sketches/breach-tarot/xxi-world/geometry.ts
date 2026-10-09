@@ -14,7 +14,7 @@ import { thinRanked } from '../../kit/density.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { atPage, fitDepthRange, onGround, pageOf, type PageSize } from '../../kit/perspective.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { bigSuit, bigSuitMeshes, bigSuitStrokes, type BigSuit } from '../../kit/mannequin/big-suit.ts';
 import { bodyMeshes, contourTube, type Body } from '../../kit/mannequin/body.ts';
@@ -637,14 +637,10 @@ export function drawWorld(ctx: SketchContext): Part[] {
     // Each family gets its hidden-line tolerance in world units, turned into window depth at its
     // distance: the masonry tight, the figure's tube lines (tuned on cards with about a unit and a
     // half of slack) looser.
-    const biasAt = (tolerance: number, at: THREE.Vector3) => {
-      const d = eye.distanceTo(at);
-      return tolerance * view.far * view.near / ((view.far - view.near) * d * d);
-    };
     const figureTol = n(ctx, 'figureSlack', 1.2, 0, 4);
     for (const [family, tol, at] of [['figure', figureTol, centre], ['rest', 0.6, centre]] as const) {
       const mine = strokes.filter(st => (st.group.startsWith('figure') || st.group === 'helix') === (family === 'figure'));
-      projectStrokes(mine, { view, depth, width: DW, height: DH, bias: biasAt(tol, at) }, {
+      projectStrokes(mine, { view, depth, width: DW, height: DH, bias: hiddenBias(view, tol, eye.distanceTo(at)) }, {
         begin: st => runs => {
           const keep = st.group === 'helix' || st.group.startsWith('figure') ? () => true : clear;
           // A small card's figure is thinned too, each pen among its own lines (the helix keeps its own spacing).

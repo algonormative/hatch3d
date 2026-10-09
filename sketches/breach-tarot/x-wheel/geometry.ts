@@ -12,7 +12,7 @@ import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { BIAS_FLOOR, PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -541,8 +541,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
     const dview = FINE === 1 ? view : oversampledView(view, FINE);
     const full = fineDepth(geometries, dview, RASTER, FINE), slimmed = fineDepth(slimGeos, dview, RASTER, FINE);
     const { env, mmX, mmY } = full;
-    const nearP = view.near, farP = view.far;
-    const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
+    const biasAt = (d: number, slack: number) => hiddenBias(view, slack, d, BIAS_FLOOR);
     const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));
 
     // The phrase: one word to a tower round the rim, in order from the rising side over the top and down. Or, where the

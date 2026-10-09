@@ -12,7 +12,7 @@ import { bandMarks } from '../../kit/fills.ts';
 import { insideRing, keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, onGround, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
-import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { ELONGATED, gesture } from '../../kit/mannequin/gesture.ts';
 import { POSES, poseSkeleton, withPose, type JointName, type Skeleton } from '../../kit/mannequin/skeleton.ts';
@@ -428,11 +428,11 @@ export function drawMagician(ctx: SketchContext): Part[] {
       try {
         fitDepthRange(figView, figGeos);
         const fine = fineDepth(figGeos, figView, { W, H, MM_X, MM_Y }, m);
-        const biasAt = (tol: number) => tol * figView.far * figView.near / ((figView.far - figView.near) * (eye.z - place.z) ** 2);
+        const figDist = eye.z - place.z;
         const lines = figureStrokes(fig, env);
         // An outline runs along the edge where the surface turns away from the eye, so its depth changes fastest there: it gets more slack than the hatch.
         for (const edge of [false, true]) {
-          projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { ...fine.env, bias: biasAt(edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK) }, {
+          projectStrokes(lines.filter(st => (st.group === 'figure-edge') === edge), { ...fine.env, bias: hiddenBias(figView, edge ? FIGURE_EDGE_SLACK : FIGURE_SLACK, figDist) }, {
             begin: () => runs => { for (const run of runs) add('figure-carbon', scalePoints(run, fine.mmX, fine.mmY), p => !onFlameFront(p)); },
           });
         }

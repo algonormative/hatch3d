@@ -130,3 +130,17 @@ export function fineDepth(geometries: THREE.BufferGeometry[], view: THREE.Camera
 export function fineEnv(geometries: THREE.BufferGeometry[], view: THREE.Camera, own: ProjectEnv, raster: Raster, m: number): { env: ProjectEnv; mmX: number; mmY: number } {
   return m === 1 ? { env: own, mmX: raster.MM_X, mmY: raster.MM_Y } : fineDepth(geometries, view, raster, m);
 }
+
+/** The floor `hiddenBias` keeps the bias above where a card asks for one: a slack so small in window depth the buffer cannot tell it. */
+export const BIAS_FLOOR = 3e-5;
+
+/**
+ * The depth-test bias for a hidden-line test: `slack` world units of leeway at distance `d` from the eye, turned into window
+ * depth by the camera's near and far planes (`ProjectEnv.bias`, `splitPolylineByDepth`). Pass `BIAS_FLOOR` as `floor` where a
+ * small slack at a long range would otherwise fall under the depth buffer's resolution. The camera is the one whose range was
+ * fitted (`fitDepthRange`): call this after.
+ */
+export function hiddenBias(view: THREE.PerspectiveCamera, slack: number, d: number, floor?: number): number {
+  const bias = slack * view.far * view.near / ((view.far - view.near) * d * d);
+  return floor === undefined ? bias : Math.max(floor, bias);
+}
