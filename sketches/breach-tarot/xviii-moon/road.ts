@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
 import { helixStrands, strandPoint, strandStrokes, type HelixStroke, type Strand } from '../../kit/helix.ts';
-import { PAGE, TABLOID_HORIZON_Y, tolerance } from '../../kit/format.ts';
+import { FORMAT, MIN_SPACING, PAGE, PITCH_SCALE, TABLOID_HORIZON_Y, tolerance } from '../../kit/format.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { onGround, pageOf } from '../../kit/perspective.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
@@ -17,11 +17,17 @@ import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 
 /** Strand length in its own space: short enough that the kit's rests (open bars far from its breach centre) never fall. */
 const LEN = 10;
-/** A strand with no turns of its own (the road does the turning) and its fixed wobble zeroed, so a stroke point gives back where along and across the strand it lies. */
+/**
+ * A strand with no turns of its own (the road does the turning) and its fixed wobble zeroed, so a stroke point gives back
+ * where along and across the strand it lies. The kit lays its laminations across it at a pitch held on paper (times the
+ * format's pitch scale), so off tabloid the strand is widened by that scale, and doubled: it gives twice the print's
+ * laminations, so the small card's fill finds one near each place it wants, and the road thins them by its own width.
+ */
 function flatStrand(st: Strand): Strand {
   // The kit lifts each point by 0.3·sin(2θ + 0.3·phase): with no turns θ is fixed, and this θ makes that lift nothing.
   const theta0 = -0.15 * st.phase;
-  return { ...st, x: 0, y: 0, z: 0, y0: 0, y1: LEN, turns: 0, theta0, twist: 0, swell: 0, centre: LEN / 2, depth: 1, radius: 1, width: 1.05 };
+  const width = FORMAT.tabloid ? 1.05 : 2 * 1.05 * PITCH_SCALE;
+  return { ...st, x: 0, y: 0, z: 0, y0: 0, y1: LEN, turns: 0, theta0, twist: 0, swell: 0, centre: LEN / 2, depth: 1, radius: 1, width };
 }
 
 /** Where along (`t`, 0..1) and across (`v`, -1..1 at the ribbon's edges) a strand-space point lies. */
@@ -31,6 +37,32 @@ function strandCoords(st: Strand, p: THREE.Vector3): { t: number; v: number } {
   const across = new THREE.Vector3(-Math.sin(st.theta0), 0, Math.cos(st.theta0));
   const c0 = strandPoint(st, tc, 0), e = strandPoint(st, tc, 1).sub(c0);
   return { t, v: p.clone().sub(c0).dot(across) / e.dot(across) };
+}
+
+/**
+ * The fill of a small card's ribbon: each of the kit's laminations (by its place across, `v`) given a level, so that the
+ * levels up to L lay lines in each half of the ribbon at the odd multiples of 1/2^L of the way from the middle to the
+ * edge (a half at level 1, then the quarters, then the eighths), each the lamination nearest its place. The middle
+ * lamination is level 0. `gap[L]` is the closest two lines then come, with the middle and the edge, in half widths.
+ */
+function dyadicFill(vs: number[]): { level: (v: number) => number; gap: number[] } {
+  // The kit lays `count` laminations evenly across, at v = -0.975 + 1.95 (j + 0.5) / count; j and its mirror share a level.
+  const count = Math.round(0.975 / (Math.min(...vs) + 0.975));
+  const indexOf = (v: number) => { const j = Math.round((v + 0.975) / 1.95 * count - 0.5); return Math.min(j, count - 1 - j); };
+  const place = (i: number) => Math.abs(-0.975 + 1.95 * (i + 0.5) / count);
+  const half = Array.from({ length: Math.ceil(count / 2) }, (_, i) => i);
+  const levels = new Map<number, number>([[half[half.length - 1], 0]]);
+  const gap = [1];
+  for (let L = 1; L <= 6; L++) {
+    const picks = Array.from({ length: 2 ** (L - 1) }, (_, q) => (2 * q + 1) / 2 ** L)
+      .map(t => half.reduce((a, b) => Math.abs(place(b) - t) < Math.abs(place(a) - t) ? b : a));
+    if (picks.some(i => levels.has(i)) || new Set(picks).size < picks.length) break;
+    for (const i of picks) levels.set(i, L);
+    const placed = [0, ...[...levels.keys()].filter(i => levels.get(i)! > 0).map(place), 1].sort((a, b) => a - b);
+    gap.push(Math.min(...placed.slice(1).map((p, k) => p - placed[k])));
+  }
+  // With an even count the middle is a pair a hair apart: one of them is the middle line.
+  return { level: v => (count % 2 === 0 && v < 0 && levels.get(indexOf(v)) === 0 ? Infinity : levels.get(indexOf(v)) ?? Infinity), gap };
 }
 
 export interface RoadPlan {
@@ -100,8 +132,11 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
   const sight = new THREE.OrthographicCamera(-hx, hx, hy, -hy, 0.1, 100);
   const lift = n(ctx, 'pathLift', 0.05, 0, 1) * plan.half;
   const tilt = n(ctx, 'pathTwistLift', 0.35, 0, 1);
-  const minGap = tolerance(n(ctx, 'pathLamination', 0.75, 0.4, 2));
+  // Off tabloid the road is filled at the pen floor: at the print's 0.75 mm a road a few millimetres wide keeps a handful
+  // of laminations and reads as a bundle of lines, where the print's reads as one dense ribbon.
+  const minGap = FORMAT.tabloid ? tolerance(n(ctx, 'pathLamination', 0.75, 0.4, 2)) : MIN_SPACING;
   const ribGap = n(ctx, 'pathRibGap', 6, 0.5, 12);
+  // The kit's laminations across the strand at tabloid (a small card's fill counts its own).
   const contours = Math.max(6, Math.round(2 * 1.05 * 0.95 / 0.09));
   const uOf = (t: number) => plan.u0 + t * (1 - plan.u0);
   const world = (u: number, s: number): THREE.Vector3 => {
@@ -116,6 +151,26 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
     const p = pageOf(view, c.clone().addScaledVector(a, plan.half)), q = pageOf(view, c.clone().addScaledVector(a, -plan.half));
     return Math.hypot(p.x - q.x, p.y - q.y) * Math.abs(Math.cos(plan.turn(u)));
   };
+  // Off tabloid, the width as the ribbon lies (lifted where it turns), square to its run on the sheet: where the road
+  // swings across the view its edges at one place along it fall far apart on the sheet but close square to its run, and
+  // lines packed by the width the tabloid rule measures close up there. Opened over a stretch of road (its least nearby,
+  // then the most of that), so it never overstates the width, and a lamination does not break and resume where the
+  // road only briefly widens.
+  const lyingWidth = (() => {
+    if (FORMAT.tabloid) return () => 0;
+    const STEPS = 1200, REACH = 36;
+    const at = (i: number) => plan.u0 + (1 - plan.u0) * i / STEPS;
+    const raw = Array.from({ length: STEPS + 1 }, (_, i) => {
+      const u = at(i);
+      const a = pageOf(view, world(u, -1)), b = pageOf(view, world(u, 1));
+      const t0 = pageOf(view, world(u - 0.002, 0)), t1 = pageOf(view, world(u + 0.002, 0));
+      const tx = t1.x - t0.x, ty = t1.y - t0.y, tl = Math.hypot(tx, ty) || 1;
+      return Math.abs(((b.x - a.x) * ty - (b.y - a.y) * tx) / tl);
+    });
+    const least = raw.map((_, i) => Math.min(...raw.slice(Math.max(0, i - REACH), i + REACH + 1)));
+    const opened = least.map((_, i) => Math.max(...least.slice(Math.max(0, i - REACH), i + REACH + 1)));
+    return (u: number) => opened[Math.max(0, Math.min(STEPS, Math.round((u - plan.u0) / (1 - plan.u0) * STEPS)))];
+  })();
   const out: HelixStroke[] = [];
   for (const st of strands) {
     const mid = strandPoint(st, 0.5, 0);
@@ -126,7 +181,11 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
     const face = st.id === 'a' ? 1 : -1;
     const up = (u: number) => face * Math.cos(plan.turn(u)) >= 0;
     let lastRib: Point | null = null;
-    for (const h of strandStrokes(st, 0, 0, ctx, sight)) {
+    const strokes = strandStrokes(st, 0, 0, ctx, sight);
+    // Off tabloid the laminations fill the ribbon at the pen floor, at even places from the middle to each edge.
+    const fill = FORMAT.tabloid ? null
+      : dyadicFill(strokes.filter(h => h.role === 'lamination').map(h => strandCoords(st, h.points[0]).v));
+    for (const h of strokes) {
       const coords = h.points.map(p => strandCoords(st, p));
       const constantV = Math.abs(coords[0].v - coords[coords.length - 1].v) < 0.01;
       if (!constantV) {
@@ -143,6 +202,26 @@ export function roadStrokes(ctx: SketchContext, view: THREE.PerspectiveCamera, p
         continue;
       }
       const v = coords[0].v;
+      if (fill) {
+        // A small card: the edges and the spine always; a lamination where its level keeps the lines the pen floor apart
+        // across the ribbon as it lies. The middle lamination stands in for the spine on the underside, which has none.
+        const level = h.role === 'lamination' ? fill.level(v) : -1;
+        if (level === 0 && face === 1) continue;
+        const keep = (u: number) => {
+          if (!up(u)) return false;
+          if (level <= 0) return true;
+          return level < fill.gap.length && fill.gap[level] * lyingWidth(u) / 2 >= minGap;
+        };
+        let run: THREE.Vector3[] = [];
+        const flush = () => { if (run.length > 1) out.push({ ...h, points: run }); run = []; };
+        for (const c of coords) {
+          const u = uOf(c.t);
+          if (!keep(u)) { flush(); continue; }
+          run.push(world(u, face * c.v));
+        }
+        flush();
+        continue;
+      }
       const edge = Math.abs(Math.abs(v) - 1) < 0.01 || Math.abs(v) < 0.01;
       const j = Math.round((v + 0.975) / 1.95 * contours - 0.5);
       const keep = (u: number) => {

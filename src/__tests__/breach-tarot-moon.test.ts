@@ -294,6 +294,31 @@ describe('Breach Tarot: XVIII The Moon at 70 x 120 mm', () => {
     }
   }, 120_000);
 
+  it('lays the road as one ribbon: its laminations fill both halves either side of the spine evenly, and its lines in every ink stand the pen floor apart', async () => {
+    for (const fit of fits) {
+      const result = await render(fit);
+      // The spine (the acid line along the middle where the face that carries it is up): which side of it, and how far,
+      // each stretch of lamination lies. Before the fix the small card's fill fell on one half only (44 mm of ink against 5).
+      const spine = lines(result, 'helix-acid').filter(path => length(path) > 3).flatMap(path => path.slice(1).map((q, i) => [path[i], q] as const));
+      const side = (m: Pt) => spine.reduce((best, [a, b]) => {
+        const dx = b.x - a.x, dy = b.y - a.y, t = Math.max(0, Math.min(1, ((m.x - a.x) * dx + (m.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const d = Math.hypot(m.x - a.x - t * dx, m.y - a.y - t * dy);
+        return d < best.d ? { d, s: Math.sign(dx * (m.y - a.y) - dy * (m.x - a.x)) } : best;
+      }, { d: Infinity, s: 0 });
+      const ink = [0, 0];
+      for (const path of [...lines(result, 'helix-ultramarine'), ...lines(result, 'helix-violet')]) for (let i = 1; i < path.length; i++) {
+        const { d, s } = side({ x: (path[i].x + path[i - 1].x) / 2, y: (path[i].y + path[i - 1].y) / 2 });
+        if (d > 0.2 && d < 1.5) ink[s > 0 ? 0 : 1] += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+      }
+      expect(Math.min(...ink), `${fit} ${ink}`).toBeGreaterThan(10);
+      expect(Math.max(...ink) / Math.min(...ink), `${fit} ${ink}`).toBeLessThan(1.5);
+      // The road's lines taken together, whatever their pen: the fill packs at the pen floor, never under it (before the
+      // fix, 46% of the road ran closer; the print's road, laid by its own rule, 59%).
+      const road = probe({ ...result, parts: [{ id: 'road', pen: 'carbon', paths: lines(result, 'helix-') }] });
+      expect(road.share, fit).toBeLessThan(0.15);
+    }
+  }, 120_000);
+
   it('trims its slabs on a small card: the moon\'s slabs and the towers\' courses keep single outlines', async () => {
     for (const fit of fits) {
       const report = probe(await render(fit));
