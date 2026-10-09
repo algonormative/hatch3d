@@ -188,6 +188,30 @@ export function readLayers(svg: string): Layer[] {
   return layers;
 }
 
+/**
+ * Remove pen layers that hold no path. vpype drops an empty layer from the prepared file, so a canonical
+ * render that kept it would disagree with the prepared SVG and the config on the pen-layer count, which
+ * plotter-server rejects. Layer labels and numbers are left as they were, so the plan keeps its pen order
+ * and a gap in the numbering is harmless. Returns the input untouched when no layer is empty.
+ */
+export function dropEmptyPenLayers(svg: string): string {
+  const chunks = svg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/);
+  let changed = false;
+  const kept = chunks.map((chunk, i) => {
+    if (i === 0) return chunk;
+    // The layer ends at the close that balances its own open tag; what follows (the root's end) is kept.
+    let depth = 0, end = -1;
+    for (const m of chunk.matchAll(/<g\b[^>]*?(\/?)>|<\/g>/g)) {
+      if (m[0] === '</g>') depth--; else if (m[1] !== '/') depth++;
+      if (depth === 0) { end = m.index! + m[0].length; break; }
+    }
+    if (end < 0 || /<path\b/.test(chunk.slice(0, end))) return chunk;
+    changed = true;
+    return chunk.slice(end).replace(/^\n/, '');
+  });
+  return changed ? kept.join('') : svg;
+}
+
 const isBorder = (l: Layer) => /finishing-border$/.test(l.label);
 function union(bs: (Bounds | null)[]): Bounds | null {
   return bs.reduce<Bounds | null>((a, b) => !b ? a : !a ? { ...b } : { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }, null);
@@ -270,10 +294,12 @@ export function serverConfig(resultPath: string, sourceSvg: string, report: Piec
     const pen = /data-pen-id="([^"]*)"/.exec(layer)?.[1];
     if (pen) partsByPen.set(pen, [...layer.matchAll(/data-part-id="([^"]*)"/g)].map(m => m[1]));
   }
+  // Only the pens that still have a layer in the canonical SVG (dropEmptyPenLayers removes the ones that draw nothing).
+  const pens = result.metadata.pens.filter(pen => partsByPen.has(pen.id));
   return {
     format: 'hatch3d-sketch-v1', identity: result.identity, composition: 'sketch', presetName: `${report.title} · seed ${report.seed}`,
-    page: result.metadata.page, pens: result.metadata.pens,
-    layers: result.metadata.pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
+    page: result.metadata.page, pens,
+    layers: pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
     params: result.params, ...(result.effectiveParams ? { effectiveParams: result.effectiveParams } : {}), seed: result.seed,
     ...(result.finishing ? { finishing: result.finishing } : {}),
     stats: { pathCount: report.layers.reduce((t, l) => t + l.paths, 0), lengthMm: Math.round(report.layers.reduce((t, l) => t + l.drawMm, 0)) },
@@ -298,7 +324,11 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
   const build = buildVersion(stack.edition);
   const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
-  const source = readFileSync(sourcePath, 'utf8');
+  const rendered = readFileSync(sourcePath, 'utf8');
+  // A pen that draws nothing on this piece (an empty part on a small card) is not a layer to plot: drop it from the
+  // canonical render, so that render, the prepared SVG and the config agree on the pen layers.
+  const source = dropEmptyPenLayers(rendered);
+  if (source !== rendered) writeFileSync(sourcePath, source);
   const layers = readLayers(source);
   const finalPage: Page = { ...page, paper: options.palette.paper };
   const { dx, dy, art, area } = placementOffset(layers, finalPage, stack, options.center);

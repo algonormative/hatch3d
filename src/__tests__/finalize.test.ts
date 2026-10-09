@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildVersion, finalizePiece, pageFor, parseStat, plainFinishing, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
+import { buildVersion, dropEmptyPenLayers, finalizePiece, pageFor, parseStat, plainFinishing, previewPiece, titleOverrides, placementOffset, readLayers, resolveOptions, toSketchGrammar, type Stack } from '../../cli/finalize.ts';
 import { plainRender } from '../../cli/print-queue.ts';
 import { artMatch } from '../../cli/art-match.ts';
 
@@ -97,6 +97,17 @@ describe('finalize placement and pen plan', () => {
   }, 30_000);
 });
 
+describe('finalize empty pen layers', () => {
+  const layer = (label: string, body: string) => `<g inkscape:groupmode="layer" inkscape:label="${label}" data-pen-id="${label.replace(/^\d+-/, '')}">${body}</g>\n`;
+
+  it('drops a pen layer that holds no path, empty or with only empty parts, and leaves the rest byte for byte', () => {
+    const full = `<svg>\n${layer('1-carbon', '<g data-part-id="a"><path d="M0,0L1,1"/></g>')}${layer('3-vermilion', '<path d="M2,2L3,3"/>')}</svg>\n`;
+    expect(dropEmptyPenLayers(full)).toBe(full);
+    const holed = `<svg>\n${layer('1-carbon', '<g data-part-id="a"><path d="M0,0L1,1"/></g>')}${layer('2-ultramarine', '\n')}${layer('3-vermilion', '<path d="M2,2L3,3"/>')}${layer('4-violet', '<g data-part-id="v">\n</g>')}</svg>\n`;
+    expect(dropEmptyPenLayers(holed)).toBe(`<svg>\n${layer('1-carbon', '<g data-part-id="a"><path d="M0,0L1,1"/></g>')}${layer('3-vermilion', '<path d="M2,2L3,3"/>')}</svg>\n`);
+  });
+});
+
 describe('finalize print title', () => {
   const controls = [{ id: 'title' }, { id: 'titleEnabled' }] as never;
   const stack = { out: '', pieces: [], printTitle: 'Breach Cathedral {version} {hash}' } as Stack;
@@ -158,5 +169,25 @@ describe.skipIf(!hasVpype)('finalize end to end (local vpype)', () => {
     // Without the stack's page the plain render is the tabloid card, which the print cannot match.
     const { page: _page, ...tabloidStack } = stack;
     expect(artMatch((await plainRender(tabloidStack, piece)).svg, print).ok).toBe(false);
+  }, 60_000);
+
+  const hasPlotterServer = existsSync(join(process.env.PLOTTER_SERVER_DIR ?? join(homedir(), 'git', 'plotter-server'), 'src', 'pen-plan.ts'));
+
+  it.skipIf(!hasPlotterServer)('finalizes a sketch with a pen that draws nothing, and plotter-server accepts it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'finalize-empty-'));
+    const piece = { name: 'empty-pen', sketch: 'src/__tests__/fixtures/empty-pen-sketch.ts', seed: 1 };
+    const stack: Stack = { out: dir, border: { style: 'simple', pen: 'carbon', inset: 2.5, contentGap: 1 }, defaults: { center: 'none', mergeSameColor: false }, pieces: [piece] };
+    const report = await finalizePiece(stack, piece, resolveOptions(stack));
+    const out = join(dir, 'empty-pen');
+    const canonical = readFileSync(join(out, 'source', 'render.svg'), 'utf8');
+    expect(canonical).not.toContain('ultramarine');
+    expect(report.layers.map(l => l.label)).toEqual(['1-carbon', '3-vermilion', '4-finishing-border']);
+    const config = JSON.parse(readFileSync(join(out, 'config.json'), 'utf8')) as { pens: { id: string }[]; layers: { id: string }[] };
+    expect(config.pens.map(p => p.id)).toEqual(['carbon', 'vermilion', 'finishing-border']);
+    expect(config.layers.map(l => l.id)).toEqual(['carbon', 'vermilion', 'finishing-border']);
+    // Through the CLI under tsx: vitest cannot import plotter-server's source from outside the repo.
+    const check = spawnSync(process.execPath, ['--import', 'tsx', 'cli/plotter-check.ts', out], { cwd: process.cwd(), encoding: 'utf8' });
+    expect(check.stdout).toMatch(/^OK +empty-pen: 3 pen steps for 3 layers; negative control rejected/);
+    expect(check.status).toBe(0);
   }, 60_000);
 });
