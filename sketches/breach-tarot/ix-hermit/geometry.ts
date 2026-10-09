@@ -8,7 +8,7 @@ import { thinRanked } from '../../kit/density.ts';
 import { facetStrokes, slabGeometry, slabMatrix } from '../../kit/slabs.ts';
 import { narrowStrands } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, pathLength, reduceAtScale } from '../../kit/page.ts';
 import { n, smooth } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
 import { PartBuckets, fineEnv, projectStrokes, scalePoints } from '../../kit/strokes.ts';
@@ -30,8 +30,8 @@ import { H, MM_X, MM_Y, W, buildPeak, hermitCamera, scaleOf, worldScale, type Pe
  *
  * On a small card (`kit/format.ts`) the world is the print's, laid out in tabloid's frame (`hermitWorld`), and the
  * card's own camera draws it: the light's pool, the peak's hint and the halos scale with the card; the night's ruling,
- * the plain's rows and the hatch keep their pitch on paper; the city's lit points keep their size and thin to the
- * print's density; small slabs are trimmed to their outlines, the helix's narrow strands drawn as lines; and the phrase
+ * the plain's rows and the hatch keep their pitch on paper; the city's lit points become notches in single rules, packed
+ * toward the horizon so the plain keeps the print's band of lights (`networkRows`); small slabs are trimmed to their outlines, the helix's narrow strands drawn as lines; and the phrase
  * moves to the bottom band.
  */
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
@@ -177,14 +177,19 @@ export function drawHermit(ctx: SketchContext): Part[] {
 
     // Every ordinary path goes through the reducer at the card's scale (`reduceAtScale`: the print's reducer at tabloid),
     // so a small card's hermit and lantern keep their curves.
-    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
+    const SHORTEST = 0.4;
+    const buckets = new PartBuckets(SHORTEST, { reduce: reduceAtScale });
     // On a small card the summit's marks (the hermit, the lantern's frame, the slabs) wait for `thinRanked`
     // (`RANK`): where one runs beside a mark that ranks above it, closer than the pens hold apart, that stretch of it is
     // left out. At tabloid every mark goes straight to its part.
     const pending: { key: string; piece: Point[]; min?: number; rank: number }[] | undefined = FORMAT.tabloid ? undefined : [];
     const add = (key: string, run: Point[], keep: (p: Point, at: number) => boolean = () => true, min?: number, rank?: number) => {
       for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, (p, at) => !onGlyph(p) && keep(p, at), 0.15)) {
-        if (pending && rank !== undefined) pending.push({ key, piece, min, rank });
+        if (pending && rank !== undefined) {
+          // A scrap of the hermit no longer than his part's shortest path never draws (the buckets drop it), so it waits for
+          // no thinning: kept there, it took the line of what runs beside it, and the dark back of his cloak lost its folds.
+          if (!key.startsWith('figure-') || pathLength(piece) > (min ?? SHORTEST)) pending.push({ key, piece, min, rank });
+        }
         else buckets.add(key, piece, false, min);
       }
     };

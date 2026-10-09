@@ -314,6 +314,23 @@ describe('Breach Tarot: IX The Hermit at 70 x 120 mm', () => {
     }
   }, 120_000);
 
+  it('reads the city as the print\'s band at the card\'s size: many small lights, packed into the rules below the horizon and thinning toward the eye at least as fast as the print\'s', async () => {
+    const [printed, ...small] = await Promise.all([print(), ...fits.map(render)]);
+    const printLit = lit(printed, CARD.y0 + 0.6 * (CARD.y1 - CARD.y0), 1);
+    const printPack = printLit.share(10, 20) / printLit.share(20, 46);
+    for (const [k, result] of small.entries()) {
+      const { horizonY, s } = formatOf(fits[k]);
+      const { holes, share } = lit(result, horizonY, s);
+      const widths = holes.map(h => h.width).sort((a, b) => a - b);
+      // Notches in single rules, narrower than the print's dots (1.1 mm and up), and many of them; with the print's dots kept
+      // at their size, a few dozen cut two or three rules each and the band read as a scatter of separate lights.
+      expect(holes.length, fits[k]).toBeGreaterThan(70);
+      expect(widths[widths.length >> 1], fits[k]).toBeLessThan(1.1);
+      // Their light gathers in the first rows below the mountain's foot, falling off across the belt as fast as the print's.
+      expect(share(10, 20) / share(20, 46), fits[k]).toBeGreaterThan(printPack);
+    }
+  }, 120_000);
+
   it('is no denser than its tabloid print, part by part, which the print shrunk to the card is', async () => {
     const [printed, ...small] = await Promise.all([print(), ...fits.map(render)]);
     const master = probe(printed);

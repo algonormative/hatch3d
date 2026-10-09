@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Point, SketchContext } from '../../../src/sketch/types.ts';
-import { S, TABLOID_CARD, TABLOID_HORIZON_Y, evenlyKept, layoutLength, layoutX, layoutY, scaledCount, tolerance } from '../../kit/format.ts';
+import { FORMAT, S, TABLOID_CARD, TABLOID_HORIZON_Y, evenlyKept, layoutLength, layoutX, layoutY, tolerance } from '../../kit/format.ts';
 import { keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { valueNoise } from '../../kit/mannequin/hatch.ts';
@@ -58,11 +58,21 @@ export interface NetworkRow { y: number; gaps: [number, number][] }
 export interface Lit { x: number; y: number; hx: number; hy: number; index: number }
 
 /**
- * The fewest lit points a smaller card keeps, so the network still reads as the print's band of lights. By the window's
- * area alone a 70 × 120 card keeps 60 of the print's 870 (seed 1), and its lit belt prints at under three quarters of
- * the print's light (the holes' share of the rows, seeds 0 to 4); 90 holds the print's.
+ * A lit point on a smaller card: a notch in the one rule nearest it, this share of its print width wide. On the print a
+ * dot 1.7 mm tall cuts two or three rules; on a 70 × 120 card the print's first ten millimetres below the horizon, where
+ * most of the city's lights are, come to three or four rules, so dots of the print's size there swallow the gradient and
+ * read as a scatter of separate lights. Notches in single rules keep the print's band: packed into the first rules, then
+ * thinning, row by row, toward the eye.
  */
-const LIT_FLOOR = 90;
+const LIT_NOTCH = 0.4;
+/** How much rule one of the print's dots opens, in its own widths (the rules it cuts, by their chords): what notches make up. */
+const PRINT_CUT = 2.2;
+/**
+ * The notches' light against the print's dots', at the horizon and at the far edge of the lit belt (`gridBelt`): the
+ * band's light gathers into its first rules, so it reads as a band at the card's size, and the rows toward the eye keep
+ * only a few lights; across the belt it is a little over the print's, and well under the lantern's clear pool.
+ */
+const LIT_HORIZON = 1.8, LIT_FAR = 0.35;
 
 /**
  * The ruling's pitch below the horizon, in millimetres on paper, at `t` tabloid millimetres below the horizon (a card
@@ -140,38 +150,53 @@ export function networkLights(ctx: SketchContext, sc: Scale): Lit[] {
 
 /**
  * The plain ruled on this card, with the lit points cut out of its rows. The ruling is a tone: its pitch holds on paper
- * (`rowGap`). The lit points are a density, each a hole of a fixed size on paper, so a smaller card keeps as many per
- * square millimetre as the print (`scaledCount` by area, never under `LIT_FLOOR`), an even spread through the seeded
- * set (`evenlyKept`), each at its own place scaled with the card. All of them, unmoved, at tabloid.
+ * (`rowGap`). At tabloid each lit point is a hole of its own size, where the world put it. On a smaller card each is a
+ * notch in the rule nearest its place scaled with the card (`LIT_NOTCH`), and the card keeps an even spread of the seeded
+ * set (`evenlyKept`) that opens as much of its rows as the print's dots open of the print's (`PRINT_CUT`): the lights
+ * spread over the print's width and depth times `S`, so the share kept goes as `S` squared.
  */
 export function networkRows(ctx: SketchContext, lights: Lit[]): NetworkRow[] {
   // The pitch is a tone: real millimetres, never under the pen floor; the gradient reads this card's offsets as the print's.
   const gapAt = rowGap(ctx, tolerance(gridPitch(ctx)));
-  const keep = lights.length ? scaledCount(lights.length, LIT_FLOOR) / lights.length : 1;
-  const points = lights.filter(q => evenlyKept(q.index, keep)).map(q => ({ ...q, x: layoutX(q.x), y: layoutY(q.y) }));
-  points.sort((a, b) => a.y - b.y);
   const reach = CARD.y1 - HORIZON_Y;
-  const rows: NetworkRow[] = [];
-  let from = 0;
+  const ys: number[] = [];
   // The first rule a little below the horizon line, never closer to it than the pens hold apart.
-  for (let off = tolerance(layoutLength(1.3)); off < reach; off += gapAt(off / S)) {
-    const y = HORIZON_Y + off;
-    while (from < points.length && points[from].y + points[from].hy / 2 < y) from++;
-    const found: [number, number][] = [];
-    for (let k = from; k < points.length && points[k].y - points[k].hy / 2 <= y; k++) {
-      const q = points[k];
-      const t = (y - q.y) / (q.hy / 2);
-      if (Math.abs(t) >= 1) continue;
-      const half = q.hx / 2 * Math.sqrt(1 - t * t);
-      if (half > 0.12) found.push([q.x - half, q.x + half]);
+  for (let off = tolerance(layoutLength(1.3)); off < reach; off += gapAt(off / S)) ys.push(HORIZON_Y + off);
+  const found: [number, number][][] = ys.map(() => []);
+  if (FORMAT.tabloid) {
+    const points = [...lights].sort((a, b) => a.y - b.y);
+    let from = 0;
+    ys.forEach((y, r) => {
+      while (from < points.length && points[from].y + points[from].hy / 2 < y) from++;
+      for (let k = from; k < points.length && points[k].y - points[k].hy / 2 <= y; k++) {
+        const q = points[k];
+        const t = (y - q.y) / (q.hy / 2);
+        if (Math.abs(t) >= 1) continue;
+        const half = q.hx / 2 * Math.sqrt(1 - t * t);
+        if (half > 0.12) found[r].push([q.x - half, q.x + half]);
+      }
+    });
+  } else if (ys.length) {
+    const belt = n(ctx, 'gridBelt', 46, 20, 100);
+    for (const q of lights) {
+      // Packed toward the horizon: the share kept falls from `LIT_HORIZON` times the print's light to `LIT_FAR` across the belt.
+      const near = Math.min(1, (q.y - TABLOID_HORIZON_Y) / belt);
+      const keep = S * S * PRINT_CUT / LIT_NOTCH * (LIT_HORIZON + (LIT_FAR - LIT_HORIZON) * near);
+      if (!evenlyKept(q.index, keep)) continue;
+      const x = layoutX(q.x), y = layoutY(q.y), half = LIT_NOTCH * q.hx / 2;
+      // The nearest rule: the first at or below the point, or the one before it.
+      let r = ys.findIndex(v => v >= y);
+      if (r < 0) r = ys.length - 1; else if (r > 0 && y - ys[r - 1] < ys[r] - y) r--;
+      found[r].push([x - half, x + half]);
     }
-    found.sort((a, b) => a[0] - b[0]);
+  }
+  return ys.map((y, r) => {
+    found[r].sort((a, b) => a[0] - b[0]);
     const gaps: [number, number][] = [];
-    for (const g of found) {
+    for (const g of found[r]) {
       const last = gaps[gaps.length - 1];
       if (last && g[0] <= last[1]) last[1] = Math.max(last[1], g[1]); else gaps.push([g[0], g[1]]);
     }
-    rows.push({ y, gaps });
-  }
-  return rows;
+    return { y, gaps };
+  });
 }
