@@ -5,7 +5,7 @@ import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sk
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
 import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, printFine, tolerance } from '../../kit/format.ts';
-import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, ruledFaces, slabFaceNormal, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixAlong, narrowStrands, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
 import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
@@ -393,32 +393,15 @@ function trimmedEdges(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof fa
 }
 
 /**
- * The face of a slab a hatch stroke lies on, from the middle of its ends in the slab's frame (`inverse` is the slab's
- * matrix inverted): the axis it lies nearest the surface across (0 x, 1 y, 2 z), and the side.
- */
-function faceOf(s: Slab, inverse: THREE.Matrix4, points: THREE.Vector3[]): { axis: number; side: number } {
-  const q = points[0].clone().add(points[points.length - 1]).multiplyScalar(0.5).applyMatrix4(inverse);
-  const qa = [q.x, q.y, q.z], half = [s.w / 2, s.h / 2, s.d / 2];
-  let axis = 0, best = Infinity;
-  for (let i = 0; i < 3; i++) { const d = Math.abs(Math.abs(qa[i]) - half[i]); if (d < best) { best = d; axis = i; } }
-  return { axis, side: Math.sign(qa[axis]) };
-}
-
-/**
  * A face seen almost edge-on squeezes its rings into a sliver that the depth pass breaks into dashes,
  * so hatch on faces turned this far from the eye (cosine of the angle to the line of sight) is dropped.
  */
 function dropGrazing(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof facetStrokes>, minCos: number): ReturnType<typeof facetStrokes> {
-  const m = slabMatrix(s);
-  const inv = m.clone().invert();
-  const rot = new THREE.Matrix4().extractRotation(m);
+  const rot = new THREE.Matrix4().extractRotation(slabMatrix(s));
   return strokes.filter(st => {
     if (st.family !== 'hatch') return true;
-    const { axis, side } = faceOf(s, inv, st.points);
-    const nl = new THREE.Vector3(); nl.setComponent(axis, side);
-    const normal = nl.applyMatrix4(rot);
-    const here = st.points[0];
-    return normal.dot(eye.clone().sub(here).normalize()) >= minCos;
+    const normal = slabFaceNormal(st.face!).applyMatrix4(rot);
+    return normal.dot(eye.clone().sub(st.points[0]).normalize()) >= minCos;
   });
 }
 
@@ -534,10 +517,8 @@ export function drawWheel(ctx: SketchContext): Part[] {
     // into the ground would print as light as those rising pale out of it. The proud tower at the top keeps its hatch.
     const ruled = trim && sl.kind === 'tower' && sl.tower !== 0 && !outline ? ruledFaces(sl, LIGHT, view, tolerance(RULE_MM) / mmPerUnit(at)) : [];
     if (ruled.length) {
-      const inverse = slabMatrix(sl).invert();
-      const face = (points: THREE.Vector3[]) => { const f = faceOf(sl, inverse, points); return 2 * f.axis + (f.side > 0 ? 1 : 0); };
-      const faces = new Set(ruled.map(st => face(st.points)));
-      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(face(st.points))), ...ruled];
+      const faces = new Set(ruled.map(st => st.face));
+      made = [...made.filter(st => st.family !== 'hatch' || !faces.has(st.face)), ...ruled];
     }
     const kept = dropGrazing(sl, eye, made, GRAZING);
     for (const st of trim ? trimmedEdges(sl, eye, kept) : visibleEdges(sl, eye, kept)) {

@@ -8,6 +8,8 @@ import { figureBands, flowBody, ribbonStrokes } from '../../sketches/kit/mannequ
 import { LOOK, type Look } from '../../sketches/kit/mannequin/hatch.ts';
 import { POSES, poseSkeleton } from '../../sketches/kit/mannequin/skeleton.ts';
 import { Tube, silhouettes } from '../../sketches/kit/mannequin/tube.ts';
+import { facetStrokes, ruledFaces, slabFaceNormal, slabMatrix, solid } from '../../sketches/kit/slabs.ts';
+import { horizonCamera } from '../../sketches/kit/perspective.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
@@ -139,6 +141,55 @@ describe('sketch kit: shared card helpers, batch 3', () => {
       expect(strokes.some(st => st.group === 'outline-group')).toBe(true);
       for (const st of strokes) expect(st.role).toBe(st.group === 'outline-group' ? 'outline' : undefined);
       expect(strokes.filter(st => st.group === 'cloth-group').every(st => !('role' in st))).toBe(true);
+    });
+  });
+
+  describe('the face a slab\'s hatch lies on', () => {
+    const page = { width: 279.4, height: 431.8 };
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+
+    it('names the six faces by their normals in the slab\'s own frame: +z, -z, +x, -x, +y, -y', () => {
+      expect([0, 1, 2, 3, 4, 5].map(f => slabFaceNormal(f).toArray())).toEqual([[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]]);
+      // A fresh vector each time, so a caller may turn it.
+      expect(slabFaceNormal(0)).not.toBe(slabFaceNormal(0));
+    });
+
+    it('tags each hatch stroke of facetStrokes with the face it lies on, and no edge', () => {
+      // A slab turned every which way, seen from above and to one side so several of its faces see the eye.
+      const slab = { ...solid(1, 2, -30, 4, 6, 3, 0, 'stack'), rx: 0.4, ry: 0.7, rz: 0.2 };
+      const strokes = facetStrokes(slab, new THREE.Vector3(0.2, -1, 0.3).normalize(), new THREE.Vector3(14, 30, 0), false);
+      const inverse = slabMatrix(slab).invert(), half = [slab.w / 2, slab.h / 2, slab.d / 2];
+      const hatch = strokes.filter(st => st.family === 'hatch');
+      expect(hatch.length).toBeGreaterThan(20);
+      expect(strokes.filter(st => st.family === 'edge').every(st => st.face === undefined)).toBe(true);
+      expect(new Set(hatch.map(st => st.face)).size).toBeGreaterThanOrEqual(3);
+      for (const st of hatch) {
+        // Every point of the stroke stands the hair off that face's plane that the kit keeps hatch from its surface.
+        const n = slabFaceNormal(st.face!), axis = n.x ? 0 : n.y ? 1 : 2;
+        for (const p of st.points) {
+          const local = p.clone().applyMatrix4(inverse);
+          expect(local.dot(n)).toBeCloseTo(half[axis] + 0.006, 9);
+        }
+      }
+    });
+
+    it('tags the ruled lines of ruledFaces with their face too, in the same numbering', () => {
+      // Seen from the origin, light from behind: only the face towards the eye is ruled. Turned a quarter about y it is the -x one.
+      const block = solid(0, 2, -30, 6, 8, 4, 0, 'stack');
+      const behind = new THREE.Vector3(0, 0, -1);
+      const front = ruledFaces(block, behind, view, 1);
+      expect(front.length).toBe(5);
+      expect(front.every(st => st.face === 0)).toBe(true);
+      const turned = ruledFaces({ ...block, ry: Math.PI / 2 }, behind, view, 1);
+      expect(turned.length).toBeGreaterThan(0);
+      expect(turned.every(st => st.face === 3)).toBe(true);
+      const other = ruledFaces({ ...block, ry: -Math.PI / 2 }, behind, view, 1);
+      expect(other.length).toBeGreaterThan(0);
+      expect(other.every(st => st.face === 2)).toBe(true);
+      const tipped = ruledFaces({ ...block, rx: Math.PI / 2 }, behind, view, 1);
+      expect(tipped.length).toBeGreaterThan(0);
+      expect(tipped.every(st => st.face === 4)).toBe(true);
+      expect(ruledFaces({ ...block, rx: -Math.PI / 2 }, behind, view, 1).every(st => st.face === 5)).toBe(true);
     });
   });
 });

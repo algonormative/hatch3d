@@ -152,8 +152,19 @@ function clipRect(ox: number, oy: number, dx: number, dy: number, a: number, b: 
   return hi - lo > 1e-6 ? [lo, hi] : null;
 }
 
-/** A stroke of the raking-light hatch: outline `edge`s, and `hatch` (rings and fields) on faces that see the eye. */
-export type FacetStroke = { ink: Ink; group: 'system'; family: 'edge' | 'hatch'; points: THREE.Vector3[] };
+/**
+ * A stroke of the raking-light hatch: outline `edge`s, and `hatch` (rings and fields) on faces that see the eye. The hatch
+ * of `facetStrokes` and `ruledFaces` names the `face` it lies on (see `slabFaceNormal`), for a card that drops or replaces
+ * the hatch of a face.
+ */
+export type FacetStroke = { ink: Ink; group: 'system'; family: 'edge' | 'hatch'; points: THREE.Vector3[]; face?: number };
+
+/**
+ * The unit normal, in the slab's own frame, of the face a hatch stroke names (`FacetStroke.face`): +z, −z, +x, −x, +y, −y
+ * for 0 to 5. Turn it by the slab's rotation for the world's.
+ */
+export const slabFaceNormal = (face: number): THREE.Vector3 =>
+  new THREE.Vector3(...[[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]][face]);
 
 /** A slab's bounding box on the page: its centre and its larger side, in millimetres. */
 export function pageExtent(view: THREE.Camera, s: Slab): { x: number; y: number; size: number } {
@@ -254,7 +265,7 @@ export function sliverShade(s: Slab, view: THREE.Camera, light: THREE.Vector3, i
   return out;
 }
 
-/** The faces of a slab in its own frame: each face's centre, and its two half-extents (the same six `facetStrokes` hatches). */
+/** The faces of a slab in its own frame: each face's centre, and its two half-extents (the six `facetStrokes` hatches, in the order of `slabFaceNormal`). */
 const slabFaces = (s: Slab): [THREE.Vector3, THREE.Vector3, THREE.Vector3][] => {
   const hx = s.w / 2, hy = s.h / 2, hz = s.d / 2;
   const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -278,7 +289,7 @@ const slabFaces = (s: Slab): [THREE.Vector3, THREE.Vector3, THREE.Vector3][] => 
 export function ruledFaces(s: Slab, light: THREE.Vector3, view: THREE.Camera, step: number): FacetStroke[] {
   const m = slabMatrix(s), rot = new THREE.Matrix4().extractRotation(m);
   const out: FacetStroke[] = [];
-  for (const [c0, U0, V0] of slabFaces(s)) {
+  for (const [face, [c0, U0, V0]] of slabFaces(s).entries()) {
     const normal = c0.clone().normalize().applyMatrix4(rot);
     const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, 0.006);
     if (view.position.clone().sub(centre).dot(normal) <= 0 || faceDarkness(normal, light, s.tone) <= 0.62) continue;
@@ -294,7 +305,7 @@ export function ruledFaces(s: Slab, light: THREE.Vector3, view: THREE.Camera, st
     if (lines < 1 || long <= gap) continue;
     for (let j = 0; j < lines; j++) {
       const v = -half + (j + 1) * gap;
-      out.push({ ink: j % 2 ? 'ultramarine' : 'carbon', group: 'system', family: 'hatch', points: [at(-long + gap, v), at(long - gap, v)] });
+      out.push({ ink: j % 2 ? 'ultramarine' : 'carbon', group: 'system', family: 'hatch', points: [at(-long + gap, v), at(long - gap, v)], face });
     }
   }
   return out;
@@ -334,15 +345,8 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     for (const [x, y] of corners.slice(0, 4)) push('carbon', 'edge', P(x * (hx + e), y * (hy + e), -hz), P(x * (hx + e), y * (hy + e), hz));
   }
   if (outlineOnly) return out;
-  const faces: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
-    [new THREE.Vector3(0, 0, hz), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(0, 0, -hz), new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(-hx, 0, 0), new THREE.Vector3(0, 0, hz), new THREE.Vector3(0, hy, 0)],
-    [new THREE.Vector3(0, hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, -hz)],
-    [new THREE.Vector3(0, -hy, 0), new THREE.Vector3(hx, 0, 0), new THREE.Vector3(0, 0, hz)],
-  ];
-  for (const [c0, U0, V0] of faces) {
+  for (const [face, [c0, U0, V0]] of slabFaces(s).entries()) {
+    const hatch = (ink: Ink, ...pts: THREE.Vector3[]) => out.push({ ink, group: 'system', family: 'hatch', points: pts, face });
     const normal = c0.clone().normalize().applyMatrix4(rot);
     const centre = c0.clone().applyMatrix4(m).addScaledVector(normal, e);
     if (eye.clone().sub(centre).dot(normal) <= 0) continue;
@@ -355,7 +359,7 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     const band = Math.min(a, b) * (0.12 + 0.6 * d);
     let t = ring;
     for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring) {
-      push('carbon', 'hatch', at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t)));
+      hatch('carbon', at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t)));
     }
     // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
     const ia = a - t, ib = b - t;
@@ -368,7 +372,7 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
       for (let k = -reach + step / 2; k < reach; k += step) {
         const span = clipRect(nx * k, ny * k, dx, dy, ia, ib);
         if (!span) continue;
-        push(ink, 'hatch', at(nx * k + dx * span[0], ny * k + dy * span[0]), at(nx * k + dx * span[1], ny * k + dy * span[1]));
+        hatch(ink, at(nx * k + dx * span[0], ny * k + dy * span[0]), at(nx * k + dx * span[1], ny * k + dy * span[1]));
       }
     }
   }
