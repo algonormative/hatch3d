@@ -1,17 +1,18 @@
 import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { projectPolylinesClipped } from '../../../src/projection.ts';
-import { clipProjectedPolyline, densifyProjectedPolyline, renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
+import { clipProjectedPolyline, densifyProjectedPolyline } from '../../../src/sketch/depth-buffer.ts';
 import { measureStrokeText, strokeText } from '../../../src/sketch/stroke-text.ts';
-import { PAGE, depthRaster } from '../../kit/format.ts';
+import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { FORMAT, PAGE, PHRASE, TABLOID_CARD, TABLOID_HORIZON_Y, TABLOID_RASTER, depthRaster, halo, hatchMin, layoutLength, tolerance } from '../../kit/format.ts';
 import { facetStrokes, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
-import { helixAlong } from '../../kit/helix.ts';
+import { helixAlong, narrowStrands, type HelixStroke } from '../../kit/helix.ts';
 import { glyphMask, sloganSettings } from '../../kit/lettering.ts';
-import { keepAlong, meshCoverage } from '../../kit/page.ts';
+import { keepAlong, meshCoverage, reduceAtScale } from '../../kit/page.ts';
 import { clamp, n, smooth } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../kit/perspective.ts';
 import { barPattern } from '../../kit/rhythm.ts';
-import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import { PartBuckets, fineDepth, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
 
@@ -29,7 +30,15 @@ import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
  * through the hub's bore, then thinning away toward the horizon. The phrase is cut a word to a
  * tower, in order round the wheel, so reading it means going round.
  */
-const { W, H, MM_X, MM_Y } = depthRaster(1118, 1728);
+/**
+ * How many times finer each way than the card's raster the depth test runs (`fineDepth`): 1 at tabloid. On a small card a
+ * pixel of the card's raster spans several times the world it does on the print, and against it the edges of faces seen
+ * nearly edge-on (the rim's sides, the paving's tops) fail the test and print as dashes; the finer raster gives back
+ * about the print's world per pixel.
+ */
+const FINE = FORMAT.tabloid ? 1 : 4;
+const RASTER = depthRaster(TABLOID_RASTER.width, TABLOID_RASTER.height, FINE);
+const { W, H } = RASTER;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const FACET_MM_PER_UNIT = 8.3;
 /** World size of the whole wheel: the tip of an ordinary tower stands this far from the hub. */
@@ -56,27 +65,36 @@ type WSlab = Slab & { kind: Kind; psi: number; tower: number };
 /**
  * Where the eye stands. The top tower's tip lands at `topY` on the sheet and the ground under the
  * hub at `groundY`; those two heights, and the wheel's own height, fix its scale on the sheet, the
- * eye's height above the plain and the wheel's distance.
+ * eye's height above the plain and the wheel's distance. They are the print's page positions, so the
+ * placement is worked out in tabloid's frame (its page and horizon) on every size and fit: a small
+ * card stands the eye where the print does, and its own camera draws the wheel smaller.
  */
 function placement(ctx: SketchContext) {
   const fov = n(ctx, 'fov', 60, 36, 75);
-  const f = PAGE.height / 2 / Math.tan(rad(fov / 2));
+  const f = TABLOID_PAGE.height / 2 / Math.tan(rad(fov / 2));
   const towerH = n(ctx, 'towerH', 24, 12, 40), proud = n(ctx, 'proud', 2.8, 1, 3.4);
   const ringOuter = R_OUT - towerH;
   const hubY = n(ctx, 'sink', 0.38, 0.1, 0.5) * ringOuter;
   const topTip = hubY + ringOuter + towerH * proud;
   const scale = (n(ctx, 'groundY', 330, 290, 370) - n(ctx, 'topY', 107, 60, 200)) / topTip;
-  const eyeH = (n(ctx, 'groundY', 330, 290, 370) - HORIZON_Y) / scale;
+  const eyeH = (n(ctx, 'groundY', 330, 290, 370) - TABLOID_HORIZON_Y) / scale;
   const D = f / scale;
   return { fov, f, ringOuter, hubY, eyeH, D, scale };
 }
 
+/** The card's camera, on the format's page. */
 export function wheelCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   const p = placement(ctx);
   return horizonCamera({
     fov: p.fov, eye: [0, p.eyeH, 0], target: [0, p.eyeH, -100], near: 8, far: 4000,
     page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
+}
+
+/** The same camera in tabloid's frame, whatever the size and fit: the one the card's world is laid out with. At tabloid it is `wheelCamera`. */
+export function worldCamera(ctx: SketchContext): THREE.PerspectiveCamera {
+  const p = placement(ctx);
+  return tabloidFrameCamera({ fov: p.fov, eye: p.eyeH, near: 8, far: 4000 });
 }
 
 /** The wheel's own frame: hub, axle direction (away from the eye), in-plane right, and the face we see. */
@@ -120,10 +138,10 @@ function wheelSlab(f: Frame, centre: THREE.Vector3, psi: number, w: number, h: n
 
 export interface Layout { C: THREE.Vector3; frame: Frame; ringOuter: number; hubY: number; D: number }
 
-/** Where the wheel stands: the hub lands at `hubX` across the sheet, `D` units from the eye, at `hubY` above the plain. */
+/** Where the wheel stands: the hub lands at `hubX` across the print, `D` units from the eye, at `hubY` above the plain. */
 export function layout(ctx: SketchContext): Layout {
   const p = placement(ctx);
-  const x = (n(ctx, 'hubX', 118, 100, 200) - PAGE.width / 2) * p.D / p.f;
+  const x = (n(ctx, 'hubX', 118, 100, 200) - TABLOID_PAGE.width / 2) * p.D / p.f;
   const C = new THREE.Vector3(x, p.hubY, -p.D);
   return { C, frame: wheelFrame(C, n(ctx, 'turn', 25, 15, 60)), ringOuter: p.ringOuter, hubY: p.hubY, D: p.D };
 }
@@ -221,7 +239,8 @@ function nearEach(a: Slab, b: Slab, margin: number): boolean {
  * A ring of lifted paving blocks round each place where the rim goes into or comes out of the ground:
  * the plain buckles outward from the point, each block tilted up on its inner edge and resting on
  * the ground by its lowest corner. A block that would touch the wheel, another block or the axle is
- * left out.
+ * left out, and so is one that would leave the card. Laid out in tabloid's frame: `view` is
+ * `worldCamera`, and the axle's cover and the card are the print's (see `wheelWorld`).
  */
 function pavers(ctx: SketchContext, L: Layout, view: THREE.Camera, blocked: (p: Point) => boolean, obstacles: Slab[]): WSlab[] {
   const count = Math.round(n(ctx, 'pavers', 9, 0, 14));
@@ -254,9 +273,9 @@ function pavers(ctx: SketchContext, L: Layout, view: THREE.Camera, blocked: (p: 
       // Rest it on the ground by its lowest corner.
       s.y = -Math.min(...corners(s).map(q => q.y)) + 0.01;
       s.kind = 'paver'; s.psi = sign * cross; s.tower = -2; s.tone = 0.75;
-      if (blocked(pageOf(view, new THREE.Vector3(s.x, s.y, s.z)))) continue;
+      if (blocked(pageOf(view, new THREE.Vector3(s.x, s.y, s.z), TABLOID_PAGE))) continue;
       // Wholly inside the sheet.
-      if (corners(s).some(q => { const pg = pageOf(view, q); return pg.x < CARD.x0 + 3 || pg.x > CARD.x1 - 3 || pg.y > CARD.y1 - 3; })) continue;
+      if (corners(s).some(q => { const pg = pageOf(view, q, TABLOID_PAGE); return pg.x < TABLOID_CARD.x0 + 3 || pg.x > TABLOID_CARD.x1 - 3 || pg.y > TABLOID_CARD.y1 - 3; })) continue;
       if (obstacles.some(o => nearEach(s, o, 1)) || out.some(o => nearEach(s, o, 1))) continue;
       out.push(s);
     }
@@ -340,6 +359,33 @@ function visibleEdges(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof fa
 }
 
 /**
+ * A trimmed outline (`facetStrokes`' `trim`, off tabloid) as `visibleEdges` treats the kit's: each edge's two faces
+ * are found from where it lies on the slab, an edge that neither sees the eye past `EDGE_GRAZING` is dropped, and one
+ * that only a glancing face supports is marked `soft`, so a sliver's outline draws whole. Other strokes pass through.
+ */
+function trimmedEdges(s: Slab, eye: THREE.Vector3, strokes: ReturnType<typeof facetStrokes>): EdgeStroke[] {
+  const m = slabMatrix(s), inverse = m.clone().invert(), rot = new THREE.Matrix4().extractRotation(m);
+  const half = [s.w / 2, s.h / 2, s.d / 2];
+  const centre = new THREE.Vector3(s.x, s.y, s.z);
+  const out: EdgeStroke[] = [];
+  for (const st of strokes) {
+    if (st.family !== 'edge') { out.push(st); continue; }
+    const mid = st.points[0].clone().add(st.points[st.points.length - 1]).multiplyScalar(0.5).applyMatrix4(inverse);
+    const local = [mid.x, mid.y, mid.z];
+    let best = -Infinity;
+    // The edge runs along one axis (its middle there is the slab's); it joins the faces across the other two.
+    for (let a = 0; a < 3; a++) {
+      if (Math.abs(local[a]) < half[a] / 2) continue;
+      const normal = new THREE.Vector3().setComponent(a, Math.sign(local[a])).applyMatrix4(rot);
+      best = Math.max(best, normal.dot(eye.clone().sub(centre.clone().addScaledVector(normal, half[a])).normalize()));
+    }
+    if (best <= EDGE_GRAZING) continue;
+    out.push({ ...st, soft: best < GRAZING });
+  }
+  return out;
+}
+
+/**
  * A face seen almost edge-on squeezes its rings into a sliver that the depth pass breaks into dashes,
  * so hatch on faces turned this far from the eye (cosine of the angle to the line of sight) is dropped.
  */
@@ -369,31 +415,44 @@ function chunk(points: THREE.Vector3[], max = 20): THREE.Vector3[][] {
   return out;
 }
 
-/** The solid parts of the card and where the axle runs: everything before the helix is built. */
-export function scene(ctx: SketchContext) {
-  const view = wheelCamera(ctx);
-  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+/** The helix is built at this many times the world's size and brought back: its wiggles are fixed in world units. */
+const UPSCALE = 3;
+
+/** A camera that sees the helix built at `UPSCALE` as `view` sees the world. */
+function upscaled(view: THREE.PerspectiveCamera): THREE.PerspectiveCamera {
+  const sv = view.clone();
+  sv.position.multiplyScalar(UPSCALE); sv.near *= UPSCALE; sv.far *= UPSCALE;
+  sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
+  return sv;
+}
+
+/** A helix built at `UPSCALE`, its strokes brought back to the world's size. */
+const unscaled = (strokes: HelixStroke[]): HelixStroke[] => strokes.map(h => ({ ...h, points: h.points.map(q => q.clone().multiplyScalar(1 / UPSCALE)) }));
+
+/**
+ * The card's world: where the wheel stands, its rim, towers, hub and spokes, the paving its crossings lift, and the
+ * axle's course and helix. It is laid out in tabloid's frame, with `worldCamera` and the print's page and card, so
+ * every size and fit builds the same world, to the bit; each card's own camera (`wheelCamera`) then draws it. The
+ * helix's strokes here are spaced on the print's paper; a small card traces its own (`drawWheel`).
+ */
+export function wheelWorld(ctx: SketchContext) {
+  const view = worldCamera(ctx);
   const depthOf = (p: THREE.Vector3) => Math.max(1, -p.z);
   const L = layout(ctx);
   const fr = L.frame;
 
-  // The axle: a straight line through the hub along the wheel's axis, cut where it leaves the sheet.
-  const pageAt = (t: number) => pageOf(view, fr.C.clone().addScaledVector(fr.a, t));
+  // The axle: a straight line through the hub along the wheel's axis, cut where it leaves the print's card.
+  const pageAt = (t: number) => pageOf(view, fr.C.clone().addScaledVector(fr.a, t), TABLOID_PAGE);
   let tNear = 0;
-  while (tNear > -2000 && pageAt(tNear).x > CARD.x0 - 30 && depthOf(fr.C.clone().addScaledVector(fr.a, tNear)) > 40) tNear -= 1;
+  while (tNear > -2000 && pageAt(tNear).x > TABLOID_CARD.x0 - 30 && depthOf(fr.C.clone().addScaledVector(fr.a, tNear)) > 40) tNear -= 1;
   let tFar = 0;
-  while (tFar < 900 && pageAt(tFar).x < CARD.x1 + 40) tFar += 1;
+  while (tFar < 900 && pageAt(tFar).x < TABLOID_CARD.x1 + 40) tFar += 1;
   const r0 = n(ctx, 'thread', 1.8, 0.6, 3), taper = n(ctx, 'taper', 4.5, 1, 8), flare = n(ctx, 'flare', 4, 1, 6);
   const sHub = tFar / (tFar - tNear);
   const hubScale = taper ** (sHub ** flare);
   // Wide enough for the strands at the hub, with a clear gap.
   const bore = Math.max(6, (r0 * (1 + 0.35 + 0.9)) * hubScale + 1.6);
 
-  // The helix, built at 3x and brought back: its wiggles are fixed in world units.
-  const S = 3;
-  const sv = view.clone();
-  sv.position.multiplyScalar(S); sv.near *= S; sv.far *= S;
-  sv.updateProjectionMatrix(); sv.updateMatrixWorld(true);
   // The axle runs level through the hub, then sweeps down toward the ground as it comes toward the eye, so its near end
   // lies low in the foreground and runs off the bottom of the sheet's left side.
   const axleLow = n(ctx, 'axleLow', 14, 3, 40), straight = HD / 2 + 14;
@@ -404,45 +463,58 @@ export function scene(ctx: SketchContext) {
     if (t < -straight) q.y = L.hubY - (L.hubY - axleLow) * ((-straight - t) / (-straight - tNear)) ** 1.7;
     axle.push(q);
   }
-  const big = new THREE.CatmullRomCurve3(axle.map(p => p.clone().multiplyScalar(S)), false, 'centripetal');
+  const axleCurve = new THREE.CatmullRomCurve3(axle.map(p => p.clone().multiplyScalar(UPSCALE)), false, 'centripetal');
   const options = {
-    radius: r0 * S, width: r0 * 0.9 * S, pitch: n(ctx, 'pitch', 40, 8, 120) * S, spread: r0 * 0.35 * S, narrow: 0.1, twist: 0.1,
+    radius: r0 * UPSCALE, width: r0 * 0.9 * UPSCALE, pitch: n(ctx, 'pitch', 40, 8, 120) * UPSCALE, spread: r0 * 0.35 * UPSCALE, narrow: 0.1, twist: 0.1,
     density: 0.45, interruption: 0.15, taper, flare, pitchGrowth: 1,
   };
-  const made = helixAlong(ctx, sv, big, options);
+  const made = helixAlong(ctx, upscaled(view), axleCurve, options);
   // Seen this nearly along its length, a wide ribbon hides the far side of every turn behind the near side and the coil
   // reads as a row of arches. The helix's own lines are tested against a slim copy of the ribbon (same turns), so the turns
-  // show through; everything else is tested against the ribbon at its true width.
-  const slim = helixAlong(ctx, sv, big, { ...options, width: options.width * SLIM });
-  const unscale = (g: THREE.BufferGeometry) => { g.scale(1 / S, 1 / S, 1 / S); g.computeBoundingSphere(); return g; };
+  // show through; everything else is tested against the ribbon at its true width. The surfaces don't depend on the camera.
+  const slim = helixAlong(ctx, upscaled(view), axleCurve, { ...options, width: options.width * SLIM });
+  const unscale = (g: THREE.BufferGeometry) => { g.scale(1 / UPSCALE, 1 / UPSCALE, 1 / UPSCALE); g.computeBoundingSphere(); return g; };
   const helix = {
-    strokes: made.strokes.map(h => ({ ...h, points: h.points.map(q => q.clone().multiplyScalar(1 / S)) })),
+    strokes: unscaled(made.strokes),
     meshes: slim.meshes.map(unscale),
     /** The ribbon at its true width: what hides the wheel behind it. */
     full: made.meshes.map(unscale),
   };
 
-  // Paving blocks keep clear of the axle on the sheet.
-  const nearHelix = meshCoverage(helix.full, view, PAGE, 1);
+  // Paving blocks keep clear of the axle on the print.
+  const nearHelix = meshCoverage(helix.full, view, TABLOID_PAGE, 1);
   const wheel: WSlab[] = [...rim(ctx, L), ...towers(ctx, L), ...hubAndSpokes(ctx, L, bore)];
   const slabs: WSlab[] = [...wheel, ...pavers(ctx, L, view, nearHelix, wheel)].filter(s => Math.max(...corners(s).map(q => q.y)) > 0.02);
-  return { view, f, L, tNear, tFar, r0, taper, flare, bore, slabs, helix };
+  return { L, tNear, tFar, r0, taper, flare, bore, slabs, helix, axleCurve, options };
 }
 
 export function drawWheel(ctx: SketchContext): Part[] {
-  const { view, f, slabs, helix } = scene(ctx);
+  const world = wheelWorld(ctx);
+  const { slabs } = world;
+  const view = wheelCamera(ctx);
+  const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(view.fov / 2));
+  // The helix as this card's paper spaces it: the world's at tabloid, traced again on any other page (its surfaces are the world's).
+  const traced = FORMAT.tabloid ? undefined : helixAlong(ctx, upscaled(view), world.axleCurve, world.options);
+  for (const g of traced?.meshes ?? []) g.dispose();
+  const helix = traced ? { ...world.helix, strokes: unscaled(traced.strokes) } : world.helix;
   const eye = view.position.clone();
   const mmPerUnit = (p: THREE.Vector3) => f / Math.max(1, eye.z - p.z);
   const depthOf = (p: THREE.Vector3) => Math.max(1, eye.z - p.z);
   const hatch = n(ctx, 'hatch', 0.7, 0.5, 3);
 
+  // Off tabloid every slab's outline is trimmed (kit/slabs.ts): no back edges, and a face narrower on paper than the
+  // smallest feature folded into it. That outline is no longer the kit's twelve edges in order, so `trimmedEdges` does
+  // `visibleEdges`' work on it.
+  const trim = FORMAT.tabloid ? undefined : { view };
   const strokes: (Stroke & { soft?: boolean })[] = [];
   for (const sl of slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z);
     // The wheel draws as rim, towers and hub (spokes with the rim), so each can be told apart.
     const group = sl.kind === 'paver' ? 'ground' : sl.kind === 'spoke' ? 'rim' : sl.kind;
+    // Under 1.5 mm on this card's paper a slab is an outline; its hatch keeps its pitch on paper.
     const outline = Math.max(sl.w, sl.h) * mmPerUnit(at) < 1.5;
-    for (const st of visibleEdges(sl, eye, dropGrazing(sl, eye, facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at)), GRAZING))) {
+    const kept = dropGrazing(sl, eye, facetStrokes(sl, LIGHT, eye, outline, hatch * FACET_MM_PER_UNIT / mmPerUnit(at), trim), GRAZING);
+    for (const st of trim ? trimmedEdges(sl, eye, kept) : visibleEdges(sl, eye, kept)) {
       for (const piece of aboveGround(st.points)) strokes.push({ ink: st.ink, group, family: st.family, points: piece, soft: st.soft });
     }
     if (sl.kind !== 'paver') {
@@ -450,28 +522,32 @@ export function drawWheel(ctx: SketchContext): Part[] {
       if (section) strokes.push({ ink: 'carbon', group, family: 'edge', points: section });
     }
   }
-  for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
+  // A strand whose ribbon is narrower on this card's paper than the smallest feature is drawn by its line (none at tabloid).
+  for (const h of narrowStrands(helix.strokes, view)) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points });
 
   const solidGeos = slabs.map(slabGeometry);
   const geometries = [...solidGeos, ...helix.full];
   const slimGeos = [...solidGeos, ...helix.meshes];
   try {
     fitDepthRange(view, [...geometries, ...helix.meshes]);
-    const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
-    const slimBuffer = renderDepthBufferCPU(slimGeos, view, W, H);
+    // The depth passes, against the full ribbon and the slim one (see `wheelWorld`), and the page mm per pixel of their raster.
+    const dview = FINE === 1 ? view : oversampledView(view, FINE);
+    const full = fineDepth(geometries, dview, RASTER, FINE), slimmed = fineDepth(slimGeos, dview, RASTER, FINE);
+    const { env, mmX, mmY } = full;
     const nearP = view.near, farP = view.far;
     const biasAt = (d: number, slack: number) => Math.max(3e-5, slack * nearP * farP / ((farP - nearP) * d * d));
-    const solids = meshCoverage(geometries, view, PAGE, n(ctx, 'knockout', 1, 0.3, 3));
+    const solids = meshCoverage(geometries, view, PAGE, halo(n(ctx, 'knockout', 1, 0.3, 3)));
 
-    // The phrase: one word to a tower round the rim, in order from the rising side over the top and down.
+    // The phrase: one word to a tower round the rim, in order from the rising side over the top and down. Or, where the
+    // format sets it in the band, under the card's name instead.
     const settings = sloganSettings(ctx);
-    const words = settings.count > 0 ? settings.text.split(' ').filter(Boolean) : [];
+    const words = settings.count > 0 && PHRASE === 'art' ? settings.text.split(' ').filter(Boolean) : [];
     const wrng = ctx.random('wheel-words');
     const style = { face: settings.face, height: settings.size };
     const textStrokes: THREE.Vector3[][] = [];
     const visible = (lines3: THREE.Vector3[][], bias: number) => {
       let total = 0, seen = 0;
-      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { view, depth: depthBuffer, width: W, height: H, bias }, {
+      const count = (hidden: boolean, addTo: (k: number) => void) => projectStrokes(lines3.map(points => ({ points })), { ...env, bias }, {
         hidden: () => hidden, begin: () => runs => { for (const r of runs) addTo(r.length); },
       });
       count(false, k => { total += k; });
@@ -479,7 +555,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
       return total > 0 && seen >= total * 0.97;
     };
     const cands = slabs.filter(s => s.kind === 'tower').map(sl => ({ sl, at: pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z)), low: Math.min(...corners(sl).map(q => q.y)) }))
-      .filter(({ at, low }) => low > 0.6 && at.x > CARD.x0 + 6 && at.x < CARD.x1 - 6 && at.y > CARD.y0 + 6 && at.y < CARD.y1 - 6);
+      .filter(({ at, low }) => low > 0.6 && at.x > CARD.x0 + layoutLength(6) && at.x < CARD.x1 - layoutLength(6) && at.y > CARD.y0 + layoutLength(6) && at.y < CARD.y1 - layoutLength(6));
     const used = new Set<number>();
     words.forEach((word, i) => {
       // Round the wheel from the rising side, over the top, to the falling side.
@@ -506,13 +582,14 @@ export function drawWheel(ctx: SketchContext): Part[] {
       }
     });
     const glyphPaths: Point[][] = [];
-    for (const l of projectPolylinesClipped(textStrokes, view, W, H).polylines) for (const c of clipProjectedPolyline(l, W, H)) {
-      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), MM_X, MM_Y)));
+    for (const l of projectPolylinesClipped(textStrokes, env.view, env.width, env.height).polylines) for (const c of clipProjectedPolyline(l, env.width, env.height)) {
+      glyphPaths.push(...clipWindow(scalePoints(densifyProjectedPolyline(c), mmX, mmY)));
     }
-    const onGlyph = glyphMask(glyphPaths, 0.7);
-    const buckets = new PartBuckets(0.4);
-    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true) => {
-      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece);
+    const onGlyph = glyphMask(glyphPaths, halo(0.7));
+    // The buckets' reducer keeps the helix's curves on a small card (`simplify` at tabloid).
+    const buckets = new PartBuckets(0.4, { reduce: reduceAtScale });
+    const add = (key: string, run: Point[], extra: (p: Point) => boolean = () => true, min?: number) => {
+      for (const inside of clipWindow(run)) for (const piece of keepAlong(inside, p => !onGlyph(p) && extra(p), 0.15)) buckets.add(key, piece, false, min);
     };
     // Each stroke is tested at its own depth: strokes are split into pieces and banded by distance.
     const bands = new Map<string, { list: Stroke[]; d: number; slack: number }>();
@@ -524,15 +601,16 @@ export function drawWheel(ctx: SketchContext): Part[] {
       bands.get(key)!.list.push({ ...st, points: piece });
     }
     for (const { list, d, slack } of bands.values()) {
-      projectStrokes(list, { view, depth: list[0].group === 'helix' ? slimBuffer : depthBuffer, width: W, height: H, bias: biasAt(d, slack) }, {
-        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, MM_X, MM_Y)); },
+      projectStrokes(list, { ...(list[0].group === 'helix' ? slimmed : full).env, bias: biasAt(d, slack) }, {
+        begin: st => runs => { for (const run of runs) add(`${st.group}-${st.ink}`, scalePoints(run, mmX, mmY), undefined, hatchMin(st.family)); },
       });
     }
 
     // The sky: a ruled night, closest at the top and opening to the horizon, knocked out round all that stands in it.
+    // The ruling and its breaks keep their millimetres on paper, so a small card keeps the print's tones in fewer rules.
     const pattern = barPattern(ctx.random('wheel-sky'), 0.86);
-    const skyTop = CARD.y0, skyBottom = HORIZON_Y - 1, pitch = n(ctx, 'skyPitch', 1.8, 0.8, 5);
-    for (let y = skyTop + 0.3, i = 0; y < skyBottom; i++) {
+    const skyTop = CARD.y0, skyBottom = HORIZON_Y - layoutLength(1), pitch = tolerance(n(ctx, 'skyPitch', 1.8, 0.8, 5));
+    for (let y = skyTop + tolerance(0.3), i = 0; y < skyBottom; i++) {
       const t = (y - skyTop) / (skyBottom - skyTop);
       const broken = t > 0.5;
       const row = i;
@@ -543,7 +621,7 @@ export function drawWheel(ctx: SketchContext): Part[] {
     for (const path of glyphPaths) buckets.add('slogan-lettering', path, true);
     const parts = buckets.toParts(['sky', 'ground', 'rim', 'tower', 'hub', 'helix', 'slogan'], INKS);
     parts.push({ id: 'horizon-carbon', pen: 'carbon', paths: keepAlong([{ x: CARD.x0, y: HORIZON_Y }, { x: CARD.x1, y: HORIZON_Y }], p => !solids(p), 0.3) });
-    parts.push(...cardFrame('X', 'WHEEL OF FORTUNE'));
+    parts.push(...cardFrame('X', 'WHEEL OF FORTUNE', { phrase: settings }));
     return parts;
   } finally {
     for (const geo of [...geometries, ...slimGeos]) geo.dispose();
