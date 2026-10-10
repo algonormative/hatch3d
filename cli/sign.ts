@@ -50,7 +50,7 @@ function parseTransform(attr: string): Matrix {
 function artBounds(svg: string) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const stack: Matrix[] = [IDENTITY];
-  const body = svg.replace(/<defs[\s\S]*?<\/defs>/, '');
+  const body = svg.replace(/<defs[\s\S]*?<\/defs>|<clipPath[\s\S]*?<\/clipPath>/g, '');
   for (const [, close, tag, attrs] of body.matchAll(/<(\/?)(g|path|polyline|polygon)\b([^>]*)>/g)) {
     if (tag === 'g') {
       if (close) stack.pop();
@@ -73,7 +73,7 @@ function artBounds(svg: string) {
   // An unframed render clipped to its margin box signs against that box, not wherever the drawing ends.
   const clip = svg.match(/<clipPath[^>]*>\s*<rect ([^>]*)\/?>/);
   if (clip) {
-    const v = (k: string) => Number(clip[1].match(new RegExp(`\\b${k}="([^"]+)"`))?.[1] ?? 0);
+    const v = (k: string) => Number(clip[1].match(new RegExp(`(?<![\\w-])${k}="([^"]+)"`))?.[1] ?? 0);
     return { x0: v('x'), y0: v('y'), x1: v('x') + v('width'), y1: v('y') + v('height') };
   }
   return { x0, y0, x1, y1 };
@@ -101,12 +101,13 @@ export function signSvg(source: string, text: string): { svg: string; note: stri
   const top = art.y1 + (gap - height) / 2;
   const d = strokeText(text, x, top, style)
     .map(p => 'M' + p.map(q => `${q.x.toFixed(3)},${q.y.toFixed(3)}`).join('L')).join('');
-  const sig = `<g id="signature" data-signature="${text}"><path d="${d}"/></g><!--/signature-->`;
+  const attr = text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const sig = `<g id="signature" data-signature="${attr}"><path d="${d}"/></g><!--/signature-->`;
   const lettering = /(<g [^>]*inkscape:label="6-lettering"[^>]*>)/;
-  if (lettering.test(svg)) svg = svg.replace(lettering, `$1\n${sig}`);
+  if (lettering.test(svg)) svg = svg.replace(lettering, m => `${m}\n${sig}`);
   else {
     if (!/xmlns:inkscape=/.test(root)) svg = svg.replace(root, root.replace(/^<svg\b/, '<svg xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'));
-    svg = svg.replace(/<\/svg>\s*$/, `<g ${LETTERING_LAYER(+(0.13 * perMm).toFixed(4) + '')}>\n${sig}</g>\n</svg>\n`);
+    svg = svg.replace(/<\/svg>\s*$/, () => `<g ${LETTERING_LAYER(+(0.13 * perMm).toFixed(4) + '')}>\n${sig}</g>\n</svg>\n`);
   }
   return { svg, note: `${+Wmm.toFixed(1)}x${+Hmm.toFixed(1)} mm, ${heightMm.toFixed(2)} mm text at ${(x / perMm).toFixed(1)},${(top / perMm).toFixed(1)} mm` };
 }
