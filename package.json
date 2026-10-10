@@ -14,6 +14,7 @@
     "wasm:build": "cd src/wasm && wasm-pack build --target web --out-dir pkg",
     "wasm:dev": "cd src/wasm && wasm-pack build --target web --out-dir pkg --dev",
     "render": "tsx cli/render.ts",
+    "sign": "tsx cli/sign.ts",
     "sketch": "tsx cli/sketch.ts",
     "sketch:typecheck": "tsc --project tsconfig.sketch.json",
     "plot-core:build": "npm run build --prefix packages/plot-core",
