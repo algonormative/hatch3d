@@ -21,7 +21,8 @@ import { contourTube } from '../../kit/mannequin/body.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { CARD, HORIZON_Y, cardFrame, clipWindow } from '../card.ts';
-import { colossus, cutTube, frameAt, fromFrame, headCoil, headOf, plinthFronts, seatedSkeleton, toFrame, type Colossus, type Frame } from './figure.ts';
+import { cutTube, frameAt, fromFrame, headCoil, headOf, toFrame, type AgentHead, type Frame } from '../../kit/agent.ts';
+import { colossus, plinthFronts, seatedSkeleton, type Colossus } from './figure.ts';
 
 /**
  * IV The Emperor: you are already standing on it. Power is order, and it is colossal by distance: a
@@ -182,7 +183,7 @@ function cutMeshes(t: Tube): THREE.BufferGeometry[] {
 }
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side so the knot reads as one form. */
-function skull(h: Colossus['head']): THREE.BufferGeometry {
+function skull(h: AgentHead): THREE.BufferGeometry {
   const g = new THREE.SphereGeometry(1, 28, 18);
   g.applyMatrix4(new THREE.Matrix4().makeBasis(h.side, h.axis, h.face).multiply(new THREE.Matrix4().makeScale(0.52 * h.r, 0.66 * h.r, 0.52 * h.r)));
   g.translate(h.centre.x, h.centre.y, h.centre.z);
