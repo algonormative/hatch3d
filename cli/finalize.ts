@@ -18,6 +18,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
+import { targetPage } from '../src/sketch/render-target.ts';
+import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import type { Control, Page, Pen } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +36,8 @@ export interface FinalizeOptions {
 }
 export interface Stack {
   title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string };
+  /** The sheet every piece prints on (mm). A page-aware sketch draws on it; any other is fitted onto it. Default: each sketch's own page. */
+  page?: { width: number; height: number; margin?: number };
   /** Params every piece shares (e.g. slogan and scratch settings); a piece's own params win. */
   params?: Record<string, unknown>;
   /** Print-run number; `run --bump` increments it. */
@@ -89,18 +93,41 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 
 function fail(message: string): never { throw new Error(message); }
 
-async function loadSketch(entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
+/**
+ * The one page a piece prints on: the stack's page when it sets one, else the sketch's own. A page-aware sketch
+ * gets the page the render will draw it on (a margin the stack leaves out scales with the page, as in the render);
+ * any other sketch gets the stack's page over its own, as finishing fits it.
+ */
+export function pageFor(stack: Pick<Stack, 'page'>, sketch: { page: Page; pageAware?: boolean }): Page {
+  if (!stack.page) return sketch.page;
+  return sketch.pageAware ? targetPage(sketch.page, stack.page) : { ...sketch.page, ...stack.page };
+}
+
+/**
+ * The finishing for the art match's plain render: the piece's page for a page-aware sketch when the stack sets
+ * one, since such a sketch draws differently on it. Otherwise none: the match fits the sketch's own render.
+ */
+export function plainFinishing(stack: Pick<Stack, 'page'>, sketch: { page: Page; pageAware?: boolean }): { page: Page } | undefined {
+  if (!stack.page || !sketch.pageAware) return undefined;
+  const { width, height, margin } = pageFor(stack, sketch);
+  return { page: { width, height, ...(margin === undefined ? {} : { margin }) } };
+}
+
+/** The piece's page (`pageFor`), pens and controls. */
+async function loadSketch(stack: Stack, entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
   const sketch = mod.default;
   if (!sketch?.page || !Array.isArray(sketch.pens)) fail(`${entry} does not export a sketch with page and pens`);
-  return { page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [] };
+  return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [] };
 }
 
-/** Overrides may only name controls the sketch declares, so a typo can't silently do nothing. */
-/** Layering: stack-wide params, then the piece's own params, then title stamping and explicit overrides. */
+/**
+ * Layering: stack-wide params, then the piece's own params, then title stamping and explicit overrides. Every layer
+ * may only name controls the sketch declares, so a typo can't silently do nothing.
+ */
 function withOverrides(stack: Stack, piece: Piece, controls: Control[], overrides: Record<string, unknown>): Record<string, unknown> {
   const ids = new Set(controls.map(c => c.id));
-  for (const key of Object.keys({ ...stack.params, ...overrides })) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
+  for (const key of Object.keys({ ...stack.params, ...piece.params, ...overrides })) if (!ids.has(key)) fail(`${piece.name} has no control named ${key}`);
   return { ...stack.params, ...piece.params, ...overrides };
 }
 
@@ -121,7 +148,7 @@ async function renderSource(piece: Piece, request: object, dir: string): Promise
 
 /** Render only (no vpype), for previews: the page recolors layers itself. */
 export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
-  const { page, pens, controls } = await loadSketch(piece.sketch);
+  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
   const auto = titleOverrides(stack, controls, buildVersion(stack.edition));
   const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
@@ -161,6 +188,30 @@ export function readLayers(svg: string): Layer[] {
   return layers;
 }
 
+/**
+ * Remove pen layers that hold no path. vpype drops an empty layer from the prepared file, so a canonical
+ * render that kept it would disagree with the prepared SVG and the config on the pen-layer count, which
+ * plotter-server rejects. Layer labels and numbers are left as they were, so the plan keeps its pen order
+ * and a gap in the numbering is harmless. Returns the input untouched when no layer is empty.
+ */
+export function dropEmptyPenLayers(svg: string): string {
+  const chunks = svg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/);
+  let changed = false;
+  const kept = chunks.map((chunk, i) => {
+    if (i === 0) return chunk;
+    // The layer ends at the close that balances its own open tag; what follows (the root's end) is kept.
+    let depth = 0, end = -1;
+    for (const m of chunk.matchAll(/<g\b[^>]*?(\/?)>|<\/g>/g)) {
+      if (m[0] === '</g>') depth--; else if (m[1] !== '/') depth++;
+      if (depth === 0) { end = m.index! + m[0].length; break; }
+    }
+    if (end < 0 || /<path\b/.test(chunk.slice(0, end))) return chunk;
+    changed = true;
+    return chunk.slice(end).replace(/^\n/, '');
+  });
+  return changed ? kept.join('') : svg;
+}
+
 const isBorder = (l: Layer) => /finishing-border$/.test(l.label);
 function union(bs: (Bounds | null)[]): Bounds | null {
   return bs.reduce<Bounds | null>((a, b) => !b ? a : !a ? { ...b } : { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }, null);
@@ -169,9 +220,9 @@ function union(bs: (Bounds | null)[]): Bounds | null {
 /** Offset (mm) that centers the art bounds inside the area it may occupy. */
 export function placementOffset(layers: Layer[], page: Page, stack: Stack, center: FinalizeOptions['center']): { dx: number; dy: number; art: Bounds | null; area: Bounds } {
   const art = union(layers.filter(l => !isBorder(l)).map(l => l.bounds));
-  const border = stack.border as { inset?: number; contentGap?: number; style?: string } | undefined;
+  const border = stack.border as { inset?: number; contentGap?: number; style?: string; lineGap?: number } | undefined;
   // Mirrors finishing's content inset: the border's inner line plus half its 0.25 mm stroke.
-  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? 2 : 0) + (border.contentGap ?? 6) + 0.25 : page.margin ?? 18;
+  const inner = border ? (border.inset ?? 12) + (border.style === 'double' ? border.lineGap ?? DOUBLE_BORDER_INSET : 0) + (border.contentGap ?? 6) + 0.25 : page.margin ?? 18;
   const area = { x0: inner, y0: inner, x1: page.width - inner, y1: page.height - inner };
   if (!art || center === 'none') return { dx: 0, dy: 0, art, area };
   const dy = (area.y0 + area.y1) / 2 - (art.y0 + art.y1) / 2;
@@ -243,10 +294,12 @@ export function serverConfig(resultPath: string, sourceSvg: string, report: Piec
     const pen = /data-pen-id="([^"]*)"/.exec(layer)?.[1];
     if (pen) partsByPen.set(pen, [...layer.matchAll(/data-part-id="([^"]*)"/g)].map(m => m[1]));
   }
+  // Only the pens that still have a layer in the canonical SVG (dropEmptyPenLayers removes the ones that draw nothing).
+  const pens = result.metadata.pens.filter(pen => partsByPen.has(pen.id));
   return {
     format: 'hatch3d-sketch-v1', identity: result.identity, composition: 'sketch', presetName: `${report.title} · seed ${report.seed}`,
-    page: result.metadata.page, pens: result.metadata.pens,
-    layers: result.metadata.pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
+    page: result.metadata.page, pens,
+    layers: pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
     params: result.params, ...(result.effectiveParams ? { effectiveParams: result.effectiveParams } : {}), seed: result.seed,
     ...(result.finishing ? { finishing: result.finishing } : {}),
     stats: { pathCount: report.layers.reduce((t, l) => t + l.paths, 0), lengthMm: Math.round(report.layers.reduce((t, l) => t + l.drawMm, 0)) },
@@ -264,14 +317,18 @@ export interface PieceReport {
 }
 
 export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
-  const { page, pens, controls } = await loadSketch(piece.sketch);
+  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
   const inked = pens.filter(p => p.id !== 'lettering').length;
   if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
   const build = buildVersion(stack.edition);
   const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
-  const source = readFileSync(sourcePath, 'utf8');
+  const rendered = readFileSync(sourcePath, 'utf8');
+  // A pen that draws nothing on this piece (an empty part on a small card) is not a layer to plot: drop it from the
+  // canonical render, so that render, the prepared SVG and the config agree on the pen layers.
+  const source = dropEmptyPenLayers(rendered);
+  if (source !== rendered) writeFileSync(sourcePath, source);
   const layers = readLayers(source);
   const finalPage: Page = { ...page, paper: options.palette.paper };
   const { dx, dy, art, area } = placementOffset(layers, finalPage, stack, options.center);
@@ -348,6 +405,10 @@ export function resolveOptions(stack: Stack, override: Partial<Omit<FinalizeOpti
 function loadStack(path: string): Stack {
   const stack = JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')) as Stack;
   if (!stack.out || !Array.isArray(stack.pieces) || !stack.pieces.length) fail('Stack needs out and pieces');
+  const sheet = stack.page as Record<string, unknown> | undefined;
+  const mm = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (sheet !== undefined && (typeof sheet !== 'object' || sheet === null || !mm(sheet.width) || !mm(sheet.height) || (sheet.margin !== undefined && !(mm(sheet.margin) || sheet.margin === 0))
+    || Object.keys(sheet).some(k => !['width', 'height', 'margin'].includes(k)))) fail('Stack page must be { width, height, margin? } in millimetres');
   const names = new Set<string>();
   for (const p of stack.pieces) {
     if (!p.name || !p.sketch || !Number.isSafeInteger(p.seed)) fail('Each piece needs name, sketch and an integer seed');
@@ -366,7 +427,7 @@ async function serve(stackPath: string, port: number) {
   // Preview renders in the default palette; the page recolors layers live. Variants are keyed by their overrides.
   const basePalette = resolveOptions(stack).palette;
   const pieceInfo = new Map<string, { pens: Pen[]; controls: Control[] }>();
-  for (const piece of stack.pieces) pieceInfo.set(slug(piece.name), await loadSketch(piece.sketch));
+  for (const piece of stack.pieces) pieceInfo.set(slug(piece.name), await loadSketch(stack, piece.sketch));
   const variants = new Map<string, Map<string, string>>();
   const variantKey = (overrides: Record<string, unknown>) => sha256(JSON.stringify(Object.keys(overrides).sort().map(k => [k, overrides[k]]))).slice(0, 12);
   async function renderVariant(overrides: Record<string, unknown>, slugs: string[]): Promise<{ key: string; svgs: Record<string, string> }> {

@@ -47,7 +47,7 @@ export function drape(b: Body, o: DrapeOptions): Drape {
   // The body's envelope in cylindrical coordinates round the vertical through the pelvis.
   const samples: THREE.Vector3[] = [];
   // Trunk and legs only: arms pass in front of the cloth or out through it, rather than tenting it.
-  const legs = b.limbs.filter(t => /^(thigh|shin)_/.test(t.id));
+  const legs = b.limbs.filter(t => /^(thigh|shin|leg)_/.test(t.id));
   for (const t of [b.trunk, ...legs]) for (let i = 0; i <= 24; i++) for (let j = 0; j < 16; j++) samples.push(t.point(i / 24, j / 16));
   for (const slab of b.blocks.filter((_, i) => i % 2 === 1)) samples.push(new THREE.Vector3(slab.x, slab.y, slab.z));
   const low = Math.min(...samples.map(p => p.y));
@@ -135,7 +135,8 @@ function normalAt(d: Drape, r: number, c: number): THREE.Vector3 {
 
 /**
  * Draw a drape: hatch along the fall of the cloth, as dense as its tone; crease lines down each fold
- * valley; the neckline and hem; a cloak's opening edges; and the silhouette where the cloth turns away.
+ * valley; the neckline and hem; a cloak's opening edges; and the silhouette where the cloth turns away. The hatch and
+ * creases are `fold`s and the rest `outline`s (`ClothStroke.role`).
  */
 export function drapeStrokes(d: Drape, env: ToneEnv & ViewEnv, look: Look = LOOK): ClothStroke[] {
   const out: ClothStroke[] = [];
@@ -152,16 +153,16 @@ export function drapeStrokes(d: Drape, env: ToneEnv & ViewEnv, look: Look = LOOK
       const s = stride(perpendicular(env, p, d.grid[Math.min(rows - 1, r + 1)][c], d.grid[r][(c + 1) % cols]));
       keep.push(c % s === 0 && env.dark(p, normalAt(d, r, c)) > TIER[tier]);
     }
-    runs(pts, keep, c % 8 === 0 ? look.accent : look.cloth, look.figure, out, fam);
+    runs(pts, keep, c % 8 === 0 ? look.accent : look.cloth, look.figure, out, fam, 'fold');
   }
   // Creases down the fold valleys.
   for (const v of d.valleys) {
     const pts = d.grid.slice(v.from).map(row => row[v.col]);
     const keep = pts.map((_, i) => d.cloth[v.from + i][v.col]);
-    runs(pts, keep, look.crease, look.figure, out, fam);
+    runs(pts, keep, look.crease, look.figure, out, fam, 'fold');
   }
   // Neckline and hem.
-  for (const r of [0, rows - 1]) runs(d.grid[r], d.cloth[r].map((m, c) => m && d.cloth[r][(c + 1) % cols]), look.edge, look.contour, out, fam);
+  for (const r of [0, rows - 1]) runs(d.grid[r], d.cloth[r].map((m, c) => m && d.cloth[r][(c + 1) % cols]), look.edge, look.contour, out, fam, 'outline');
   // A cloak's opening: the first and last cloth cells of each row, joined down the fall.
   const edgeL: THREE.Vector3[] = [], edgeR: THREE.Vector3[] = [];
   for (let r = 0; r < rows; r++) {
@@ -170,8 +171,8 @@ export function drapeStrokes(d: Drape, env: ToneEnv & ViewEnv, look: Look = LOOK
       if (!d.cloth[r][c] && d.cloth[r][(c + 1) % cols]) edgeR.push(d.grid[r][(c + 1) % cols]);
     }
   }
-  if (edgeL.length > 1) out.push({ ink: look.edge, group: look.contour, family: fam, points: edgeL });
-  if (edgeR.length > 1) out.push({ ink: look.edge, group: look.contour, family: fam, points: edgeR });
+  if (edgeL.length > 1) out.push({ ink: look.edge, group: look.contour, family: fam, points: edgeL, role: 'outline' });
+  if (edgeR.length > 1) out.push({ ink: look.edge, group: look.contour, family: fam, points: edgeR, role: 'outline' });
   // Silhouette: where the cloth's normal turns edge-on, tracked row to row.
   for (let c0 = 0; c0 < cols; c0++) {
     const pts: THREE.Vector3[] = [], keep: boolean[] = [];
@@ -181,7 +182,7 @@ export function drapeStrokes(d: Drape, env: ToneEnv & ViewEnv, look: Look = LOOK
       pts.push(d.grid[r][c0].clone().lerp(d.grid[r][(c0 + 1) % cols], hit ? a / (a - b) : 0));
       keep.push(hit);
     }
-    runs(pts, keep, look.edge, look.contour, out, fam);
+    runs(pts, keep, look.edge, look.contour, out, fam, 'outline');
   }
   return out;
 }

@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { bandHatch, bandMarks, bandOutlines, circlePath, discHatch, hatchedBar, hatchedDisc, sideOf } from '../../sketches/kit/fills.ts';
-import { alongRay, collapseBand, helixStrands, strandPoint, towerFrame } from '../../sketches/kit/helix.ts';
+import { alongRay, collapseBand, helixStrands, narrowStrands, ribbonEdges, ribbonMidline, ribbonWidths, strandPoint, strandStrokes, towerFrame } from '../../sketches/kit/helix.ts';
 import {
   glyphMask, groundWord, onWordBox, planSloganAttempts, rigidWords, type SloganEnv,
 } from '../../sketches/kit/lettering.ts';
-import { densityPitch, facetStrokes, faceDarkness, rakingLight, slabGeometry, slabMatrix, slabStrokes, solid } from '../../sketches/kit/slabs.ts';
-import { horizonCamera, pageOf } from '../../sketches/kit/perspective.ts';
+import { densityPitch, facetStrokes, faceDarkness, pageExtent, rakingLight, ruledFaces, slabGeometry, slabMatrix, slabStrokes, sliverShade, solid } from '../../sketches/kit/slabs.ts';
+import { horizonCamera, oversampledView, pageOf, tabloidFrameCamera } from '../../sketches/kit/perspective.ts';
+import { MIN_FEATURE, TABLOID_HORIZON_Y, TABLOID_RASTER, hatchMin } from '../../sketches/kit/format.ts';
+import { TABLOID_PAGE } from '../../sketches/phase-garden/poster.ts';
+import { thinParallel } from '../../sketches/kit/density.ts';
+import { Clearance, insideRing, reduceAtScale, segDist, simplify, straightened } from '../../sketches/kit/page.ts';
+import { PartBuckets, fineDepth } from '../../sketches/kit/strokes.ts';
+import { renderDepthBufferCPU } from '../sketch/depth-buffer.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
 const page = { width: 279.4, height: 431.8 };
@@ -48,6 +54,25 @@ describe('sketch kit: slabs', () => {
     // Outline only: twelve edges' worth of strokes, nothing else; and faces turned away draw nothing.
     expect(facetStrokes(s, new THREE.Vector3(0, 0, -1), eye, true).every(st => st.family === 'edge')).toBe(true);
     expect(facetStrokes(s, new THREE.Vector3(0, 0, -1), eye, false).filter(st => st.family === 'hatch').every(st => st.points.every(p => p.z > 0))).toBe(true);
+  });
+
+  it('leaves a slab untrimmed at tabloid, whatever trim a card asks for small cards, and measures it on the page', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+    const thin = solid(3, 4, -40, 6, 0.02, 4, 0, 'stack');
+    thin.ry = 0.6;
+    const light = new THREE.Vector3(0, 1, 0);
+    for (const outline of [false, true]) {
+      expect(facetStrokes(thin, light, view.position, outline, undefined, { view, shade: true })).toEqual(facetStrokes(thin, light, view.position, outline));
+      expect(facetStrokes(thin, light, view.position, outline, undefined, { view, hidden: false })).toEqual(facetStrokes(thin, light, view.position, outline));
+    }
+    expect(sliverShade(thin, view, light)).toEqual([]);
+    // Its box on the page: centred about its centre's projection, its 6 x 4 footprint turned 0.6 rad spanning about
+    // 7.2 units across, at 10.6 mm a unit 40 units out.
+    const extent = pageExtent(view, thin), centre = pageOf(view, new THREE.Vector3(3, 4, -40));
+    expect(extent.x).toBeCloseTo(centre.x, 0);
+    expect(extent.y).toBeCloseTo(centre.y, 0);
+    expect(extent.size).toBeGreaterThan(72);
+    expect(extent.size).toBeLessThan(80);
   });
 
   it('lowers the raking light as the angle control falls', () => {
@@ -176,6 +201,11 @@ describe('sketch kit: flat fills', () => {
     expect(hatch.length).toBeGreaterThan(20);
     for (const run of hatch) for (const p of run) expect(sideOf(centreline, p).dist).toBeLessThan(half - 0.5 + 0.2);
     expect(bandMarks(centreline, half, area).length).toBe(2 + hatch.length);
+    // Narrower across than `narrow`, a band is its centreline alone; wider, or with no floor (tabloid's 0), a band.
+    expect(bandMarks(centreline, 0.4, area, { narrow: 1 })).toEqual([centreline]);
+    expect(bandMarks(centreline, 0.6, area, { narrow: 1 })).toEqual(bandMarks(centreline, 0.6, area));
+    expect(bandMarks(centreline, 0.4, area, { narrow: 0 })).toEqual(bandMarks(centreline, 0.4, area));
+    expect(bandMarks(centreline, half, area, { pitch: 0.8, narrow: 1 })).toEqual(bandMarks(centreline, half, area, { pitch: 0.8 }));
   });
 
   it('draws a hatched bar: an outer rule, an inner rule, and hatch inside both', () => {
@@ -196,5 +226,222 @@ describe('sketch kit: flat fills', () => {
       expect(Math.abs(s)).toBeLessThanOrEqual(bar.l / 2 - 1.6 + 1e-9);
       expect(Math.abs(t)).toBeLessThanOrEqual(bar.h / 2 - 1.6 + 1e-9);
     }
+    // Narrower between its outline and its rule than `narrow`, the bar is its outline and its hatch, the rule left out.
+    const families = [[Math.PI / 3, 0.62], [-Math.PI / 3, 0.9]] as const;
+    const wide = hatchedBar(bar, tilt, families, 0.5), narrow = hatchedBar(bar, tilt, families, 0.5, 1.6, 1);
+    expect(narrow.paths).toEqual([wide.paths[0], ...wide.paths.slice(2)]);
+    expect(narrow.quad).toEqual(wide.quad);
+    // A band as wide as `narrow`, or no `narrow` (tabloid's 0), keeps its rule.
+    expect(hatchedBar(bar, tilt, families, 1, 1.6, 1)).toEqual(hatchedBar(bar, tilt, families, 1));
+    expect(hatchedBar(bar, tilt, families, 0.5, 1.6, 0)).toEqual(wide);
+  });
+});
+
+describe('sketch kit: shared card helpers', () => {
+  it('builds a level camera in tabloid\'s frame: its horizon on tabloid\'s line, its lens as given', () => {
+    const cam = tabloidFrameCamera({ fov: 54, eye: 6, near: 8, far: 4000 });
+    expect(cam.position.toArray()).toEqual([0, 6, 0]);
+    expect([cam.fov, cam.near, cam.far]).toEqual([54, 8, 4000]);
+    const horizon = pageOf(cam, new THREE.Vector3(0, 6, -1000), TABLOID_PAGE);
+    expect(horizon.x).toBeCloseTo(TABLOID_PAGE.width / 2, 6);
+    expect(horizon.y).toBeCloseTo(TABLOID_HORIZON_Y, 6);
+    // The same camera `horizonCamera` makes from tabloid's page, raster and horizon; near defaults as there.
+    const by = horizonCamera({ fov: 54, eye: [0, 6, 0], target: [0, 6, -100], far: 4000, page: TABLOID_PAGE, depth: TABLOID_RASTER, horizonY: TABLOID_HORIZON_Y, fit: false });
+    const plain = tabloidFrameCamera({ fov: 54, eye: 6, far: 4000 });
+    expect(plain.near).toBe(0.5);
+    expect(plain.projectionMatrix.equals(by.projectionMatrix) && plain.matrixWorldInverse.equals(by.matrixWorldInverse)).toBe(true);
+  });
+
+  it('reduces a path at the card\'s scale: the print\'s reducer at 1, finer on a small card, and a bucket takes it as its reducer', () => {
+    // A 3 mm circle in 0.1 mm steps: `simplify` cuts its corners; on a 0.25 scale card the reducer keeps its curve.
+    const ring = Array.from({ length: 189 }, (_, i) => ({ x: 3 * Math.cos(i / 188 * Math.PI * 2), y: 3 * Math.sin(i / 188 * Math.PI * 2) }));
+    expect(reduceAtScale(ring, 1)).toEqual(simplify(ring));
+    const small = reduceAtScale(ring, 0.25);
+    expect(small.length).toBeGreaterThan(simplify(ring).length * 2);
+    expect(small[0]).toBe(ring[0]);
+    expect(small[small.length - 1]).toBe(ring[ring.length - 1]);
+    expect(small.every(p => ring.includes(p))).toBe(true);
+    expect(reduceAtScale(ring.slice(0, 2), 0.25)).toEqual(ring.slice(0, 2));
+    // `PartBuckets` takes a reducer for its ordinary paths; an exact path skips it, and the default is `simplify`.
+    const keepEnds = (pts: { x: number; y: number }[]) => [pts[0], pts[pts.length - 1]];
+    const line = [{ x: 0, y: 0 }, { x: 1, y: 0.5 }, { x: 2, y: 0 }, { x: 3, y: 0.5 }];
+    const custom = new PartBuckets(0.4, { reduce: keepEnds }), plain = new PartBuckets(0.4);
+    custom.add('a', line); custom.add('b', line, true); plain.add('a', line);
+    expect(custom.get('a')).toEqual([[line[0], line[3]]]);
+    expect(custom.get('b')).toEqual([line]);
+    expect(plain.get('a')).toEqual([simplify(line)]);
+  });
+
+  it('straightens a path to its corners and curves, and measures a point to a segment', () => {
+    const p = (x: number, y: number) => ({ x, y });
+    expect(straightened([p(0, 0), p(1, 0), p(2, 0), p(2, 1)])).toEqual([p(0, 0), p(2, 0), p(2, 1)]);
+    expect(straightened([p(0, 0), p(1, 0.01), p(2, 0)])).toEqual([p(0, 0), p(2, 0)]);
+    expect(straightened([p(0, 0), p(1, 0.05), p(2, 0)])).toHaveLength(3);
+    expect(straightened([p(0, 0), p(1, 0.05), p(2, 0)], 0.1)).toHaveLength(2);
+    expect(straightened([p(0, 0), p(1, 1)])).toEqual([p(0, 0), p(1, 1)]);
+    expect(segDist(p(1, 1), p(0, 0), p(2, 0))).toBe(1);
+    expect(segDist(p(-3, 4), p(0, 0), p(2, 0))).toBe(5);
+    expect(segDist(p(3, 0), p(1, 1), p(1, 1))).toBeCloseTo(Math.hypot(2, 1), 12);
+  });
+
+  it('tags each helix stroke with its role, and a strand\'s edges are found by it', () => {
+    const ctx = sketchContext(5);
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 250 });
+    const [a, b] = helixStrands(ctx).map(st => strandStrokes({ ...st, z: -30 }, 0.5, 0.3, ctx, view));
+    expect([a, b].every(strokes => strokes.every(h => h.role))).toBe(true);
+    expect(a.slice(0, 2).map(h => h.role)).toEqual(['edge', 'edge']);
+    expect(a.filter(h => h.role === 'spine').map(h => h.ink)).toEqual(['acid']);
+    expect(b.some(h => h.role === 'spine')).toBe(false);
+    expect(new Set([...a, ...b].map(h => h.role))).toEqual(new Set(['edge', 'lamination', 'spine', 'rib', 'pulse']));
+    const edges = ribbonEdges([...a, ...b], 'strand-b')!;
+    expect(edges[0]).toBe(b[0]);
+    expect(edges[1]).toBe(b[1]);
+    // Not the first two strokes by position: a strand without its edges has none.
+    expect(ribbonEdges([...a, ...b].filter(h => h.role !== 'edge'), 'strand-a')).toBeUndefined();
+    const widths = ribbonWidths(edges, view), mid = ribbonMidline(edges);
+    expect(widths).toHaveLength(481);
+    expect(mid).toHaveLength(481);
+    expect(Math.min(...widths)).toBeGreaterThanOrEqual(0);
+    expect(mid[200].distanceTo(edges[0].points[200].clone().add(edges[1].points[200]).multiplyScalar(0.5))).toBeLessThan(1e-9);
+  });
+
+  it('draws a ribbon narrower than its limit as a line, by its median or its widest, keeping its spine or the rest', () => {
+    const ctx = sketchContext(5);
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 250 });
+    const [a, b] = helixStrands(ctx).map(st => strandStrokes({ ...st, z: -30 }, 0.5, 0.3, ctx, view));
+    const strokes = [...a, ...b];
+    const widths = ribbonWidths(ribbonEdges(strokes, 'strand-a')!, view).sort((x, y) => x - y);
+    const median = widths[widths.length >> 1], widest = widths[widths.length - 1];
+    expect(widest).toBeGreaterThan(median);
+    // No limit (tabloid), or a ribbon wide enough: every stroke, as it was.
+    expect(narrowStrands(strokes, view, { limit: 0 })).toBe(strokes);
+    expect(narrowStrands(strokes, view, { limit: median * 0.5 })).toEqual(strokes);
+    // Narrower than the limit: each strand is its line alone. Strand a keeps its spine, strand b has none, so its edges' midline.
+    const lines = narrowStrands(strokes, view, { limit: 1e6 });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(a.find(h => h.role === 'spine'));
+    expect([lines[1].group, lines[1].ink]).toEqual(['strand-b', b[0].ink]);
+    expect(lines[1].points).toEqual(ribbonMidline([b[0], b[1]]));
+    // `rest` merges only the two edges of each strand into their midline and keeps everything else, in order.
+    const rest = narrowStrands(strokes, view, { limit: 1e6, keep: 'rest' });
+    expect(rest).toHaveLength(strokes.length - 2);
+    expect(rest[0].points).toEqual(ribbonMidline([a[0], a[1]]));
+    expect(rest.slice(1, a.length - 1)).toEqual(a.slice(2));
+    // Between the median and the widest, the median says narrow and the widest says wide; a window that counts no sample says narrow.
+    const between = (median + widest) / 2;
+    expect(narrowStrands(strokes, view, { limit: between })).toHaveLength(2);
+    expect(narrowStrands(strokes, view, { limit: between, measure: 'widest' })).toEqual(strokes);
+    expect(narrowStrands(strokes, view, { limit: between, measure: 'widest', counts: () => false })).toHaveLength(2);
+  });
+
+  it('tests a small subject against a finer raster: a view of its own with the same projection, and the depth pass at m times the card\'s', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 40, height: 62 }, horizonY: 300 });
+    const finer = oversampledView(view, 4);
+    expect(finer).not.toBe(view);
+    expect(finer.view).toMatchObject({ fullWidth: 160, fullHeight: 248, width: 160, height: 248 });
+    expect(finer.projectionMatrix.equals(view.projectionMatrix)).toBe(true);
+    finer.near = 3;
+    expect(view.near).toBe(0.5);
+    expect(oversampledView(view, 1).projectionMatrix.equals(view.projectionMatrix)).toBe(true);
+    // The depth pass of a slab at 4 times a 40 x 62 raster, and the page millimetres per finer pixel.
+    const slabs = [solid(0, 2, -30, 8, 6, 2, 0, 'stack')].map(slabGeometry);
+    const raster = { W: 40, H: 62, MM_X: page.width / 40, MM_Y: page.height / 62 };
+    const fine = fineDepth(slabs, finer, raster, 4, 0.01);
+    expect([fine.env.width, fine.env.height, fine.env.bias, fine.env.view]).toEqual([160, 248, 0.01, finer]);
+    expect([fine.env.depth.width, fine.env.depth.height]).toEqual([160, 248]);
+    expect(fine.env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, finer, 160, 248).depthData);
+    expect([fine.mmX, fine.mmY]).toEqual([raster.MM_X / 4, raster.MM_Y / 4]);
+    expect(fineDepth(slabs, view, raster, 1).env.depth.depthData).toEqual(renderDepthBufferCPU(slabs, view, 40, 62).depthData);
+  });
+
+  it('thins near-parallel strokes in rank order: the first path keeps its line, a neighbour closer than the limit loses the stretch beside it', () => {
+    const line = (x0: number, x1: number, y: number) => [{ x: x0, y }, { x: x1, y }];
+    const [outline, near, far, over, crossing] = thinParallel([line(0, 10, 0), line(0, 10, 0.2), line(0, 10, 1), line(-5, 5, 0.2), [{ x: 5, y: -3 }, { x: 5.1, y: 3 }]], 0.5);
+    // A kept path is one run, cut into steps of 0.2 mm along its length.
+    const ends = (runs: { x: number; y: number }[][]) => runs.map(r => [r[0], r[r.length - 1]]);
+    expect(ends(outline)).toEqual([line(0, 10, 0)]);
+    expect(near).toEqual([]);
+    expect(ends(far)).toEqual([line(0, 10, 1)]);
+    // Only the stretch beside the outline goes: from x = 0 on, the part before it carries on.
+    expect(over).toHaveLength(1);
+    expect(over[0][0]).toEqual({ x: -5, y: 0.2 });
+    expect(over[0][over[0].length - 1].x).toBeCloseTo(0, 9);
+    // A stroke that crosses at an angle is not beside it, and keeps its line.
+    expect(crossing).toHaveLength(1);
+    // The order ranks them: a path given first wins, and a path never crowds itself.
+    expect(thinParallel([line(0, 10, 0.2), line(0, 10, 0)], 0.5).map(runs => runs.length)).toEqual([1, 0]);
+    const [back] = thinParallel([[{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0.1 }, { x: 0, y: 0.1 }]], 0.5);
+    expect(back).toHaveLength(1);
+    expect(back[0][back[0].length - 1]).toEqual({ x: 0, y: 0.1 });
+    // A path that carries on from where another ends keeps its line; one the limit apart does too.
+    expect(thinParallel([line(0, 10, 0), line(10.5, 20, 0.1)], 0.5)[1]).toHaveLength(1);
+    expect(thinParallel([line(0, 10, 0), line(0, 10, 0.5)], 0.5)[1]).toHaveLength(1);
+  });
+
+  it('keeps paper clear round the marks drawn so far: a point within the gap of any registered mark is near', () => {
+    const clear = new Clearance(1);
+    expect(clear.near({ x: 5, y: 0 })).toBe(false);
+    clear.add([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
+    // Along the whole mark, not just its ends or its vertices; strictly under the gap; past its end by the gap.
+    for (const x of [0, 2.53, 5.03, 9.97]) expect(clear.near({ x, y: 0.9 })).toBe(true);
+    expect(clear.near({ x: 5, y: 1 })).toBe(false);
+    expect(clear.near({ x: 5, y: -2.5 })).toBe(false);
+    expect(clear.near({ x: 10.9, y: 0 })).toBe(true);
+    expect(clear.near({ x: 11.2, y: 0 })).toBe(false);
+    expect(clear.near({ x: -0.5, y: -0.5 })).toBe(true);
+    // A mark of one point, or none; and a sparser sampling step leaves gaps a point can slip through.
+    clear.add([{ x: 20, y: 20 }]);
+    clear.add([]);
+    expect(clear.near({ x: 20.5, y: 20 })).toBe(true);
+    const sparse = new Clearance(0.5, 4);
+    sparse.add([{ x: 0, y: 0 }, { x: 8, y: 0 }]);
+    expect(sparse.near({ x: 2, y: 0 })).toBe(false);
+    expect(sparse.near({ x: 4.2, y: 0 })).toBe(true);
+  });
+
+  it('tells inside a closed path from outside by the even-odd rule, both loops of a figure eight included', () => {
+    const p = (x: number, y: number) => ({ x, y });
+    const square = [p(0, 0), p(4, 0), p(4, 4), p(0, 4)];
+    expect([p(2, 2), p(0.1, 0.1), p(3.9, 3.9)].map(q => insideRing(square, q))).toEqual([true, true, true]);
+    expect([p(-0.1, 2), p(4.1, 2), p(2, -0.1), p(2, 4.1), p(9, 9)].map(q => insideRing(square, q))).toEqual([false, false, false, false, false]);
+    // The path closes itself: its last point need not repeat the first, and one that does gives the same answer.
+    expect(insideRing([...square, square[0]], p(2, 2))).toBe(true);
+    // A figure eight crosses at (4, 2): both its loops are inside, the crossing's outside is not.
+    const eight = [p(0, 0), p(4, 2), p(8, 4), p(8, 0), p(4, 2), p(0, 4)];
+    expect([p(1.5, 2), p(6.5, 2)].map(q => insideRing(eight, q))).toEqual([true, true]);
+    expect([p(4, 3.5), p(4, 0.5), p(-1, 2), p(9, 2)].map(q => insideRing(eight, q))).toEqual([false, false, false, false]);
+    expect(insideRing([], p(1, 1))).toBe(false);
+  });
+
+  it('sets no shortest piece of hatch at tabloid, whatever the stroke (the small card\'s is pinned by the Star\'s 70 x 120 test)', () => {
+    expect(MIN_FEATURE).toBe(0);
+    for (const family of ['hatch', 'edge', 'membrane', 'text']) expect(hatchMin(family)).toBeUndefined();
+  });
+
+  it('rules the dark faces of a slab that sees the eye along their length, a line every step, in the print\'s two inks by turns', () => {
+    const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
+    // 6 wide, 8 tall, 4 deep, its centre 30 units out: from the eye only its front face shows.
+    const block = solid(0, 2, -30, 6, 8, 4, 0, 'stack');
+    const behind = new THREE.Vector3(0, 0, -1);
+    const ruled = ruledFaces(block, behind, view, 1);
+    // The face is 6 across and 8 tall: five lines a unit apart, each the length of the face less a gap at either end.
+    expect(ruled.map(st => st.ink)).toEqual(['carbon', 'ultramarine', 'carbon', 'ultramarine', 'carbon']);
+    expect(ruled.every(st => st.family === 'hatch' && st.group === 'system' && st.points.length === 2)).toBe(true);
+    ruled.forEach((st, j) => {
+      const [a, b] = st.points;
+      expect(a.z).toBeCloseTo(-28 + 0.006, 9);
+      expect(b.z).toBeCloseTo(-28 + 0.006, 9);
+      expect(a.x).toBeCloseTo(-3 + (j + 1), 9);
+      expect(b.x).toBeCloseTo(a.x, 9);
+      expect([a.y, b.y].map(y => y - 2).sort((m, n) => m - n)).toEqual([-3, 3].map(y => expect.closeTo(y, 9)));
+    });
+    // A step wider than the face leaves it open; so does a light that falls on it, and a pale slab.
+    expect(ruledFaces(block, behind, view, 7)).toEqual([]);
+    expect(ruledFaces(block, new THREE.Vector3(0, 0, 1), view, 1)).toEqual([]);
+    expect(ruledFaces({ ...block, tone: 0.1 }, behind, view, 1)).toEqual([]);
+    // A face too short for even one line's length between its gaps (a square one with a single line) is left open, not a point.
+    expect(ruledFaces(solid(0, 2, -30, 2.4, 2.4, 4, 0, 'stack'), behind, view, 1)).toEqual([]);
+    // Closer steps give more lines.
+    expect(ruledFaces(block, behind, view, 0.5).length).toBe(11);
   });
 });

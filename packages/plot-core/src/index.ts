@@ -4,6 +4,8 @@ export { validateSketch, resolveParams, finalParts } from './validation.js';
 export { svgFor } from './svg.js';
 export { resolveFinishing, applyFinishing, mapFinishingPoint, mapFinishingBox, mapFinishingAssetMetadata, quantizeMm } from './finishing.js';
 export type { ResolvedFinishing } from './finishing.js';
+export { publishRenderTarget, renderTarget, adoptRenderTarget, renderTargetAdopted, targetPage } from './render-target.js';
+export type { RenderTarget } from './render-target.js';
 export { strokeText, strokeTextOnPath, measureStrokeText } from './stroke-text.js';
 export type { StrokeFace, TextStyle, PathTextStyle } from './stroke-text.js';
 export { snapSliderValue, resolveMacroParams } from './control-values.js';

@@ -1,11 +1,16 @@
+// First: the fit this card prefers on a small card, declared before the format loads.
+import './prefers.ts';
 import type { Control, Sketch } from '../../../src/sketch/types.ts';
 import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { assertFormatPage } from '../../kit/format.ts';
 import { sloganControls, titleControls, LETTERING_PEN } from '../../kit/lettering.ts';
 import { drawTower } from './geometry.ts';
+import { drawMachineTower } from './machine.ts';
 
 const sketch: Sketch = {
   name: 'Breach Tarot: XVI The Tower',
   page: TABLOID_PAGE,
+  pageAware: true,
   pens: [
     { id: 'carbon', color: '#22282c', width: 0.25 },
     { id: 'ultramarine', color: '#3c49aa', width: 0.25 },
@@ -15,6 +20,12 @@ const sketch: Sketch = {
     LETTERING_PEN,
   ],
   controls: [
+    { type: 'select', id: 'form', label: 'The tower', default: 'machine', options: ['cantilever', 'machine'],
+      optionLabels: { cantilever: 'Cantilevered stack (approved)', machine: 'The supercomputer, square on, struck from behind' }, group: 'Tower' },
+    { type: 'slider', id: 'machineOpen', label: 'Opening of the C', default: 1.55, min: 0.1, max: 2.4, step: 0.01, units: 'rad', group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
+    { type: 'select', id: 'machineTicks', label: 'Status ticks', default: 'dead', options: ['dead', 'lit'],
+      optionLabels: { dead: 'Dead where the bolt passes behind', lit: 'Lit everywhere' }, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
+    { type: 'toggle', id: 'machineClock', label: 'Clock across the sky', default: false, group: 'Tower', showWhen: { control: 'form', equals: 'machine' } },
     { type: 'slider', id: 'bolt', label: 'Bolt width', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
     { type: 'slider', id: 'slip', label: 'Slip along the tear', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
     { type: 'slider', id: 'storm', label: 'Storm', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Strike' },
@@ -34,7 +45,8 @@ const sketch: Sketch = {
     ...titleControls(),
   ],
   draw(ctx) {
-    return drawTower(ctx);
+    assertFormatPage(ctx.page);
+    return ctx.params.form === 'machine' ? drawMachineTower(ctx) : drawTower(ctx);
   },
 };
 

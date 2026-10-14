@@ -61,12 +61,14 @@ export function resolveFinishing(sourcePage: Page, sourcePens: Pen[], input: unk
   let border: FinishingOptions['border'];
   if (input.border !== undefined) {
     assert(object(input.border), 'Finishing border must be an object');
-    onlyKeys(input.border, ['style', 'pen', 'inset', 'contentGap'], 'finishing border');
+    onlyKeys(input.border, ['style', 'pen', 'inset', 'contentGap', 'lineGap'], 'finishing border');
     assert(typeof input.border.style === 'string' && ['simple', 'double', 'ticked', 'cropmarks'].includes(input.border.style), 'Unknown finishing border style');
     const borderPen = input.border.pen;
     assert(typeof borderPen === 'string' && sourcePens.some((p) => p.id === borderPen), 'Finishing border pen must reference a declared pen');
     assert(input.border.inset === undefined || (finite(input.border.inset) && input.border.inset >= 0), 'Finishing border inset must be nonnegative finite millimeters');
     assert(input.border.contentGap === undefined || (finite(input.border.contentGap) && input.border.contentGap >= 0), 'Finishing border contentGap must be nonnegative finite millimeters');
+    assert(input.border.lineGap === undefined || input.border.style === 'double', 'Finishing border lineGap is the gap between a double border\'s two lines');
+    assert(input.border.lineGap === undefined || (finite(input.border.lineGap) && input.border.lineGap > 0), 'Finishing border lineGap must be positive finite millimeters');
     assert(!sourcePens.some((p) => p.id === BORDER_ID), `Border pen id collision: ${BORDER_ID}`);
     border = input.border as NonNullable<FinishingOptions['border']>;
   }
@@ -103,7 +105,7 @@ export function resolveFinishing(sourcePage: Page, sourcePens: Pen[], input: unk
   }
   const sourceMargin = sourcePage.margin ?? 0;
   const margin = page.margin ?? 0;
-  const legacyInnerInset = border?.style === 'double' ? DOUBLE_BORDER_INSET : 0;
+  const legacyInnerInset = border?.style === 'double' ? border.lineGap ?? DOUBLE_BORDER_INSET : 0;
   const explicitBorderSpacing = border !== undefined && (border.inset !== undefined || border.contentGap !== undefined);
   let borderInset = margin;
   let contentInset = margin + legacyInnerInset;
@@ -213,7 +215,7 @@ export function applyFinishing(rawParts: Part[], finishing: ResolvedFinishing, s
   }
   if (finishing.border) {
     const sheet: Rect = { xMin: 0, yMin: 0, xMax: finishing.page.width, yMax: finishing.page.height };
-    const paths = cleanPaths(generateBorderPolylines(finishing.border.style, finishing.page.width, finishing.page.height, finishing.border.inset ?? finishing.page.margin ?? 0)
+    const paths = cleanPaths(generateBorderPolylines(finishing.border.style, finishing.page.width, finishing.page.height, finishing.border.inset ?? finishing.page.margin ?? 0, finishing.border.lineGap)
       .flatMap((path) => clipPolylineToRect(path, sheet)), 'Finishing border');
     parts.push({ id: BORDER_ID, pen: BORDER_ID, paths });
   }

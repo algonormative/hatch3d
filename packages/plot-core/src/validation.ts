@@ -17,6 +17,7 @@ export function validateSketch(value: unknown): Sketch {
   assert(Math.round(page.width * 1000) > 0 && Math.round(page.height * 1000) > 0, 'Page dimensions must survive millimeter quantization');
   assert(page.margin === undefined || (finite(page.margin) && page.margin >= 0 && page.margin * 2 < Math.min(page.width, page.height)), 'Page margin must fit the page');
   assert(page.paper === undefined || nonempty(page.paper), 'Page paper must be a color string');
+  assert(value.pageAware === undefined || typeof value.pageAware === 'boolean', 'Sketch pageAware must be a boolean');
   assert(Array.isArray(value.pens) && value.pens.length > 0, 'Sketch needs at least one pen');
   const penIds = new Set<string>();
   for (const pen of value.pens as Pen[]) {

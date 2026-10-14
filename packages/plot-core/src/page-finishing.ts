@@ -14,6 +14,7 @@ export const BORDER_STYLES: Record<string, string> = {
   cropmarks: "Crop marks",
 };
 
+/** A double border's default distance between its two lines, in millimeters. */
 export const DOUBLE_BORDER_INSET = 2;
 export type BorderStyle = 'simple' | 'double' | 'ticked' | 'cropmarks';
 export interface PagePoint { x: number; y: number }
@@ -59,8 +60,11 @@ export function generateBorderPaths(
   }
 }
 
-/** Real plotter polylines with the same coordinates and order as generateBorderPaths. */
-export function generateBorderPolylines(style: BorderStyle, pageW: number, pageH: number, margin: number): PagePoint[][] {
+/**
+ * Real plotter polylines with the same coordinates and order as generateBorderPaths. `lineGap` is a double
+ * border's distance between its two lines (the inner one's inset from the outer).
+ */
+export function generateBorderPolylines(style: BorderStyle, pageW: number, pageH: number, margin: number, lineGap = DOUBLE_BORDER_INSET): PagePoint[][] {
   const x = margin; const y = margin;
   const w = pageW - 2 * margin; const h = pageH - 2 * margin;
   const rect = (rx: number, ry: number, rw: number, rh: number): PagePoint[] => [
@@ -68,7 +72,7 @@ export function generateBorderPolylines(style: BorderStyle, pageW: number, pageH
     { x: rx, y: ry + rh }, { x: rx, y: ry },
   ];
   if (style === 'simple') return [rect(x, y, w, h)];
-  if (style === 'double') return [rect(x, y, w, h), rect(x + DOUBLE_BORDER_INSET, y + DOUBLE_BORDER_INSET, w - 2 * DOUBLE_BORDER_INSET, h - 2 * DOUBLE_BORDER_INSET)];
+  if (style === 'double') return [rect(x, y, w, h), rect(x + lineGap, y + lineGap, w - 2 * lineGap, h - 2 * lineGap)];
   if (style === 'ticked') {
     const paths = [rect(x, y, w, h)];
     for (let tx = x + 10; tx < x + w; tx += 10) {

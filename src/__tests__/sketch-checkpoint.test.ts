@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCheckpoint, replayCheckpoint } from '../../cli/sketch/checkpoint.ts';
 import { comparePreserved } from '../../cli/sketch/preserve.ts';
+import { renderSketch } from '../../cli/sketch/runner.ts';
 import type { Params, RenderResult } from '../sketch/types.ts';
 
 const exec = promisify(execFile);
@@ -78,6 +79,22 @@ describe('source checkpoint', () => {
     const first = await rendered(entry, finishing);
     const saved = await createCheckpoint({ entry, result: first, outputDir: output });
     expect(saved.manifest.finishing).toEqual(first.finishing);
+    expect((await replayCheckpoint({ checkpoint: saved.path, repoRoot: root })).identity).toBe(first.identity);
+  }, 30000);
+
+  it('replays a legacy sketch whose modules adopt the render target, with its format options, through the retry', async () => {
+    const { root, entry, output } = await fixture();
+    await writeFile(join(root, 'sketches/study/layout.ts'), `import { adoptRenderTarget, renderTarget } from '../../packages/plot-core/src/render-target.ts';
+      export const WIDTH = renderTarget().page?.width ?? 20;
+      if (WIDTH !== 20) adoptRenderTarget();`);
+    await writeFile(entry, `import { WIDTH } from './layout.ts';
+      export default { name: 'Adopting checkpoint', page: { width: 20, height: 20, margin: 2 }, pens: [{ id: 'p', color: '#222222', width: 0.3 }], controls: [],
+        draw() { return [{ id: 'line', pen: 'p', paths: [[{x:3,y:8},{x:3+WIDTH/2,y:8}]] }]; } };`);
+    const first = await renderSketch({ entry, seed: 7, finishing: { page: { width: 10, height: 10, margin: 1 } }, format: { fit: 'width' } });
+    // Drawn at its default width (a 10 mm line on 20 mm), then fitted by 0.5.
+    expect(first.parts[0].paths[0]).toEqual([{ x: 1.5, y: 4 }, { x: 6.5, y: 4 }]);
+    const saved = await createCheckpoint({ entry, result: first, outputDir: output });
+    expect(saved.manifest.format).toEqual({ fit: 'width' });
     expect((await replayCheckpoint({ checkpoint: saved.path, repoRoot: root })).identity).toBe(first.identity);
   }, 30000);
 

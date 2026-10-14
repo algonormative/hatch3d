@@ -1,6 +1,6 @@
 /** Public local Node host for the plot-core Sketch contract. */
 export { SketchRunnerError } from './errors.js';
-import type { FinishingOptions, Params, RenderResult, SketchMetadata } from '@hatch3d/plot-core';
+import type { FinishingOptions, FormatOptions, Params, RenderResult, SketchMetadata } from '@hatch3d/plot-core';
 import { inspectSketch as inspect, renderSketch as render } from '../../../cli/sketch/runner.ts';
 import { startSketchServer as start } from '../../../cli/sketch/server.ts';
 import { exportSketchPng as exportPng, pngOptions as parsePng, PNG_SCALES as scales } from '../../../cli/sketch/export-png.ts';
@@ -8,7 +8,7 @@ import { runExperimentBatch as runBatch } from '../../../cli/sketch/experiments.
 import type { ExperimentBatchOptions, ExperimentManifest } from './experiment-types.js';
 export type { ExperimentBatchOptions, ExperimentCandidate, ExperimentInputFingerprint, ExperimentManifest, ExperimentMatrix, ExperimentRegime, ExperimentSource, ExperimentStatus } from './experiment-types.js';
 
-export interface RenderOptions { entry: string; params?: Params; seed?: number; finishing?: FinishingOptions; timeoutMs?: number; signal?: AbortSignal }
+export interface RenderOptions { entry: string; params?: Params; seed?: number; finishing?: FinishingOptions; format?: FormatOptions; timeoutMs?: number; signal?: AbortSignal }
 export interface InspectOptions { entry: string; timeoutMs?: number; signal?: AbortSignal }
 export function renderSketch(options: RenderOptions): Promise<RenderResult> { return render(options); }
 export function inspectSketch(options: InspectOptions): Promise<SketchMetadata> { return inspect(options); }

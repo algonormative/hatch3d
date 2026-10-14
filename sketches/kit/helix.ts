@@ -1,7 +1,10 @@
 import * as THREE from 'three';
-import type { SketchContext } from '../../src/sketch/types.ts';
+import type { Point, SketchContext } from '../../src/sketch/types.ts';
+import { buildSurfaceMesh } from '../../src/projection.ts';
 import { clamp, n } from './params.ts';
-import { POSTER_HALF_H, POSTER_HALF_W, POSTER_MM_PER_UNIT, SLAB_MIN_PITCH, densityPitch } from './slabs.ts';
+import { MIN_FEATURE, SHEET } from './format.ts';
+import { pageOf } from './perspective.ts';
+import { POSTER_HALF_H, POSTER_HALF_W, POSTER_MM_PER_UNIT, SLAB_MIN_PITCH, densityLevel, densityPitch } from './slabs.ts';
 import type { Ink } from './types.ts';
 
 /**
@@ -15,8 +18,15 @@ export type Strand = {
   x: number; y: number; z: number;
 };
 
-/** A helix stroke: strand `a` and `b` draw into their own groups. */
-export type HelixStroke = { ink: Ink; group: 'strand-a' | 'strand-b'; points: THREE.Vector3[] };
+/**
+ * What a helix stroke is: a ribbon's `edge` (a strand's first two strokes, traced at the same samples either side of
+ * its ribbon), a `lamination` along it, the `spine` (strand a's centre line), a `rib` across it, or a `pulse` beside
+ * its leading edge.
+ */
+export type HelixRole = 'edge' | 'lamination' | 'spine' | 'rib' | 'pulse';
+
+/** A helix stroke: strand `a` and `b` draw into their own groups. `strandStrokes` tags each with its role. */
+export type HelixStroke = { ink: Ink; group: 'strand-a' | 'strand-b'; points: THREE.Vector3[]; role?: HelixRole };
 
 /** The cathedral tower's height range, in world units: strands scatter their ends over it, and the breach sits within it. */
 export const TOWER_BOT = -10.9, TOWER_TOP = 10.6;
@@ -98,8 +108,8 @@ export function strandPoint(s: Strand, t: number, v: number): THREE.Vector3 {
     .addScaledVector(dir, v * width);
 }
 
-function trace(ink: Ink, group: HelixStroke['group'], count: number, fn: (t: number) => THREE.Vector3): HelixStroke {
-  return { ink, group, points: Array.from({ length: count + 1 }, (_, i) => fn(i / count)) };
+function trace(ink: Ink, group: HelixStroke['group'], role: HelixRole, count: number, fn: (t: number) => THREE.Vector3): HelixStroke {
+  return { ink, group, role, points: Array.from({ length: count + 1 }, (_, i) => fn(i / count)) };
 }
 
 const BARS = 16;
@@ -110,12 +120,13 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
   const out: HelixStroke[] = [];
   const group: HelixStroke['group'] = s.id === 'a' ? 'strand-a' : 'strand-b';
   const rng = ctx.random(`lamellar-${s.id}`);
+  // On-sheet millimetres: tabloid's frame, times the format's page ratio per axis (1 at tabloid).
   const screen = (p: THREE.Vector3) => {
     const q = p.clone().project(view);
-    return { x: q.x * POSTER_HALF_W * POSTER_MM_PER_UNIT, y: q.y * POSTER_HALF_H * POSTER_MM_PER_UNIT };
+    return { x: q.x * POSTER_HALF_W * POSTER_MM_PER_UNIT * SHEET.x, y: q.y * POSTER_HALF_H * POSTER_MM_PER_UNIT * SHEET.y };
   };
   const at = (t: number, v: number) => screen(strandPoint(s, t, v));
-  for (const v of [-1, 1]) out.push(trace('vermilion', group, 480, t => strandPoint(s, t, v)));
+  for (const v of [-1, 1]) out.push(trace('vermilion', group, 'edge', 480, t => strandPoint(s, t, v)));
   const gates = Array.from({ length: BARS }, (_, bar) => bar === 0 || bar === BARS - 1 || rng() > interruption * 0.73);
   const pitch = Math.max(SLAB_MIN_PITCH, densityPitch(density, 0.09, 0.034, 0.032));
   const contours = Math.max(6, Math.round(2 * s.width * 0.95 / pitch));
@@ -156,13 +167,13 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
         let r = q;
         while (r + 1 < SUB && keep(strides[r + 1])) r++;
         const a0 = start + (end - start) * q / SUB, a1 = start + (end - start) * (r + 1) / SUB;
-        out.push(trace(ink, group, 5 * (r - q + 1), t => strandPoint(s, a0 + (a1 - a0) * t, v)));
+        out.push(trace(ink, group, 'lamination', 5 * (r - q + 1), t => strandPoint(s, a0 + (a1 - a0) * t, v)));
         q = r + 1;
       }
     }
   }
-  if (s.id === 'a') out.push(trace('acid', group, 480, t => strandPoint(s, t, 0)));
-  const ribs = Math.round(densityPitch(density, 40, 120, 170));
+  if (s.id === 'a') out.push(trace('acid', group, 'spine', 480, t => strandPoint(s, t, 0)));
+  const ribs = Math.round(densityLevel(density, 40, 120, 170));
   let last: { x: number; y: number } | null = null;
   for (let i = 0; i <= ribs; i++) {
     const u = i / ribs;
@@ -174,7 +185,7 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
     const ink: Ink = s.id === 'a'
       ? (i % 8 === 0 ? 'acid' : i % 3 === 0 ? 'violet' : i % 4 === 0 ? 'vermilion' : 'ultramarine')
       : (i % 8 === 0 ? 'vermilion' : i % 3 === 0 ? 'ultramarine' : 'violet');
-    out.push(trace(ink, group, 14, t => strandPoint(s, u, -0.96 + t * 1.92)));
+    out.push(trace(ink, group, 'rib', 14, t => strandPoint(s, u, -0.96 + t * 1.92)));
   }
   if (s.id === 'a') {
     // Sixty-four offset pulses along the leading edge: 8 bars of 8 with built-in rests.
@@ -183,7 +194,7 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
       if ((beat === 2 || beat === 5) && bar % 2 === 0) continue;
       if (rng() < interruption * 0.38) continue;
       const u = 0.04 + 0.92 * (i + 0.5) / 64;
-      out.push(trace(bar % 2 ? 'violet' : 'acid', group, 5, t => strandPoint(s, u, -1.12 - 0.15 * t)));
+      out.push(trace(bar % 2 ? 'violet' : 'acid', group, 'pulse', 5, t => strandPoint(s, u, -1.12 - 0.15 * t)));
     }
   }
   return out;
@@ -196,4 +207,137 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
 export function alongRay(from: THREE.Vector3, angle: number): THREE.Matrix4 {
   return new THREE.Matrix4().makeTranslation(from.x, from.y, from.z)
     .multiply(new THREE.Matrix4().makeRotationZ(angle - Math.PI / 2));
+}
+
+export interface AlongOptions {
+  /** Strand radius round the curve, world units; the second strand sits `spread` wider. */
+  radius: number;
+  /** Ribbon width; the second strand is `narrow` slimmer. */
+  width: number;
+  /** Curve length per turn of the strands. */
+  pitch: number;
+  spread?: number;
+  narrow?: number;
+  /** Ribbon twist (the helix's shellTwist). */
+  twist?: number;
+  density?: number;
+  interruption?: number;
+  /**
+   * How many times wider the helix is at the curve's end than at its start. Its ribbons and their
+   * spread grow along the curve as `taper ** (s ** flare)` at curve fraction s, and the pitch grows
+   * with them (as that width to the power `pitchGrowth`), so it opens without winding tighter.
+   */
+  taper?: number;
+  /** 1 widens steadily (exponential in length); higher holds the widening back for the end. */
+  flare?: number;
+  /** 1 keeps every turn's proportions; lower lets the open end keep more turns. */
+  pitchGrowth?: number;
+}
+
+/**
+ * The twin helix laid along any curve: the two seeded strands are built in their own upright space
+ * (starting at the curve's first point) and bent onto the curve, height along the strand becoming
+ * arc length, the sideways offsets riding the curve's frame. Returns the strokes and the strands'
+ * surfaces for the depth pass.
+ */
+export function helixAlong(ctx: SketchContext, view: THREE.Camera, curve: THREE.CatmullRomCurve3, o: AlongOptions): { strokes: HelixStroke[]; meshes: THREE.BufferGeometry[] } {
+  const start = curve.getPointAt(0);
+  const length = curve.getLength();
+  const frames = curve.computeFrenetFrames(400, false);
+  const template = helixStrands({ ...ctx, params: { ...ctx.params, helixTurns: 1.6, shellTwist: o.twist ?? 0.35 } });
+  // A taper scales the helix by width(s) at curve fraction s. The strands are built with uniform
+  // turns in their own height u; u is sent to the s where the turns so far, at a pitch growing with
+  // the width, reach that share of the whole.
+  const taper = o.taper !== undefined && Math.abs(o.taper - 1) > 1e-6 ? o.taper : null;
+  const STEPS = 400;
+  const width = (s: number) => taper! ** (s ** (o.flare ?? 1));
+  const turnsTo: number[] = [0];
+  if (taper) for (let i = 1; i <= STEPS; i++) turnsTo.push(turnsTo[i - 1] + 1 / (STEPS * width((i - 0.5) / STEPS) ** (o.pitchGrowth ?? 1)));
+  const curveAt = (u: number): number => {
+    const want = u * turnsTo[STEPS];
+    let lo = 0, hi = STEPS;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (turnsTo[mid] < want) lo = mid; else hi = mid; }
+    const span = turnsTo[hi] - turnsTo[lo];
+    return (lo + (span > 0 ? (want - turnsTo[lo]) / span : 0)) / STEPS;
+  };
+  const strands: Strand[] = template.map((st, i) => ({
+    ...st, x: start.x, y: start.y, z: start.z, y0: 0, y1: length, radius: o.radius + (o.spread ?? 0.15) * i, depth: 1, width: o.width - (o.narrow ?? 0.1) * i,
+    swell: 0, centre: -1e3, turns: taper ? length / o.pitch * turnsTo[STEPS] : length / o.pitch,
+  }));
+  const bend = (p: THREE.Vector3): THREE.Vector3 => {
+    const u = clamp((p.y - start.y) / length, 0, 1);
+    if (taper) {
+      const s = curveAt(u), scale = width(s);
+      const k = Math.min(400, Math.round(s * 400));
+      return curve.getPointAt(s).addScaledVector(frames.normals[k], (p.x - start.x) * scale).addScaledVector(frames.binormals[k], (p.z - start.z - 0.25) * scale);
+    }
+    const k = Math.min(400, Math.round(u * 400));
+    return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - start.x).addScaledVector(frames.binormals[k], p.z - start.z - 0.25);
+  };
+  const strokes: HelixStroke[] = [];
+  for (const st of strands) for (const h of strandStrokes(st, o.density ?? 0.35, o.interruption ?? 0.3, ctx, view)) strokes.push({ ...h, points: h.points.map(bend) });
+  const meshes = strands.map(st => buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8));
+  return { strokes, meshes };
+}
+
+/** A strand's two edge strokes, the ribbon's sides, in the order `strandStrokes` traces them; undefined if a card has cut them away. */
+export function ribbonEdges(strokes: readonly HelixStroke[], group: HelixStroke['group']): [HelixStroke, HelixStroke] | undefined {
+  const edges = strokes.filter(h => h.group === group && h.role === 'edge');
+  return edges.length >= 2 ? [edges[0], edges[1]] : undefined;
+}
+
+/** The ribbon's width at each sample of its edges, in page millimetres as `view` sees it. */
+export function ribbonWidths(edges: readonly [HelixStroke, HelixStroke], view: THREE.Camera): number[] {
+  const count = Math.min(edges[0].points.length, edges[1].points.length);
+  return Array.from({ length: count }, (_, i) => {
+    const a = pageOf(view, edges[0].points[i]), b = pageOf(view, edges[1].points[i]);
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  });
+}
+
+/** The line down the middle of a ribbon: its edges' midpoints, sample for sample. */
+export function ribbonMidline(edges: readonly [HelixStroke, HelixStroke]): THREE.Vector3[] {
+  return edges[0].points.map((p, i) => p.clone().lerp(edges[1].points[i], 0.5));
+}
+
+export interface NarrowStrands {
+  /** A ribbon narrower than this on the page, in millimetres, is drawn as a line. Default `MIN_FEATURE`: none at tabloid. */
+  limit?: number;
+  /** How wide a ribbon is: the `median` of its samples (the default), or its `widest` sample among those that `counts`. */
+  measure?: 'median' | 'widest';
+  /** For `widest`: which samples count, by the page point of the strand's first edge. Default all of them. */
+  counts?: (p: Point) => boolean;
+  /**
+   * What a narrow strand keeps: only its line (`line`, the default: its spine if it has one, else the midline between
+   * its edges, in their ink), or all it has but its two edges, which merge into that midline (`rest`).
+   */
+  keep?: 'line' | 'rest';
+}
+
+/**
+ * A small card's narrow strands. A ribbon narrower on the page than `limit` has edges closer than the pen can hold
+ * apart, and its laminations are specks: it is drawn by its line instead (see `NarrowStrands` for which, and how
+ * the width is measured). Strokes of a ribbon wide enough, and every other group, are returned as they are; none
+ * of the strokes at all at tabloid, where `limit` is 0. A strand without both its edges (`ribbonEdges`) is left alone.
+ */
+export function narrowStrands(strokes: HelixStroke[], view: THREE.Camera, options: NarrowStrands = {}): HelixStroke[] {
+  const limit = options.limit ?? MIN_FEATURE;
+  if (!limit) return strokes;
+  const { measure = 'median', keep = 'line', counts = () => true } = options;
+  const swap = new Map<HelixStroke, HelixStroke | null>();
+  for (const group of ['strand-a', 'strand-b'] as const) {
+    const edges = ribbonEdges(strokes, group);
+    if (!edges || edges[0].ink !== edges[1].ink || edges[0].points.length !== edges[1].points.length) continue;
+    const widths = ribbonWidths(edges, view);
+    let width = 0;
+    if (measure === 'median') width = [...widths].sort((x, y) => x - y)[widths.length >> 1];
+    else edges[0].points.forEach((p, i) => { if (counts(pageOf(view, p))) width = Math.max(width, widths[i]); });
+    if (width >= limit) continue;
+    const midline: HelixStroke = { ...edges[0], role: 'spine', points: ribbonMidline(edges) };
+    if (keep === 'rest') { swap.set(edges[0], midline); swap.set(edges[1], null); continue; }
+    const spine = strokes.find(h => h.group === group && h.role === 'spine' && h.points.length === edges[0].points.length);
+    let first = true;
+    for (const h of strokes) if (h.group === group) { swap.set(h, first ? spine ?? midline : null); first = false; }
+  }
+  return strokes.flatMap(h => { const to = swap.get(h); return to === undefined ? [h] : to ? [to] : []; });
 }

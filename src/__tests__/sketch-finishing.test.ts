@@ -85,6 +85,28 @@ describe('sketch finishing', () => {
     expect(() => resolveFinishing(sourcePage, pens, { border: { style: 'simple', pen: 'ink', inset: 12, contentGap: -1 } })).toThrow(/contentGap/);
   });
 
+  it('sets a double border’s gap between its lines, 2 mm unless given, and fits the artwork inside the inner one', () => {
+    const art: Part[] = [{ id: 'art', pen: 'ink', paths: [[{ x: 10, y: 50 }, { x: 90, y: 50 }]] }];
+    const border = { style: 'double', pen: 'ink', inset: 3, contentGap: 1 } as const;
+    const narrow = resolveFinishing(sourcePage, pens, { border: { ...border, lineGap: 0.75 } });
+    // The inner line 0.75 mm inside the outer, the content 1 mm inside that plus half each stroke.
+    expect(narrow.contentRect.xMin).toBeCloseTo(3 + 0.75 + 1 + 0.3, 9);
+    const lines = applyFinishing(art, narrow, 0).at(-1)!.paths;
+    expect(lines[0][0]).toEqual({ x: 3, y: 3 });
+    expect(lines[1][0]).toEqual({ x: 3.75, y: 3.75 });
+    expect(lines[1][2]).toEqual({ x: 96.25, y: 96.25 });
+    // Left out, the gap is 2 mm, as every existing print has it; a given 2 is the same border.
+    const plain = resolveFinishing(sourcePage, pens, { border });
+    expect(plain.contentRect.xMin).toBeCloseTo(3 + 2 + 1 + 0.3, 9);
+    expect(applyFinishing(art, plain, 0)).toEqual(applyFinishing(art, resolveFinishing(sourcePage, pens, { border: { ...border, lineGap: 2 } }), 0));
+    expect(applyFinishing(art, plain, 0).at(-1)!.paths[1][0]).toEqual({ x: 5, y: 5 });
+    // Without explicit spacing the gap still sets the content inset from the margin.
+    expect(resolveFinishing(sourcePage, pens, { border: { style: 'double', pen: 'ink', lineGap: 1 } }).contentRect.xMin).toBe(11);
+    expect(() => resolveFinishing(sourcePage, pens, { border: { ...border, lineGap: 0 } })).toThrow(/lineGap/);
+    expect(() => resolveFinishing(sourcePage, pens, { border: { ...border, lineGap: Number.NaN } })).toThrow(/lineGap/);
+    expect(() => resolveFinishing(sourcePage, pens, { border: { ...border, style: 'simple', lineGap: 1 } })).toThrow(/double border/);
+  });
+
   it('rejects invalid physical values, unknown keys and pen references before processing', () => {
     const invalid: unknown[] = [
       { bogus: true }, { page: { width: 210 } }, { page: { width: Infinity, height: 297 } },

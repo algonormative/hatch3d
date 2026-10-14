@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SketchContext } from '../../../src/sketch/types.ts';
 import { clamp, n } from '../params.ts';
-import { densityPitch } from '../slabs.ts';
+import { densityLevel, densityPitch } from '../slabs.ts';
 import type { Family, Ink } from '../types.ts';
 import { Tube, type ClothStroke } from './tube.ts';
 
@@ -55,9 +55,13 @@ export function stride(spacing: number, min = MIN_MM): number {
 export const TIER = [0.1, 0.42, 0.66];
 export const tierOf = (j: number) => (j % 4 === 0 ? 0 : j % 2 === 0 ? 1 : 2);
 
-/** Collect contiguous runs of samples that pass `keep` into strokes. */
-export function runs(points: THREE.Vector3[], keep: boolean[], ink: Ink, group: string, out: ClothStroke[], family?: Family) {
-  const make = (pts: THREE.Vector3[]): ClothStroke => family ? { ink, group, family, points: pts } : { ink, group, points: pts };
+/** Collect contiguous runs of samples that pass `keep` into strokes, each tagged with `role` where one is named. */
+export function runs(points: THREE.Vector3[], keep: boolean[], ink: Ink, group: string, out: ClothStroke[], family?: Family, role?: string) {
+  const make = (pts: THREE.Vector3[]): ClothStroke => {
+    const st: ClothStroke = family ? { ink, group, family, points: pts } : { ink, group, points: pts };
+    if (role) st.role = role;
+    return st;
+  };
   let run: THREE.Vector3[] = [];
   for (let i = 0; i < points.length; i++) {
     if (keep[i]) run.push(points[i]);
@@ -125,7 +129,7 @@ export function toneField(ctx: SketchContext, source: THREE.Vector3, opts: ToneF
 export function ribbonTube(t: Tube, env: ToneEnv, opts: { band: number; gap: number; rests: (k: number) => boolean }, look: Look = LOOK): ClothStroke[] {
   const out: ClothStroke[] = [];
   const Wb = opts.band, L = t.length, gap = opts.gap;
-  const lamPrimary = Math.max(3, Math.round(densityPitch(env.density, 3, 5, 7)));
+  const lamPrimary = Math.max(3, Math.round(densityLevel(env.density, 3, 5, 7)));
   const N = lamPrimary * 4;
   const perTurn = Math.max(96, Math.round(t.circ / 0.09));
   const bAt = (u: number, v: number) => u * L / Wb + t.hand * v;

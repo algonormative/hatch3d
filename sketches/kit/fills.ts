@@ -81,6 +81,12 @@ export interface BandHatch {
   angle?: number;
   /** How far inside the band edge the hatch stops (default 0.5 mm). */
   margin?: number;
+  /**
+   * `bandMarks` only: a band narrower than this across, in millimetres, is drawn as its centreline alone (like the
+   * outlines, not clipped to the area), since its two rules would print as one blot. Pass `MIN_FEATURE`
+   * (`kit/format.ts`), which is 0 at tabloid, so the print keeps its band. Default 0: always a band.
+   */
+  narrow?: number;
 }
 
 /** Parallel hatch across `area`, kept only where it lies within `half - margin` of the centreline. */
@@ -97,8 +103,9 @@ export function bandHatch(centreline: Point[], half: number, area: Rect, hatch: 
   return out;
 }
 
-/** A flat band along a centreline: two outline rules and a dense hatch between them. */
+/** A flat band along a centreline: two outline rules and a dense hatch between them; under `hatch.narrow` across, the centreline. */
 export function bandMarks(centreline: Point[], half: number, area: Rect, hatch?: BandHatch): Point[][] {
+  if (hatch?.narrow && 2 * half < hatch.narrow) return [centreline];
   return [...bandOutlines(centreline, half), ...bandHatch(centreline, half, area, hatch)];
 }
 
@@ -108,13 +115,15 @@ export interface Bar { cx: number; cy: number; l: number; h: number }
 /**
  * A bar filled with hatching instead of ink: its outer quad, an inner rule `rule` mm inside, and
  * crossing families inside the rule's `inset`. Returns the quad and the paths (outline, rule, hatch).
+ * Where the band between the outline and the rule is narrower than `narrow` mm (`rule < narrow`: on a small card, under
+ * `MIN_FEATURE`) the two rules would print as one blot, so the rule is left out, and the paths are the outline and the hatch.
  */
-export function hatchedBar(b: Bar, tilt: number, families: readonly HatchFamily[], rule = 1.1, inset = 1.6): { quad: Point[]; paths: Point[][] } {
+export function hatchedBar(b: Bar, tilt: number, families: readonly HatchFamily[], rule = 1.1, inset = 1.6, narrow = 0): { quad: Point[]; paths: Point[][] } {
   const ux = Math.cos(tilt), uy = Math.sin(tilt);
   const at = (s: number, t: number): Point => ({ x: b.cx + ux * s - uy * t, y: b.cy + uy * s + ux * t });
   const quad = [at(-b.l / 2, -b.h / 2), at(b.l / 2, -b.h / 2), at(b.l / 2, b.h / 2), at(-b.l / 2, b.h / 2)];
-  const paths: Point[][] = [[...quad, quad[0]],
-    [at(-b.l / 2 + rule, -b.h / 2 + rule), at(b.l / 2 - rule, -b.h / 2 + rule), at(b.l / 2 - rule, b.h / 2 - rule), at(-b.l / 2 + rule, b.h / 2 - rule), at(-b.l / 2 + rule, -b.h / 2 + rule)]];
+  const paths: Point[][] = [[...quad, quad[0]]];
+  if (!(rule < narrow)) paths.push([at(-b.l / 2 + rule, -b.h / 2 + rule), at(b.l / 2 - rule, -b.h / 2 + rule), at(b.l / 2 - rule, b.h / 2 - rule), at(-b.l / 2 + rule, b.h / 2 - rule), at(-b.l / 2 + rule, -b.h / 2 + rule)]);
   for (const [angle, pitch] of families) {
     const dx = Math.cos(angle), dy = Math.sin(angle);
     const reach = (b.l + b.h) / 2;

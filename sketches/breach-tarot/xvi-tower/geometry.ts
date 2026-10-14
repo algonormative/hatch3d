@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Part, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
-import { TABLOID_PAGE } from '../../phase-garden/poster.ts';
+import { PAGE, depthRaster, evenlyKept, scaledCount } from '../../kit/format.ts';
 import { towerSlabs } from '../../breach-cathedral-tower/geometry.ts';
 import { facetStrokes, rakingLight, slabGeometry, slabMatrix, solid, type Slab } from '../../kit/slabs.ts';
 import { helixStrands, strandPoint, strandStrokes, type Strand } from '../../kit/helix.ts';
@@ -25,8 +25,7 @@ import { PartBuckets, projectStrokes, scalePoints } from '../../kit/strokes.ts';
  * print. The tower itself is unsealed rather than destroyed: its crown lifts off like a lid and
  * the helix pours up out of the opened shaft.
  */
-const W = 559, H = 864;
-const MM_X = TABLOID_PAGE.width / W, MM_Y = TABLOID_PAGE.height / H;
+const { W, H, MM_X, MM_Y } = depthRaster(559, 864);
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'lettering'];
 const EYE = 2.2;
 /** The tower's own frame: Breach Cathedral Tower coordinates run from −10.9 to 10.6; ground is 0 here. */
@@ -36,12 +35,12 @@ const LIFT = 10.9, CROWN = 10.6 + LIFT;
 export function towerCamera(ctx: SketchContext): THREE.PerspectiveCamera {
   return horizonCamera({
     fov: n(ctx, 'fov', 56, 40, 80), eye: [0, EYE, n(ctx, 'distance', 48, 30, 90)], target: [0, EYE, 0], far: 400,
-    page: TABLOID_PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
+    page: PAGE, depth: { width: W, height: H }, horizonY: HORIZON_Y,
   });
 }
 
 /** The cathedral tower on the ground, its crown slabs lifted off and turned like a lid. */
-function tower(ctx: SketchContext): Slab[] {
+export function tower(ctx: SketchContext): Slab[] {
   const rng = ctx.random('tower-card-lid');
   const lid = n(ctx, 'lid', 0.5, 0, 1);
   const scene: SketchContext = { ...ctx, params: { collapse: 0, debris: 0, cantilever: 0.85, levels: 19, ...ctx.params } };
@@ -88,12 +87,17 @@ function pour(ctx: SketchContext): Strand[] {
   }));
 }
 
+/** The fewest raindrops (of the whole fall, most of it hidden or off the card) a smaller card keeps, so it still storms. */
+const RAIN_FLOOR = 300;
+
 /**
  * The storm: slanted rain on a backdrop plane behind the tower, so the depth pass keeps it behind
  * everything. Dashes thicken toward the top of the sky into a cloud bank and thin out to the horizon;
- * a fixed 64-step rhythm breaks each fall.
+ * a fixed 64-step rhythm breaks each fall. The drops are a density: a smaller card keeps fewer of the
+ * same fall, as an even spread through it. Each dash shrinks with the card, so the count goes with the
+ * scale rather than the area: that keeps the rain's tone on paper (by area it all but vanished).
  */
-function storm(ctx: SketchContext): Stroke[] {
+export function storm(ctx: SketchContext): Stroke[] {
   const amount = n(ctx, 'storm', 0.5, 0, 1);
   if (amount <= 0) return [];
   const rng = ctx.random('tower-card-storm');
@@ -114,7 +118,8 @@ function storm(ctx: SketchContext): Stroke[] {
       y += dash + gap;
     }
   }
-  return out;
+  const keep = out.length ? scaledCount(out.length, RAIN_FLOOR, 'length') / out.length : 1;
+  return keep >= 1 ? out : out.filter((_, i) => evenlyKept(i, keep));
 }
 
 /**

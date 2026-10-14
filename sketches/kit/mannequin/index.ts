@@ -6,3 +6,6 @@ export * from './stick.ts';
 export * from './body.ts';
 export * from './drape.ts';
 export * from './pieces.ts';
+export * from './gesture.ts';
+export * from './motion.ts';
+export * from './big-suit.ts';
