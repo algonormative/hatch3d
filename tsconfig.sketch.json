@@ -52,6 +52,7 @@
     "sketches/mannequin-proof/**/*.ts",
     "sketches/agent-bust/**/*.ts",
     "sketches/kit/**/*.ts",
+    "sketches/assembly-calibration/**/*.ts",
     "sketches/breach-cathedral-extended/**/*.ts",
     "sketches/chamber-bloom-foam/**/*.ts",
     "sketches/chamber-bloom-plonk/**/*.ts",
