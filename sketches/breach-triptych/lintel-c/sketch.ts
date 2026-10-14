@@ -107,7 +107,7 @@ function draw(ctx: SketchContext): Part[] {
   }
 
   // The gaze, on the gold under the slot: fine level lines from the left, opening a little as they cross.
-  const count = Math.round(n(ctx, 'gaze', 5, 1, 9));
+  const count = Math.round(n(ctx, 'gazeLines', 5, 1, 9));
   const half = (slot.y1 - slot.y0) / 2;
   for (let i = 0; i < count; i++) {
     const k = count === 1 ? 0 : i / (count - 1) * 2 - 1;

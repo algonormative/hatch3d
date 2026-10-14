@@ -6,8 +6,9 @@ import { barCut, footprintOf } from '../kit/assembly.ts';
 import { HEM, agentFigure, headCoil, type Agent } from '../kit/agent.ts';
 import { hatchedBar } from '../kit/fills.ts';
 import { n } from '../kit/params.ts';
+import { keepAlong } from '../kit/page.ts';
 import { pageOf } from '../kit/perspective.ts';
-import { facetStrokes, slabMatrix, solid, type FacetStroke, type Slab } from '../kit/slabs.ts';
+import { faceDarkness, facetStrokes, slabMatrix, solid, type FacetStroke, type Slab } from '../kit/slabs.ts';
 import type { JointAngles, JointName, Proportions } from '../kit/mannequin/skeleton.ts';
 
 /**
@@ -60,17 +61,19 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'density', label: 'Suit line density', default: 0.45, min: 0, max: 1, step: 0.01, group: 'Bust' },
   { type: 'slider', id: 'slack', label: 'Figure hidden-line slack (of its scale)', default: 0.15, min: 0.01, max: 2, step: 0.01, group: 'Bust' },
   { type: 'slider', id: 'elbow', label: 'Elbow bend (90: forearms forward, the kit\'s; low: they hang off the sheet)', default: 15, min: 0, max: 120, step: 1, units: '°', group: 'Bust' },
+  { type: 'select', id: 'gaze', label: 'Where the head looks, and the camera', default: 'down', options: ['up', 'level', 'down', 'camera'],
+    optionLabels: { up: 'Up: the seated pose\'s head (chin seen), camera 25° up', level: 'Level: head and neck straight, camera 25° up', down: 'Down: a slight nod toward us, camera 25° up', camera: 'Up, with the camera only 13° up' }, group: 'Bust' },
   { type: 'slider', id: 'fov', label: 'Field of view', default: 54, min: 30, max: 80, step: 1, group: 'Bust' },
-  { type: 'slider', id: 'pitch', label: 'Looking up', default: 25, min: 0, max: 60, step: 1, units: '°', group: 'Bust' },
   { type: 'slider', id: 'fitMargin', label: 'Margin the shoulders are fitted inside', default: 40, min: 0, max: 60, step: 1, units: 'mm', group: 'Bust' },
-  { type: 'slider', id: 'headAt', label: 'Head centre, share of the sheet down', default: 0.33, min: 0.1, max: 0.6, step: 0.01, group: 'Bust' },
+  { type: 'slider', id: 'eyeAt', label: 'Eye height on the sheet (the line the three panels share)', default: 123.4, min: 60, max: 260, step: 0.1, units: 'mm', group: 'Bust' },
   { type: 'slider', id: 'reach', label: 'Reach of the head\'s light (canon units)', default: 2, min: 0.5, max: 8, step: 0.1, group: 'Bust' },
   { type: 'slider', id: 'value', label: 'Value far from the head', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Bust' },
   { type: 'slider', id: 'impression', label: 'Breakup of the value', default: 0.5, min: 0, max: 1, step: 0.01, group: 'Bust' },
   { type: 'select', id: 'glare', label: 'Where the silver is', default: 'head', options: ['head', 'away'],
     optionLabels: { head: 'Densest at the head (the head is the light)', away: 'Bare at the head (the kit\'s value, on black)' }, group: 'Bust' },
   { type: 'slider', id: 'slabMm', label: 'Background slab hatch pitch', default: 7, min: 3, max: 20, step: 0.5, units: 'mm', group: 'Bust' },
-  { type: 'toggle', id: 'holeLines', label: 'Gaze lines on the gold under the hole', default: false, group: 'Bust' },
+  { type: 'slider', id: 'barPitch', label: 'Censor bar hatch pitch (the silver on the part that becomes the lintel)', default: 2.6, min: 0.6, max: 5, step: 0.1, units: 'mm', group: 'Bust' },
+  { type: 'toggle', id: 'holeBar', label: 'The censor bar in black ink on the gold under the hole (else bare gold)', default: true, group: 'Bust' },
   // The plain (C).
   { type: 'slider', id: 'slotMm', label: 'Slot height', default: 5, min: 3.5, max: 14, step: 0.5, units: 'mm', group: 'Plain' },
   { type: 'slider', id: 'slotInset', label: 'Slot ends, in from the trim', default: 16, min: 8, max: 60, step: 1, units: 'mm', group: 'Plain' },
@@ -79,7 +82,7 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'lightUp', label: 'Sun elevation', default: 20, min: 4, max: 70, step: 1, units: '°', group: 'Plain' },
   { type: 'toggle', id: 'sky', label: 'Sky hatch above the plain', default: true, group: 'Plain' },
   { type: 'toggle', id: 'joints', label: 'Paving joints run on to the horizon (else the plain dissolves into the glare)', default: false, group: 'Plain' },
-  { type: 'slider', id: 'gaze', label: 'Gaze lines in the slot', default: 5, min: 1, max: 9, step: 1, group: 'Plain' },
+  { type: 'slider', id: 'gazeLines', label: 'Gaze lines in the slot', default: 5, min: 1, max: 9, step: 1, group: 'Plain' },
   // The gate (R).
   { type: 'slider', id: 'horizon', label: 'Gate horizon, share of the sheet down', default: 0.74, min: 0.45, max: 0.9, step: 0.01, group: 'Gate' },
   { type: 'slider', id: 'pierMm', label: 'Pier width on the sheet', default: 48, min: 24, max: 70, step: 1, units: 'mm', group: 'Gate' },
@@ -102,6 +105,19 @@ const SIT: Partial<Record<JointName, JointAngles>> = {
   neck: { flex: -24, twist: -30 }, head: { flex: -12, twist: -15 },
 };
 const BROAD: Proportions = { shoulderX: 1.28, hipX: 1.12 };
+
+/**
+ * The gaze readings: neck and head flex (degrees; negative tips the head back) and the camera's upward look. The
+ * Emperor's seated pose tips the face about 28° above level and the camera sits about 35° below the head, so `up` shows
+ * the underside of the jaw; `level` and `down` straighten or nod the head, `camera` keeps the pose and lowers the look.
+ */
+export const GAZE: Record<string, { neck: number; head: number; pitch: number }> = {
+  up: { neck: -24, head: -12, pitch: 25 },
+  level: { neck: -4, head: 0, pitch: 25 },
+  down: { neck: 6, head: 10, pitch: 25 },
+  camera: { neck: -24, head: -12, pitch: 13 },
+};
+export const gazeOf = (ctx: SketchContext) => GAZE[String(ctx.params.gaze)] ?? GAZE.down;
 const BUILD = 1.3;
 
 export interface BustFrame {
@@ -130,15 +146,17 @@ function upCamera(fov: number, pitch: number, target: THREE.Vector3, D: number):
 }
 
 /**
- * The seated agent seen from below, fitted so the shoulders fill the sheet between `fitMargin` and the head's centre
- * sits `headAt` of the way down (the recipe of `sketches/agent-bust`): the figure, the camera and the eyes on the page.
+ * The seated agent seen from below, fitted so the shoulders fill the sheet between `fitMargin` and the eyes sit on the
+ * shared eye height `eyeAt` (the recipe of `sketches/agent-bust`, which fits the head's centre instead): the figure,
+ * the camera and the eyes on the page.
  */
 export function bustFrame(ctx: SketchContext): BustFrame {
   const K = n(ctx, 'scale', 6, 2, 30);
   const FOV = n(ctx, 'fov', 54, 30, 80);
-  const pitch = THREE.MathUtils.degToRad(n(ctx, 'pitch', 25, 0, 60));
+  const gaze = gazeOf(ctx);
+  const pitch = THREE.MathUtils.degToRad(gaze.pitch);
   const elbow = n(ctx, 'elbow', 15, 0, 120);
-  const pose = { ...SIT, elbow_l: { flex: elbow }, elbow_r: { flex: elbow } };
+  const pose = { ...SIT, elbow_l: { flex: elbow }, elbow_r: { flex: elbow }, neck: { ...SIT.neck, flex: gaze.neck }, head: { ...SIT.head, flex: gaze.head } };
   const yaw = -THREE.MathUtils.degToRad(36);
   const fig = agentFigure({ height: 24 * K, anchor: new THREE.Vector3(), yaw, pose, proportions: BROAD, build: BUILD, facets: 6, bow: 0.015, hem: HEM });
   const { body, head } = fig;
@@ -146,13 +164,15 @@ export function bustFrame(ctx: SketchContext): BustFrame {
   const bust: THREE.Vector3[] = [...headCoil(head)];
   for (let i = 0; i <= 16; i++) for (let j = 0; j < 24; j++) bust.push(body.trunk.point(0.62 + 0.38 * i / 16, j / 24));
   let target = head.centre.clone().lerp(fig.skeleton.at('chest'), 0.4), D = 40 * K;
-  const margin = n(ctx, 'fitMargin', 40, 0, 60), headAt = n(ctx, 'headAt', 0.33, 0.1, 0.6);
+  // The eyes, where the bar goes: fitted onto the shared eye height, whatever the gaze.
+  const eyePoint = head.centre.clone().addScaledVector(head.face, 0.9 * head.r).addScaledVector(head.axis, 0.12 * head.r);
+  const margin = n(ctx, 'fitMargin', 40, 0, 60), eyeAt = n(ctx, 'eyeAt', 123.4, 60, 260);
   for (let it = 0; it < 60; it++) {
     const c = upCamera(FOV, pitch, target, D);
     const ps = bust.map(p => pageOf(c, p, PAGE));
     const x0 = Math.min(...ps.map(p => p.x)), x1 = Math.max(...ps.map(p => p.x));
     const right = new THREE.Vector3().setFromMatrixColumn(c.matrixWorld, 0), up = new THREE.Vector3().setFromMatrixColumn(c.matrixWorld, 1);
-    const dx = (x0 + x1) / 2 - PAGE.width / 2, dy = pageOf(c, head.centre, PAGE).y - headAt * PAGE.height;
+    const dx = (x0 + x1) / 2 - PAGE.width / 2, dy = pageOf(c, eyePoint, PAGE).y - eyeAt;
     target = target.clone().addScaledVector(right, dx * D / f).addScaledVector(up, -dy * D / f);
     D *= (x1 - x0) / (PAGE.width - 2 * margin);
   }
@@ -160,7 +180,7 @@ export function bustFrame(ctx: SketchContext): BustFrame {
   const forward = new THREE.Vector3();
   view.getWorldDirection(forward);
   const mmPerUnit = (p: THREE.Vector3) => f / -p.clone().applyMatrix4(view.matrixWorldInverse).z;
-  const eyes = pageOf(view, head.centre.clone().addScaledVector(head.face, 0.9 * head.r).addScaledVector(head.axis, 0.12 * head.r), PAGE);
+  const eyes = pageOf(view, eyePoint, PAGE);
   return { fig, K, view, eye: view.position.clone(), forward, f, mmPerUnit, eyes, headMm: 2 * head.r * mmPerUnit(head.centre) };
 }
 
@@ -180,14 +200,44 @@ export interface LintelBar {
 
 /** The bar's id on L's black ply: R's onlay names it as `lintel-l/black/bar`. */
 export const BAR_ID = 'bar';
+/** The least paper between the bar and the trim on L (mm). */
+const BAR_CLEAR = 8;
 
-/** L's censor bar: flat on the sheet across the eyes, 1.75 x 0.36 of the projected head, at a seeded tilt. */
+/**
+ * L's censor bar: flat on the sheet across the eyes, 1.75 x 0.36 of the projected head, at a seeded tilt; its double
+ * rule and two crossing families in silver, at `barPitch` and 1.3 times it, open enough that the black paper reads when
+ * it is glued on R as the lintel (R1 had 0.62 mm).
+ */
 export function lintelBar(ctx: SketchContext, frame: BustFrame): LintelBar {
   const brng = ctx.random('bust-censor');
   const tilt = (brng() < 0.5 ? -1 : 1) * (0.06 + 0.1 * (0.5 + brng()));
   const l = 1.75 * frame.headMm, h = 0.36 * frame.headMm;
-  const bar = hatchedBar({ cx: frame.eyes.x, cy: frame.eyes.y, l, h }, tilt, [[Math.PI / 3, 0.62], [-Math.PI / 3, 0.9]], 1.1, 1.6, 0);
-  return { quad: bar.quad, paths: bar.paths, tilt, centre: { ...frame.eyes }, l, h, cut: barCut(BAR_ID, bar.quad, 'part') };
+  const pitch = n(ctx, 'barPitch', 2.6, 0.6, 5);
+  // Centred on the eyes, but held BAR_CLEAR inside the trim: a head turned to the side has its eyes near its edge, and
+  // the bar, longer than the head is wide, still covers them when it moves along.
+  const reach = l / 2 * Math.abs(Math.cos(tilt)) + h / 2 * Math.abs(Math.sin(tilt));
+  const cx = Math.max(TRIM.x0 + BAR_CLEAR + reach, Math.min(TRIM.x1 - BAR_CLEAR - reach, frame.eyes.x));
+  const centre = { x: cx, y: frame.eyes.y };
+  const bar = hatchedBar({ cx, cy: centre.y, l, h }, tilt, [[Math.PI / 3, pitch], [-Math.PI / 3, 1.3 * pitch]], 1.1, 1.6, 0);
+  return { quad: bar.quad, paths: bar.paths, tilt, centre, l, h, cut: barCut(BAR_ID, bar.quad, 'part') };
+}
+
+/**
+ * The censor bar again, in black ink on L's gold sheet, seen through the hole the bar left: a double rule `rules` mm
+ * inside the hole's edge and two crossing families (`pitch`, 1.3 times it) run out `bleed` mm past the edge under the
+ * black paper, so a knife a little off never shows a bare gold rim. The hatch gives way between the two rules so they
+ * read. Sparse, so the gold still glows.
+ */
+export function holeBarPaths(bar: LintelBar, bleed: number, pitch = 2, rules: [number, number] = [1.6, 2.7]): Point[][] {
+  const ux = Math.cos(bar.tilt), uy = Math.sin(bar.tilt);
+  const local = (p: Point) => { const dx = p.x - bar.centre.x, dy = p.y - bar.centre.y; return { s: dx * ux + dy * uy, t: -dx * uy + dy * ux }; };
+  const at = (s: number, t: number): Point => ({ x: bar.centre.x + ux * s - uy * t, y: bar.centre.y + uy * s + ux * t });
+  const inset = (p: Point) => { const q = local(p); return Math.min(bar.l / 2 - Math.abs(q.s), bar.h / 2 - Math.abs(q.t)); };
+  const ring = (d: number): Point[] => { const a = bar.l / 2 - d, b = bar.h / 2 - d; return [at(-a, -b), at(a, -b), at(a, b), at(-a, b), at(-a, -b)]; };
+  const grown = hatchedBar({ cx: bar.centre.x, cy: bar.centre.y, l: bar.l + 2 * bleed, h: bar.h + 2 * bleed }, bar.tilt, [[Math.PI / 3, pitch], [-Math.PI / 3, 1.3 * pitch]], 0, 0.2, 1);
+  const between = (p: Point) => { const e = inset(p); return e > rules[0] - 0.6 && e < rules[1] + 0.6; };
+  const hatch = grown.paths.slice(1).flatMap(path => keepAlong(path, p => !between(p), 0.2));
+  return [ring(rules[0]), ring(rules[1]), ...hatch];
 }
 
 /** The eye height: the page y the hole, the slot and the lintel share. */
@@ -266,6 +316,22 @@ export function faceWordAt(sl: Slab, word: string, view: THREE.Camera, at: Point
   const here = pageOf(view, hit, PAGE);
   const scale = (axis: THREE.Vector3) => { const p = pageOf(view, hit.clone().addScaledVector(axis.clone().applyMatrix4(rot), 1e-3), PAGE); return Math.hypot(p.x - here.x, p.y - here.y) / 1e-3; };
   return faceWord(sl, word, { normal: o.normal, up: o.up, at: [u, v], cap: o.capMm / Math.max(scale(right), scale(o.up)) });
+}
+
+/**
+ * Whether `facetStrokes` hatches a slab face under every one of `points` (world points on the face): a face dark enough
+ * for its field hatch (darkness 0.32 or more) is hatched all over; a lighter one only in its band of contour rings, which
+ * reaches `0.12 + 0.6 * darkness` of the face's smaller half extent in from its edges.
+ */
+export function hatchedUnder(sl: Slab, normal: THREE.Vector3, up: THREE.Vector3, light: THREE.Vector3, points: THREE.Vector3[]): boolean {
+  const m = slabMatrix(sl), inverse = m.clone().invert();
+  const d = faceDarkness(normal.clone().applyMatrix4(new THREE.Matrix4().extractRotation(m)), light, sl.tone);
+  if (d >= 0.32) return true;
+  const half = new THREE.Vector3(sl.w / 2, sl.h / 2, sl.d / 2);
+  const right = up.clone().cross(normal);
+  const extent = (axis: THREE.Vector3) => Math.abs(axis.x) * half.x + Math.abs(axis.y) * half.y + Math.abs(axis.z) * half.z;
+  const a = extent(right), b = extent(up), band = Math.min(a, b) * (0.12 + 0.6 * d);
+  return points.every(p => { const q = p.clone().applyMatrix4(inverse); return Math.min(a - Math.abs(q.dot(right)), b - Math.abs(q.dot(up))) < band; });
 }
 
 /** A word laid flat in page millimetres: its left end at `x`, cap top at `top`, turned `angle` radians about its start. */

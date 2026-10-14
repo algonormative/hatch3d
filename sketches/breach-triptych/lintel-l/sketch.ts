@@ -17,13 +17,14 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
-import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWordAt, lintelBar, pensOf } from '../world.ts';
+import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWordAt, hatchedUnder, holeBarPaths, lintelBar, pensOf } from '../world.ts';
 
 /**
  * Lintel, panel L: "the hole". The Plenipotentiary as a bust from below, filling the sheet, drawn in silver with gold
- * edges on black paper over a bare gold-yellow sheet. The censor bar across its eyes is plotted in silver hatch and cut
- * out as a part: gold shows through where it was, and the bar itself is glued on panel R as the lintel of a gate.
- * "what blinds" is hidden in the hatch of the slabs behind the head, in its glare.
+ * edges on black paper over a gold-yellow sheet. The censor bar across its eyes is plotted in silver hatch and cut out
+ * as a part: the gold shows through where it was, with the bar drawn again on it in black ink, and the bar itself is
+ * glued on panel R as the lintel of a gate. "what blinds" is hidden in the hatch of the slabs behind the head, in its
+ * glare. `gaze` sets the head's tilt and the camera (see `GAZE` in the world).
  *
  * Built on the kit's bust (`sketches/agent-bust`); the shared world (bar, eye height) is `../world.ts`.
  */
@@ -38,14 +39,14 @@ const pens = pensOf(['silver', 'gold', 'black']);
 /**
  * The kit's inks on each ply. On the black ply silver carries the cloth, the slabs and the bar, and gold the edges
  * (the suit's seams and silhouettes, the helix's ribbon edges and spine): the figure is outlined in the colour the hole
- * shows. Gaze lines on the gold ply are black.
+ * shows. The bar on the gold ply is black.
  */
 const ROUTES = {
-  gold: { groups: ['gaze'], inks: { carbon: 'black' } },
+  gold: { groups: ['hole'], inks: { carbon: 'black' } },
   black: { groups: ['slab', 'figure', 'contour', 'helix', 'bar', 'word'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['slab', 'figure', 'contour', 'helix', 'bar', 'word', 'gaze'] as const;
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'bar', 'word', 'hole'] as const;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -76,8 +77,8 @@ type Tagged = Stroke & { slack: number };
 
 /**
  * The two words of "what blinds", beside the hole in the head's glare: which background slab each is painted on, where
- * its centre lands on the sheet (page millimetres), and its cap height (mm). "what" sits off the bar's right end, high;
- * "blinds" off its left end, low.
+ * its centre lands on the sheet (page millimetres, R1's approved places), and its cap height (mm). "what" sits off the
+ * bar's right end, high; "blinds" off its left end, low.
  */
 const WORDS: { word: string; slab: number; at: Point; capMm: number }[] = [
   { word: 'what', slab: 0, at: { x: 251, y: 124 }, capMm: 3 },
@@ -129,32 +130,49 @@ function draw(ctx: SketchContext): Part[] {
   };
   place(18, 8, 26, 16, 80, 9, 0.5);
   place(-12, -4, 38, 30, 56, 9, -0.35);
+  const lightOf = (sl: Slab) => { const toHead = head.centre.clone().sub(new THREE.Vector3(sl.x, sl.y, sl.z)).normalize(); return toward ? toHead.negate() : toHead; };
   for (const sl of slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z), toHead = head.centre.clone().sub(at).normalize();
     sl.tone = 2.4 * env.dark(at, toHead) - 1.1;
     const slabSlack = Math.max(0.12, Math.min(0.5 * Math.max(1, K / 4), 0.25 * Math.min(sl.w, sl.h, sl.d)));
-    for (const st of facetStrokes(sl, toward ? toHead.clone().negate() : toHead, eye, false, n(ctx, 'slabMm', 7, 3, 20) / mmPerUnit(at))) {
+    for (const st of facetStrokes(sl, lightOf(sl), eye, false, n(ctx, 'slabMm', 7, 3, 20) / mmPerUnit(at))) {
       strokes.push({ ink: st.ink, group: 'slab', family: st.family, points: st.points, slack: slabSlack, owner: slabs.indexOf(sl) });
     }
   }
 
-  // "what blinds": painted on the slabs' faces that look at the eye.
+  const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...sleeves.flatMap(cutMeshes), ...helix.meshes, skull(head)];
+  const solids = meshCoverage(figureGeos, view, PAGE, 1.1);
+  const onBar = inQuad(bar.quad, 1.4);
+
+  // "what blinds": painted on the slabs' faces that look at the eye, each at its approved place on the sheet, or the
+  // nearest place round it (a spiral of 4 mm steps, out to 64 mm) where the word lies whole on the face, clear of the figure, the bar
+  // and the trim: the gaze readings move the slabs with the camera.
   const words: Tagged[] = [];
+  const clearOf = (points: THREE.Vector3[][]) => points.flat().every(q => {
+    const p = pageOf(view, q, PAGE);
+    return p.x > ART.x0 + 3 && p.x < ART.x1 - 3 && p.y > ART.y0 + 3 && p.y < ART.y1 - 3 && !solids(p) && !inQuad(bar.quad, 3)(p);
+  });
   for (const w of WORDS) {
     const sl = slabs[w.slab];
-    // The face the ray through the word's place meets (the one turned toward the eye).
-    const painted = SIDES.map(normal => faceWordAt(sl, w.word, view, w.at, { normal, up: new THREE.Vector3(0, 1, 0), capMm: w.capMm })).find(Boolean) ?? [];
-    for (const points of painted) {
-      words.push({ ink: 'carbon', group: 'word', family: 'text', points, slack: 0.12, owner: w.slab });
+    let painted: THREE.Vector3[][] = [];
+    search: for (let ring = 0; ring <= 16; ring++) {
+      const steps = ring === 0 ? 1 : 8 * ring;
+      for (let k = 0; k < steps; k++) {
+        const a = 2 * Math.PI * k / steps, at = { x: w.at.x + 4 * ring * Math.cos(a), y: w.at.y + 4 * ring * Math.sin(a) };
+        for (const normal of SIDES) {
+          // Only where the face's hatch lies, so the word hides in the silver rather than standing on bare black.
+          const up = new THREE.Vector3(0, 1, 0);
+          const made = faceWordAt(sl, w.word, view, at, { normal, up, capMm: w.capMm });
+          if (made && clearOf(made) && hatchedUnder(sl, normal, up, lightOf(sl), made.flat())) { painted = made; break search; }
+        }
+      }
     }
+    for (const points of painted) words.push({ ink: 'carbon', group: 'word', family: 'text', points, slack: 0.12, owner: w.slab });
   }
 
-  const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...sleeves.flatMap(cutMeshes), ...helix.meshes, skull(head)];
   const geometries = [...slabs.map(slabGeometry), ...figureGeos];
   fitDepthRange(view, geometries, 0.1, { exact: true });
   const depth = renderDepthBufferCPU(geometries, view, W, H);
-  const solids = meshCoverage(figureGeos, view, PAGE, 1.1);
-  const onBar = inQuad(bar.quad, 1.4);
 
   const buckets = new PartBuckets(0.4);
   const BANDS = 12;
@@ -196,16 +214,8 @@ function draw(ctx: SketchContext): Part[] {
   }
   for (const path of bar.paths) buckets.add('bar-carbon', path, true);
 
-  // Gaze lines on the gold, level, seen only through the hole (off by default: the gold is bare).
-  if (ctx.params.holeLines === true) {
-    const ys = bar.quad.map(p => p.y), xs = bar.quad.map(p => p.x);
-    const y0 = Math.min(...ys), y1 = Math.max(...ys), x0 = Math.min(...xs) - 3, x1 = Math.max(...xs) + 3;
-    const count = Math.round(n(ctx, 'gaze', 5, 1, 9));
-    for (let i = 0; i < count; i++) {
-      const y = bar.centre.y + (i - (count - 1) / 2) * Math.min(1.6, (y1 - y0) / (count + 1));
-      buckets.add('gaze-carbon', [{ x: x0, y }, { x: x1, y }], true);
-    }
-  }
+  // The censor bar in black ink on the gold, seen through the hole (the gold runs `bleed` under the hole's edge).
+  if (ctx.params.holeBar !== false) for (const path of holeBarPaths(bar, spec.bleed)) buckets.add('hole-carbon', path, true);
   for (const g of geometries) g.dispose();
 
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
