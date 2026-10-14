@@ -1,6 +1,8 @@
-import { mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { finalizePiece, resolveOptions, type Piece, type Stack } from '../../../cli/finalize.ts';
 import { lintelL, lintelR } from '../fixtures/assembly-fixture.ts';
 
@@ -18,3 +20,24 @@ export const rWhite = piece('lintel-r-white', 'lintel-r', R, 'white');
 export const stackIn = (out: string, pieces: Piece[], over: Partial<Stack> = {}): Stack => ({ out, border, pieces, ...over });
 export const fresh = () => mkdtempSync(join(tmpdir(), 'assembly-cli-'));
 export const finalize = (stack: Stack, p: Piece) => finalizePiece(stack, p, resolveOptions(stack));
+
+/** Every file under `dir` with the sha256 of its bytes, keyed by path: a directory's whole content, for before-and-after comparisons. */
+export function hashTree(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string) => {
+    for (const name of readdirSync(d).sort()) {
+      const path = join(d, name);
+      if (statSync(path).isDirectory()) walk(path); else out[relative(dir, path)] = createHash('sha256').update(readFileSync(path)).digest('hex');
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return out;
+}
+
+/** Runs `cli/finalize.ts run` on a stack as the command line does, whole-stack unless `only` is given. */
+export function runFinalize(stack: Stack, only?: string[]): { status: number | null; stdout: string; stderr: string } {
+  const path = join(stack.out, '..', `${stack.out.split('/').pop()}-stack.json`);
+  writeFileSync(path, JSON.stringify(stack));
+  const run = spawnSync(process.execPath, ['--import', 'tsx', 'cli/finalize.ts', 'run', path, ...(only ? ['--only', only.join(',')] : [])], { cwd: process.cwd(), encoding: 'utf8' });
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+}

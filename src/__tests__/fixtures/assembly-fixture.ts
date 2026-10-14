@@ -23,31 +23,34 @@ const lines = (horizontal: boolean, from: number, step: number, count: number): 
     : [P(from + i * step, 18), P(from + i * step, 122)]));
 
 const spacing = { type: 'slider' as const, id: 'spacing', label: 'Spacing', default: 6, min: 3, max: 12, step: 1, units: 'mm' };
+const windowShift = { type: 'slider' as const, id: 'windowShift', label: 'Window shift', default: 0, min: -4, max: 4, step: 1, units: 'mm' };
 
 /**
  * Panel L. `whiteGold`: the white ply carries the gold pen, which does not read on white. `whiteTrial`: it carries
- * silver, which the catalog has on trial for white. `leaky`: the window moves with the ply.
+ * silver, which the catalog has on trial for white. `leaky`: the window moves with the ply. `equalInk`: both plies are
+ * cut with a 0.5 mm ink (silver, on trial for white, and gold), so a border's spacing fits the page alike on both.
+ * `noCarbon`: the white ply, which signs in carbon, draws nothing in it. The `windowShift` control moves the window.
  */
-export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; leaky?: boolean } = {}): Sketch {
+export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; leaky?: boolean; equalInk?: boolean; noCarbon?: boolean } = {}): Sketch {
   const whitePen = options.whiteGold ? 'gold' : options.whiteTrial ? 'silver' : 'carbon';
   const spec: AssemblySpec = {
     control: 'ply', cutPen: 'black', margin: 1.5, bleed: 1,
     plies: [
-      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [whitePen], cutInk: 'black' },
+      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [whitePen], cutInk: options.equalInk ? 'silver' : 'black' },
       { id: 'black', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold', lift: 0.4 },
     ],
-    signature: { ply: 'white', pen: 'carbon', box: { x: 50, y: 112, width: 30, height: 8 } },
+    signature: { ply: 'white', pen: whitePen, box: { x: 50, y: 112, width: 30, height: 8 } },
   };
-  const sketchPens = options.whiteTrial ? [...pens, inkPen('silver')] : pens;
+  const sketchPens = options.whiteTrial || options.equalInk ? [...pens, inkPen('silver')] : pens;
   return {
-    name: 'Assembly fixture, panel L', page, pens: sketchPens, controls: [plyControl(spec), spacing], assembly: spec,
+    name: 'Assembly fixture, panel L', page, pens: sketchPens, controls: [plyControl(spec), spacing, windowShift], assembly: spec,
     draw(ctx) {
       const step = Number(ctx.params.spacing);
-      const shift = options.leaky && ctx.params.ply === 'black' ? 2 : 0;
+      const shift = (options.leaky && ctx.params.ply === 'black' ? 2 : 0) + Number(ctx.params.windowShift);
       const cuts: Cuts = { black: [{ id: 'w', rings: [WINDOW.map((p) => P(p.x + shift, p.y))] }, { id: 'bar', kind: 'part', rings: [BAR] }] };
       validateCuts(spec, cuts, page);
       const art: Record<string, Part[]> = {
-        white: [{ id: 'carbon-lines', pen: spec.plies[0].pens[0], paths: lines(true, 20, step, 18) }],
+        white: options.noCarbon ? [] : [{ id: 'carbon-lines', pen: spec.plies[0].pens[0], paths: lines(true, 20, step, 18) }],
         black: [{ id: 'gold-lines', pen: 'gold', paths: lines(false, 20, 8, 8) }],
       };
       return renderPly(spec, ctx, sketchPens, { cuts, art });
@@ -55,13 +58,13 @@ export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; le
   };
 }
 
-/** Panel R. `skew`: the footprint is stretched by this factor along one axis, so it is no longer the bar. */
-export function lintelR(options: { skew?: number } = {}): Sketch {
+/** Panel R. `skew`: the footprint is stretched by this factor along one axis, so it is no longer the bar. `from`: the onlay's source, which is malformed when it is not three names. */
+export function lintelR(options: { skew?: number; from?: string } = {}): Sketch {
   const spec: AssemblySpec = {
     control: 'ply', cutPen: 'black', margin: 1.5, bleed: 1,
     plies: [
       { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: ['carbon'], cutInk: 'black' },
-      { id: 'bar', paper: { id: 'black', color: PAPERS.black.color }, pens: [], cutInk: 'gold', onlay: { from: 'lintel-l/black/bar' } },
+      { id: 'bar', paper: { id: 'black', color: PAPERS.black.color }, pens: [], cutInk: 'gold', onlay: { from: options.from ?? 'lintel-l/black/bar' } },
     ],
   };
   return {

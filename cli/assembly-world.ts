@@ -52,11 +52,28 @@ export function readPlyResult(pieceDir: string): PlyResult {
   return JSON.parse(readFileSync(path, 'utf8')) as PlyResult;
 }
 
-/** `"<assembly>/<ply>/<cut>"`, which names the part a ply is an onlay of. */
-export function parseFrom(from: string): { assembly: string; ply: string; cut: string } {
+/** `"<assembly>/<ply>/<cut>"`, which names the part a ply is an onlay of; undefined when it does not read so. */
+export function tryParseFrom(from: string): { assembly: string; ply: string; cut: string } | undefined {
   const parts = from.split('/');
-  if (parts.length !== 3 || parts.some(p => !p.trim())) throw new Error(`onlay source ${JSON.stringify(from)} must read "<assembly>/<ply>/<cut>"`);
-  return { assembly: parts[0], ply: parts[1], cut: parts[2] };
+  return parts.length !== 3 || parts.some(p => !p.trim()) ? undefined : { assembly: parts[0], ply: parts[1], cut: parts[2] };
+}
+
+/** As `tryParseFrom`, throwing when the source does not read as `"<assembly>/<ply>/<cut>"`. */
+export function parseFrom(from: string): { assembly: string; ply: string; cut: string } {
+  return tryParseFrom(from) ?? (() => { throw new Error(`onlay source ${JSON.stringify(from)} must read "<assembly>/<ply>/<cut>"`); })();
+}
+
+/**
+ * Whether two plies were finished on the same page and border, or what differs. Registration needs more than one world:
+ * a ply finished with another margin or border is fitted differently, whatever it drew.
+ */
+export function registrationProblem(a: PlyResult, b: PlyResult): string | undefined {
+  const [pa, pb] = [a.metadata.page, b.metadata.page];
+  if (pa.width !== pb.width || pa.height !== pb.height) return `${pa.width} x ${pa.height} mm against ${pb.width} x ${pb.height} mm`;
+  if ((pa.margin ?? 0) !== (pb.margin ?? 0)) return `margin ${pa.margin ?? 0} mm against margin ${pb.margin ?? 0} mm`;
+  const border = (r: PlyResult) => JSON.stringify(Object.entries(r.finishing?.border ?? {}).sort(([x], [y]) => (x < y ? -1 : 1)));
+  if (border(a) !== border(b)) return 'the border differs';
+  return undefined;
 }
 
 // ── The cuts, as diagnostics ─────────────────────────────────────────
@@ -73,10 +90,12 @@ export function worldCuts(parts: Part[], spec: AssemblySpec): WorldCut[] {
   const cuts: WorldCut[] = [];
   for (const part of diagnosticParts(parts)) {
     if (part.id === 'asm-signature') continue;
-    const owners = spec.plies.filter(p => part.id.startsWith(`asm-${p.id}-`) && part.id.length > `asm-${p.id}-`.length);
-    if (owners.length !== 1) throw new Error(`diagnostic ${part.id} names ${owners.length ? 'more than one ply' : 'no ply'} of the assembly`);
-    const ply = owners[0].id;
+    // The longest ply id that fits wins: `asm-a-b-x` is cut `x` of ply `a-b` when the assembly has plies `a` and `a-b`.
+    const owner = spec.plies.filter(p => part.id.startsWith(`asm-${p.id}-`) && part.id.length > `asm-${p.id}-`.length).sort((x, y) => y.id.length - x.id.length)[0];
+    if (!owner) throw new Error(`diagnostic ${part.id} names no ply of the assembly`);
+    const ply = owner.id;
     const id = part.id.slice(`asm-${ply}-`.length);
+    if (part.paths.length === 0) throw new Error(`cut ${id} of ply ${ply} is clipped away by the page fit: keep every cut inside the content area, clear of the border`);
     const rings = part.paths.map(path => {
       if (path.length < 4 || !samePoint(path[0], path[path.length - 1])) {
         throw new Error(`cut ${id} of ply ${ply} is clipped by the page fit: keep every cut inside the content area, clear of the border`);
@@ -125,7 +144,7 @@ export function plyCuts(parts: Part[], spec: AssemblySpec, plyId: string): { id:
 
 // ── Congruence ───────────────────────────────────────────────────────
 
-export interface RigidFit { cos: number; sin: number; tx: number; ty: number; rms: number }
+export interface RigidFit { cos: number; sin: number; tx: number; ty: number; rms: number; /** The farthest any one vertex lands from its partner. */ max: number }
 
 /**
  * The rotation and translation (no reflection) that carry `from` onto `to` with the least squared distance between
@@ -149,19 +168,32 @@ export function fitRigid(from: Point[][], to: Point[][]): RigidFit {
   const theta = Math.atan2(cross, dot);
   const cos = Math.cos(theta), sin = Math.sin(theta);
   const tx = cb.x - (cos * ca.x - sin * ca.y), ty = cb.y - (sin * ca.x + cos * ca.y);
-  let squares = 0;
-  for (let i = 0; i < a.length; i++) squares += (cos * a[i].x - sin * a[i].y + tx - b[i].x) ** 2 + (sin * a[i].x + cos * a[i].y + ty - b[i].y) ** 2;
-  return { cos, sin, tx, ty, rms: Math.sqrt(squares / a.length) };
+  let squares = 0, max = 0;
+  for (let i = 0; i < a.length; i++) {
+    const miss = (cos * a[i].x - sin * a[i].y + tx - b[i].x) ** 2 + (sin * a[i].x + cos * a[i].y + ty - b[i].y) ** 2;
+    squares += miss;
+    max = Math.max(max, Math.sqrt(miss));
+  }
+  return { cos, sin, tx, ty, rms: Math.sqrt(squares / a.length), max };
 }
 
-/** An onlay's footprint must be its part's outline to within this RMS residual, millimetres. */
+/** An onlay's footprint must be its part's outline to within this RMS residual, and no vertex further off than the maximum, millimetres. */
 export const CONGRUENT_RMS_MM = 0.05;
+export const CONGRUENT_MAX_MM = 0.1;
 
-/** The fit from the part's rings to the footprint's, or a thrown error naming both when they are not congruent. */
+const CORRESPONDENCE = 'the footprint must be the part ring transformed, same vertex count, order and start vertex';
+
+/**
+ * The fit from the part's rings to the footprint's, or a thrown error naming both when they are not congruent. The
+ * vertices correspond one to one in order (the start vertex carries the authored rotation), so a footprint that is the
+ * part's outline started elsewhere is refused, and so is one with a single vertex far off that an RMS alone would average away.
+ */
 export function congruentFit(part: Point[][], footprint: Point[][], label: string): RigidFit {
   let fit: RigidFit;
-  try { fit = fitRigid(part, footprint); } catch (error) { throw new Error(`${label}: footprint is not congruent to the part (${(error as Error).message})`); }
-  if (!(fit.rms < CONGRUENT_RMS_MM)) throw new Error(`${label}: footprint is not congruent to the part (rigid fit leaves an RMS of ${fit.rms.toFixed(3)} mm, limit ${CONGRUENT_RMS_MM} mm)`);
+  try { fit = fitRigid(part, footprint); } catch (error) { throw new Error(`${label}: footprint is not congruent to the part: ${CORRESPONDENCE} (${(error as Error).message})`); }
+  if (!(fit.rms < CONGRUENT_RMS_MM) || !(fit.max < CONGRUENT_MAX_MM)) {
+    throw new Error(`${label}: footprint is not congruent to the part: ${CORRESPONDENCE} (rigid fit leaves an RMS of ${fit.rms.toFixed(3)} mm against a limit of ${CONGRUENT_RMS_MM}, and a worst vertex ${fit.max.toFixed(2)} mm off against a limit of ${CONGRUENT_MAX_MM})`);
+  }
   return fit;
 }
 
