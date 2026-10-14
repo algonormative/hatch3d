@@ -98,15 +98,22 @@ export interface ToneFieldOptions {
   noiseKey?: string;
   /** Direction toward the fixed key light that shades faces turned to it. */
   key?: THREE.Vector3;
+  /**
+   * The aura's reach, in the units of the points the field is read at (canon units where a card divides by its scale):
+   * within about this far of `source` the cloth blows out to paper. Default `3 + 5 * glow` (3 to 8), which for a bust
+   * that fills the sheet covers the whole chest; pass a smaller one (about 2) to size the aura to the head alone.
+   * Overrides the `glow` parameter.
+   */
+  reach?: number;
 }
 
 /**
  * Tone field: `source` is the light. Close to it the cloth blows out to paper; the base stays heavy.
- * Reads the sketch parameters `value`, `glow` and `impression`.
+ * Reads the sketch parameters `value`, `glow` (unless `reach` is given) and `impression`.
  */
 export function toneField(ctx: SketchContext, source: THREE.Vector3, opts: ToneFieldOptions = {}): (p: THREE.Vector3, normal: THREE.Vector3) => number {
   const base = 0.58 + 0.42 * n(ctx, 'value', 0.5, 0, 1);
-  const reach = 3 + 5 * n(ctx, 'glow', 0.5, 0, 1);
+  const reach = opts.reach ?? 3 + 5 * n(ctx, 'glow', 0.5, 0, 1);
   const impression = 0.75 * n(ctx, 'impression', 0.5, 0, 1);
   const noise = valueNoise(ctx.random(opts.noiseKey ?? 'mannequin-impression'));
   const key = (opts.key ?? V(0.45, 0.55, 0.7)).clone().normalize();

@@ -106,11 +106,35 @@ export function onGround(view: THREE.Camera, p: Point, page: PageSize = PAGE): T
  * (a fraction of each distance). The hidden-line test's bias is a fixed step of window depth, so a
  * near plane far short of the scene spreads that step over tens or hundreds of world units: small
  * blocks then show their back edges through their own faces. Fitting the range keeps it under a unit.
+ *
+ * The default reads each geometry's bounding sphere, which is loose for a long or large piece: a tall slab's
+ * sphere can swallow a close camera and drag `near` to its 0.5 floor, and every bias (`hiddenBias`) then falls
+ * under the depth buffer's resolution. `{ exact: true }` fits from the transformed vertex depths instead (the
+ * nearest and farthest vertex in front of the eye), and never lets `near` fall under `far / 1000`.
  */
-export function fitDepthRange(view: THREE.PerspectiveCamera, geometries: THREE.BufferGeometry[], slack = 0.1): void {
+export function fitDepthRange(view: THREE.PerspectiveCamera, geometries: THREE.BufferGeometry[], slack = 0.1, options: { exact?: boolean } = {}): void {
   view.updateMatrixWorld();
   const inverse = view.matrixWorldInverse;
   let lo = Infinity, hi = 0;
+  if (options.exact) {
+    const v = new THREE.Vector3();
+    for (const g of geometries) {
+      const positions = g.getAttribute('position');
+      if (!positions) continue;
+      for (let i = 0; i < positions.count; i++) {
+        const depth = -v.fromBufferAttribute(positions, i).applyMatrix4(inverse).z;
+        if (depth <= 0) continue;
+        lo = Math.min(lo, depth);
+        hi = Math.max(hi, depth);
+      }
+    }
+    if (!Number.isFinite(lo)) return;
+    const far = hi * (1 + slack);
+    view.near = Math.max(far / 1000, lo * (1 - slack));
+    view.far = Math.max(view.near + 1, far);
+    view.updateProjectionMatrix();
+    return;
+  }
   const centre = new THREE.Vector3();
   for (const g of geometries) {
     if (!g.boundingSphere) g.computeBoundingSphere();
