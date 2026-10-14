@@ -1,0 +1,225 @@
+import * as THREE from 'three';
+import type { AssemblySpec, Part, Point, Sketch, SketchContext } from '../../../src/sketch/types.ts';
+import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
+import { buildSurfaceMesh, type ProjectedPoint } from '../../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
+import { routeParts } from '../../kit/assembly.ts';
+import { cutTube, headCoil, type AgentHead } from '../../kit/agent.ts';
+import { MIN_FEATURE } from '../../kit/format.ts';
+import { helixAlong } from '../../kit/helix.ts';
+import { glyphMask } from '../../kit/lettering.ts';
+import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { n } from '../../kit/params.ts';
+import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
+import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
+import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
+import type { Ink, Stroke } from '../../kit/types.ts';
+import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
+import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
+import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
+import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWordAt, lintelBar, pensOf } from '../world.ts';
+
+/**
+ * Lintel, panel L: "the hole". The Plenipotentiary as a bust from below, filling the sheet, drawn in silver with gold
+ * edges on black paper over a bare gold-yellow sheet. The censor bar across its eyes is plotted in silver hatch and cut
+ * out as a part: gold shows through where it was, and the bar itself is glued on panel R as the lintel of a gate.
+ * "what blinds" is hidden in the hatch of the slabs behind the head, in its glare.
+ *
+ * Built on the kit's bust (`sketches/agent-bust`); the shared world (bar, eye height) is `../world.ts`.
+ */
+
+const plies = [
+  { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
+  { id: 'black', paper: PAPER.black, pens: ['silver', 'gold'], cutInk: 'silver' },
+];
+export const spec: AssemblySpec = { ...ASSEMBLY, plies };
+const pens = pensOf(['silver', 'gold', 'black']);
+
+/**
+ * The kit's inks on each ply. On the black ply silver carries the cloth, the slabs and the bar, and gold the edges
+ * (the suit's seams and silhouettes, the helix's ribbon edges and spine): the figure is outlined in the colour the hole
+ * shows. Gaze lines on the gold ply are black.
+ */
+const ROUTES = {
+  gold: { groups: ['gaze'], inks: { carbon: 'black' } },
+  black: { groups: ['slab', 'figure', 'contour', 'helix', 'bar', 'word'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
+};
+const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'bar', 'word', 'gaze'] as const;
+
+/** An egg inside the head's coil, never drawn: it hides the coil's far side. */
+function skull(h: AgentHead): THREE.BufferGeometry {
+  const g = new THREE.SphereGeometry(1, 28, 18);
+  g.applyMatrix4(new THREE.Matrix4().makeBasis(h.side, h.axis, h.face).multiply(new THREE.Matrix4().makeScale(0.52 * h.r, 0.66 * h.r, 0.52 * h.r)));
+  g.translate(h.centre.x, h.centre.y, h.centre.z);
+  return g;
+}
+
+/** A sleeve cut at the cuff, for the depth pass: its surface and a disc closing the end. */
+function cutMeshes(t: Tube): THREE.BufferGeometry[] {
+  const segs = t.facets >= 3 ? t.facets * 4 : 32;
+  return [t.mesh(96, segs), buildSurfaceMesh((u, v) => t.centre(1).lerp(t.point(1, v), u), {}, 2, segs)];
+}
+
+/** The point inside a convex page quad (clockwise on the sheet), grown by `margin`. */
+const inQuad = (quad: Point[], margin: number) => (p: Point) => quad.every((a, i) => {
+  const b = quad[(i + 1) % quad.length];
+  const ex = b.x - a.x, ey = b.y - a.y;
+  return (ex * (p.y - a.y) - ey * (p.x - a.x)) / Math.hypot(ex, ey) > -margin;
+});
+
+/** The vertical faces of a slab, as outward normals in its own frame. */
+const SIDES = [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)];
+
+/** A stroke with the slack its hidden-line test allows. */
+type Tagged = Stroke & { slack: number };
+
+/**
+ * The two words of "what blinds", beside the hole in the head's glare: which background slab each is painted on, where
+ * its centre lands on the sheet (page millimetres), and its cap height (mm). "what" sits off the bar's right end, high;
+ * "blinds" off its left end, low.
+ */
+const WORDS: { word: string; slab: number; at: Point; capMm: number }[] = [
+  { word: 'what', slab: 0, at: { x: 228, y: 131 }, capMm: 2.6 },
+  { word: 'blinds', slab: 1, at: { x: 47, y: 186 }, capMm: 2.6 },
+];
+
+function draw(ctx: SketchContext): Part[] {
+  const frame = bustFrame(ctx);
+  const { fig, K, view, eye, forward, mmPerUnit } = frame;
+  const { body, head, stops } = fig;
+  const arms = body.limbs.filter(t => t.id.startsWith('arm'));
+  const bar = lintelBar(ctx, frame);
+  const toward = ctx.params.glare !== 'away';
+
+  // The tone: the head is the light. On black paper silver is the light, so by default the field is turned over: the
+  // cloth is densest round the head and goes bare far from it; `away` keeps the kit's value (bare at the head).
+  const aura = toneField(ctx, head.centre.clone().divideScalar(K), { noiseKey: 'bust-aura', reach: n(ctx, 'reach', 2, 0.5, 8) });
+  const dark = (p: THREE.Vector3, nrm: THREE.Vector3) => { const d = aura(p.clone().divideScalar(K), nrm); return toward ? 1 - d : d; };
+  const env: ToneEnv = { density: n(ctx, 'density', 0.45, 0, 1), dark, screen: p => pageOf(view, p, PAGE) };
+
+  const strokes: Tagged[] = [];
+  const slack = n(ctx, 'slack', 0.15, 0.01, 2) * K;
+  const cloth = (list: ClothStroke[]) => {
+    for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack });
+  };
+  cloth(pinstripeTube(body.trunk, env, HEMS.trunk, LOOK));
+  cloth(suitFront(body.trunk, env, LOOK));
+  for (const t of arms) {
+    const stop = stops.get(t.id)!;
+    cloth(pinstripeTube(t, env, { seams: [0.5], hems: [], stop: stop - 0.012, cuffs: [stop - 0.035] }, LOOK));
+  }
+  const sleeves = arms.map(t => cutTube(t, stops.get(t.id)!));
+  for (const t of [body.trunk, ...sleeves]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }));
+
+  const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
+    { radius: 0.12 * K, width: 0.5 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.45, interruption: 0.1 });
+  for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });
+
+  // The background: two large slabs, hatched at a pitch in page millimetres. Their light is the head's, turned over
+  // with the tone: faces toward the head take the most silver.
+  const right = new THREE.Vector3().setFromMatrixColumn(view.matrixWorld, 0), up = new THREE.Vector3().setFromMatrixColumn(view.matrixWorld, 1);
+  const back = forward.clone().setY(0).normalize();
+  const slabs: Slab[] = [];
+  const place = (r: number, u: number, b: number, w: number, h: number, d: number, ry: number) => {
+    const c = head.centre.clone().addScaledVector(right, r * K).addScaledVector(up, u * K).addScaledVector(back, b * K);
+    const sl = solid(c.x, c.y, c.z, w * K, h * K, d * K, slabs.length, 'stack');
+    sl.ry = ry;
+    slabs.push(sl);
+  };
+  place(9, 8, 26, 16, 80, 9, 0.5);
+  place(-12, -4, 38, 30, 56, 9, -0.35);
+  for (const sl of slabs) {
+    const at = new THREE.Vector3(sl.x, sl.y, sl.z), toHead = head.centre.clone().sub(at).normalize();
+    sl.tone = 2.4 * env.dark(at, toHead) - 1.1;
+    const slabSlack = Math.max(0.12, Math.min(0.5 * Math.max(1, K / 4), 0.25 * Math.min(sl.w, sl.h, sl.d)));
+    for (const st of facetStrokes(sl, toward ? toHead.clone().negate() : toHead, eye, false, n(ctx, 'slabMm', 7, 3, 20) / mmPerUnit(at))) {
+      strokes.push({ ink: st.ink, group: 'slab', family: st.family, points: st.points, slack: slabSlack, owner: slabs.indexOf(sl) });
+    }
+  }
+
+  // "what blinds": painted on the slabs' faces that look at the eye.
+  const words: Tagged[] = [];
+  for (const w of WORDS) {
+    const sl = slabs[w.slab];
+    // The face the ray through the word's place meets (the one turned toward the eye).
+    const painted = SIDES.map(normal => faceWordAt(sl, w.word, view, w.at, { normal, up: new THREE.Vector3(0, 1, 0), capMm: w.capMm })).find(Boolean) ?? [];
+    for (const points of painted) {
+      words.push({ ink: 'carbon', group: 'word', family: 'text', points, slack: 0.12, owner: w.slab });
+    }
+  }
+
+  const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...sleeves.flatMap(cutMeshes), ...helix.meshes, skull(head)];
+  const geometries = [...slabs.map(slabGeometry), ...figureGeos];
+  fitDepthRange(view, geometries, 0.1, { exact: true });
+  const depth = renderDepthBufferCPU(geometries, view, W, H);
+  const solids = meshCoverage(figureGeos, view, PAGE, 1.1);
+  const onBar = inQuad(bar.quad, 1.4);
+
+  const buckets = new PartBuckets(0.4);
+  const BANDS = 12;
+  const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
+  // Words first, so the hatch round them can give way.
+  const wordPaths: Point[][] = [];
+  projectStrokes(words, { view, depth, width: W, height: H, bias: hiddenBias(view, 0.12, dist(words[0] ?? strokes[0])) }, {
+    begin: () => (runs: ProjectedPoint[][]) => {
+      for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
+        for (const piece of keepAlong(inside, p => !onBar(p) && !solids(p), 0.1)) if (buckets.add('word-carbon', piece, true)) wordPaths.push(piece);
+      }
+    },
+  });
+  const clear = glyphMask(wordPaths, 0.9, 6, PAGE);
+
+  // Hidden lines, tested in bands of eye distance (see `sketches/agent-bust`).
+  const order = [...strokes].sort((a, b) => dist(a) - dist(b));
+  const groups = new Map<string, { strokes: Tagged[]; bias: number }>();
+  for (let b = 0; b < BANDS; b++) {
+    const chunk = order.slice(Math.floor(b * order.length / BANDS), Math.floor((b + 1) * order.length / BANDS));
+    for (const t of chunk) {
+      const key = `${t.owner ?? 'figure'}:${b}`;
+      const g = groups.get(key) ?? { strokes: [], bias: hiddenBias(view, t.slack, dist(chunk[chunk.length >> 1])) };
+      g.strokes.push(t);
+      groups.set(key, g);
+    }
+  }
+  for (const g of groups.values()) {
+    projectStrokes(g.strokes, { view, depth, width: W, height: H, bias: g.bias }, {
+      begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
+        for (const run of runs) {
+          const keep = st.owner === undefined ? () => true : (p: Point) => !solids(p);
+          for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
+            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && keep(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+          }
+        }
+      },
+    });
+  }
+  for (const path of bar.paths) buckets.add('bar-carbon', path, true);
+
+  // Gaze lines on the gold, level, seen only through the hole (off by default: the gold is bare).
+  if (ctx.params.holeLines === true) {
+    const ys = bar.quad.map(p => p.y), xs = bar.quad.map(p => p.x);
+    const y0 = Math.min(...ys), y1 = Math.max(...ys), x0 = Math.min(...xs) - 3, x1 = Math.max(...xs) + 3;
+    const count = Math.round(n(ctx, 'gaze', 5, 1, 9));
+    for (let i = 0; i < count; i++) {
+      const y = bar.centre.y + (i - (count - 1) / 2) * Math.min(1.6, (y1 - y0) / (count + 1));
+      buckets.add('gaze-carbon', [{ x: x0, y }, { x: x1, y }], true);
+    }
+  }
+  for (const g of geometries) g.dispose();
+
+  const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
+  return renderPly(spec, ctx, pens, { cuts: { black: [bar.cut] }, art });
+}
+
+const sketch: Sketch = {
+  name: 'Breach triptych: Lintel L (the hole)',
+  page: { ...PAGE },
+  pageAware: true,
+  pens,
+  controls: [plyControl(spec), ...CONTROLS],
+  assembly: spec,
+  draw,
+};
+
+export default sketch;

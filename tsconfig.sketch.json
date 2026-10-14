@@ -57,6 +57,7 @@
     "sketches/chamber-bloom-foam/**/*.ts",
     "sketches/chamber-bloom-plonk/**/*.ts",
     "sketches/load-bearing-silence-span/**/*.ts",
-    "sketches/load-bearing-silence-nova/**/*.ts"
+    "sketches/load-bearing-silence-nova/**/*.ts",
+    "sketches/breach-triptych/**/*.ts"
   ]
 }
