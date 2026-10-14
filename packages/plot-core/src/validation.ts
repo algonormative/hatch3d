@@ -1,11 +1,12 @@
 import { clipPolylineToRect } from './clip.js';
 import { applyFinishing, type ResolvedFinishing } from './finishing.js';
-import type { AssetDeclaration, Control, Macro, Navigator, Page, Params, Part, Pen, Point, Sketch } from './types.js';
+import { validateAssemblySpec } from './assembly.js';
+import { validId } from './ids.js';
+import type { AssemblySpec, AssetDeclaration, Control, Macro, Navigator, Page, Params, Part, Pen, Point, Sketch } from './types.js';
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
-const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]*$/.test(value);
 function assert(ok: unknown, message: string): asserts ok { if (!ok) throw new Error(message); }
 
 export function validateSketch(value: unknown): Sketch {
@@ -125,6 +126,7 @@ export function validateSketch(value: unknown): Sketch {
     assert(validId(id) && object(asset) && nonempty(asset.path) && (asset.fit === 'contain' || asset.fit === 'cover'), `Invalid asset: ${id}`);
     assert(object(asset.box) && finite(asset.box.x) && finite(asset.box.y) && finite(asset.box.width) && finite(asset.box.height) && asset.box.width > 0 && asset.box.height > 0, `Invalid asset box: ${id}`);
   }
+  if (value.assembly !== undefined) validateAssemblySpec(value.assembly as AssemblySpec, value.pens as Pen[], controls);
   assert(typeof value.draw === 'function', 'Sketch draw(ctx) must be a function');
   return value as unknown as Sketch;
 }

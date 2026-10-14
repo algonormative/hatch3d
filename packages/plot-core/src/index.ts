@@ -10,6 +10,8 @@ export { strokeText, strokeTextOnPath, measureStrokeText } from './stroke-text.j
 export type { StrokeFace, TextStyle, PathTextStyle } from './stroke-text.js';
 export { clipToRegion, inRegion, distanceToRings, signedArea, offsetRing, ringsSimple } from './region.js';
 export type { Region } from './region.js';
+export { plyControl, validateAssemblySpec, validateCuts, plyRegion, cutGuides, renderPly, GUIDE_DEFAULTS } from './assembly.js';
+export type { GuideOptions } from './assembly.js';
 export { snapSliderValue, resolveMacroParams } from './control-values.js';
 export * from './control-geometry.js';
 export { createAtmosphere, maskAtmospherePaths, hatchAtmosphere } from './atmosphere.js';

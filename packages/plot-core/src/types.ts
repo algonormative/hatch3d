@@ -75,6 +75,28 @@ export interface Part {
   diagnostic?: boolean;
 }
 
+/**
+ * One ply of an assembly: a physical sheet of one paper, plotted as its own SVG job and then knife-cut. `pens` are the
+ * pens its art may use (declared pens, by id); `cutInk` is the pen its cut guides are drawn with, whose width sizes them.
+ * `bleed` overrides the assembly's for the windows cut in this ply; `lift` is carried for the host and not read by plot-core.
+ */
+export interface PlySpec { id: string; paper: { id: string; color: string }; pens: string[]; cutInk: string; bleed?: number; lift?: number }
+
+/**
+ * Several plies stacked into one artwork. `plies` runs bottom to top; a window cut in an upper ply shows the ply
+ * below. `control` is the id of the select control (options = the ply ids, bottom to top) that picks the ply a render
+ * is. Art is kept `margin` mm away from its own ply's cuts and, on the ply below a window, extends `bleed` mm under the
+ * window's edge. `cutPen` is the declared pen that cut guides and the `asm-*` diagnostics are drawn with. A
+ * `signature` keeps its `box` empty of art on `ply`, for the signing pen to fill.
+ */
+export interface AssemblySpec { control: string; plies: PlySpec[]; cutPen: string; margin: number; bleed: number;
+  signature?: { ply: string; pen: string; box: Box } }
+
+/** A window cut in a ply. `rings` is the even-odd waste area; an outer ring with a hole keeps only the hole's inside (a "shaped ply"). */
+export interface Cut { id: string; rings: Point[][]; label?: string }
+/** Cuts by ply id. */
+export type Cuts = Record<string, Cut[]>;
+
 export interface Sketch {
   name: string;
   /** The declared page. A `pageAware` sketch treats it as the default and draws on `ctx.page`. */
@@ -85,6 +107,13 @@ export interface Sketch {
    * finishing fits it uniformly onto the requested one. Not part of the metadata, so render identities don't move.
    */
   pageAware?: boolean;
+  /**
+   * Opt in to assembly: one artwork made from several plies of different paper. The sketch draws the whole world on
+   * every render (the same seed gives the same world), a select control (`assembly.control`) picks which ply this
+   * render is, and `renderPly` clips the art to what that ply shows and adds its cut guides. Validated by
+   * `validateSketch`, but not part of the metadata, so render identities don't move.
+   */
+  assembly?: AssemblySpec;
   pens: Pen[];
   controls: Control[];
   navigators?: Navigator[];
