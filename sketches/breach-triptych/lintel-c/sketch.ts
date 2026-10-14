@@ -5,7 +5,7 @@ import type { ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
-import { glyphMask } from '../../kit/lettering.ts';
+import { glyphMask, groundWord } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
@@ -236,10 +236,12 @@ function draw(ctx: SketchContext): Part[] {
     threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);
   }
 
-  // "can": painted on whichever face of a solid lies at its place on the sheet, or the nearest such place round it.
+  // "can": in the corridor, painted on the way's floor like a road marking; elsewhere on whichever face of a solid lies
+  // at its place on the sheet, or the nearest such place round it.
   const target = { x: CAN.at.x * PAGE.width, y: CAN.at.y * PAGE.height };
   let painted: THREE.Vector3[][] = [];
-  search: for (let ring = 0; ring <= 20; ring++) {
+  if (kind === 'corridor') painted = groundWord(view, 'can', { x: PAGE.width / 2 + 9, y: target.y }, { face: 'sans', height: 3.2 });
+  else search: for (let ring = 0; ring <= 20; ring++) {
     const steps = ring === 0 ? 1 : 8 * ring;
     for (let k = 0; k < steps; k++) {
       const at = { x: target.x + 4 * ring * Math.cos(2 * Math.PI * k / steps), y: target.y + 4 * ring * Math.sin(2 * Math.PI * k / steps) };

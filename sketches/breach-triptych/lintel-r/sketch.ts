@@ -26,7 +26,7 @@ import {
  * city beyond is drawn on the gold in black, low on the horizon. The helix (`knot`) binds the joints where lintel and
  * pier meet, comes in as the thread from C, or lashes the piers' courses; each piece of it is drawn on whichever sheet
  * shows there, in that sheet's ink. "bear" is painted on a pier in the light;
- * "weight" is plotted under the strip and sealed, the only word with no light.
+ * "weight" is plotted on the gold under the strip and sealed, the only word with no light.
  */
 
 const plies = [
@@ -69,6 +69,8 @@ const PIERS: Record<string, PierReading> = {
 const DEFAULT_PIERS = 'low';
 /** The spacing of the ruled faces of the piers, and the hatch pitch of the city, on the sheet (mm). */
 const RULE_MM = 1.1, CITY_MM = 2.4;
+/** The strip's placement ticks on the gold: arm length and inset from the footprint's edges (mm), as the assembly draws them. */
+const TICK = { arm: 3, inset: 1.5 };
 /** The least paper between two forms on the sheet (mm): a city tower and a pier's edge. */
 const CLEAR = 4;
 
@@ -346,10 +348,15 @@ function draw(ctx: SketchContext): Part[] {
   }
   for (const g of geometries) g.dispose();
 
-  // "weight": under the strip, sealed: off-centre in the lintel's footprint, clear of its corner ticks.
+  // "weight": under the strip, sealed: off-centre in the lintel's footprint, clear of its corner ticks. The strip lies on
+  // the gold sky (the white is cut away there), so the word is plotted on the gold, in black. The gold also carries the
+  // strip's placement ticks, sealed under it: the assembly's own ticks go on the white, whose paper there is waste.
   const cap = 4;
   const weight = pageWord('weight', lintel.x0 + 0.56 * (lintel.x1 - lintel.x0), lintel.y0 + 0.3 * (lintel.y1 - lintel.y0), cap);
-  const sealed = { white: [{ id: 'weight-carbon', pen: 'carbon', paths: weight }] };
+  const tick = (x: number, y: number, sx: number, sy: number): Point[] => [{ x: x + sx * TICK.arm, y }, { x, y }, { x, y: y + sy * TICK.arm }];
+  const { x0, x1, y0, y1 } = lintel, i = TICK.inset;
+  const ticks = [tick(x0 + i, y0 + i, 1, 1), tick(x1 - i, y0 + i, -1, 1), tick(x1 - i, y1 - i, -1, -1), tick(x0 + i, y1 - i, 1, -1)];
+  const sealed = { gold: [{ id: 'weight-black', pen: 'black', paths: weight }, { id: 'ticks-black', pen: 'black', paths: ticks }] };
 
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   // The white's one cut: the sky above the horizon, round the piers (their outer silhouettes, on straight edges).
