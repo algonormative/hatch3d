@@ -20,11 +20,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
 import { targetPage } from '../src/sketch/render-target.ts';
 import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
-import type { Control, Page, Pen } from '../src/sketch/types.ts';
+import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, signatureBox, worldCuts, worldSha256, type AssemblyReport } from './assembly-world.ts';
+import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-export interface Piece { name: string; sketch: string; seed: number; params?: Record<string, unknown>; title?: string }
+export interface Piece {
+  name: string; sketch: string; seed: number; params?: Record<string, unknown>; title?: string;
+  /** The panel (one artwork made of paper plies, see `assembly` in the sketch) this piece is a ply of, such as "lintel-r". The ply is the sketch's ply control. */
+  assembly?: string;
+}
 export interface VpypeOptions { mergeTolerance: number; simplifyTolerance: number; minLength: number; reloop: boolean; sort: boolean }
 export interface FinalizeOptions {
   palette: Palette;
@@ -89,7 +94,7 @@ export const DEFAULT_OPTIONS: Omit<FinalizeOptions, 'palette'> = {
 const MM_PER_PX = 25.4 / 96;
 const DRAW_MM_S = 60, TRAVEL_MM_S = 200, SWAP_S = 60;
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 function fail(message: string): never { throw new Error(message); }
 
@@ -113,12 +118,14 @@ export function plainFinishing(stack: Pick<Stack, 'page'>, sketch: { page: Page;
   return { page: { width, height, ...(margin === undefined ? {} : { margin }) } };
 }
 
-/** The piece's page (`pageFor`), pens and controls. */
-async function loadSketch(stack: Stack, entry: string): Promise<{ page: Page; pens: Pen[]; controls: Control[] }> {
+export interface LoadedSketch { page: Page; pens: Pen[]; controls: Control[]; assembly?: AssemblySpec }
+
+/** The piece's page (`pageFor`), pens, controls and, for an assembly sketch, its assembly spec. */
+export async function loadSketch(stack: Stack, entry: string): Promise<LoadedSketch> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
   const sketch = mod.default;
   if (!sketch?.page || !Array.isArray(sketch.pens)) fail(`${entry} does not export a sketch with page and pens`);
-  return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [] };
+  return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [], ...(sketch.assembly ? { assembly: sketch.assembly as AssemblySpec } : {}) };
 }
 
 /**
@@ -148,9 +155,12 @@ async function renderSource(piece: Piece, request: object, dir: string): Promise
 
 /** Render only (no vpype), for previews: the page recolors layers itself. */
 export async function previewPiece(stack: Stack, piece: Piece, palette: Palette, overrides: Record<string, unknown>, dir: string): Promise<string> {
-  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
+  const loaded = await loadSketch(stack, piece.sketch);
+  const { page, pens, controls } = loaded;
   const auto = titleOverrides(stack, controls, buildVersion(stack.edition));
-  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...auto, ...overrides }), finishing: finishingFor(stack, page, pens, palette) };
+  const asm = await planAssembly(stack, piece, loaded, overrides);
+  const finishing = asm ? assemblyFinishing(stack, page, pens, asm) : finishingFor(stack, page, pens, palette);
+  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...auto, ...overrides }), finishing };
   return readFileSync(await renderSource(piece, request, dir), 'utf8');
 }
 
@@ -162,6 +172,154 @@ function finishingFor(stack: Stack, page: Page, pens: Pen[], palette: Palette) {
     ...(stack.border ? { border: stack.border } : {}),
     page: { width: page.width, height: page.height, margin: page.margin ?? 18, paper: palette.paper },
     pens: Object.fromEntries(pens.map((pen, i) => [pen.id, { color: inkFor(pen.id, i, palette) }])),
+  };
+}
+
+// ── Assembly: a panel made of plies ──────────────────────────────────
+//
+// A sketch that declares `assembly` is one panel; each piece of it is one ply, a render of the same world with the
+// ply control set. The plies are plotted on different papers, cut and glued, so they must register: same seed and
+// params, the same page fit (nothing moves them), crop marks to trim at, and inks that read on their paper.
+
+/** The ply a piece is: the assembly control's value after layering, else the control's default (the top ply). */
+export function plyOf(stack: Stack, piece: Piece, loaded: LoadedSketch, overrides: Record<string, unknown> = {}): { spec: AssemblySpec; ply: PlySpec; index: number } {
+  const spec = loaded.assembly ?? fail(`${piece.sketch} does not declare an assembly`);
+  const control = loaded.controls.find(c => c.id === spec.control);
+  const given = { ...stack.params, ...piece.params, ...overrides }[spec.control];
+  const id = given ?? (control && 'default' in control ? control.default : undefined);
+  const index = spec.plies.findIndex(p => p.id === id);
+  if (index < 0) fail(`${piece.name} is ply ${String(id)}, which assembly ${piece.assembly ?? spec.control} does not have (plies: ${spec.plies.map(p => p.id).join(', ')})`);
+  return { spec, ply: spec.plies[index], index };
+}
+
+interface AssemblyPlan { name: string; spec: AssemblySpec; ply: PlySpec; index: number; siblings: Piece[] }
+
+const canonical = (value: Record<string, unknown>) => JSON.stringify(Object.keys(value).sort().map(k => [k, value[k]]));
+
+/**
+ * Checks a piece of an assembly before anything is rendered, and returns its plan; undefined for a plain sketch.
+ * Throws when the sketch and the piece disagree about being an assembly, the piece is an onlay (never finalized), the
+ * stack's border is not crop marks on the cut pen, an ink does not read on its paper, or the pieces that share the
+ * assembly differ in sketch, seed or params (other than the ply), or make one ply twice.
+ */
+async function planAssembly(stack: Stack, piece: Piece, loaded: LoadedSketch, overrides: Record<string, unknown>): Promise<AssemblyPlan | undefined> {
+  if (!loaded.assembly) {
+    if (piece.assembly !== undefined) fail(`${piece.name} names assembly ${piece.assembly}, but ${piece.sketch} does not declare one`);
+    return undefined;
+  }
+  const name = piece.assembly;
+  if (!name || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)) fail(`${piece.name} is a ply of an assembly sketch: its "assembly" must name the panel (letters, digits and hyphens), such as "lintel-r"`);
+  const { spec, ply, index } = plyOf(stack, piece, loaded, overrides);
+  if (ply.onlay) fail(`${piece.name} is ply ${ply.id}, an onlay plotted and cut on ${ply.onlay.from}: onlays are never finalized`);
+  const border = stack.border as { style?: string; pen?: string } | undefined;
+  if (border?.style !== 'cropmarks' || border.pen !== spec.cutPen) fail(`assembly ${name}: the stack border must be crop marks on the cut pen (${spec.cutPen}), since every ply is trimmed at them`);
+  checkInksRead(ply);
+  const declared = (p: Piece) => Object.fromEntries(Object.entries({
+    ...Object.fromEntries(loaded.controls.flatMap(c => ('default' in c ? [[c.id, c.default]] : []))), ...stack.params, ...p.params,
+  }).filter(([k]) => k !== spec.control));
+  const siblings = stack.pieces.filter(p => p.assembly === name && slug(p.name) !== slug(piece.name));
+  for (const q of siblings) {
+    if (resolve(ROOT, q.sketch) !== resolve(ROOT, piece.sketch)) fail(`assembly ${name}: ${q.name} is made from ${q.sketch}, but ${piece.name} from ${piece.sketch}`);
+    if (q.seed !== piece.seed) fail(`assembly ${name}: ${q.name} has seed ${q.seed}, but ${piece.name} has seed ${piece.seed}`);
+    const other = plyOf(stack, q, loaded).ply;
+    if (other.id === ply.id) fail(`assembly ${name}: ply ${ply.id} is made by both ${piece.name} and ${q.name}`);
+    if (other.onlay) fail(`assembly ${name}: ${q.name} is ply ${other.id}, an onlay plotted and cut on ${other.onlay.from}: onlays are never finalized`);
+    if (canonical(declared(q)) !== canonical(declared(piece))) fail(`assembly ${name}: ${q.name} and ${piece.name} differ in params other than ${spec.control}, so they would not draw one world`);
+  }
+  return { name, spec, ply, index, siblings };
+}
+
+/** The forced options of an assembly ply: its own paper as the palette, nothing recentred, nothing merged. */
+function assemblyOptions(options: FinalizeOptions, ply: PlySpec): FinalizeOptions {
+  const palette: Palette = { id: `ply-${ply.paper.id}`, label: `${ply.id} on ${ply.paper.id}`, paper: ply.paper.color, inks: [] };
+  // Recentring would move each ply's art by its own bounds and break registration; merging puts layers on one pen,
+  // which makes the pen plan differ from the canonical render, and then no config.json is written.
+  return { ...options, palette, center: 'none', mergeSameColor: false };
+}
+
+/** Finishing for a ply: the sketch's own pen colours, the cut pen inked as the ply's cut ink, the ply's paper. */
+function assemblyFinishing(stack: Stack, page: Page, pens: Pen[], plan: Pick<AssemblyPlan, 'spec' | 'ply'>) {
+  const ink = pens.find(p => p.id === plan.ply.cutInk) ?? fail(`ply ${plan.ply.id} cutInk ${plan.ply.cutInk} is not a declared pen`);
+  return {
+    ...(stack.border ? { border: stack.border } : {}),
+    page: { width: page.width, height: page.height, margin: page.margin ?? 18, paper: plan.ply.paper.color },
+    pens: { [plan.spec.cutPen]: { color: ink.color, width: ink.width } },
+  };
+}
+
+const pieceDir = (stack: Stack, piece: Piece) => resolve(ROOT, stack.out, slug(piece.name));
+const hasResult = (stack: Stack, piece: Piece) => existsSync(join(pieceDir(stack, piece), 'source', 'result.json'));
+
+/**
+ * Every onlay of every assembly in the stack that involves the assembly of `current`, checked against the part it is
+ * cut from: the part must exist (a part cut with that id on that ply of that assembly), and the footprint must be
+ * congruent to it, which fits a rigid transform and bounds its residual. The assembly of `current` must be able to
+ * resolve its own onlays (the source ply finalized first); an assembly that merely supplies a part is checked only
+ * against onlay panels that have been finalized.
+ */
+async function checkOnlays(stack: Stack, current: Piece): Promise<void> {
+  const members = new Map<string, { spec: AssemblySpec; pieces: { piece: Piece; ply: string }[] }>();
+  for (const name of new Set(stack.pieces.flatMap(p => (p.assembly ? [p.assembly] : [])))) {
+    const pieces = stack.pieces.filter(p => p.assembly === name);
+    const loaded = await loadSketch(stack, pieces[0].sketch);
+    if (!loaded.assembly) continue;
+    members.set(name, { spec: loaded.assembly, pieces: pieces.map(piece => ({ piece, ply: plyOf(stack, piece, loaded).ply.id })) });
+  }
+  for (const [name, group] of members) {
+    for (const onlay of group.spec.plies.filter(p => p.onlay)) {
+      const from = onlay.onlay!.from;
+      const ref = parseFrom(from);
+      const strict = name === current.assembly;
+      if (!strict && ref.assembly !== current.assembly) continue;
+      const label = `onlay ${onlay.id} of ${name} (${from})`;
+      const source = members.get(ref.assembly);
+      if (!source) { if (strict) fail(`${label}: no piece of assembly ${ref.assembly} is in the stack`); continue; }
+      const sourcePly = source.spec.plies.find(p => p.id === ref.ply);
+      if (!sourcePly || sourcePly.onlay) fail(`${label}: assembly ${ref.assembly} has no sheet ply ${ref.ply}`);
+      const sourcePiece = source.pieces.find(m => m.ply === ref.ply)?.piece;
+      if (!sourcePiece || !hasResult(stack, sourcePiece)) {
+        if (strict) fail(`${label}: finalize ${sourcePiece?.name ?? `ply ${ref.ply} of ${ref.assembly}`} first, so the part can be checked`);
+        continue;
+      }
+      const targetPiece = strict ? current : group.pieces.find(m => hasResult(stack, m.piece))?.piece;
+      if (!targetPiece || !hasResult(stack, targetPiece)) continue;
+      const sourceResult = readPlyResult(pieceDir(stack, sourcePiece));
+      const cut = plyCuts(sourceResult.parts, source.spec, ref.ply).find(c => c.id === ref.cut);
+      if (cut?.kind !== 'part') fail(`${label}: ply ${ref.ply} of ${ref.assembly} has no part cut ${ref.cut}${cut ? ` (it is a ${cut.kind} cut)` : ''}`);
+      const part = worldCuts(sourceResult.parts, source.spec).find(c => c.ply === ref.ply && c.id === ref.cut)!;
+      const footprints = worldCuts(readPlyResult(pieceDir(stack, targetPiece)).parts, group.spec).filter(c => c.ply === onlay.id);
+      if (footprints.length !== 1) fail(`${label}: the render has ${footprints.length} footprint cuts for ply ${onlay.id}, not one`);
+      congruentFit(part.rings, footprints[0].rings, label);
+    }
+  }
+}
+
+/**
+ * The checks that need the render, then the report's assembly record. The world (every ply's cuts and the signature
+ * box, in finished millimetres) must be the one the plies finalized earlier drew: same seed, same params, same
+ * fingerprint. Then the onlays are checked (see `checkOnlays`).
+ */
+async function checkAssemblyWorld(stack: Stack, piece: Piece, plan: AssemblyPlan, dir: string): Promise<AssemblyReport> {
+  const result = readPlyResult(dir);
+  const world = worldSha256(result.parts);
+  const { spec, ply, name } = plan;
+  const withoutControl = (params: Record<string, unknown>) => Object.fromEntries(Object.entries(params).filter(([k]) => k !== spec.control));
+  for (const q of plan.siblings.filter(s => hasResult(stack, s))) {
+    const earlier = readPlyResult(pieceDir(stack, q));
+    if (earlier.seed !== result.seed || canonical(withoutControl(earlier.params)) !== canonical(withoutControl(result.params))) {
+      fail(`assembly ${name}: ${q.name} was finalized with a different seed or params than ${piece.name} (${JSON.stringify(withoutControl(earlier.params))} against ${JSON.stringify(withoutControl(result.params))}); finalize every ply of the assembly together`);
+    }
+    if (worldSha256(earlier.parts) !== world) fail(`assembly ${name}: ${q.name} and ${piece.name} do not draw one world: their cuts differ (same seed and params, so the sketch's cuts depend on the ply, or the page fit moved)`);
+  }
+  await checkOnlays(stack, piece);
+  const signature = spec.signature?.ply === ply.id ? { pen: spec.signature.pen, box: signatureBox(result.parts) ?? fail(`ply ${ply.id} has no signature box in its render`) } : undefined;
+  return {
+    name, ply: ply.id, index: plan.index + 1, plies: spec.plies.length, paper: { ...ply.paper }, cutPen: spec.cutPen, cutInk: ply.cutInk,
+    ...(ply.lift === undefined ? {} : { lift: ply.lift }),
+    cuts: plyCuts(result.parts, spec, ply.id),
+    onlays: spec.plies.filter(p => p.onlay).map(p => ({ ply: p.id, from: p.onlay!.from })),
+    ...(signature ? { signature } : {}),
+    worldSha256: world,
   };
 }
 
@@ -314,16 +472,25 @@ export interface PieceReport {
   /** Same numbered layers, labels and passes as the canonical source, so plotter-server's pen-plan check can pass. */
   serverCompatible: boolean;
   files: { source: string; sourcePng: string; prepared: string; preparedPng: string }; sourceSha256: string; preparedSha256: string;
+  /** Only for a ply of an assembly: which ply of which panel, its cuts, and the fingerprint of the world it drew. */
+  assembly?: AssemblyReport;
 }
 
-export async function finalizePiece(stack: Stack, piece: Piece, options: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
-  const { page, pens, controls } = await loadSketch(stack, piece.sketch);
-  const inked = pens.filter(p => p.id !== 'lettering').length;
-  if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
+export async function finalizePiece(stack: Stack, piece: Piece, requested: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
+  const loaded = await loadSketch(stack, piece.sketch);
+  const { page, pens, controls } = loaded;
+  // A ply of an assembly is finished with its own paper and the sketch's own pens; any other piece gets the palette.
+  const asm = await planAssembly(stack, piece, loaded, overrides);
+  const options = asm ? assemblyOptions(requested, asm.ply) : requested;
+  if (!asm) {
+    const inked = pens.filter(p => p.id !== 'lettering').length;
+    if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
+  }
   const dir = resolve(ROOT, stack.out, slug(piece.name));
   const build = buildVersion(stack.edition);
-  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
+  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: asm ? assemblyFinishing(stack, page, pens, asm) : finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
+  const assembly = asm ? await checkAssemblyWorld(stack, piece, asm, dir) : undefined;
   const rendered = readFileSync(sourcePath, 'utf8');
   // A pen that draws nothing on this piece (an empty part on a small card) is not a layer to plot: drop it from the
   // canonical render, so that render, the prepared SVG and the config agree on the pen layers.
@@ -383,6 +550,7 @@ export async function finalizePiece(stack: Stack, piece: Piece, options: Finaliz
     layers: layerStats, pens: layerStats.length, minutes: Math.round(minutes), serverCompatible: moves.length === 0,
     files: { source: relative(ROOT, sourcePath), sourcePng: relative(ROOT, join(dir, 'source', 'render.png')), prepared: relative(ROOT, preparedPath), preparedPng: relative(ROOT, join(dir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
+    ...(assembly ? { assembly } : {}),
   };
   if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report), null, 2));
   writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
@@ -402,7 +570,7 @@ export function resolveOptions(stack: Stack, override: Partial<Omit<FinalizeOpti
   };
 }
 
-function loadStack(path: string): Stack {
+export function loadStack(path: string): Stack {
   const stack = JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')) as Stack;
   if (!stack.out || !Array.isArray(stack.pieces) || !stack.pieces.length) fail('Stack needs out and pieces');
   const sheet = stack.page as Record<string, unknown> | undefined;
