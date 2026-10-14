@@ -1,7 +1,7 @@
 import { validId } from './ids.js';
 import { clipToRegion, distanceToRings, inRegion, offsetRing, ringsSimple, signedArea } from './region.js';
 import type { Region } from './region.js';
-import { measureStrokeText, strokeText } from './stroke-text.js';
+import { measureStrokeText, strokeFaceSupports, strokeText } from './stroke-text.js';
 import type { AssemblySpec, Box, Control, Cut, Cuts, Page, Part, Pen, Point, SketchContext } from './types.js';
 
 /**
@@ -134,8 +134,28 @@ export function plyRegion(spec: AssemblySpec, cuts: Cuts, ply: string): Region {
 
 /** The step of the grid that looks for the greatest inscribed clearance, millimetres. */
 const GRID = 0.5;
+/**
+ * After the grid, the best sample is refined: a finer grid over the neighbourhood of the best point, then a finer
+ * one again, each `[step, half-width]` in millimetres. A coarse grid under-measures a window whose roomiest point
+ * falls between samples (a diamond), and would reject one that is wide enough.
+ */
+const REFINE: [number, number][] = [[0.05, 0.5], [0.005, 0.05]];
+/** A refinement step must beat the best by this much, so a plateau does not drift the point about. */
+const REFINE_GAIN = 1e-12;
 /** Windows whose greatest inscribed clearance is under this are narrower than 3 mm and cannot be cut or marked. */
 const MIN_CLEARANCE = 1.5;
+/** The guard around the lone X that stands in when the lattice has no room, and the shortest X worth drawing. */
+const LONE_GUARD = 0.5;
+const MIN_MARK = 1.5;
+/** The longest label the stroke text face will set. */
+const MAX_LABEL = 256;
+
+/**
+ * The least inscribed clearance a window needs to be marked when its guides are inked `penWidth` wide: the lone X
+ * is `2 × (clearance − penWidth / 2 − LONE_GUARD)` long and must be at least `MIN_MARK`. Never under `MIN_CLEARANCE`,
+ * so a window is nowhere less than 3 mm wide whatever the pen.
+ */
+const windowClearance = (penWidth: number): number => Math.max(MIN_CLEARANCE, MIN_MARK / 2 + penWidth / 2 + LONE_GUARD);
 
 interface Bounds { x0: number; y0: number; x1: number; y1: number }
 function boundsOf(paths: Point[][]): Bounds | undefined {
@@ -148,7 +168,8 @@ function boundsOf(paths: Point[][]): Bounds | undefined {
 
 /**
  * The point of the waste (even-odd area of `rings`) farthest from any ring edge, on a grid anchored at the corner of
- * its bounding box; the first of equals wins. With `atLeast`, stops at the first point that clears it.
+ * its bounding box, then refined around the best sample (see `REFINE`); the first of equals wins. With `atLeast`,
+ * stops at the first point that clears it.
  */
 function greatestClearance(rings: Point[][], atLeast = Infinity): { point: Point; clearance: number } | undefined {
   const b = boundsOf(rings);
@@ -165,6 +186,17 @@ function greatestClearance(rings: Point[][], atLeast = Infinity): { point: Point
       if (best.clearance >= atLeast) return best;
     }
   }
+  if (!best) return best;
+  for (const [stepSize, halfWidth] of REFINE) {
+    const around: Point = best.point, n = Math.round(halfWidth / stepSize);
+    for (let j = -n; j <= n; j++) for (let i = -n; i <= n; i++) {
+      const p: Point = { x: around.x + i * stepSize, y: around.y + j * stepSize };
+      if (!inRegion(p, waste)) continue;
+      const clearance = distanceToRings(p, rings);
+      if (clearance > best.clearance + REFINE_GAIN) best = { point: p, clearance };
+      if (best.clearance >= atLeast) return best;
+    }
+  }
   return best;
 }
 
@@ -174,15 +206,20 @@ const insideRing = (p: Point, ring: Point[]): boolean => inRegion(p, { rings: [r
 /**
  * Checks every cut of the assembly against the page. Throws, listing every problem, when a ring is not a simple
  * polygon, two rings of one cut cross, two cuts on one ply cross or nest, a vertex lies outside the page margin, a cut
- * id is unsafe or repeated, a cut's area (its window, part or piece) is nowhere 3 mm wide (its greatest inscribed
- * clearance is under 1.5 mm, sampled on a 0.5 mm grid), an onlay ply does not have exactly one footprint cut, or a
- * footprint cut sits on a ply that is not an onlay. Returns the warnings: a window with a hole inside its waste (kept
- * paper that comes away loose, unless it is a shaped ply), and a lower ply fully hidden by an upper ply with no cuts.
+ * id is unsafe or repeated, a cut's label has a character the stroke face cannot draw, a cut's area (its window, part
+ * or piece) is nowhere 3 mm wide (its greatest inscribed clearance is under 1.5 mm, found on a 0.5 mm grid and refined
+ * around the best sample), an onlay ply does not have exactly one footprint cut, or a footprint cut sits on a ply that
+ * is not an onlay. Returns the warnings: a window with a hole inside its waste (kept paper that comes away loose,
+ * unless it is a shaped ply), and a lower ply fully hidden by an upper ply with no cuts.
+ *
+ * With `pens`, a window (a `waste` cut) must also be wide enough for `cutGuides` to mark it with the ply's `cutInk`
+ * width, which for a wide pen is more than 1.5 mm of clearance: every window this accepts can be marked. Without
+ * them 1.5 mm is the floor. Without a `page` the page-margin check is skipped.
  */
-export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string[] {
+export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page | undefined, pens?: Pen[]): string[] {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const margin = page.margin ?? 0;
+  const margin = page?.margin ?? 0;
   const plyIds = new Set(spec.plies.map((ply) => ply.id));
   for (const id of Object.keys(cuts)) if (!plyIds.has(id)) errors.push(`Cuts name an unknown ply: ${id}`);
   const partIds = new Set<string>();
@@ -199,6 +236,13 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
       const partId = `asm-${ply.id}-${cut.id}`;
       if (partIds.has(partId)) errors.push(`${where}: the diagnostic part id ${partId} is already taken`);
       partIds.add(partId);
+      if (cut.label !== undefined) {
+        const chars = typeof cut.label === 'string' ? [...cut.label] : undefined;
+        const unsupported = chars?.find((char) => !strokeFaceSupports(char, 'sans'));
+        if (!chars) errors.push(`${where}: label must be a string`);
+        else if (chars.length > MAX_LABEL) errors.push(`${where}: label is longer than ${MAX_LABEL} characters`);
+        else if (unsupported !== undefined) errors.push(`${where}: label has unsupported character U+${unsupported.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`);
+      }
       const kind = cut.kind ?? 'waste';
       if (kind !== 'waste' && kind !== 'part' && kind !== 'footprint') { errors.push(`${where}: unknown cut kind ${String(kind)}`); continue; }
       if (kind === 'footprint' && !ply.onlay) errors.push(`${where}: a footprint cut belongs on an onlay ply`);
@@ -211,13 +255,15 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
       if (sound) for (let i = 0; i < cut.rings.length; i++) for (let j = i + 1; j < cut.rings.length; j++) {
         if (ringCrosses(cut.rings[i], cut.rings[j])) { errors.push(`${where}: rings ${i} and ${j} cross`); sound = false; }
       }
-      const outside = cut.rings.flat().find((p) => p.x < margin - 1e-6 || p.x > page.width - margin + 1e-6 || p.y < margin - 1e-6 || p.y > page.height - margin + 1e-6);
+      const outside = page ? cut.rings.flat().find((p) => p.x < margin - 1e-6 || p.x > page.width - margin + 1e-6 || p.y < margin - 1e-6 || p.y > page.height - margin + 1e-6) : undefined;
       if (outside) errors.push(`${where}: vertex (${outside.x}, ${outside.y}) is outside the ${margin} mm page margin`);
       if (!sound) continue;
       usable.push(cut);
-      const best = greatestClearance(cut.rings, MIN_CLEARANCE - 1e-9);
-      if (!best || best.clearance < MIN_CLEARANCE - 1e-9) {
-        errors.push(`${where}: the ${kind === 'part' ? 'part' : kind === 'footprint' ? 'piece' : 'window'} is nowhere 3 mm wide (greatest inscribed clearance ${(best?.clearance ?? 0).toFixed(2)} mm, under ${MIN_CLEARANCE} mm)`);
+      const inkWidth = pens?.find((pen) => pen.id === ply.cutInk)?.width;
+      const need = kind === 'waste' && finite(inkWidth) && inkWidth > 0 ? windowClearance(inkWidth) : MIN_CLEARANCE;
+      const best = greatestClearance(cut.rings, need - 1e-9);
+      if (!best || best.clearance < need - 1e-9) {
+        errors.push(`${where}: the ${kind === 'part' ? 'part' : kind === 'footprint' ? 'piece' : 'window'} is nowhere ${Number((2 * need).toFixed(2))} mm wide (greatest inscribed clearance ${(best?.clearance ?? 0).toFixed(2)} mm, under ${Number(need.toFixed(3))} mm)`);
       }
       const hole = kind === 'waste' && cut.rings.some((ring, i) => cut.rings.some((other, j) => i !== j && insideRing(ring[0], other)));
       if (hole) warnings.push(`${where}: a hole inside the waste leaves kept paper that will come away loose, unless this is a shaped ply`);
@@ -251,10 +297,6 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
 export interface GuideOptions { penWidth: number; pitch: number; size: number; guard: number; label: string | boolean; heights: number[]; maxMarks: number }
 export const GUIDE_DEFAULTS: Omit<GuideOptions, 'penWidth'> = { pitch: 12, size: 4, guard: 2, label: true, heights: [5, 3.5, 2.5], maxMarks: 80 };
 
-/** The guard around the lone X that stands in when the lattice has no room, and the shortest X worth drawing. */
-const LONE_GUARD = 0.75;
-const MIN_MARK = 1.5;
-
 function boxMeets(a: Bounds, b: Bounds): boolean { return !(a.x1 < b.x0 || a.x0 > b.x1 || a.y1 < b.y0 || a.y0 > b.y1); }
 
 /** Does the segment ab touch the box (Liang-Barsky)? */
@@ -287,8 +329,9 @@ function distanceBoxToRings(box: Bounds, rings: Point[][]): number {
 /**
  * Guides for one cut, plotted on the front of the ply inside the waste (the even-odd area of the cut's rings):
  *   - an outline of every ring, a pen width's half inside the waste, so the ink just touches the line to cut along;
- *   - X marks on a lattice anchored at the centre of the waste's bounding box, each clear of the cut by its reach, the
- *     pen and a guard; if none fits, one X at the point of greatest clearance, shrunk to fit;
+ *   - X marks on a lattice anchored at the centre of the waste's bounding box, each an X of two strokes of length
+ *     `size`, so its ink reaches half of `size` and half a pen width from its centre, and that plus the guard clear of
+ *     the cut; if none fits, one X at the point of greatest clearance, shrunk to fit (its ink 0.5 mm clear of the cut);
  *   - a label in Hershey sans, in the first height that fits clear of the cut, with the X marks under it left out.
  * Throws when the outline is finer than the pen or no X fits. Returns one part, `cut-<id>`, whose boundary is the rings.
  *
@@ -330,11 +373,11 @@ export function cutGuides(cut: Cut, pen: string, o: GuideOptions): Part {
   for (const outline of outlines) for (const v of outline) if (!(distanceToRings(v, rings) >= half - 1e-6 && inRegion(v, waste))) throw finer();
   for (const outline of outlines) paths.push(closed(outline));
 
-  // X marks. Each X is two strokes of length `size`, but the clearance is budgeted for the half-diagonal of the
-  // size × size square the X sits in, which is farther than the strokes reach.
+  // X marks. Each X is two diagonal strokes of length `size` crossing at its centre, so every point of it is within
+  // `size / 2` of the centre, and its ink within that plus half a pen width.
   const bounds = boundsOf(rings)!;
   const centre = { x: (bounds.x0 + bounds.x1) / 2, y: (bounds.y0 + bounds.y1) / 2 };
-  const reach = (size: number) => size / Math.SQRT2 + half;
+  const reach = (size: number) => size / 2 + half;
   const latticeAt = (pitch: number): Point[] => {
     const out: Point[] = [];
     const nx = Math.ceil((bounds.x1 - centre.x) / pitch), ny = Math.ceil((bounds.y1 - centre.y) / pitch);
@@ -351,8 +394,10 @@ export function cutGuides(cut: Cut, pen: string, o: GuideOptions): Part {
   let size = o.size;
   const best = greatestClearance(rings);
   if (marks.length === 0) {
-    const fit = best ? (best.clearance - half - LONE_GUARD) * Math.SQRT2 : 0;
-    if (!best || fit < MIN_MARK) throw new Error(`cut ${cut.id}: no room for an X mark`);
+    // The disc of radius `clearance` about the point is all waste, so an X of length `fit` (reach `fit / 2`) leaves
+    // its ink `LONE_GUARD` clear of the cut. The tolerance covers a window `validateCuts` took at its exact minimum.
+    const fit = best ? 2 * (best.clearance - half - LONE_GUARD) : 0;
+    if (!best || fit < MIN_MARK - 1e-8) throw new Error(`cut ${cut.id}: no room for an X mark`);
     size = Math.min(o.size, fit);
     marks = [best.point];
   }
@@ -473,6 +518,9 @@ function placementTicks(rings: Point[][]): Point[][] {
 
 // ── Rendering one ply ────────────────────────────────────────────────
 
+/** Part ids `renderPly` makes for itself: the guides, the placement marks and the diagnostics. */
+const RESERVED_PREFIXES = ['asm-', 'cut-', 'place-'];
+
 /**
  * The parts of the ply this render is (`ctx.params[spec.control]`): the ply's art clipped to what it shows, its sealed
  * art, the guides of each of its cuts on `spec.cutPen`, placement marks when an onlay sits directly above it, and
@@ -483,15 +531,39 @@ function placementTicks(rings: Point[][]): Point[][] {
  * by its own ply's cuts and signature, never by the plies above. The placement marks `place-<onlay>` are the same:
  * they sit under the piece on purpose, so the onlay does not clip them.
  *
- * Throws for an unknown ply, for an onlay ply (it is plotted and cut elsewhere), or art in a pen the ply does not carry.
+ * The world is checked first, so every ply of one world is accepted or refused alike: the cuts with `validateCuts`
+ * (including the page margin when `ctx.page` is known, and the guide pen widths), the art and sealed art for keys that
+ * are not plies and part ids that start with `asm-`, `cut-` or `place-` (the ids renderPly makes for itself), and the
+ * signature box for lying inside the page.
+ *
+ * Throws for an unknown ply, for an onlay ply (it is plotted and cut elsewhere), for a world that fails those checks,
+ * or art in a pen the ply does not carry.
  */
-export function renderPly(spec: AssemblySpec, ctx: Pick<SketchContext, 'params'>, pens: Pen[],
+export function renderPly(spec: AssemblySpec, ctx: Pick<SketchContext, 'params' | 'page'>, pens: Pen[],
   world: { cuts: Cuts; art: Record<string, Part[]>; sealed?: Record<string, Part[]> }, guide?: Partial<GuideOptions>): Part[] {
   const id = String(ctx.params[spec.control]);
   const index = spec.plies.findIndex((p) => p.id === id);
   assert(index >= 0, `Unknown ply: ${id}`);
   const ply = spec.plies[index];
   assert(!ply.onlay, `ply ${ply.id} is an onlay, plotted and cut on ${ply.onlay?.from}`);
+  validateCuts(spec, world.cuts, ctx.page, pens);
+  const plyIds = new Set(spec.plies.map((p) => p.id));
+  for (const [name, art] of [['art', world.art], ['sealed art', world.sealed]] as const) {
+    if (!art) continue;
+    for (const key of Object.keys(art)) {
+      assert(plyIds.has(key), `World ${name} names an unknown ply: ${key}`);
+      assert(Array.isArray(art[key]), `World ${name} for ply ${key} must be an array of parts`);
+      for (const part of art[key]) {
+        const reserved = RESERVED_PREFIXES.find((prefix) => String(part?.id).startsWith(prefix));
+        assert(!reserved, `World ${name} part ${String(part?.id)} uses the reserved id prefix ${reserved}`);
+      }
+    }
+  }
+  const signature = spec.signature?.box;
+  if (ctx.page && signature) {
+    assert(signature.x >= 0 && signature.y >= 0 && signature.x + signature.width <= ctx.page.width && signature.y + signature.height <= ctx.page.height,
+      `Assembly signature box lies outside the ${ctx.page.width} x ${ctx.page.height} mm page`);
+  }
   const parts: Part[] = [];
   const pool = (art: Record<string, Part[]> | undefined, region: Region) => {
     for (const part of art && Object.prototype.hasOwnProperty.call(art, ply.id) ? art[ply.id] : []) {

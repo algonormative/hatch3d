@@ -201,12 +201,16 @@ export function ringsSimple(rings: Point[][]): boolean {
 interface Edge { ax: number; ay: number; bx: number; by: number; x0: number; x1: number; y0: number; y1: number }
 interface Leaf { near: boolean; distance: number; edges: Edge[]; x0: number; x1: number; y0: number; y1: number }
 
-function edgesOf(rings: Point[][], grow: number): { edges: Edge[]; x0: number; x1: number; y0: number; y1: number } {
+/**
+ * The edges of the rings that are at least `minPoints` long, each grown by `grow`. A one-point ring has one degenerate
+ * edge (P, P), which a `near` region reads as a disc, matching `nearAny`.
+ */
+function edgesOf(rings: Point[][], grow: number, minPoints: number): { edges: Edge[]; x0: number; x1: number; y0: number; y1: number } {
   const edges: Edge[] = [];
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (const ring of rings) {
     const n = ring.length;
-    if (n < 2) continue;
+    if (n < minPoints) continue;
     for (let i = 0, j = n - 1; i < n; j = i++) {
       const a = ring[j], b = ring[i];
       const edge = { ax: a.x, ay: a.y, bx: b.x, by: b.y, x0: Math.min(a.x, b.x) - grow, x1: Math.max(a.x, b.x) + grow, y0: Math.min(a.y, b.y) - grow, y1: Math.max(a.y, b.y) + grow };
@@ -218,8 +222,8 @@ function edgesOf(rings: Point[][], grow: number): { edges: Edge[]; x0: number; x
 }
 
 function leavesOf(region: Region, out: Leaf[] = []): Leaf[] {
-  if ('rings' in region) out.push({ near: false, distance: 0, ...edgesOf(region.rings, 0) });
-  else if ('near' in region) { if (region.distance > 0) out.push({ near: true, distance: region.distance, ...edgesOf(region.near, region.distance) }); }
+  if ('rings' in region) out.push({ near: false, distance: 0, ...edgesOf(region.rings, 0, 2) });
+  else if ('near' in region) { if (region.distance > 0) out.push({ near: true, distance: region.distance, ...edgesOf(region.near, region.distance, 1) }); }
   else if ('not' in region) leavesOf(region.not, out);
   else if ('and' in region) for (const r of region.and) leavesOf(r, out);
   else if ('or' in region) for (const r of region.or) leavesOf(r, out);

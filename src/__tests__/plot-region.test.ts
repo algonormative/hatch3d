@@ -72,6 +72,25 @@ describe('clipToRegion: rings', () => {
     expect(clipToRegion([line(0, 15, 30, 15)], spike)).toEqual([]);
   });
 
+  it('keeps a segment that enters a ring exactly at a vertex it passes through, to float rounding', () => {
+    // The segment runs through the triangle's first vertex, which the crossing test meets at u = -1e-16 rather than 0.
+    // Brute force over 200000 samples of inRegion is the independent answer: 3.0 mm inside.
+    const A = P(2.261194377206266, 6.931398988235742), B = P(9.261572826653719, 1.8699655099771917);
+    const triangle = [P(6.714092834139001, 3.7118517183329076), P(9.731123203071503, 2.7644723049303277), P(8.559289481243455, 1.1437299662513427)];
+    const region: Region = { rings: [triangle] };
+    const N = 200000, total = length([[A, B]]);
+    let inside = 0;
+    for (let k = 0; k < N; k++) {
+      const t = (k + 0.5) / N;
+      if (inRegion(P(A.x + (B.x - A.x) * t, A.y + (B.y - A.y) * t), region)) inside++;
+    }
+    const sampled = (inside / N) * total;
+    expect(Math.abs(sampled - 3)).toBeLessThan(1e-3);
+    const kept = clipToRegion([[A, B]], region);
+    expect(Math.abs(length(kept) - sampled)).toBeLessThan((total / N) * 4);
+    expect(Math.abs(length(kept) - 3)).toBeLessThan(1e-3);
+  });
+
   it('treats an unclosed ring as closed, and ignores a repeated closing point', () => {
     const closedRing: Region = { rings: [[...rect(10, 10, 20, 20), P(10, 10)]] };
     expect(clipToRegion([line(0, 15, 30, 15)], closedRing)).toEqual([line(10, 15, 20, 15)]);
@@ -87,6 +106,23 @@ describe('clipToRegion: near', () => {
     expect(kept).toHaveLength(1);
     expect(Math.abs(kept[0][0].x - (10 - Math.sqrt(3)))).toBeLessThan(1e-9);
     expect(Math.abs(kept[0][1].x - (20 + Math.sqrt(3)))).toBeLessThan(1e-9);
+  });
+
+  it('treats a one-point ring as a disc: it breaks where the line enters and leaves it', () => {
+    const disc: Region = { near: [[P(0, 0)]], distance: 1 };
+    expect(clipToRegion([line(-2, 0, 2, 0)], disc)).toEqual([line(-1, 0, 1, 0)]);
+    expect(clipToRegion([line(-2, 0, 2, 0)], { not: disc })).toEqual([line(-2, 0, -1, 0), line(1, 0, 2, 0)]);
+    expect(inRegion(P(0.5, 0), disc)).toBe(true);
+    expect(inRegion(P(1.5, 0), disc)).toBe(false);
+  });
+
+  it('measures a two-point ring as a capsule round its one segment', () => {
+    const capsule: Region = { near: [[P(0, 0), P(10, 0)]], distance: 1 };
+    expect(clipToRegion([line(-2, 0, 12, 0)], capsule)).toEqual([line(-1, 0, 11, 0)]);
+    const kept = clipToRegion([line(5, -3, 5, 3)], capsule);
+    expect(kept).toHaveLength(1);
+    expect(Math.abs(kept[0][0].y + 1)).toBeLessThan(1e-9);
+    expect(Math.abs(kept[0][1].y - 1)).toBeLessThan(1e-9);
   });
 
   it('keeps the band either side of each edge', () => {
@@ -233,6 +269,17 @@ describe('ring geometry', () => {
     expect(reach(mitred)).toBeGreaterThan(4);
     // Shrinking never bevels: the offset edges overlap there.
     expect(offsetRing(spike, -0.2)).toHaveLength(3);
+  });
+
+  it('a bevelled sharp corner joins the two offset edges in order, so the offset ring is simple', () => {
+    const needle = [P(0, 0), P(20, 1), P(0, 2)];
+    const grown = offsetRing(needle, 0.3);
+    expect(grown).toHaveLength(4);
+    expect(ringsSimple([grown])).toBe(true);
+    // The bevel joins the first edge's offset end to the second's: both sit 0.3 from the ring, either side of the tip.
+    for (const p of grown.slice(1, 3)) expect(Math.abs(distanceToRings(p, [needle]) - 0.3)).toBeLessThan(1e-9);
+    expect(grown[1].y).toBeLessThan(grown[2].y);
+    expect(Math.abs(signedArea(grown))).toBeGreaterThan(Math.abs(signedArea(needle)));
   });
 
   it('ringsSimple: simple rings pass; self-crossing, crossing, touching and degenerate rings fail', () => {

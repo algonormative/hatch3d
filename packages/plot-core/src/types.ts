@@ -77,7 +77,10 @@ export interface Part {
 
 /**
  * One ply of an assembly: a physical sheet of one paper, plotted as its own SVG job and then knife-cut. `pens` are the
- * pens its art may use (declared pens, by id); `cutInk` is the pen its cut guides are drawn with, whose width sizes them.
+ * pens its art may use (declared pens, by id). `cutInk` is the pen this ply's cut guides are inked with: the guides
+ * themselves are emitted on the assembly's `cutPen` layer, and the host (finalize) inks that layer for this ply in
+ * `cutInk`'s colour and width, so `cutInk`'s width is what the guide geometry is sized by (the outline sits half of it
+ * inside the waste, the X marks keep clear of it).
  * `bleed` overrides the assembly's for the windows cut in this ply; `lift` is carried for the host and not read by plot-core.
  * An `onlay` is not a full sheet but a piece glued on top, plotted and cut elsewhere: `from` is free text naming its
  * source (such as `"lintel-l/black/bar"`) and the world's one `footprint` cut for the ply is its outline as placed. It
@@ -90,8 +93,9 @@ export interface PlySpec { id: string; paper: { id: string; color: string }; pen
  * Several plies stacked into one artwork. `plies` runs bottom to top; a window cut in an upper ply shows the ply
  * below. `control` is the id of the select control (options = the ply ids, bottom to top) that picks the ply a render
  * is. Art is kept `margin` mm away from its own ply's cuts and, on the ply below a window, extends `bleed` mm under the
- * window's edge. `cutPen` is the declared pen that cut guides and the `asm-*` diagnostics are drawn with. A
- * `signature` keeps its `box` empty of art on `ply`, for the signing pen to fill.
+ * window's edge. `cutPen` is the declared pen id of the layer that cut guides, placement marks and the `asm-*`
+ * diagnostics are emitted on. It names a layer, not an ink: the host inks that layer in the colour and width of the
+ * ply's own `cutInk`. A `signature` keeps its `box` empty of art on `ply`, for the signing pen to fill.
  */
 export interface AssemblySpec { control: string; plies: PlySpec[]; cutPen: string; margin: number; bleed: number;
   signature?: { ply: string; pen: string; box: Box } }
