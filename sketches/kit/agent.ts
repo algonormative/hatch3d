@@ -13,6 +13,23 @@ import { Tube } from './mannequin/tube.ts';
  * sits; the card draws them with `pinstripeTube` / `silhouettes` / `suitFront` and winds the helix
  * along `headCoil(head)`. Whatever the figure sits on or beside (a throne, a floor, a table) stays
  * in the card. The frame helpers below place such things in the figure's own level frame.
+ *
+ * Zoomed in (a bust from below that fills the sheet; `sketches/agent-bust/sketch.ts` is the worked example):
+ * - Camera: a raw `THREE.PerspectiveCamera` (not `horizonCamera`, which keeps the horizon level) on the figure's
+ *   front, below the head and looking up about 25 degrees, fitted so the shoulders fill the sheet's width.
+ * - Scale: the pinstripe pitch is in world units (about 0.1 whatever the figure's size), so the figure must be built
+ *   big enough for the stripes to land 0.55 to 1.1 mm apart on the page: `height / 24` of 6 or more. Below about 3 the
+ *   stripes go sparse and the darkest tone is lost. Cost grows with the square of that scale.
+ * - Depth: `fitDepthRange(view, geometries, 0.1, { exact: true })`. The default sphere fit lets one big background slab
+ *   swallow the eye, `near` collapses to 0.5 and the slabs' hatch is cut to dashes.
+ * - Hidden lines: `hiddenBias(view, 0.15 * k, distance)` for the figure, tested in bands of eye distance. The Emperor's
+ *   0.45 * k lets back strokes near a silhouette through at this range.
+ * - Outlines: `silhouettes(tube, { forward, eye })`; `forward` alone is up to 40 degrees off at this range.
+ * - Tone: `toneField(ctx, head / k, { reach: 2 })`, since the default reach (3 to 8 canon units) covers a whole bust.
+ * - Censor bar: a page-space `hatchedBar` 1.75 by 0.36 of the projected head (`2 * head.r` times the page millimetres
+ *   per unit at the head), across the eyes.
+ * - Background: `facetStrokes` slabs at `pitch = mm / mmPerUnit(slab)`, not `slabStrokes`, whose pitch is in world units
+ *   and goes coarse when zoomed.
  */
 
 /** A level frame: `z` the way it faces, `x` its left. */

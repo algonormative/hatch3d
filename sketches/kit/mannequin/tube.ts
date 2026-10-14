@@ -100,13 +100,17 @@ export class Tube {
   }
 }
 
-/** What `silhouettes` reads of the view: the camera's forward direction. */
-export interface ViewEnv { forward: THREE.Vector3 }
+/**
+ * What `silhouettes` reads of the view: the camera's forward direction and, optionally, its eye. With `eye` the
+ * outline is where the surface turns edge-on to the ray from the eye to each point, not to one parallel direction:
+ * the true outline of a tube seen close up and off-axis, where `forward` alone is off by tens of degrees.
+ */
+export interface ViewEnv { forward: THREE.Vector3; eye?: THREE.Vector3 }
 
 /** How the silhouette strokes are tagged; omitted fields take the Agent's vermilion contour. */
 export interface SilhouetteStyle { ink?: Ink; group?: string; family?: Family }
 
-/** Silhouette curves: where the surface turns edge-on to the camera. */
+/** Silhouette curves: where the surface turns edge-on to the camera (to the ray from `env.eye`, when it is given). */
 export function silhouettes(t: Tube, env: ViewEnv, style: SilhouetteStyle = {}): ClothStroke[] {
   const { ink = 'vermilion', group = 'contour', family } = style;
   const out: ClothStroke[] = [];
@@ -118,7 +122,8 @@ export function silhouettes(t: Tube, env: ViewEnv, style: SilhouetteStyle = {}):
   };
   for (let i = 0; i <= NU; i++) {
     const u = i / NU;
-    const g = (v: number) => t.normal(u, v).dot(env.forward);
+    const eye = env.eye;
+    const g = eye ? (v: number) => t.normal(u, v).dot(t.point(u, v).sub(eye).normalize()) : (v: number) => t.normal(u, v).dot(env.forward);
     const roots: number[] = [];
     let prev = g(0);
     for (let j = 1; j <= NV; j++) {
