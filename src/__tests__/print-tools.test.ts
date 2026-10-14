@@ -143,6 +143,13 @@ describe('print-queue entry', () => {
       expect(section).not.toContain('assembled.png');
     });
 
+    it('does not invent an entry for a ply that is not in the stack, or a home for a part nothing is cut from', () => {
+      const section = md({}, { keeps: [{ cut: 'bar' }], plies: [{ ply: 'white', paper: 'white' }, { ply: 'black', paper: 'black', entry: 'x' }] }).split('## Assembly')[1];
+      expect(section).toContain('| 1 white | white | not in this stack |');
+      expect(section).toContain('Keep `bar`: no onlay in this stack is cut from it yet.');
+      expect(section).not.toContain('glue onto');
+    });
+
     it('says which part lands on a sheet that receives an onlay, and shows the preview only when it has one', () => {
       const sheet = md({ ply: 'white', index: 1, cuts: [] }, { keeps: [], receives: [{ ply: 'bar', from: 'lintel-l/black/bar' }], preview: true });
       expect(sheet).toContain('This sheet receives onlay `bar`, the part `lintel-l/black/bar`');

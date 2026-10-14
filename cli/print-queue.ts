@@ -51,8 +51,8 @@ interface Report {
 export interface AssemblyEntry {
   /** The plies of the panel, bottom to top: the entry that holds a sheet ply, or the part an onlay is cut from. */
   plies: { ply: string; paper: string; entry?: string; onlay?: string }[];
-  /** The part cuts of this ply, and the onlay ply (of the named assembly) each is glued on as. */
-  keeps: { cut: string; assembly: string; ply: string }[];
+  /** The part cuts of this ply, and the onlay ply (of the named assembly) each is glued on as; none named when no onlay in the stack is cut from it. */
+  keeps: { cut: string; assembly?: string; ply?: string }[];
   /** The onlays glued onto this sheet: the ply of the piece and the part (`<assembly>/<ply>/<cut>`) it is cut from. */
   receives: { ply: string; from: string }[];
   /** Whether `assembled.png` sits in the entry. */
@@ -73,7 +73,7 @@ function assemblySection(a: AssemblyReport, o: AssemblyEntry): string[] {
     '',
     '| Ply | Paper | Entry |',
     '| ---: | --- | --- |',
-    ...o.plies.map((p, i) => `| ${i + 1} ${p.ply} | ${p.paper} | ${p.ply === a.ply ? 'this entry' : p.onlay ? `onlay: cut from \`${p.onlay}\`, not plotted` : `\`${p.entry}\``} |`),
+    ...o.plies.map((p, i) => `| ${i + 1} ${p.ply} | ${p.paper} | ${p.ply === a.ply ? 'this entry' : p.onlay ? `onlay: cut from \`${p.onlay}\`, not plotted` : p.entry ? `\`${p.entry}\`` : 'not in this stack'} |`),
     '',
     ...(o.preview ? ['![assembled preview](assembled.png)', ''] : []),
     ...(cutRows.length ? ['Cuts on this ply:', '', '| Cut | Kind |', '| --- | --- |', ...cutRows, ''] : ['This ply has no cuts.', '']),
@@ -84,7 +84,7 @@ function assemblySection(a: AssemblyReport, o: AssemblyEntry): string[] {
     '- Cut parts **down the middle** of the line.',
     '- Trim at the crop marks.',
     '- Square in an L-square, bottom ply first.',
-    ...o.keeps.map(k => `- Keep \`${k.cut}\`: glue onto \`${k.assembly}\` as \`${k.ply}\`, aligning to the placement ticks.`),
+    ...o.keeps.map(k => (k.assembly ? `- Keep \`${k.cut}\`: glue onto \`${k.assembly}\` as \`${k.ply}\`, aligning to the placement ticks.` : `- Keep \`${k.cut}\`: no onlay in this stack is cut from it yet.`)),
     ...o.receives.map(r => `- This sheet receives onlay \`${r.ply}\`, the part \`${r.from}\`: it lands inside the placement ticks printed on this sheet.`),
     '',
   ];
@@ -178,10 +178,13 @@ async function assemblyEntry(stack: Stack, here: AssemblyReport, entryPrefix: st
   if (!own) throw new Error(`assembly ${here.name} is not in the stack`);
   const plies = own.spec.plies.map(p => ({
     ply: p.id, paper: p.paper.id,
-    ...(p.onlay ? { onlay: p.onlay.from } : { entry: `${entryPrefix}${own.members.find(m => m.ply === p.id)?.piece.name ?? p.id}` }),
+    ...(p.onlay ? { onlay: p.onlay.from } : own.members.some(m => m.ply === p.id) ? { entry: `${entryPrefix}${own.members.find(m => m.ply === p.id)!.piece.name}` } : {}),
   }));
-  const keeps = here.cuts.filter(c => c.kind === 'part').flatMap(cut => [...groups].flatMap(([assembly, g]) => g.spec.plies
-    .filter(p => p.onlay && p.onlay.from === `${here.name}/${here.ply}/${cut.id}`).map(p => ({ cut: cut.id, assembly, ply: p.id }))));
+  const keeps = here.cuts.filter(c => c.kind === 'part').flatMap(cut => {
+    const targets = [...groups].flatMap(([assembly, g]) => g.spec.plies
+      .filter(p => p.onlay && p.onlay.from === `${here.name}/${here.ply}/${cut.id}`).map(p => ({ cut: cut.id, assembly, ply: p.id })));
+    return targets.length ? targets : [{ cut: cut.id }];
+  });
   const below = own.spec.plies.findIndex(p => p.id === here.ply);
   const above = own.spec.plies[below + 1];
   const receives = above?.onlay ? [{ ply: above.id, from: above.onlay.from }] : [];
