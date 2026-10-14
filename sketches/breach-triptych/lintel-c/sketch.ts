@@ -9,10 +9,10 @@ import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
-import { slabGeometry, type Slab } from '../../kit/slabs.ts';
+import { slabGeometry } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, eyeHeight, faceWord, farJoints, lintelBar, paving, pensOf, plainStrokes, ringOf, skyLines, slotRect, sun } from '../world.ts';
+import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, eyeHeight, faceWordAt, farJoints, lintelBar, paving, pensOf, plainStrokes, ringOf, skyLines, slotRect, sun } from '../world.ts';
 
 /**
  * Lintel, panel C: "the gaze". A paved plain in raking light, seen from eye height, so its horizon is the eye height
@@ -38,8 +38,11 @@ const GROUPS = ['plain', 'far', 'sky', 'word', 'gaze'] as const;
 
 /** Eye height above the plain, and the paving pitch and joint, world units. */
 const EYE = 4, PITCH = 1.5, JOINT = 0.09;
-/** The word "can": where on the sheet its paver is sought, and its cap height there (mm). */
-const CAN = { at: { x: 0.69, y: 0.71 }, capMm: 3.2 };
+/**
+ * The word "can": where its centre lands on the sheet, and its cap height there across the sheet (mm). Painted flat on a
+ * paver it is foreshortened to about half that in height, so its lowercase stands about 1.7 mm tall on the paper.
+ */
+const CAN = { at: { x: 0.66, y: 0.79 }, capMm: 6 };
 
 type Tagged = Stroke & { slack: number };
 
@@ -64,16 +67,10 @@ function draw(ctx: SketchContext): Part[] {
   const strokes: Tagged[] = laid.flatMap(({ slab, strokes: list }, i) => list.map(st => ({ ink: st.ink, group: 'plain', family: st.family, points: st.points, slack: 0.004 * -slab.z, owner: i })));
   const joints = ctx.params.joints === true ? farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 }) : [];
 
-  // "can": on the paver nearest its place on the sheet, painted on the top face, reading across.
+  // "can": painted flat on the top of whichever paver lies under its place on the sheet, reading across.
   const target = { x: CAN.at.x * PAGE.width, y: CAN.at.y * PAGE.height };
-  let paver: Slab = slabs[0], best = Infinity;
-  for (const sl of slabs) {
-    const p = pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z), PAGE);
-    const d = Math.hypot(p.x - target.x, p.y - target.y);
-    if (d < best) { best = d; paver = sl; }
-  }
-  const words: Tagged[] = faceWord(paver, 'can', { normal: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, -1), at: [0.12, -0.1], cap: CAN.capMm / mmPerUnit(new THREE.Vector3(paver.x, paver.y, paver.z)) })
-    .map(points => ({ ink: 'carbon' as Ink, group: 'word', family: 'text' as const, points, slack: 0.03 }));
+  const painted = slabs.map(sl => faceWordAt(sl, 'can', view, target, { normal: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, -1), capMm: CAN.capMm })).find(Boolean) ?? [];
+  const words: Tagged[] = painted.map(points => ({ ink: 'carbon' as Ink, group: 'word', family: 'text' as const, points, slack: 0.03 }));
 
   const geometries = slabs.map(slabGeometry);
   fitDepthRange(view, geometries, 0.1, { exact: true });
