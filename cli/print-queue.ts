@@ -12,6 +12,10 @@
  * (status prepped, seed, build, hashes, pens, minutes), the piece's notes, the files, the regenerate
  * command, the pen plan and the status. The notes file maps piece names to markdown. Existing
  * entries are left alone unless `--force`. Nothing is uploaded or queued: that needs its own approval.
+ *
+ * A ply of an assembly (a piece with `assembly`) also gets `assembly`, `ply`, `ply_order`, `paper_stock` and the
+ * signing pen and box in its frontmatter, and an `## Assembly` section: the sibling plies, the cuts, how to cut and
+ * glue, and where its parts and onlays go. `assembled.png` is copied in when `cli/assembly.ts preview` has made it.
  */
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,8 +24,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { artMatch, type ArtMatch } from './art-match.ts';
 import { checkPiece, loadPenPlan } from './plotter-check.ts';
 import { renderSketch } from './sketch/runner.ts';
-import { plainFinishing, type Piece, type Stack } from './finalize.ts';
-import type { Page, Params } from '../src/sketch/types.ts';
+import { loadSketch, plainFinishing, plyOf, slug, type Piece, type Stack } from './finalize.ts';
+import { previewDir } from './assembly.ts';
+import type { AssemblyReport } from './assembly-world.ts';
+import type { AssemblySpec, Page, Params } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -38,9 +44,51 @@ interface Report {
   name: string; title: string | null; seed: number; palette: string; paper: string;
   build: { version: string; hash: string; dirty: boolean };
   layers: LayerStat[]; pens: number; minutes: number; sourceSha256: string; preparedSha256: string;
+  assembly?: AssemblyReport;
 }
 
-export interface EntryOptions { stackPath: string; prefix: string; date: string; notes: string; branch: string | null; art: { identity: string; match: ArtMatch } }
+/** What the entry of an assembly ply says about its panel; see `assemblyEntry`. */
+export interface AssemblyEntry {
+  /** The plies of the panel, bottom to top: the entry that holds a sheet ply, or the part an onlay is cut from. */
+  plies: { ply: string; paper: string; entry?: string; onlay?: string }[];
+  /** The part cuts of this ply, and the onlay ply (of the named assembly) each is glued on as. */
+  keeps: { cut: string; assembly: string; ply: string }[];
+  /** The onlays glued onto this sheet: the ply of the piece and the part (`<assembly>/<ply>/<cut>`) it is cut from. */
+  receives: { ply: string; from: string }[];
+  /** Whether `assembled.png` sits in the entry. */
+  preview: boolean;
+}
+
+export interface EntryOptions { stackPath: string; prefix: string; date: string; notes: string; branch: string | null; art: { identity: string; match: ArtMatch }; assembly?: AssemblyEntry }
+
+const box = (b: { x: number; y: number; width: number; height: number }) => [b.x, b.y, b.x + b.width, b.y + b.height].map(n => +n.toFixed(3)).join(',');
+
+/** The `## Assembly` section: where this ply sits in its panel, what to cut, and how the pieces go together. */
+function assemblySection(a: AssemblyReport, o: AssemblyEntry): string[] {
+  const cutRows = a.cuts.map(c => `| ${c.id} | ${c.kind}${c.kind === 'part' ? ' (kept)' : ''} |`);
+  return [
+    '## Assembly',
+    '',
+    `Panel \`${a.name}\`, ply ${a.index} of ${a.plies}: \`${a.ply}\` on ${a.paper.id} paper. The plies, bottom to top:`,
+    '',
+    '| Ply | Paper | Entry |',
+    '| ---: | --- | --- |',
+    ...o.plies.map((p, i) => `| ${i + 1} ${p.ply} | ${p.paper} | ${p.ply === a.ply ? 'this entry' : p.onlay ? `onlay: cut from \`${p.onlay}\`, not plotted` : `\`${p.entry}\``} |`),
+    '',
+    ...(o.preview ? ['![assembled preview](assembled.png)', ''] : []),
+    ...(cutRows.length ? ['Cuts on this ply:', '', '| Cut | Kind |', '| --- | --- |', ...cutRows, ''] : ['This ply has no cuts.', '']),
+    'To assemble:',
+    '',
+    '- Let the gel ink dry before cutting.',
+    '- Cut waste along the **outer edge** of each outline.',
+    '- Cut parts **down the middle** of the line.',
+    '- Trim at the crop marks.',
+    '- Square in an L-square, bottom ply first.',
+    ...o.keeps.map(k => `- Keep \`${k.cut}\`: glue onto \`${k.assembly}\` as \`${k.ply}\`, aligning to the placement ticks.`),
+    ...o.receives.map(r => `- This sheet receives onlay \`${r.ply}\`, the part \`${r.from}\`: it lands inside the placement ticks printed on this sheet.`),
+    '',
+  ];
+}
 
 /** The entry's index.md, in the print-queue's format. */
 export function indexMarkdown(piece: Piece, report: Report, config: { pens?: { id: string; width: number }[] }, o: EntryOptions): string {
@@ -62,6 +110,13 @@ export function indexMarkdown(piece: Piece, report: Report, config: { pens?: { i
     `build: ${report.build.hash}${report.build.dirty ? '+' : ''}`,
     `palette: ${report.palette}`,
     `paper: "${report.paper}"`,
+    ...(report.assembly ? [
+      `assembly: ${report.assembly.name}`,
+      `ply: ${report.assembly.ply}`,
+      `ply_order: ${report.assembly.index}/${report.assembly.plies}`,
+      `paper_stock: ${report.assembly.paper.id}`,
+      ...(report.assembly.signature ? [`sign_pen: ${report.assembly.signature.pen}`, `sign_box: ${box(report.assembly.signature.box)}`] : ['sign: false']),
+    ] : []),
     `pens: ${report.pens}`,
     `estimated_minutes: ${report.minutes}`,
     `source_sha256: ${report.sourceSha256}`,
@@ -86,6 +141,7 @@ export function indexMarkdown(piece: Piece, report: Report, config: { pens?: { i
     '- `config.json` is the plotter-server queue config (`hatch3d-sketch-v1`).',
     '- `request.json` is the exact render request.',
     '- `finalize-report.json` holds the options, the vpype arguments and the build.',
+    ...(report.assembly && o.assembly?.preview ? ['- `assembled.png` previews the panel with every ply laid up (`cli/assembly.ts preview`). It is not plotted.'] : []),
     '',
     `To regenerate, run this at hatch3d \`${report.build.hash}\`${o.branch ? ` (branch \`${o.branch}\`)` : ''}:`,
     '',
@@ -102,11 +158,34 @@ export function indexMarkdown(piece: Piece, report: Report, config: { pens?: { i
     ...fine.map(l => `- Layer ${l.layer} (${l.label.replace(/^\d+-/, '')}) is drawn at ${config.pens?.find(p => l.label.endsWith(`-${p.id}`))?.width} mm, so use a fine pen.`),
     '- The estimate is rough: 60 mm/s drawing, 200 mm/s travel, and one minute per pen change.',
     '',
+    ...(report.assembly && o.assembly ? assemblySection(report.assembly, o.assembly) : []),
     '## Status',
     '',
     'Not uploaded to the plotter-server queue and not plotted. Queue upload, server import and physical start each need explicit approval.',
     '',
   ].join('\n');
+}
+
+/** The panel of an assembly ply as its entry describes it, read from the sketches of the stack's assemblies. */
+async function assemblyEntry(stack: Stack, here: AssemblyReport, entryPrefix: string, preview: boolean): Promise<AssemblyEntry> {
+  const groups = new Map<string, { spec: AssemblySpec; members: { piece: Piece; ply: string }[] }>();
+  for (const name of new Set(stack.pieces.flatMap(p => (p.assembly ? [p.assembly] : [])))) {
+    const pieces = stack.pieces.filter(p => p.assembly === name);
+    const loaded = await loadSketch(stack, pieces[0].sketch);
+    if (loaded.assembly) groups.set(name, { spec: loaded.assembly, members: pieces.map(piece => ({ piece, ply: plyOf(stack, piece, loaded).ply.id })) });
+  }
+  const own = groups.get(here.name);
+  if (!own) throw new Error(`assembly ${here.name} is not in the stack`);
+  const plies = own.spec.plies.map(p => ({
+    ply: p.id, paper: p.paper.id,
+    ...(p.onlay ? { onlay: p.onlay.from } : { entry: `${entryPrefix}${own.members.find(m => m.ply === p.id)?.piece.name ?? p.id}` }),
+  }));
+  const keeps = here.cuts.filter(c => c.kind === 'part').flatMap(cut => [...groups].flatMap(([assembly, g]) => g.spec.plies
+    .filter(p => p.onlay && p.onlay.from === `${here.name}/${here.ply}/${cut.id}`).map(p => ({ cut: cut.id, assembly, ply: p.id }))));
+  const below = own.spec.plies.findIndex(p => p.id === here.ply);
+  const above = own.spec.plies[below + 1];
+  const receives = above?.onlay ? [{ ply: above.id, from: above.onlay.from }] : [];
+  return { plies, keeps, receives, preview };
 }
 
 function arg(argv: string[], name: string): string | undefined {
@@ -129,7 +208,7 @@ async function main(argv: string[]): Promise<number> {
   const plan = await loadPenPlan();
   let failed = 0;
   for (const piece of stack.pieces.filter(p => !only || only.includes(p.name))) {
-    const dir = resolve(ROOT, stack.out, piece.name);
+    const dir = resolve(ROOT, stack.out, slug(piece.name));
     const target = join(resolve(into), `${prefix}-${date}-${piece.name}`);
     if (!existsSync(join(dir, 'report.json'))) { failed++; console.log(`SKIP  ${piece.name}: not finalized (run cli/finalize.ts first)`); continue; }
     if (!notes[piece.name]) { failed++; console.log(`SKIP  ${piece.name}: no notes for it in ${notesPath}`); continue; }
@@ -145,7 +224,13 @@ async function main(argv: string[]): Promise<number> {
     mkdirSync(target, { recursive: true });
     for (const [from, to] of [['source/render.svg', 'render.svg'], ['source/render.png', 'render.png'], ['plot-ready.svg', 'plot-ready.svg'],
       ['config.json', 'config.json'], ['request.json', 'request.json'], ['report.json', 'finalize-report.json']]) copyFileSync(join(dir, from), join(target, to));
-    writeFileSync(join(target, 'index.md'), indexMarkdown(piece, report, config, { stackPath: relative(ROOT, resolve(stackPath)), prefix, date, notes: notes[piece.name], branch, art: { identity: plain.identity, match } }));
+    let assembly: AssemblyEntry | undefined;
+    if (report.assembly) {
+      const preview = join(previewDir(stack, report.assembly.name), 'assembled.png');
+      if (existsSync(preview)) copyFileSync(preview, join(target, 'assembled.png'));
+      assembly = await assemblyEntry(stack, report.assembly, `${prefix}-${date}-`, existsSync(preview));
+    }
+    writeFileSync(join(target, 'index.md'), indexMarkdown(piece, report, config, { stackPath: relative(ROOT, resolve(stackPath)), prefix, date, notes: notes[piece.name], branch, art: { identity: plain.identity, match }, ...(assembly ? { assembly } : {}) }));
     console.log(`OK    ${piece.name}: ${target} (${report.minutes} min, ${report.pens} pens)`);
   }
   return failed ? 1 : 0;
