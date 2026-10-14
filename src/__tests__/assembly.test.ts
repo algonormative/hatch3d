@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { renderSketch } from '../../cli/sketch/runner.ts';
 import { validateSketch } from '../../packages/plot-core/src/index.ts';
 import { GUIDE_DEFAULTS, cutGuides, plyControl, plyRegion, renderPly, validateAssemblySpec, validateCuts } from '../sketch/assembly.ts';
-import { INKS, PAPERS, inkPen, inkReads } from '../sketch/materials.ts';
+import { INKS, PAPERS, inkOnTrial, inkPen, inkReads } from '../sketch/materials.ts';
 import { clipToRegion, distanceToRings, inRegion } from '../sketch/region.ts';
 import { measureStrokeText } from '../sketch/stroke-text.ts';
 import type { Region } from '../sketch/region.ts';
@@ -718,6 +718,96 @@ describe('renderPly checks its world before it draws', () => {
   });
 });
 
+describe('per-cut guide options', () => {
+  const felt: Pen = { id: 'felt', color: '#222222', width: 1.2 };
+  const small = (id: string, x: number, guide?: Cut['guide']): Cut => ({ id, rings: [rect(x, 30, x + 36, 60)], ...(guide ? { guide } : {}) });
+  const world = (top: Cut[]) => ({ cuts: { top } as Cuts, art: {} });
+  const guideOf = (parts: Part[], id: string) => parts.find((p) => p.id === `cut-${id}`)!;
+  const render = (top: Cut[], guide?: Partial<typeof GUIDE_DEFAULTS & { penWidth: number }>) => renderPly(spec, { params: { ply: 'top' } }, pens, world(top), guide);
+  const width = inkPen('black').width;
+
+  it('merges over the render’s options and the defaults for that cut only, with the ply’s ink width always last', () => {
+    const a = small('a', 20), b = small('b', 80, { pitch: 8, size: 3, label: 'CUT B' }), c = small('c', 140, { label: false });
+    const parts = render([a, b, c], { size: 5 });
+    // Without a guide a cut is drawn with the defaults and the render's options: unchanged from before.
+    expect(guideOf(parts, 'a')).toEqual(cutGuides(a, 'black', { ...GUIDE_DEFAULTS, size: 5, penWidth: width }));
+    // Its own options win over the render's, the rest of the render's still apply to it.
+    expect(guideOf(parts, 'b')).toEqual(cutGuides(b, 'black', { ...GUIDE_DEFAULTS, size: 3, pitch: 8, label: 'CUT B', penWidth: width }));
+    expect(guideOf(parts, 'c')).toEqual(cutGuides(c, 'black', { ...GUIDE_DEFAULTS, size: 5, label: false, penWidth: width }));
+    expect(guideOf(parts, 'b')).not.toEqual(cutGuides(b, 'black', { ...GUIDE_DEFAULTS, size: 5, penWidth: width }));
+    // The label option changes what is drawn: the label-less guide has fewer paths than the labelled one.
+    expect(guideOf(parts, 'c').paths.length).toBeLessThan(guideOf(render([small('c', 140)]), 'c').paths.length);
+    // The pen width is the cut ink's: a guide cannot set it, and the render's options cannot either.
+    expect(guideOf(render([a], { penWidth: 3 }), 'a')).toEqual(guideOf(render([a]), 'a'));
+  });
+
+  it('draws different guides for different options, and the diagnostics (the world) do not depend on them', () => {
+    const [plain, spaced] = [render([small('a', 20)]), render([small('a', 20, { pitch: 6, size: 2 })])];
+    expect(guideOf(plain, 'a').paths).not.toEqual(guideOf(spaced, 'a').paths);
+    expect(spaced.filter((p) => p.id.startsWith('asm-'))).toEqual(plain.filter((p) => p.id.startsWith('asm-')));
+  });
+
+  it('validateCuts refuses options cutGuides cannot use, by name, and options it does not have', () => {
+    const check = (guide: unknown) => () => validateCuts(spec, { top: [{ id: 'a', rings: [rect(40, 40, 100, 100)], guide: guide as Cut['guide'] }] }, page, pens);
+    expect(check({ pitch: 8, size: 3, guard: 0, label: false, heights: [4], maxMarks: 10 })).not.toThrow();
+    expect(check({})).not.toThrow();
+    expect(check({ pitch: 0 })).toThrow(/ply top cut a: invalid guide options \(pitch\)/);
+    expect(check({ size: -1, guard: -1 })).toThrow(/invalid guide options \(size, guard\)/);
+    expect(check({ maxMarks: 0.5 })).toThrow(/invalid guide options \(maxMarks\)/);
+    expect(check({ heights: [3, 0] })).toThrow(/invalid guide options \(heights\)/);
+    expect(check({ label: 42 })).toThrow(/invalid guide options \(label\)/);
+    expect(check({ label: 'café' })).toThrow(/invalid guide options \(label\)/);
+    expect(check({ label: 'x'.repeat(257) })).toThrow(/invalid guide options \(label\)/);
+    expect(check({ pich: 8 })).toThrow(/guide has unknown option pich/);
+    expect(check({ penWidth: 0.3 })).toThrow(/guide has unknown option penWidth \(the pen width is the cut ink's\)/);
+    expect(check('wide')).toThrow(/guide must be an object/);
+    expect(check(null)).toThrow(/guide must be an object/);
+    expect(check([])).toThrow(/guide must be an object/);
+  });
+
+  it('checks the render’s own options too, merged with the cut’s, so a good cut option does not hide a bad render option', () => {
+    const top = [small('a', 20, { pitch: 8 })];
+    expect(() => validateCuts(spec, { top }, page, pens, { size: 0 })).toThrow(/ply top cut a: invalid guide options \(size\)/);
+    expect(() => renderPly(spec, { params: { ply: 'top' } }, pens, world(top), { size: 0 })).toThrow(/invalid guide options \(size\)/);
+    // The cut's own option replaces the bad one.
+    expect(() => validateCuts(spec, { top: [small('a', 20, { size: 3 })] }, page, pens, { size: 0 })).not.toThrow();
+    expect(() => validateCuts(spec, { top }, page, pens, { size: 3 })).not.toThrow();
+  });
+
+  it('is only for windows: a part or a footprint has no marks or label, and ignores it', () => {
+    const part: Cut = { id: 'p', kind: 'part', rings: [rect(40, 40, 100, 100)], guide: { pitch: -1 } };
+    expect(() => validateCuts(spec, { top: [part] }, page, pens)).not.toThrow();
+    expect(guideOf(render([part]), 'p')).toEqual(cutGuides({ ...part, guide: undefined }, 'black', { ...GUIDE_DEFAULTS, penWidth: width }));
+  });
+
+  it('keeps accepted implies markable: every window validateCuts takes with options, renderPly marks, over random options and pens', () => {
+    const rand = mulberry32(7);
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rand() * xs.length)];
+    const wide = structuredClone(spec);
+    wide.plies[2].cutInk = 'felt';
+    let rendered = 0, refused = 0;
+    for (let n = 0; n < 150; n++) {
+      const w = 3 + rand() * 30, h = 3 + rand() * 30;
+      const guide: NonNullable<Cut['guide']> = {
+        ...(rand() < 0.7 ? { pitch: pick([3, 6, 8, 12, 16, 30, 0, -2]) } : {}), ...(rand() < 0.7 ? { size: pick([1, 2, 3, 4, 6, 10, 0]) } : {}),
+        ...(rand() < 0.5 ? { guard: pick([0, 0.5, 2, 5, -1]) } : {}), ...(rand() < 0.5 ? { label: pick<string | boolean>([true, false, 'A', 'CUT 12', '', 'caf\u00e9']) } : {}),
+        ...(rand() < 0.3 ? { maxMarks: pick([1, 2, 80, 0, 2.5]) } : {}), ...(rand() < 0.3 ? { heights: pick([[5, 3.5, 2.5], [2.5], [8], [0]]) } : {}),
+      };
+      const cut: Cut = { id: 'w', rings: [rect(40, 40, 40 + w, 40 + h)], guide };
+      for (const s of [spec, wide]) {
+        let accepted = true;
+        try { validateCuts(s, { top: [cut] }, page, [...pens, felt]); } catch { accepted = false; refused++; }
+        if (accepted) {
+          expect(() => renderPly(s, { params: { ply: 'top' } }, [...pens, felt], world([cut])), JSON.stringify([w, h, guide])).not.toThrow();
+          rendered++;
+        }
+      }
+    }
+    expect(rendered).toBeGreaterThan(100);
+    expect(refused).toBeGreaterThan(0);
+  });
+});
+
 describe('materials', () => {
   it('has the three papers and the ink table', () => {
     expect(Object.fromEntries(Object.entries(PAPERS).map(([id, paper]) => [id, paper.color]))).toEqual({ black: '#141416', 'gold-yellow': '#e0b13a', white: '#f7f6f2' });
@@ -747,6 +837,12 @@ describe('materials', () => {
     expect(() => inkPen('nope')).toThrow(/Unknown ink/);
     expect(inkReads('gold', 'black')).toBe(true);
     expect(inkReads('gold', 'gold-yellow')).toBe(false); // on trial there, not read
+    expect(inkOnTrial('gold', 'gold-yellow')).toBe(true);
+    expect(inkOnTrial('gold', 'black')).toBe(false); // it reads there
+    expect(inkOnTrial('gold', 'white')).toBe(false); // not on trial there either
+    expect(inkOnTrial('fluoro-green', 'white')).toBe(false);
+    expect(() => inkOnTrial('nope', 'white')).toThrow(/Unknown ink/);
+    expect(() => inkOnTrial('gold', 'cream')).toThrow(/Unknown paper/);
     expect(inkReads('black', 'white')).toBe(true);
     expect(inkReads('carbon', 'gold-yellow')).toBe(true);
     expect(() => inkReads('nope', 'white')).toThrow(/Unknown ink/);

@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { inkReads } from '../src/sketch/materials.ts';
+import { inkOnTrial, inkReads } from '../src/sketch/materials.ts';
 import type { AssemblySpec, Box, FinishingOptions, Page, Part, PlySpec, Point } from '../src/sketch/types.ts';
 
 export type CutKind = 'waste' | 'part' | 'footprint';
@@ -24,6 +24,8 @@ export interface AssemblyReport {
   paper: { id: string; color: string };
   cutPen: string;
   cutInk: string;
+  /** The pens of this ply (and its cut ink) that are only on trial on its paper, accepted because the stack sets `defaults.trialInks`; empty when none. */
+  trialPens: string[];
   lift?: number;
   cuts: { id: string; kind: CutKind; label?: string }[];
   onlays: { ply: string; from: string }[];
@@ -168,13 +170,21 @@ export const fitMatrix = (fit: RigidFit): string => `matrix(${[fit.cos, fit.sin,
 
 // ── Materials ────────────────────────────────────────────────────────
 
-/** Every pen a ply uses (its own and its cut ink) must read on its paper, by the catalog's pen id = ink id. */
-export function checkInksRead(ply: PlySpec): void {
+/**
+ * Every pen a ply uses (its own and its cut ink) must read on its paper, by the catalog's pen id = ink id. With
+ * `trialInks`, an ink the catalog lists as being tried on that paper is accepted too. Returns the pens accepted only
+ * as trials, in the order the ply names them; throws naming every pen that is not accepted.
+ */
+export function checkInksRead(ply: PlySpec, options: { trialInks?: boolean } = {}): string[] {
   const bad: string[] = [];
+  const trial: string[] = [];
   for (const ink of new Set([...ply.pens, ply.cutInk])) {
-    let reads: boolean;
-    try { reads = inkReads(ink, ply.paper.id); } catch (error) { bad.push(`${ink} on ${ply.paper.id}: ${(error as Error).message}`); continue; }
-    if (!reads) bad.push(`ink ${ink} does not read on paper ${ply.paper.id}`);
+    let reads: boolean, onTrial: boolean;
+    try { reads = inkReads(ink, ply.paper.id); onTrial = inkOnTrial(ink, ply.paper.id); } catch (error) { bad.push(`${ink} on ${ply.paper.id}: ${(error as Error).message}`); continue; }
+    if (reads) continue;
+    if (onTrial && options.trialInks) trial.push(ink);
+    else bad.push(`ink ${ink} does not read on paper ${ply.paper.id}${onTrial ? ' (it is on trial there: set defaults.trialInks in the stack to plot it anyway)' : ''}`);
   }
   if (bad.length) throw new Error(`ply ${ply.id}: ${bad.join('; ')}`);
+  return trial;
 }

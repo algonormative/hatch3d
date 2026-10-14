@@ -24,18 +24,23 @@ const lines = (horizontal: boolean, from: number, step: number, count: number): 
 
 const spacing = { type: 'slider' as const, id: 'spacing', label: 'Spacing', default: 6, min: 3, max: 12, step: 1, units: 'mm' };
 
-/** Panel L. `whiteGold`: the white ply carries the gold pen, which does not read on white. `leaky`: the window moves with the ply. */
-export function lintelL(options: { whiteGold?: boolean; leaky?: boolean } = {}): Sketch {
+/**
+ * Panel L. `whiteGold`: the white ply carries the gold pen, which does not read on white. `whiteTrial`: it carries
+ * silver, which the catalog has on trial for white. `leaky`: the window moves with the ply.
+ */
+export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; leaky?: boolean } = {}): Sketch {
+  const whitePen = options.whiteGold ? 'gold' : options.whiteTrial ? 'silver' : 'carbon';
   const spec: AssemblySpec = {
     control: 'ply', cutPen: 'black', margin: 1.5, bleed: 1,
     plies: [
-      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [options.whiteGold ? 'gold' : 'carbon'], cutInk: 'black' },
+      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [whitePen], cutInk: 'black' },
       { id: 'black', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold', lift: 0.4 },
     ],
     signature: { ply: 'white', pen: 'carbon', box: { x: 50, y: 112, width: 30, height: 8 } },
   };
+  const sketchPens = options.whiteTrial ? [...pens, inkPen('silver')] : pens;
   return {
-    name: 'Assembly fixture, panel L', page, pens, controls: [plyControl(spec), spacing], assembly: spec,
+    name: 'Assembly fixture, panel L', page, pens: sketchPens, controls: [plyControl(spec), spacing], assembly: spec,
     draw(ctx) {
       const step = Number(ctx.params.spacing);
       const shift = options.leaky && ctx.params.ply === 'black' ? 2 : 0;
@@ -45,7 +50,7 @@ export function lintelL(options: { whiteGold?: boolean; leaky?: boolean } = {}):
         white: [{ id: 'carbon-lines', pen: spec.plies[0].pens[0], paths: lines(true, 20, step, 18) }],
         black: [{ id: 'gold-lines', pen: 'gold', paths: lines(false, 20, 8, 8) }],
       };
-      return renderPly(spec, ctx, pens, { cuts, art });
+      return renderPly(spec, ctx, sketchPens, { cuts, art });
     },
   };
 }

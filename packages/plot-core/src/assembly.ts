@@ -214,9 +214,11 @@ const insideRing = (p: Point, ring: Point[]): boolean => inRegion(p, { rings: [r
  *
  * With `pens`, a window (a `waste` cut) must also be wide enough for `cutGuides` to mark it with the ply's `cutInk`
  * width, which for a wide pen is more than 1.5 mm of clearance: every window this accepts can be marked. Without
- * them 1.5 mm is the floor. Without a `page` the page-margin check is skipped.
+ * them 1.5 mm is the floor. The guide options of a window (the defaults, then `guide`, the options the render is given,
+ * then the cut's own `guide`) must be ones `cutGuides` can use, and a cut's `guide` names only options it has, so a typo
+ * does not silently do nothing. Without a `page` the page-margin check is skipped.
  */
-export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page | undefined, pens?: Pen[]): string[] {
+export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page | undefined, pens?: Pen[], guide?: Partial<GuideOptions>): string[] {
   const errors: string[] = [];
   const warnings: string[] = [];
   const margin = page?.margin ?? 0;
@@ -260,6 +262,17 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page | undefi
       if (!sound) continue;
       usable.push(cut);
       const inkWidth = pens?.find((pen) => pen.id === ply.cutInk)?.width;
+      if (kind === 'waste') {
+        // The options this window is drawn with (see `guideFor`) must be ones `cutGuides` can use, whatever the pen.
+        const own = cut.guide as unknown;
+        const unknown = isObject(own) ? Object.keys(own).filter((key) => !GUIDE_KEYS.includes(key)) : [];
+        if (own !== undefined && !isObject(own)) errors.push(`${where}: guide must be an object of guide options`);
+        else if (unknown.length > 0) errors.push(`${where}: guide has unknown option ${unknown.join(', ')}${unknown.includes('penWidth') ? ' (the pen width is the cut ink\'s)' : ''}`);
+        else {
+          const bad = guideProblems(guideFor(cut, guide, 1));
+          if (bad.length > 0) errors.push(`${where}: invalid guide options (${bad.join(', ')})`);
+        }
+      }
       const need = kind === 'waste' && finite(inkWidth) && inkWidth > 0 ? windowClearance(inkWidth) : MIN_CLEARANCE;
       const best = greatestClearance(cut.rings, need - 1e-9);
       if (!best || best.clearance < need - 1e-9) {
@@ -296,6 +309,27 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page | undefi
  */
 export interface GuideOptions { penWidth: number; pitch: number; size: number; guard: number; label: string | boolean; heights: number[]; maxMarks: number }
 export const GUIDE_DEFAULTS: Omit<GuideOptions, 'penWidth'> = { pitch: 12, size: 4, guard: 2, label: true, heights: [5, 3.5, 2.5], maxMarks: 80 };
+
+const GUIDE_KEYS = Object.keys(GUIDE_DEFAULTS);
+
+/**
+ * The guide options one cut is drawn with: the defaults, then the options the render was given, then the cut's own
+ * `guide`, then the ply's cut ink width (never overridable).
+ */
+const guideFor = (cut: Cut, global: Partial<GuideOptions> | undefined, penWidth: number): GuideOptions => ({ ...GUIDE_DEFAULTS, ...global, ...cut.guide, penWidth });
+
+/** The options (all but the pen width) that `cutGuides` cannot use, by name; empty when it can. */
+function guideProblems(o: Omit<GuideOptions, 'penWidth'>): string[] {
+  const bad: string[] = [];
+  if (!(finite(o.pitch) && o.pitch > 0)) bad.push('pitch');
+  if (!(finite(o.size) && o.size > 0)) bad.push('size');
+  if (!(finite(o.guard) && o.guard >= 0)) bad.push('guard');
+  if (!(Number.isInteger(o.maxMarks) && o.maxMarks >= 1)) bad.push('maxMarks');
+  if (!(Array.isArray(o.heights) && o.heights.every((h) => finite(h) && h > 0))) bad.push('heights');
+  const text = o.label;
+  if (!(typeof text === 'boolean' || (typeof text === 'string' && [...text].length <= MAX_LABEL && [...text].every((char) => strokeFaceSupports(char, 'sans'))))) bad.push('label');
+  return bad;
+}
 
 function boxMeets(a: Bounds, b: Bounds): boolean { return !(a.x1 < b.x0 || a.x0 > b.x1 || a.y1 < b.y0 || a.y0 > b.y1); }
 
@@ -345,8 +379,7 @@ export function cutGuides(cut: Cut, pen: string, o: GuideOptions): Part {
     // The knife cuts down the middle of the line and half of it stays on each side, so the ring itself is drawn, uninset.
     return { id: `cut-${cut.id}`, pen, paths: cut.rings.map(closed), boundary: cut.rings.map((ring) => ring.map((p) => ({ x: p.x, y: p.y }))) };
   }
-  assert(finite(o.penWidth) && o.penWidth > 0 && finite(o.pitch) && o.pitch > 0 && finite(o.size) && o.size > 0 && finite(o.guard) && o.guard >= 0
-    && Number.isInteger(o.maxMarks) && o.maxMarks >= 1 && Array.isArray(o.heights) && o.heights.every((h) => finite(h) && h > 0), `cut ${cut.id}: invalid guide options`);
+  assert(finite(o.penWidth) && o.penWidth > 0 && guideProblems(o).length === 0, `cut ${cut.id}: invalid guide options`);
   const rings = cut.rings;
   const waste: Region = { rings };
   const half = o.penWidth / 2;
@@ -546,7 +579,7 @@ export function renderPly(spec: AssemblySpec, ctx: Pick<SketchContext, 'params' 
   assert(index >= 0, `Unknown ply: ${id}`);
   const ply = spec.plies[index];
   assert(!ply.onlay, `ply ${ply.id} is an onlay, plotted and cut on ${ply.onlay?.from}`);
-  validateCuts(spec, world.cuts, ctx.page, pens);
+  validateCuts(spec, world.cuts, ctx.page, pens, guide);
   const plyIds = new Set(spec.plies.map((p) => p.id));
   for (const [name, art] of [['art', world.art], ['sealed art', world.sealed]] as const) {
     if (!art) continue;
@@ -576,7 +609,7 @@ export function renderPly(spec: AssemblySpec, ctx: Pick<SketchContext, 'params' 
   pool(world.sealed, ownRegion(spec, world.cuts, ply.id));
   const ink = pens.find((pen) => pen.id === ply.cutInk);
   assert(ink, `Ply ${ply.id} cutInk ${ply.cutInk} is not a declared pen`);
-  for (const cut of cutsOf(world.cuts, ply.id)) parts.push(cutGuides(cut, spec.cutPen, { ...GUIDE_DEFAULTS, ...guide, penWidth: ink.width }));
+  for (const cut of cutsOf(world.cuts, ply.id)) parts.push(cutGuides(cut, spec.cutPen, guideFor(cut, guide, ink.width)));
   // The ply directly below an onlay shows where the piece lands. The line is drawn in cutPen, which the host inks as
   // this ply's cutInk; the marks are not clipped, being under the onlay by design.
   const above = spec.plies[index + 1];

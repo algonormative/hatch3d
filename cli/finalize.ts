@@ -40,7 +40,9 @@ export interface FinalizeOptions {
   vpype: VpypeOptions;
 }
 export interface Stack {
-  title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[]; defaults?: Partial<FinalizeOptions> & { palette?: string };
+  title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[];
+  /** `trialInks`: for a ply of an assembly, also accept inks the catalog lists as on trial on its paper (the report names them). */
+  defaults?: Partial<FinalizeOptions> & { palette?: string; trialInks?: boolean };
   /** The sheet every piece prints on (mm). A page-aware sketch draws on it; any other is fitted onto it. Default: each sketch's own page. */
   page?: { width: number; height: number; margin?: number };
   /** Params every piece shares (e.g. slogan and scratch settings); a piece's own params win. */
@@ -192,14 +194,15 @@ export function plyOf(stack: Stack, piece: Piece, loaded: LoadedSketch, override
   return { spec, ply: spec.plies[index], index };
 }
 
-interface AssemblyPlan { name: string; spec: AssemblySpec; ply: PlySpec; index: number; siblings: Piece[] }
+interface AssemblyPlan { name: string; spec: AssemblySpec; ply: PlySpec; index: number; siblings: Piece[]; trialPens: string[] }
 
 const canonical = (value: Record<string, unknown>) => JSON.stringify(Object.keys(value).sort().map(k => [k, value[k]]));
 
 /**
  * Checks a piece of an assembly before anything is rendered, and returns its plan; undefined for a plain sketch.
  * Throws when the sketch and the piece disagree about being an assembly, the piece is an onlay (never finalized), the
- * stack's border is not crop marks on the cut pen, an ink does not read on its paper, or the pieces that share the
+ * stack's border is not crop marks on the cut pen, an ink does not read on its paper (an ink only on trial there is
+ * accepted when the stack sets `defaults.trialInks`, and named in the plan's `trialPens`), or the pieces that share the
  * assembly differ in sketch, seed or params (other than the ply), or make one ply twice.
  */
 async function planAssembly(stack: Stack, piece: Piece, loaded: LoadedSketch, overrides: Record<string, unknown>): Promise<AssemblyPlan | undefined> {
@@ -213,7 +216,7 @@ async function planAssembly(stack: Stack, piece: Piece, loaded: LoadedSketch, ov
   if (ply.onlay) fail(`${piece.name} is ply ${ply.id}, an onlay plotted and cut on ${ply.onlay.from}: onlays are never finalized`);
   const border = stack.border as { style?: string; pen?: string } | undefined;
   if (border?.style !== 'cropmarks' || border.pen !== spec.cutPen) fail(`assembly ${name}: the stack border must be crop marks on the cut pen (${spec.cutPen}), since every ply is trimmed at them`);
-  checkInksRead(ply);
+  const trialPens = checkInksRead(ply, { trialInks: stack.defaults?.trialInks === true });
   const declared = (p: Piece) => Object.fromEntries(Object.entries({
     ...Object.fromEntries(loaded.controls.flatMap(c => ('default' in c ? [[c.id, c.default]] : []))), ...stack.params, ...p.params,
   }).filter(([k]) => k !== spec.control));
@@ -226,7 +229,7 @@ async function planAssembly(stack: Stack, piece: Piece, loaded: LoadedSketch, ov
     if (other.onlay) fail(`assembly ${name}: ${q.name} is ply ${other.id}, an onlay plotted and cut on ${other.onlay.from}: onlays are never finalized`);
     if (canonical(declared(q)) !== canonical(declared(piece))) fail(`assembly ${name}: ${q.name} and ${piece.name} differ in params other than ${spec.control}, so they would not draw one world`);
   }
-  return { name, spec, ply, index, siblings };
+  return { name, spec, ply, index, siblings, trialPens };
 }
 
 /** The forced options of an assembly ply: its own paper as the palette, nothing recentred, nothing merged. */
@@ -320,7 +323,7 @@ async function checkAssemblyWorld(stack: Stack, piece: Piece, plan: AssemblyPlan
   await checkOnlays(stack, piece);
   const signature = spec.signature?.ply === ply.id ? { pen: spec.signature.pen, box: signatureBox(result.parts) ?? fail(`ply ${ply.id} has no signature box in its render`) } : undefined;
   return {
-    name, ply: ply.id, index: plan.index + 1, plies: spec.plies.length, paper: { ...ply.paper }, cutPen: spec.cutPen, cutInk: ply.cutInk,
+    name, ply: ply.id, index: plan.index + 1, plies: spec.plies.length, paper: { ...ply.paper }, cutPen: spec.cutPen, cutInk: ply.cutInk, trialPens: plan.trialPens,
     ...(ply.lift === undefined ? {} : { lift: ply.lift }),
     cuts: plyCuts(result.parts, spec, ply.id),
     onlays: spec.plies.filter(p => p.onlay).map(p => ({ ply: p.id, from: p.onlay!.from })),
@@ -583,6 +586,7 @@ export function loadStack(path: string): Stack {
   const mm = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
   if (sheet !== undefined && (typeof sheet !== 'object' || sheet === null || !mm(sheet.width) || !mm(sheet.height) || (sheet.margin !== undefined && !(mm(sheet.margin) || sheet.margin === 0))
     || Object.keys(sheet).some(k => !['width', 'height', 'margin'].includes(k)))) fail('Stack page must be { width, height, margin? } in millimetres');
+  if (stack.defaults?.trialInks !== undefined && typeof stack.defaults.trialInks !== 'boolean') fail('Stack defaults.trialInks must be true or false');
   const names = new Set<string>();
   for (const p of stack.pieces) {
     if (!p.name || !p.sketch || !Number.isSafeInteger(p.seed)) fail('Each piece needs name, sketch and an integer seed');

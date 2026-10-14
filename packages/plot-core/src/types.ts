@@ -1,3 +1,5 @@
+import type { GuideOptions } from './assembly.js';
+
 /** Public contract for a single executable sketch. Coordinates and widths are millimeters. */
 export interface Point { x: number; y: number }
 
@@ -106,7 +108,13 @@ export interface AssemblySpec { control: string; plies: PlySpec[]; cutPen: strin
  * (glued elsewhere), so the ply's art survives on both sides of its line; plies below still see through it. A
  * `'footprint'` is the outline of an onlay ply's piece as placed, and appears only on onlay plies.
  */
-export interface Cut { id: string; rings: Point[][]; label?: string; kind?: 'waste' | 'part' | 'footprint' }
+export interface Cut { id: string; rings: Point[][]; label?: string; kind?: 'waste' | 'part' | 'footprint';
+  /**
+   * Guide options for this cut alone, merged over the defaults and the options `renderPly` was given (the pen width is
+   * always the ply's cut ink's). Only a window (`waste`) has X marks and a label to size; a part's guide is its outline
+   * and a footprint has none, so they ignore it.
+   */
+  guide?: Partial<Omit<GuideOptions, 'penWidth'>> }
 /** Cuts by ply id. */
 export type Cuts = Record<string, Cut[]>;
 

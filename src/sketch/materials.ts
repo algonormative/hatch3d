@@ -51,3 +51,10 @@ export function inkReads(ink: string, paper: string): boolean {
   if (!own(PAPERS, paper)) throw new Error(`Unknown paper: ${paper}`);
   return INKS[ink].reads.includes(paper);
 }
+
+/** Is the ink still on trial on the paper (listed in the ink's `trial`, not in its `reads`)? Throws for an unknown ink or paper. */
+export function inkOnTrial(ink: string, paper: string): boolean {
+  if (!own(INKS, ink)) throw new Error(`Unknown ink: ${ink}`);
+  if (!own(PAPERS, paper)) throw new Error(`Unknown paper: ${paper}`);
+  return !INKS[ink].reads.includes(paper) && (INKS[ink].trial ?? []).includes(paper);
+}

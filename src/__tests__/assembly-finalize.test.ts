@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { congruentFit, fitMatrix, fitRigid, parseFrom, plyCuts, readPlyResult, worldCuts, worldSha256 } from '../../cli/assembly-world.ts';
+import { checkInksRead, congruentFit, fitMatrix, fitRigid, parseFrom, plyCuts, readPlyResult, worldCuts, worldSha256 } from '../../cli/assembly-world.ts';
 import { composeAssembly } from '../../cli/assembly.ts';
-import type { PieceReport } from '../../cli/finalize.ts';
+import { loadStack, type PieceReport } from '../../cli/finalize.ts';
 import { BAR, WINDOW, placed } from './fixtures/assembly-fixture.ts';
 import { FIXTURES, L, R, fresh, finalize, lBlack, lSpec, lWhite, piece, rWhite, stackIn } from './helpers/assembly-stack.ts';
 import type { Point } from '../sketch/types.ts';
@@ -42,6 +42,40 @@ describe('assembly pieces are refused before anything is rendered', () => {
   it('names the pair when an ink does not read on its paper', async () => {
     const bad = piece('lintel-l-white', 'lintel-l', `${FIXTURES}/assembly-lintel-l-badink-sketch.ts`, 'white');
     await expect(finalize(stackIn(fresh(), [bad]), bad)).rejects.toThrow('ply white: ink gold does not read on paper white');
+  });
+
+  it('refuses an ink that is only on trial on its paper, unless the stack says trial inks are fine, and says so', async () => {
+    const trial = piece('lintel-l-trial-white', 'lintel-l', `${FIXTURES}/assembly-lintel-l-trial-sketch.ts`, 'white');
+    await expect(finalize(stackIn(fresh(), [trial]), trial)).rejects.toThrow('ply white: ink silver does not read on paper white (it is on trial there: set defaults.trialInks in the stack to plot it anyway)');
+    await expect(finalize(stackIn(fresh(), [trial], { defaults: { trialInks: false } }), trial)).rejects.toThrow(/ink silver does not read on paper white/);
+    // The flag is for trials only: an ink the catalog does not list for the paper stays refused, and so does an unknown one.
+    const bad = piece('lintel-l-white', 'lintel-l', `${FIXTURES}/assembly-lintel-l-badink-sketch.ts`, 'white');
+    await expect(finalize(stackIn(fresh(), [bad], { defaults: { trialInks: true } }), bad)).rejects.toThrow('ply white: ink gold does not read on paper white');
+  });
+
+  it('checkInksRead accepts a trial ink only with the flag, and returns the pens it accepted as trials', () => {
+    const ply = (paper: string, pens: string[], cutInk: string) => ({ id: 'p', paper: { id: paper, color: '#ffffff' }, pens, cutInk });
+    // Silver, fluoro pink and fluoro orange are on trial for white; gold for gold-yellow; fluoro green and yellow for no paper but black.
+    const white = ply('white', ['carbon', 'silver', 'fluoro-pink', 'ultramarine'], 'carbon');
+    expect(() => checkInksRead(white)).toThrow('ply p: ink silver does not read on paper white (it is on trial there: set defaults.trialInks in the stack to plot it anyway); ink fluoro-pink does not read on paper white (it is on trial there');
+    expect(checkInksRead(white, { trialInks: true })).toEqual(['silver', 'fluoro-pink']);
+    expect(() => checkInksRead(white, { trialInks: false })).toThrow(/ink silver does not read on paper white/);
+    expect(checkInksRead(ply('white', ['carbon', 'black'], 'carbon'))).toEqual([]);
+    expect(checkInksRead(ply('gold-yellow', ['black', 'gold'], 'black'), { trialInks: true })).toEqual(['gold']);
+    expect(checkInksRead(ply('black', ['gold', 'silver'], 'gold'), { trialInks: true })).toEqual([]); // they read on black
+    // The cut ink is checked too: a trial cut ink is reported as a trial pen.
+    expect(checkInksRead(ply('white', ['carbon'], 'silver'), { trialInks: true })).toEqual(['silver']);
+    expect(() => checkInksRead(ply('white', ['carbon'], 'silver'))).toThrow(/ink silver does not read on paper white/);
+    // Not trial, not reading, and unknown stay errors with the flag on.
+    expect(() => checkInksRead(ply('white', ['fluoro-green'], 'carbon'), { trialInks: true })).toThrow('ply p: ink fluoro-green does not read on paper white');
+    expect(() => checkInksRead(ply('white', ['gold'], 'carbon'), { trialInks: true })).toThrow('ink gold does not read on paper white');
+    expect(() => checkInksRead(ply('white', ['nope'], 'carbon'), { trialInks: true })).toThrow('nope on white: Unknown ink: nope');
+  });
+
+  it('refuses a trialInks that is not a boolean when the stack is read', () => {
+    const write = (defaults: unknown) => { const path = join(fresh(), 'stack.json'); writeFileSync(path, JSON.stringify({ out: 'x', pieces: [lWhite], defaults })); return path; };
+    expect(loadStack(write({ trialInks: true })).defaults?.trialInks).toBe(true);
+    expect(() => loadStack(write({ trialInks: 'yes' }))).toThrow('Stack defaults.trialInks must be true or false');
   });
 
   it('refuses a group whose plies differ in params other than the ply', async () => {
@@ -91,6 +125,16 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
       expect(JSON.parse(readFileSync(join(dir(name), 'config.json'), 'utf8')).page.paper).toBe(paper);
     }
   });
+
+  it('accepts a trial ink when the stack allows it, and records which pens are trials', async () => {
+    const trial = piece('lintel-l-trial-white', 'lintel-l', `${FIXTURES}/assembly-lintel-l-trial-sketch.ts`, 'white');
+    const allowed = stackIn(fresh(), [trial], { defaults: { trialInks: true } });
+    const report = await finalize(allowed, trial);
+    expect(report.assembly!.trialPens).toEqual(['silver']);
+    expect(JSON.parse(readFileSync(join(allowed.out, 'lintel-l-trial-white', 'report.json'), 'utf8')).assembly.trialPens).toEqual(['silver']);
+    // Plies of the ordinary stack have none.
+    for (const name of ['lintel-l-white', 'lintel-l-black', 'lintel-r-white']) expect(reports[name].assembly!.trialPens, name).toEqual([]);
+  }, 60_000);
 
   it('inks the cut pen and the border as the ply’s cut ink, and keeps the sketch’s own colours elsewhere', () => {
     const colours = (name: string) => Object.fromEntries(reports[name].layers.map((l) => [l.label.replace(/^\d+-/, ''), l.color]));
