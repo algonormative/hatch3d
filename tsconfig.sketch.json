@@ -28,6 +28,7 @@
     "cli/art-match.ts",
     "cli/baselines.ts",
     "cli/sheet.ts",
+    "cli/assembly.ts",
     "cli/density.ts",
     "cli/print-export.ts",
     "cli/print-export/**/*.ts",

@@ -36,13 +36,13 @@ export function jpegSize(bytes: Buffer): { width: number; height: number } {
  * whole factor with a box filter: the renderer's own downscale aliases fine hatching into moiré.
  * JPEGs are embedded as they are (there is no decoder here), so pass renders as PNG where possible.
  */
-function load(path: string, targetWidth?: number): Image {
-  const bytes = readFileSync(path);
+function load(path: string | Buffer, targetWidth?: number): Image {
+  const bytes = typeof path === 'string' ? readFileSync(path) : path;
   if (bytes[0] === 0xff && bytes[1] === 0xd8) {
     const { width, height } = jpegSize(bytes);
     return { id: `img${loaded++}`, href: `data:image/jpeg;base64,${bytes.toString('base64')}`, width, height };
   }
-  if (bytes.readUInt32BE(0) !== 0x89504e47) throw new Error(`sheet: ${path} is neither PNG nor JPEG`);
+  if (bytes.readUInt32BE(0) !== 0x89504e47) throw new Error(`sheet: ${typeof path === 'string' ? path : 'the image'} is neither PNG nor JPEG`);
   const png = PNG.sync.read(bytes);
   const k = targetWidth ? Math.floor(png.width / targetWidth) : 1;
   if (k < 2) return { id: `img${loaded++}`, href: `data:image/png;base64,${bytes.toString('base64')}`, width: png.width, height: png.height };
@@ -92,6 +92,12 @@ export function sheetSvg(rows: Tile[][], width: number): string {
   }).join('');
   const defs = [...images.values()].map(im => `<image id="${im.id}" href="${im.href}" width="${im.width}" height="${im.height}"/>`).join('');
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}"><defs>${defs}</defs><rect width="100%" height="100%" fill="white"/>${body}</svg>`;
+}
+
+/** A montage as PNG bytes, for other tools: rows of labelled tiles, each a PNG or JPEG (a path or its bytes), shown `width` wide. */
+export function montagePng(rows: { label: string; image: string | Buffer }[][], width: number): Buffer {
+  const tiles = rows.map(row => row.map((t): Tile => ({ label: t.label, image: load(t.image, width) })));
+  return Buffer.from(new Resvg(sheetSvg(tiles, width), { background: 'white' }).render().asPng());
 }
 
 /** Changed regions between two same-size PNGs: boxes in pixels, largest first. */
