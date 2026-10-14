@@ -138,8 +138,10 @@ describe('print-queue entry', () => {
       expect(section).toContain('| 3 top | white | onlay: cut from `lintel-x/white/seal`, not plotted |');
       expect(section).toContain('| w | waste |');
       expect(section).toContain('| bar | part (kept) |');
-      for (const line of ['Let the gel ink dry before cutting.', 'Cut waste along the **outer edge** of each outline.', 'Cut parts **down the middle** of the line.', 'Trim at the crop marks.', 'Square in an L-square, bottom ply first.',
-        'Keep `bar`: glue onto `lintel-r` as `bar`, aligning to the placement ticks.']) expect(section).toContain(line);
+      for (const line of ['Let the ink dry before cutting (gel pens: about an hour).', 'Cut waste along the edge of each guide line that faces the kept paper (the line sits inside the waste).', 'Cut parts **down the middle** of the line.', 'Trim at the crop marks.', 'Square in an L-square, bottom ply first.',
+        'Keep `bar`: glue onto `lintel-r` as `bar`. Glue the piece over its placement ticks: they sit 1.5 mm inside its outline and the piece covers them.']) expect(section).toContain(line);
+      expect(section).not.toContain('gel ink');
+      expect(section).not.toContain('outer edge');
       expect(section).not.toContain('assembled.png');
     });
 
@@ -150,9 +152,17 @@ describe('print-queue entry', () => {
       expect(section).not.toContain('glue onto');
     });
 
+    it('says when the preview it was given is stale, and does not offer the picture', () => {
+      const stale = md({}, { preview: false, previewStale: true });
+      expect(stale).toContain('preview is stale: re-run `npm run assembly -- preview`');
+      expect(stale).not.toContain('![assembled preview]');
+      expect(stale).not.toContain('previews the panel');
+      expect(md({}, { preview: false })).not.toContain('preview is stale');
+    });
+
     it('says which part lands on a sheet that receives an onlay, and shows the preview only when it has one', () => {
       const sheet = md({ ply: 'white', index: 1, cuts: [] }, { keeps: [], receives: [{ ply: 'bar', from: 'lintel-l/black/bar' }], preview: true });
-      expect(sheet).toContain('This sheet receives onlay `bar`, the part `lintel-l/black/bar`');
+      expect(sheet).toContain('This sheet receives onlay `bar`, the part `lintel-l/black/bar`. Glue the piece over its placement ticks: they sit 1.5 mm inside its outline and the piece covers them.');
       expect(sheet).toContain('This ply has no cuts.');
       expect(sheet).toContain('![assembled preview](assembled.png)');
       expect(sheet).toContain('- `assembled.png` previews the panel');

@@ -14,13 +14,13 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
 import { targetPage } from '../src/sketch/render-target.ts';
 import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
-import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, signatureBox, worldCuts, worldSha256, type AssemblyReport } from './assembly-world.ts';
+import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, signatureBox, tryParseFrom, worldCuts, worldSha256, type AssemblyReport, type PlyResult } from './assembly-world.ts';
 import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -120,14 +120,14 @@ export function plainFinishing(stack: Pick<Stack, 'page'>, sketch: { page: Page;
   return { page: { width, height, ...(margin === undefined ? {} : { margin }) } };
 }
 
-export interface LoadedSketch { page: Page; pens: Pen[]; controls: Control[]; assembly?: AssemblySpec }
+export interface LoadedSketch { name: string; page: Page; pens: Pen[]; controls: Control[]; assembly?: AssemblySpec }
 
 /** The piece's page (`pageFor`), pens, controls and, for an assembly sketch, its assembly spec. */
 export async function loadSketch(stack: Stack, entry: string): Promise<LoadedSketch> {
   const mod = await import(pathToFileURL(resolve(ROOT, entry)).href);
   const sketch = mod.default;
   if (!sketch?.page || !Array.isArray(sketch.pens)) fail(`${entry} does not export a sketch with page and pens`);
-  return { page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [], ...(sketch.assembly ? { assembly: sketch.assembly as AssemblySpec } : {}) };
+  return { name: String(sketch.name ?? ''), page: pageFor(stack, sketch), pens: sketch.pens, controls: sketch.controls ?? [], ...(sketch.assembly ? { assembly: sketch.assembly as AssemblySpec } : {}) };
 }
 
 /**
@@ -253,44 +253,81 @@ function assemblyFinishing(stack: Stack, page: Page, pens: Pen[], plan: Pick<Ass
 const pieceDir = (stack: Stack, piece: Piece) => resolve(ROOT, stack.out, slug(piece.name));
 const hasResult = (stack: Stack, piece: Piece) => existsSync(join(pieceDir(stack, piece), 'source', 'result.json'));
 
+/** The render request an assembly piece is asked for: what `request.json` records, and what a result on disk must still match. */
+function assemblyRequest(stack: Stack, piece: Piece, loaded: LoadedSketch, overrides: Record<string, unknown>) {
+  const plan = plyOf(stack, piece, loaded, overrides);
+  const { page, pens, controls } = loaded;
+  return { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, buildVersion(stack.edition)), ...overrides }), finishing: assemblyFinishing(stack, page, pens, plan) };
+}
+
+const deepCanonical = (value: unknown): string => JSON.stringify(value, (_key, v) => (v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : v));
+
 /**
- * Every onlay of every assembly in the stack that involves the assembly of `current`, checked against the part it is
- * cut from: the part must exist (a part cut with that id on that ply of that assembly), and the footprint must be
- * congruent to it, which fits a rigid transform and bounds its residual. The assembly of `current` must be able to
- * resolve its own onlays (the source ply finalized first); an assembly that merely supplies a part is checked only
- * against onlay panels that have been finalized.
+ * The result of a piece of an assembly on disk, for a piece that is not in this run: undefined when it has none, an
+ * error when it is not what the stack now asks for (its request.json, which holds the seed, params, page, finishing and
+ * border, or its sketch, differs), since a result from before an edit would be compared with the plies being drawn now.
  */
-async function checkOnlays(stack: Stack, current: Piece): Promise<void> {
-  const members = new Map<string, { spec: AssemblySpec; pieces: { piece: Piece; ply: string }[] }>();
+async function currentResult(stack: Stack, piece: Piece): Promise<PlyResult | undefined> {
+  if (!hasResult(stack, piece)) return undefined;
+  const dir = pieceDir(stack, piece);
+  const loaded = await loadSketch(stack, piece.sketch);
+  const asked = JSON.parse(JSON.stringify(assemblyRequest(stack, piece, loaded, {}))) as Record<string, unknown>;
+  const requestPath = join(dir, 'request.json');
+  const had = existsSync(requestPath) ? JSON.parse(readFileSync(requestPath, 'utf8')) as Record<string, unknown> : {};
+  const result = readPlyResult(dir);
+  const differs = ['seed', 'params', 'finishing'].filter(k => deepCanonical(had[k]) !== deepCanonical(asked[k]));
+  if (result.metadata.name !== loaded.name) differs.push('sketch');
+  if (differs.length) fail(`${piece.name} is stale on disk: finalize it in this run (changed since it was finalized: ${differs.join(', ')})`);
+  return result;
+}
+
+/** A ply of an assembly in this run, rendered into staging and not yet checked or in place. */
+interface Staged { piece: Piece; plan: AssemblyPlan; dir: string; live: string; report: PieceReport }
+
+/**
+ * Every onlay of every assembly in the stack that involves an assembly of this run, checked against the part it is cut
+ * from: the part must exist (a part cut with that id on that ply of that assembly), and the footprint must be congruent
+ * to it, which fits a rigid transform and bounds its residual. The assemblies of the run must be able to resolve their
+ * own onlays (the source ply in the run, or finalized and current on disk); an assembly that merely supplies a part is
+ * checked only against onlay panels that have a current result. Panels that do not involve the run are not looked at,
+ * so a malformed onlay in one of them blocks nothing.
+ */
+async function checkOnlays(stack: Stack, run: Piece[], resultOf: (piece: Piece, optional?: boolean) => Promise<PlyResult | undefined>): Promise<void> {
+  const runGroups = new Set(run.flatMap(p => (p.assembly ? [p.assembly] : [])));
+  const groups = new Map<string, { spec: AssemblySpec; loaded: LoadedSketch; pieces: Piece[] }>();
   for (const name of new Set(stack.pieces.flatMap(p => (p.assembly ? [p.assembly] : [])))) {
     const pieces = stack.pieces.filter(p => p.assembly === name);
     const loaded = await loadSketch(stack, pieces[0].sketch);
-    if (!loaded.assembly) continue;
-    members.set(name, { spec: loaded.assembly, pieces: pieces.map(piece => ({ piece, ply: plyOf(stack, piece, loaded).ply.id })) });
+    if (loaded.assembly) groups.set(name, { spec: loaded.assembly, loaded, pieces });
   }
-  for (const [name, group] of members) {
+  const plyIdOf = (group: { loaded: LoadedSketch }, piece: Piece) => plyOf(stack, piece, group.loaded).ply.id;
+  for (const [name, group] of groups) {
     for (const onlay of group.spec.plies.filter(p => p.onlay)) {
       const from = onlay.onlay!.from;
-      const ref = parseFrom(from);
-      const strict = name === current.assembly;
-      if (!strict && ref.assembly !== current.assembly) continue;
+      const strict = runGroups.has(name);
+      // Only the panels that involve this run are read at all, so the source is parsed after that is known.
+      const ref = strict ? parseFrom(from) : tryParseFrom(from);
+      if (!ref || (!strict && !runGroups.has(ref.assembly))) continue;
       const label = `onlay ${onlay.id} of ${name} (${from})`;
-      const source = members.get(ref.assembly);
+      const source = groups.get(ref.assembly);
       if (!source) { if (strict) fail(`${label}: no piece of assembly ${ref.assembly} is in the stack`); continue; }
       const sourcePly = source.spec.plies.find(p => p.id === ref.ply);
       if (!sourcePly || sourcePly.onlay) fail(`${label}: assembly ${ref.assembly} has no sheet ply ${ref.ply}`);
-      const sourcePiece = source.pieces.find(m => m.ply === ref.ply)?.piece;
-      if (!sourcePiece || !hasResult(stack, sourcePiece)) {
+      const sourcePiece = source.pieces.find(m => plyIdOf(source, m) === ref.ply);
+      const sourceResult = sourcePiece ? await resultOf(sourcePiece) : undefined;
+      if (!sourcePiece || !sourceResult) {
         if (strict) fail(`${label}: finalize ${sourcePiece?.name ?? `ply ${ref.ply} of ${ref.assembly}`} first, so the part can be checked`);
         continue;
       }
-      const targetPiece = strict ? current : group.pieces.find(m => hasResult(stack, m.piece))?.piece;
-      if (!targetPiece || !hasResult(stack, targetPiece)) continue;
-      const sourceResult = readPlyResult(pieceDir(stack, sourcePiece));
+      let targetResult: PlyResult | undefined;
+      if (strict) targetResult = await resultOf(run.find(p => p.assembly === name)!);
+      else for (const m of group.pieces) if ((targetResult = await resultOf(m, true))) break;
+      if (!targetResult) continue;
       const cut = plyCuts(sourceResult.parts, source.spec, ref.ply).find(c => c.id === ref.cut);
       if (cut?.kind !== 'part') fail(`${label}: ply ${ref.ply} of ${ref.assembly} has no part cut ${ref.cut}${cut ? ` (it is a ${cut.kind} cut)` : ''}`);
       const part = worldCuts(sourceResult.parts, source.spec).find(c => c.ply === ref.ply && c.id === ref.cut)!;
-      const footprints = worldCuts(readPlyResult(pieceDir(stack, targetPiece)).parts, group.spec).filter(c => c.ply === onlay.id);
+      const footprints = worldCuts(targetResult.parts, group.spec).filter(c => c.ply === onlay.id);
       if (footprints.length !== 1) fail(`${label}: the render has ${footprints.length} footprint cuts for ply ${onlay.id}, not one`);
       congruentFit(part.rings, footprints[0].rings, label);
     }
@@ -298,29 +335,40 @@ async function checkOnlays(stack: Stack, current: Piece): Promise<void> {
 }
 
 /**
- * The checks that need the render, then the report's assembly record. The world (every ply's cuts and the signature
- * box, in finished millimetres) must be the one the plies finalized earlier drew: same seed, same params, same
- * fingerprint. Then the onlays are checked (see `checkOnlays`).
+ * The checks across the plies of a run, once every one of them is staged: against the other plies of their panel, staged
+ * or current on disk, each ply must have been finished on the same page and border and draw one world (every ply's cuts
+ * and the signature box, in finished millimetres); then the onlays are checked (see `checkOnlays`). Throws on the first
+ * problem; nothing has been moved into place.
  */
-async function checkAssemblyWorld(stack: Stack, piece: Piece, plan: AssemblyPlan, dir: string): Promise<AssemblyReport> {
-  const result = readPlyResult(dir);
-  const world = worldSha256(result.parts);
-  const { spec, ply, name } = plan;
-  const withoutControl = (params: Record<string, unknown>) => Object.fromEntries(Object.entries(params).filter(([k]) => k !== spec.control));
-  for (const q of plan.siblings.filter(s => hasResult(stack, s))) {
-    const earlier = readPlyResult(pieceDir(stack, q));
-    if (earlier.seed !== result.seed || canonical(withoutControl(earlier.params)) !== canonical(withoutControl(result.params))) {
-      fail(`assembly ${name}: ${q.name} was finalized with a different seed or params than ${piece.name} (${JSON.stringify(withoutControl(earlier.params))} against ${JSON.stringify(withoutControl(result.params))}); finalize every ply of the assembly together`);
-    }
-    if (worldSha256(earlier.parts) !== world) {
-      const border = stack.border as { inset?: number; contentGap?: number } | undefined;
-      const spaced = border?.inset !== undefined || border?.contentGap !== undefined;
-      fail(`assembly ${name}: ${q.name} and ${piece.name} do not draw one world: their cuts differ (same seed and params, so the sketch's cuts depend on the ply${spaced
-        ? ', or the stack border sets inset or contentGap, which fits the page to the width of the cut ink and so moves the plies whose cut inks differ in width: leave both out'
-        : ', or the page fit moved'})`);
+async function checkAssemblyRun(stack: Stack, staged: Staged[]): Promise<void> {
+  const resultOf = async (piece: Piece, optional = false): Promise<PlyResult | undefined> => {
+    const inRun = staged.find(s => slug(s.piece.name) === slug(piece.name));
+    if (inRun) return readPlyResult(inRun.dir);
+    try { return await currentResult(stack, piece); } catch (error) { if (optional) return undefined; throw error; }
+  };
+  for (const s of staged) {
+    const mine = readPlyResult(s.dir);
+    const world = worldSha256(mine.parts);
+    for (const q of s.plan.siblings) {
+      const theirs = await resultOf(q);
+      if (!theirs) continue;
+      const apart = registrationProblem(mine, theirs);
+      if (apart) fail(`assembly ${s.plan.name}: ${q.name} and ${s.piece.name} were not finalized on the same page and border: ${apart}`);
+      if (worldSha256(theirs.parts) !== world) {
+        const border = stack.border as { inset?: number; contentGap?: number } | undefined;
+        const spaced = border?.inset !== undefined || border?.contentGap !== undefined;
+        fail(`assembly ${s.plan.name}: ${q.name} and ${s.piece.name} do not draw one world: their cuts differ (same seed and params, so the sketch's cuts depend on the ply${spaced
+          ? ', or the stack border sets inset or contentGap, which fits the page to the width of the cut ink and so moves the plies whose cut inks differ in width: leave both out'
+          : ', or the page fit moved'}, or ${q.name} was finalized from an older version of the sketch: finalize every ply in one run)`);
+      }
     }
   }
-  await checkOnlays(stack, piece);
+  await checkOnlays(stack, staged.map(s => s.piece), resultOf);
+}
+
+/** The report's assembly record for a ply that has been rendered into `dir`. */
+function assemblyReportOf(plan: AssemblyPlan, result: PlyResult): AssemblyReport {
+  const { spec, ply, name } = plan;
   const signature = spec.signature?.ply === ply.id ? { pen: spec.signature.pen, box: signatureBox(result.parts) ?? fail(`ply ${ply.id} has no signature box in its render`) } : undefined;
   return {
     name, ply: ply.id, index: plan.index + 1, plies: spec.plies.length, paper: { ...ply.paper }, cutPen: spec.cutPen, cutInk: ply.cutInk, trialPens: plan.trialPens,
@@ -328,8 +376,41 @@ async function checkAssemblyWorld(stack: Stack, piece: Piece, plan: AssemblyPlan
     cuts: plyCuts(result.parts, spec, ply.id),
     onlays: spec.plies.filter(p => p.onlay).map(p => ({ ply: p.id, from: p.onlay!.from })),
     ...(signature ? { signature } : {}),
-    worldSha256: world,
+    worldSha256: worldSha256(result.parts),
   };
+}
+
+/** Staging directories of runs that are no longer alive (killed before they could clean up). */
+function clearDeadStaging(out: string): void {
+  if (!existsSync(out)) return;
+  for (const name of readdirSync(out)) {
+    const pid = /^\.staging-(\d+)$/.exec(name)?.[1];
+    if (!pid) continue;
+    let alive = true;
+    try { process.kill(Number(pid), 0); } catch (error) { alive = (error as NodeJS.ErrnoException).code === 'EPERM'; }
+    if (!alive) rmSync(join(out, name), { recursive: true, force: true });
+  }
+}
+
+/** Moves each staged ply over its live directory, all or none: on a failure the directories it replaced are put back. */
+function commitStaged(staged: Staged[], staging: string): void {
+  const previous = join(staging, '.previous');
+  const done: { live: string; old?: string }[] = [];
+  try {
+    for (const s of staged) {
+      let old: string | undefined;
+      if (existsSync(s.live)) { mkdirSync(previous, { recursive: true }); old = join(previous, slug(s.piece.name)); renameSync(s.live, old); }
+      done.push({ live: s.live, old });
+      mkdirSync(dirname(s.live), { recursive: true });
+      renameSync(s.dir, s.live);
+    }
+  } catch (error) {
+    for (const d of done.reverse()) {
+      rmSync(d.live, { recursive: true, force: true });
+      if (d.old) renameSync(d.old, d.live);
+    }
+    throw error;
+  }
 }
 
 interface Layer { index: number; label: string; color: string; attrs: Record<string, string>; bounds: Bounds | null }
@@ -485,27 +566,34 @@ export interface PieceReport {
   assembly?: AssemblyReport;
 }
 
-export async function finalizePiece(stack: Stack, piece: Piece, requested: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
-  const loaded = await loadSketch(stack, piece.sketch);
+/**
+ * Renders and prepares one piece into `dir`, which is its live directory except when it is staged (then `liveDir` is
+ * where it will be moved, and what the report records). A ply of an assembly is finished with its own paper and the
+ * sketch's own pens; any other piece gets the palette.
+ */
+async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: AssemblyPlan | undefined, requested: FinalizeOptions, overrides: Record<string, unknown>, dir: string, liveDir: string): Promise<PieceReport> {
   const { page, pens, controls } = loaded;
-  // A ply of an assembly is finished with its own paper and the sketch's own pens; any other piece gets the palette.
-  const asm = await planAssembly(stack, piece, loaded, overrides);
   const options = asm ? assemblyOptions(requested, asm.ply) : requested;
   if (!asm) {
     const inked = pens.filter(p => p.id !== 'lettering').length;
     if (options.palette.inks.length < inked) fail(`Palette ${options.palette.id} has ${options.palette.inks.length} inks for ${inked} pens`);
   }
-  const dir = resolve(ROOT, stack.out, slug(piece.name));
   const build = buildVersion(stack.edition);
-  const request = { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: asm ? assemblyFinishing(stack, page, pens, asm) : finishingFor(stack, page, pens, options.palette) };
+  const request = asm ? assemblyRequest(stack, piece, loaded, overrides)
+    : { seed: piece.seed, params: withOverrides(stack, piece, controls, { ...titleOverrides(stack, controls, build), ...overrides }), finishing: finishingFor(stack, page, pens, options.palette) };
   const sourcePath = await renderSource(piece, request, dir);
-  const assembly = asm ? await checkAssemblyWorld(stack, piece, asm, dir) : undefined;
+  const assembly = asm ? assemblyReportOf(asm, readPlyResult(dir)) : undefined;
   const rendered = readFileSync(sourcePath, 'utf8');
   // A pen that draws nothing on this piece (an empty part on a small card) is not a layer to plot: drop it from the
   // canonical render, so that render, the prepared SVG and the config agree on the pen layers.
   const source = dropEmptyPenLayers(rendered);
   if (source !== rendered) writeFileSync(sourcePath, source);
   const layers = readLayers(source);
+  // The signature goes into a layer that already exists, since plotter-server rejects a changed layer count.
+  const signing = asm?.spec.signature;
+  if (asm && signing?.ply === asm.ply.id && !layers.some(l => l.attrs['data-pen-id'] === signing.pen)) {
+    fail(`ply ${asm.ply.id} has no ${signing.pen} layer to sign into: its signature pen draws nothing here, and a signature would need a new layer, which plotter-server rejects`);
+  }
   const finalPage: Page = { ...page, paper: options.palette.paper };
   const { dx, dy, art, area } = placementOffset(layers, finalPage, stack, options.center);
 
@@ -557,13 +645,57 @@ export async function finalizePiece(stack: Stack, piece: Piece, requested: Final
     build, printedTitle: request.params.titleEnabled === true ? String(request.params.title) : null,
     offset: { dx, dy }, margins: after ? { top: +(after.y0 - area.y0).toFixed(2), bottom: +(area.y1 - after.y1).toFixed(2) } : null,
     layers: layerStats, pens: layerStats.length, minutes: Math.round(minutes), serverCompatible: moves.length === 0,
-    files: { source: relative(ROOT, sourcePath), sourcePng: relative(ROOT, join(dir, 'source', 'render.png')), prepared: relative(ROOT, preparedPath), preparedPng: relative(ROOT, join(dir, 'plot-ready.png')) },
+    files: { source: relative(ROOT, join(liveDir, 'source', 'render.svg')), sourcePng: relative(ROOT, join(liveDir, 'source', 'render.png')), prepared: relative(ROOT, join(liveDir, 'plot-ready.svg')), preparedPng: relative(ROOT, join(liveDir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
     ...(assembly ? { assembly } : {}),
   };
   if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report), null, 2));
-  writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => (dir !== liveDir && a.startsWith(dir) ? liveDir + a.slice(dir.length) : a)).map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
   return report;
+}
+
+/**
+ * Finalizes pieces. A plain piece is written straight to its directory. The plies of an assembly are staged: every one
+ * of them is rendered and prepared into `<out>/.staging-<pid>/`, checked against each other and against the plies of
+ * their panels that are not in the run (read from disk only while they are current), and only then moved into place,
+ * all together. A run that fails leaves every live directory as it was. `onReport` hears each report as its piece is done.
+ */
+export async function finalizeRun(stack: Stack, pieces: Piece[], requested: FinalizeOptions, overrides: Record<string, unknown> = {}, onReport?: (report: PieceReport) => void): Promise<PieceReport[]> {
+  const prepared: { piece: Piece; loaded: LoadedSketch; asm: AssemblyPlan | undefined }[] = [];
+  for (const piece of pieces) {
+    const loaded = await loadSketch(stack, piece.sketch);
+    prepared.push({ piece, loaded, asm: await planAssembly(stack, piece, loaded, overrides) });
+  }
+  const out = resolve(ROOT, stack.out);
+  const staging = join(out, `.staging-${process.pid}`);
+  const reports = new Map<Piece, PieceReport>();
+  const staged: Staged[] = [];
+  if (prepared.some(p => p.asm)) clearDeadStaging(out);
+  try {
+    for (const { piece, loaded, asm } of prepared) {
+      const live = pieceDir(stack, piece);
+      if (!asm) {
+        const report = await produce(stack, piece, loaded, undefined, requested, overrides, live, live);
+        reports.set(piece, report);
+        onReport?.(report);
+        continue;
+      }
+      const dir = join(staging, slug(piece.name));
+      staged.push({ piece, plan: asm, dir, live, report: await produce(stack, piece, loaded, asm, requested, overrides, dir, live) });
+    }
+    if (staged.length) {
+      await checkAssemblyRun(stack, staged);
+      commitStaged(staged, staging);
+      for (const s of staged) { reports.set(s.piece, s.report); onReport?.(s.report); }
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  return pieces.map(p => reports.get(p)!);
+}
+
+export async function finalizePiece(stack: Stack, piece: Piece, requested: FinalizeOptions, overrides: Record<string, unknown> = {}): Promise<PieceReport> {
+  return (await finalizeRun(stack, [piece], requested, overrides))[0];
 }
 
 export function resolveOptions(stack: Stack, override: Partial<Omit<FinalizeOptions, 'palette'>> & { palette?: Palette | string } = {}): FinalizeOptions {
@@ -664,8 +796,7 @@ async function serve(stackPath: string, port: number) {
           const options = resolveOptions(stack, { palette: input.palette, center: input.center, mergeSameColor: input.mergeSameColor, vpype: input.vpype as VpypeOptions });
           const chosen = stack.pieces.filter(p => input.pieces.includes(slug(p.name)));
           if (!chosen.length) return send(400, '{"error":"no pieces selected"}');
-          const reports = [];
-          for (const piece of chosen) reports.push(await finalizePiece(stack, piece, options, overrides));
+          const reports = await finalizeRun(stack, chosen, options, overrides);
           return send(200, JSON.stringify({ reports: reports.map(r => ({ ...r, url: `/out/${slug(r.name)}/` })) }));
         } finally { busy = false; }
       }
@@ -690,10 +821,8 @@ async function main(argv: string[]) {
   const only = flag('only')?.split(',').map(slug);
   const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}), ...(rest.includes('--merge') ? { mergeSameColor: true } : {}) });
   const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
-  for (const piece of stack.pieces.filter(p => !only || only.includes(slug(p.name)))) {
-    const r = await finalizePiece(stack, piece, options, overrides);
-    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared }));
-  }
+  await finalizeRun(stack, stack.pieces.filter(p => !only || only.includes(slug(p.name))), options, overrides, r =>
+    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared })));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

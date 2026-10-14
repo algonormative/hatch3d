@@ -1,13 +1,13 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { checkInksRead, congruentFit, fitMatrix, fitRigid, parseFrom, plyCuts, readPlyResult, worldCuts, worldSha256 } from '../../cli/assembly-world.ts';
+import { checkInksRead, congruentFit, fitMatrix, fitRigid, parseFrom, plyCuts, readPlyResult, registrationProblem, worldCuts, worldSha256, type PlyResult } from '../../cli/assembly-world.ts';
 import { composeAssembly } from '../../cli/assembly.ts';
-import { loadStack, type PieceReport } from '../../cli/finalize.ts';
+import { loadStack, type Piece, type PieceReport, type Stack } from '../../cli/finalize.ts';
 import { BAR, WINDOW, placed } from './fixtures/assembly-fixture.ts';
-import { FIXTURES, L, R, fresh, finalize, lBlack, lSpec, lWhite, piece, rWhite, stackIn } from './helpers/assembly-stack.ts';
+import { FIXTURES, L, R, fresh, finalize, hashTree, lBlack, lSpec, lWhite, piece, rWhite, runFinalize, stackIn } from './helpers/assembly-stack.ts';
 import type { Point } from '../sketch/types.ts';
 
 const P = (x: number, y: number): Point => ({ x, y });
@@ -31,10 +31,71 @@ describe('rigid fit', () => {
     expect(fitRigid([ring], [ring.map((p) => P(-p.x, p.y))]).rms).toBeGreaterThan(5); // a mirror image is not a rotation
     expect(fitRigid([ring], [[...ring.slice(1), ring[0]]]).rms).toBeGreaterThan(5); // the same ring started at another vertex
     expect(() => fitRigid([ring], [ring.slice(0, 3)])).toThrow(/do not correspond/);
-    expect(() => congruentFit([ring], [ring.map((p) => P(p.x + (p.x > 20 ? 0.5 : 0), p.y))], 'onlay x')).toThrow(/onlay x: footprint is not congruent to the part \(rigid fit leaves an RMS of/);
+    expect(() => congruentFit([ring], [ring.map((p) => P(p.x + (p.x > 20 ? 0.5 : 0), p.y))], 'onlay x')).toThrow(/onlay x: footprint is not congruent to the part: the footprint must be the part ring transformed, same vertex count, order and start vertex \(rigid fit leaves an RMS of/);
     expect(congruentFit([ring], [move(ring, 0.3, 1, 2).map((p) => P(p.x + 0.0004, p.y))], 'onlay x').rms).toBeLessThan(0.05);
     expect(parseFrom('lintel-l/black/bar')).toEqual({ assembly: 'lintel-l', ply: 'black', cut: 'bar' });
     expect(() => parseFrom('lintel-l/black')).toThrow(/must read/);
+  });
+});
+
+describe('congruence is bounded by the worst vertex as well as the RMS', () => {
+  const circle = (n: number, r = 50): Point[] => Array.from({ length: n }, (_, i) => P(r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n)));
+  const move = (ring: Point[]) => ring.map((p) => P(p.x + 30, p.y + 20));
+
+  it('refuses a 400-vertex ring with one 1 mm outlier, which the RMS alone lets through, and says what a footprint must be', () => {
+    const part = circle(400), footprint = move(part);
+    footprint[200] = P(footprint[200].x + 1, footprint[200].y);
+    expect(fitRigid([part], [footprint]).rms).toBeLessThan(0.05);
+    expect(() => congruentFit([part], [footprint], 'onlay x')).toThrow(/onlay x: footprint is not congruent to the part: the footprint must be the part ring transformed, same vertex count, order and start vertex/);
+    expect(() => congruentFit([part], [footprint], 'onlay x')).toThrow(/RMS of 0\.0\d+ mm against a limit of 0\.05, and a worst vertex 1\.00 mm off against a limit of 0\.1/);
+  });
+
+  it('refuses a footprint whose vertices are all a little off, though none is far (RMS between 0.05 and 0.2 mm)', () => {
+    const part = circle(40), footprint = move(part).map((p, i) => P(p.x + (i % 2 ? 0.08 : -0.08), p.y));
+    const fit = fitRigid([part], [footprint]);
+    expect(fit.rms).toBeGreaterThan(0.05);
+    expect(fit.rms).toBeLessThan(0.2);
+    expect(() => congruentFit([part], [footprint], 'onlay x')).toThrow(/same vertex count, order and start vertex/);
+    expect(congruentFit([part], [move(part).map((p, i) => P(p.x + (i % 2 ? 0.03 : -0.03), p.y))], 'onlay x').rms).toBeLessThan(0.05);
+  });
+
+  it('names the correspondence when the vertex counts differ', () => {
+    expect(() => congruentFit([circle(8)], [circle(9)], 'onlay x')).toThrow(/same vertex count, order and start vertex/);
+  });
+});
+
+describe('plies must have been finished on one page and border', () => {
+  const result = (margin: number, border: Record<string, unknown> = { style: 'cropmarks', pen: 'black' }, width = 100): PlyResult => ({
+    identity: 'x', seed: 1, params: {}, metadata: { name: 'x', page: { width, height: 140, margin, paper: '#fff' } }, finishing: { page: { width, height: 140, margin }, border } as PlyResult['finishing'], parts: [] });
+
+  it('refuses plies at margins 16 and 10, another size, or another border, and accepts the same fit on another paper', () => {
+    expect(registrationProblem(result(16), result(10))).toBe('margin 16 mm against margin 10 mm');
+    expect(registrationProblem(result(16), result(16, undefined, 120))).toBe('100 x 140 mm against 120 x 140 mm');
+    expect(registrationProblem(result(16), result(16, { style: 'cropmarks', pen: 'black', inset: 12 }))).toBe('the border differs');
+    expect(registrationProblem(result(16), result(16, { pen: 'black', style: 'cropmarks' }))).toBeUndefined();
+  });
+});
+
+describe('the cuts as a render records them', () => {
+  const spec = { control: 'ply', cutPen: 'cut', margin: 1, bleed: 1, plies: [
+    { id: 'a', paper: { id: 'white', color: '#fff' }, pens: [], cutInk: 'x' }, { id: 'a-b', paper: { id: 'black', color: '#000' }, pens: [], cutInk: 'x' }] };
+  const diag = (id: string, paths: Point[][]) => ({ id, pen: 'cut', paths, diagnostic: true });
+  const ring = [P(10, 10), P(20, 10), P(20, 20), P(10, 20), P(10, 10)];
+
+  it('reads asm-a-b-x as cut x of ply a-b when plies a and a-b both fit the prefix, and asm-a-y as cut y of ply a', () => {
+    const cuts = worldCuts([diag('asm-a-b-x', [ring]), diag('asm-a-y', [ring])], spec);
+    expect(cuts.map((c) => [c.ply, c.id])).toEqual([['a-b', 'x'], ['a', 'y']]);
+  });
+
+  it('throws for a cut the page fit clipped away entirely, instead of reporting it as something', () => {
+    expect(() => worldCuts([diag('asm-a-w', [])], spec)).toThrow(/cut w of ply a is clipped away by the page fit/);
+    const guide = { id: 'cut-w', pen: 'cut', paths: [], boundary: [ring.slice(0, 4)] };
+    expect(() => plyCuts([diag('asm-a-w', []), guide], spec, 'a')).toThrow(/clipped away/);
+  });
+
+  it('fingerprints the signature box with the cuts, so plies that disagree about it are not one world', () => {
+    const cut = diag('asm-a-w', [ring]);
+    expect(worldSha256([cut, diag('asm-signature', [[P(0, 0), P(5, 0), P(5, 5), P(0, 5), P(0, 0)]])])).not.toBe(worldSha256([cut, diag('asm-signature', [[P(0, 0), P(6, 0), P(6, 5), P(0, 5), P(0, 0)]])]));
   });
 });
 
@@ -94,6 +155,11 @@ describe('assembly pieces are refused before anything is rendered', () => {
     await expect(finalize(stackIn(fresh(), [{ ...lWhite, assembly: undefined }]), { ...lWhite, assembly: undefined })).rejects.toThrow(/its "assembly" must name the panel/);
     const plain = { name: 'plain', assembly: 'x', sketch: 'src/__tests__/fixtures/empty-pen-sketch.ts', seed: 1 };
     await expect(finalize(stackIn(fresh(), [plain]), plain)).rejects.toThrow(/names assembly x, but .* does not declare one/);
+  });
+
+  it('refuses a sibling piece that is an onlay, which is never finalized', async () => {
+    const onlay = piece('lintel-r-bar', 'lintel-r', R, 'bar');
+    await expect(finalize(stackIn(fresh(), [rWhite, onlay]), rWhite)).rejects.toThrow(/lintel-r-bar is ply bar, an onlay plotted and cut on lintel-l\/black\/bar: onlays are never finalized/);
   });
 
   it('cannot preview a panel whose plies are not finalized', async () => {
@@ -165,16 +231,16 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
 
   it('checks the footprint against the part it is cut from, and refuses one that is not congruent', async () => {
     const skewed = piece('lintel-r-skew', 'lintel-r', `${FIXTURES}/assembly-lintel-r-skew-sketch.ts`, 'white');
-    await expect(finalize(stackIn(out, [lWhite, lBlack, skewed]), skewed)).rejects.toThrow(/onlay bar of lintel-r \(lintel-l\/black\/bar\): footprint is not congruent to the part \(rigid fit leaves an RMS of/);
+    await expect(finalize(stackIn(out, [lWhite, lBlack, skewed]), skewed)).rejects.toThrow(/onlay bar of lintel-r \(lintel-l\/black\/bar\): footprint is not congruent to the part: .* \(rigid fit leaves an RMS of/);
     // The source ply has to be finalized first, so the part can be checked.
     await expect(finalize(stackIn(fresh(), [lBlack, rWhite]), rWhite)).rejects.toThrow('onlay bar of lintel-r (lintel-l/black/bar): finalize lintel-l-black first, so the part can be checked');
     expect(plyCuts(readPlyResult(dir('lintel-l-black')).parts, lSpec, 'black').map((c) => c.kind)).toEqual(['waste', 'part']);
   }, 120_000);
 
-  it('reads the plies finalized earlier back, and refuses one finalized with other params', async () => {
+  it('reads the plies finalized earlier back, and refuses one finalized with other params as stale', async () => {
     const white8 = { ...lWhite, params: { ply: 'white', spacing: 8 } }, black8 = piece('lintel-l-black-8', 'lintel-l', L, 'black', { spacing: 8 });
     // The stack now says spacing 8 for both, so only the render of lintel-l-white (spacing 6) on disk can tell.
-    await expect(finalize(stackIn(out, [white8, black8]), black8)).rejects.toThrow(/lintel-l-white was finalized with a different seed or params than lintel-l-black-8/);
+    await expect(finalize(stackIn(out, [white8, black8]), black8)).rejects.toThrow('lintel-l-white is stale on disk: finalize it in this run');
   }, 60_000);
 
   it('explains a page fit that moves the plies when the border spacing follows the width of each ply’s cut ink', async () => {
@@ -184,6 +250,48 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
     await expect(finalize(s, lBlack)).rejects.toThrow(/do not draw one world.*border sets inset or contentGap.*leave both out/);
   }, 120_000);
 
+  it('refuses a sibling or source on disk that is not what the stack now asks for, saying so, instead of trusting or contradicting it', async () => {
+    // lintel-l-black on disk was finalized with seed 1; the stack now says seed 2. Panel R's onlay is cut from it.
+    const reseeded: Piece = { ...lBlack, seed: 2 };
+    await expect(finalize(stackIn(out, [lWhite, reseeded, rWhite]), rWhite)).rejects.toThrow('lintel-l-black is stale on disk: finalize it in this run');
+    // Both ends changed: the skewed footprint is not what the answer should be about.
+    const skewed = piece('lintel-r-skew', 'lintel-r', `${FIXTURES}/assembly-lintel-r-skew-sketch.ts`, 'white');
+    await expect(finalize(stackIn(out, [lWhite, reseeded, skewed]), skewed)).rejects.toThrow('lintel-l-black is stale on disk: finalize it in this run');
+    // A sibling in the same panel is held to the same rule.
+    await expect(finalize(stackIn(out, [{ ...lWhite, seed: 2 }, { ...lBlack, seed: 2 }]), { ...lBlack, seed: 2 })).rejects.toThrow('lintel-l-white is stale on disk: finalize it in this run');
+  }, 120_000);
+
+  it('refuses a ply on disk that was finished on another margin or border than the one being drawn, though its request is as asked', async () => {
+    const s = stackIn(fresh(), [lWhite, lBlack]);
+    await finalize(s, lWhite);
+    const path = join(s.out, 'lintel-l-white', 'source', 'result.json');
+    const result = JSON.parse(readFileSync(path, 'utf8')) as PlyResult;
+    writeFileSync(path, JSON.stringify({ ...result, metadata: { ...result.metadata, page: { ...result.metadata.page, margin: 10 } } }));
+    await expect(finalize(s, lBlack)).rejects.toThrow(/lintel-l-white and lintel-l-black were not finalized on the same page and border: margin 16 mm against margin 10 mm/);
+  }, 120_000);
+
+  it('does not let a malformed onlay in an unrelated panel block a finalize', async () => {
+    const stray = piece('stray-white', 'stray', `${FIXTURES}/assembly-lintel-r-badfrom-sketch.ts`, 'white');
+    const report = await finalize(stackIn(fresh(), [lWhite, stray]), lWhite);
+    expect(report.assembly!.name).toBe('lintel-l');
+    await expect(finalize(stackIn(fresh(), [stray]), stray)).rejects.toThrow(/onlay source "oops" must read/);
+  }, 120_000);
+
+  it('refuses, before anything is signed, a signing ply whose signing pen draws nothing', async () => {
+    const bare = piece('lintel-l-white', 'lintel-l', `${FIXTURES}/assembly-lintel-l-nocarbon-sketch.ts`, 'white');
+    await expect(finalize(stackIn(fresh(), [bare]), bare)).rejects.toThrow(/ply white has no carbon layer to sign into: its signature pen draws nothing/);
+  }, 60_000);
+
+  it('refuses a footprint that the render of a finalized panel lost, found when the part is finalized', async () => {
+    const s = stackIn(fresh(), [lBlack, rWhite]);
+    await finalize(s, lBlack);
+    await finalize(s, rWhite);
+    const path = join(s.out, 'lintel-r-white', 'source', 'result.json');
+    const result = JSON.parse(readFileSync(path, 'utf8')) as { parts: { id: string }[] };
+    writeFileSync(path, JSON.stringify({ ...result, parts: result.parts.filter((p) => p.id !== 'asm-bar-bar') }));
+    await expect(finalize(s, lBlack)).rejects.toThrow(/the render has 0 footprint cuts for ply bar, not one/);
+  }, 120_000);
+
   it('refuses plies whose worlds differ even though their params agree', async () => {
     const leaky = `${FIXTURES}/assembly-lintel-l-leaky-sketch.ts`;
     const [a, b] = [piece('leaky-white', 'leaky', leaky, 'white'), piece('leaky-black', 'leaky', leaky, 'black')];
@@ -191,4 +299,49 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
     await finalize(s, a);
     await expect(finalize(s, b)).rejects.toThrow(/leaky-white and leaky-black do not draw one world/);
   }, 120_000);
+
+  describe('a run of the whole stack', () => {
+    const shifted = (stackOut: string, shift: number): Stack => stackIn(stackOut, [
+      { ...lWhite, params: { ...lWhite.params, windowShift: shift } }, { ...lBlack, params: { ...lBlack.params, windowShift: shift } }, rWhite]);
+
+    it('succeeds in one go after a cut has moved, instead of failing against the previous run’s plies for ever', () => {
+      const s = shifted(fresh(), 0);
+      expect(runFinalize(s).status, 'the first run').toBe(0);
+      const moved = shifted(s.out, 3);
+      const again = runFinalize(moved);
+      expect(again.stderr + again.stdout).not.toMatch(/"error"/);
+      expect(again.status).toBe(0);
+      // The window really moved, on both plies, and every ply says so alike.
+      const worlds = ['lintel-l-white', 'lintel-l-black'].map((n) => readPlyResult(join(s.out, n)));
+      expect(worldSha256(worlds[0].parts)).toBe(worldSha256(worlds[1].parts));
+      expect(worldCuts(worlds[1].parts, lSpec).find((c) => c.id === 'w')!.rings[0][0].x).toBe(WINDOW[0].x + 3);
+      const reports = ['lintel-l-white', 'lintel-l-black'].map((n) => JSON.parse(readFileSync(join(s.out, n, 'report.json'), 'utf8')).assembly.worldSha256);
+      expect(reports[0]).toBe(reports[1]);
+      expect(reports[0]).toBe(worldSha256(worlds[0].parts));
+    }, 180_000);
+
+    it('leaves the live directories byte for byte as they were when a check fails, and no staging behind', () => {
+      const s = shifted(fresh(), 0);
+      expect(runFinalize(s).status).toBe(0);
+      const names = ['lintel-l-white', 'lintel-l-black', 'lintel-r-white'];
+      const before = Object.fromEntries(names.map((n) => [n, hashTree(join(s.out, n))]));
+      // Panel R's footprint no longer matches the part: the whole run is refused after every ply has been drawn.
+      const skewedRun: Stack = { ...shifted(s.out, 3), pieces: [...shifted(s.out, 3).pieces.slice(0, 2), { ...rWhite, sketch: `${FIXTURES}/assembly-lintel-r-skew-sketch.ts` }] };
+      const run = runFinalize(skewedRun);
+      expect(run.status).toBe(1);
+      expect(run.stdout + run.stderr).toMatch(/not congruent/);
+      for (const n of names) expect(hashTree(join(s.out, n)), n).toEqual(before[n]);
+      expect(readdirSync(s.out).filter((f) => f.startsWith('.staging'))).toEqual([]);
+    }, 180_000);
+
+    it('takes the plies outside an --only run from disk, once they are known to be current', () => {
+      const s = shifted(fresh(), 0);
+      expect(runFinalize(s).status).toBe(0);
+      expect(runFinalize(s, ['lintel-r-white']).status).toBe(0);
+      const moved = shifted(s.out, 3);
+      const run = runFinalize(moved, ['lintel-r-white']);
+      expect(run.status).toBe(1);
+      expect(run.stdout + run.stderr).toMatch(/lintel-l-black is stale on disk: finalize it in this run/);
+    }, 180_000);
+  });
 });
