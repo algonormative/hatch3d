@@ -8,6 +8,8 @@ export { publishRenderTarget, renderTarget, adoptRenderTarget, renderTargetAdopt
 export type { RenderTarget } from './render-target.js';
 export { strokeText, strokeTextOnPath, measureStrokeText } from './stroke-text.js';
 export type { StrokeFace, TextStyle, PathTextStyle } from './stroke-text.js';
+export { clipToRegion, inRegion, distanceToRings, signedArea, offsetRing, ringsSimple } from './region.js';
+export type { Region } from './region.js';
 export { snapSliderValue, resolveMacroParams } from './control-values.js';
 export * from './control-geometry.js';
 export { createAtmosphere, maskAtmospherePaths, hatchAtmosphere } from './atmosphere.js';
