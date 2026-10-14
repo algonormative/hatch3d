@@ -11,6 +11,11 @@
  *                   being the part of its source ply, moved onto its footprint by the rigid fit of one ring to the other
  *   assembled.png   the same, rendered
  *   exploded.png    every ply side by side on its own paper, guides visible
+ *   assembled.json  what it was composed from: each ply's plot-ready.svg sha256 and the world's, so a queue entry can
+ *                   tell a preview of its own plies from a stale one (`previewState`)
+ *
+ * A panel is refused unless every ply was finalized from one world on one page and border (a ply whose report and
+ * render disagree is the half-written state of an interrupted run).
  *
  * `--shadow` adds a soft drop shadow under any ply that declares a `lift`. Nothing here plots or uploads anything.
  */
@@ -19,7 +24,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { renderSvgPng } from './sketch/export-png.ts';
 import { montagePng } from './sheet.ts';
-import { fitMatrix, congruentFit, parseFrom, plyCuts, readPlyResult, worldCuts, type PlyResult } from './assembly-world.ts';
+import { fitMatrix, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, sha256, worldCuts, worldSha256, type PlyResult } from './assembly-world.ts';
 import { loadSketch, loadStack, plyOf, slug, type Piece, type Stack } from './finalize.ts';
 import type { AssemblySpec, Point } from '../src/sketch/types.ts';
 
@@ -29,7 +34,7 @@ const num = (n: number) => String(+n.toFixed(4));
 
 interface Group { name: string; spec: AssemblySpec; members: { piece: Piece; ply: string }[] }
 /** A finalized sheet ply: its paper, its artwork as the plotter gets it, and what its render says about the world. */
-interface Sheet { piece: Piece; dir: string; paper: string; layers: string; result: PlyResult }
+interface Sheet { piece: Piece; dir: string; paper: string; layers: string; plotReadySha256: string; result: PlyResult }
 
 async function loadGroup(stack: Stack, name: string): Promise<Group> {
   const pieces = stack.pieces.filter(p => p.assembly === name);
@@ -45,14 +50,26 @@ function readSheet(stack: Stack, group: Group, ply: string): Sheet {
   for (const file of ['report.json', 'plot-ready.svg', 'plot-ready.png', join('source', 'result.json')]) {
     if (!existsSync(join(dir, file))) fail(`ply ${ply} of ${group.name}: ${piece.name} is not finalized (no ${file}); run cli/finalize.ts first`);
   }
-  const report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8')) as { paper: string };
+  const report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8')) as { paper: string; assembly?: { worldSha256: string } };
   const prepared = readFileSync(join(dir, 'plot-ready.svg'), 'utf8');
-  return { piece, dir, paper: report.paper, layers: prepared.replace(/^\s*<svg\b[^>]*>\s*/, '').replace(/\s*<\/svg>\s*$/, ''), result: readPlyResult(dir) };
+  const result = readPlyResult(dir);
+  // A report that names another world than its own render is what an interrupted run leaves behind.
+  const reported = report.assembly?.worldSha256;
+  if (reported !== worldSha256(result.parts)) fail(`${piece.name} is in a mixed state: its report says world ${String(reported).slice(0, 12)} and its render another; finalize the whole stack again`);
+  return { piece, dir, paper: report.paper, layers: prepared.replace(/^\s*<svg\b[^>]*>\s*/, '').replace(/\s*<\/svg>\s*$/, ''), plotReadySha256: sha256(prepared), result };
 }
 
 const ringPath = (ring: Point[]) => `M${ring.map(p => `${num(p.x)},${num(p.y)}`).join('L')}Z`;
 
-export interface Assembled { svg: string; width: number; height: number; tiles: { label: string; image: string | Buffer }[] }
+/** What `assembled.json` records of the files a preview was composed from. */
+export interface PreviewRecord {
+  assembly: string; worldSha256: string;
+  plies: { ply: string; piece: string; plotReadySha256: string }[];
+  /** The plies of other panels that onlays of this one are cut from. */
+  sources: { assembly: string; ply: string; piece: string; plotReadySha256: string }[];
+}
+
+export interface Assembled { svg: string; width: number; height: number; tiles: { label: string; image: string | Buffer }[]; record: PreviewRecord }
 
 /**
  * The panel, as an SVG trimmed at the crop marks, and the tiles of its exploded view. Throws, naming the ply, when a
@@ -63,9 +80,11 @@ export async function composeAssembly(stack: Stack, name: string, options: { sha
   const sheets = new Map(group.spec.plies.filter(p => !p.onlay).map(p => [p.id, readSheet(stack, group, p.id)]));
   const first = [...sheets.values()][0] ?? fail(`assembly ${name} has no sheet ply`);
   const { width: W, height: H, margin } = first.result.metadata.page;
+  const world = worldSha256(first.result.parts);
   for (const sheet of sheets.values()) {
-    const page = sheet.result.metadata.page;
-    if (page.width !== W || page.height !== H) fail(`assembly ${name}: ${sheet.piece.name} is ${page.width} x ${page.height} mm, but ${first.piece.name} is ${W} x ${H} mm`);
+    const apart = registrationProblem(first.result, sheet.result);
+    if (apart) fail(`assembly ${name}: ${first.piece.name} and ${sheet.piece.name} were not finalized on the same page and border: ${apart}`);
+    if (worldSha256(sheet.result.parts) !== world) fail(`assembly ${name}: ${first.piece.name} and ${sheet.piece.name} were not finalized from one world; finalize the whole stack again`);
   }
   // Trim at the crop marks: the rectangle they stand at the corners of.
   const inset = first.result.finishing?.border?.inset ?? margin ?? 0;
@@ -74,6 +93,7 @@ export async function composeAssembly(stack: Stack, name: string, options: { sha
   const defs: string[] = [`<clipPath id="asm-trim"><rect x="${num(trim.x)}" y="${num(trim.y)}" width="${num(trim.width)}" height="${num(trim.height)}"/></clipPath>`];
   const body: string[] = [];
   const tiles: Assembled['tiles'] = [];
+  const sources: { assembly: string; ply: string; piece: string; plotReadySha256: string }[] = [];
   for (const [position, ply] of group.spec.plies.entries()) {
     const clip = `asm-clip-${ply.id}`;
     let inner: string;
@@ -89,6 +109,7 @@ export async function composeAssembly(stack: Stack, name: string, options: { sha
       const ref = parseFrom(ply.onlay.from);
       const sourceGroup = ref.assembly === name ? group : await loadGroup(stack, ref.assembly);
       const source = sourceGroup === group && sheets.has(ref.ply) ? sheets.get(ref.ply)! : readSheet(stack, sourceGroup, ref.ply);
+      if (!sources.some(x => x.assembly === ref.assembly && x.ply === ref.ply)) sources.push({ assembly: ref.assembly, ply: ref.ply, piece: source.piece.name, plotReadySha256: source.plotReadySha256 });
       const kind = plyCuts(source.result.parts, sourceGroup.spec, ref.ply).find(c => c.id === ref.cut)?.kind;
       if (kind !== 'part') fail(`${label}: ply ${ref.ply} of ${ref.assembly} has no part cut ${ref.cut}`);
       const part = cutsOf(source.result, sourceGroup.spec, ref.ply).find(c => c.id === ref.cut)!;
@@ -112,7 +133,12 @@ export async function composeAssembly(stack: Stack, name: string, options: { sha
     `<defs>${defs.join('\n')}</defs>`,
     `<g clip-path="url(#asm-trim)">`, ...body, '</g>', '</svg>', '',
   ].join('\n');
-  return { svg, width: trim.width, height: trim.height, tiles };
+  const record: PreviewRecord = {
+    assembly: name, worldSha256: world,
+    plies: group.spec.plies.flatMap(p => (sheets.has(p.id) ? [{ ply: p.id, piece: sheets.get(p.id)!.piece.name, plotReadySha256: sheets.get(p.id)!.plotReadySha256 }] : [])),
+    sources,
+  };
+  return { svg, width: trim.width, height: trim.height, tiles, record };
 }
 
 /** Where the preview of an assembly goes. */
@@ -126,7 +152,33 @@ export async function previewAssembly(stack: Stack, name: string, options: { sha
   writeFileSync(join(dir, 'assembled.svg'), assembled.svg);
   writeFileSync(join(dir, 'assembled.png'), renderSvgPng(assembled.svg, { width: assembled.width, height: assembled.height, paper: '#ffffff' }, 'paper', 4));
   writeFileSync(join(dir, 'exploded.png'), montagePng([assembled.tiles], 400));
+  writeFileSync(join(dir, 'assembled.json'), JSON.stringify(assembled.record, null, 2));
   return dir;
+}
+
+/**
+ * Whether the preview of an assembly in `<out>/_assembly/<name>/` was composed from the files the stack's plies have now:
+ * 'fresh' when every ply's plot-ready.svg and the world are as recorded, 'stale' when a preview exists but they are not
+ * (or it records nothing to compare), 'none' when there is no preview.
+ */
+export function previewState(stack: Stack, name: string, out?: string): 'fresh' | 'stale' | 'none' {
+  const dir = previewDir(stack, name, out);
+  if (!existsSync(join(dir, 'assembled.png'))) return 'none';
+  if (!existsSync(join(dir, 'assembled.json'))) return 'stale';
+  let record: PreviewRecord;
+  try { record = JSON.parse(readFileSync(join(dir, 'assembled.json'), 'utf8')) as PreviewRecord; } catch { return 'stale'; }
+  const current = (pieceName: string) => {
+    const piece = stack.pieces.find(p => p.name === pieceName);
+    const base = piece ? resolve(ROOT, stack.out, slug(piece.name)) : undefined;
+    if (!base || !existsSync(join(base, 'plot-ready.svg')) || !existsSync(join(base, 'report.json'))) return undefined;
+    return { sha: sha256(readFileSync(join(base, 'plot-ready.svg'), 'utf8')), world: (JSON.parse(readFileSync(join(base, 'report.json'), 'utf8')) as { assembly?: { worldSha256: string } }).assembly?.worldSha256 };
+  };
+  if (record.assembly !== name || !Array.isArray(record.plies) || !Array.isArray(record.sources)) return 'stale';
+  for (const entry of [...record.plies, ...record.sources]) {
+    const now = current(entry.piece);
+    if (!now || now.sha !== entry.plotReadySha256) return 'stale';
+  }
+  return record.plies.every(p => current(p.piece)?.world === record.worldSha256) ? 'fresh' : 'stale';
 }
 
 async function main(argv: string[]): Promise<number> {
