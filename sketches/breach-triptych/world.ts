@@ -21,7 +21,7 @@ import type { JointAngles, JointName, Proportions } from '../kit/mannequin/skele
  *     seeded tilt and its `part` cut;
  *   - the eye height, `bar.centre.y`: the one page height the three panels share;
  *   - R's lintel (`lintelPlacement`): the bar turned level (`rotate = -tilt`) and moved across the sheet, its height kept;
- *   - C's slot (`slotRing`): a long, thin, level window at that same height.
+ *   - C's slot (`slotRect`): a long, thin, level window at that same height.
  */
 
 // ── The sheet ────────────────────────────────────────────────────────
@@ -30,9 +30,8 @@ import type { JointAngles, JointName, Proportions } from '../kit/mannequin/skele
 export const PAGE: Page = { width: 279.4, height: 431.8, margin: 11 };
 /** The trim: the crop marks' rectangle. */
 export const TRIM = { x0: PAGE.margin!, y0: PAGE.margin!, x1: PAGE.width - PAGE.margin!, y1: PAGE.height - PAGE.margin! };
-/** Art runs this far past the trim, so a knife a hair outside the crop marks never shows bare paper. */
-const OVERRUN = 1;
-export const ART = { x0: TRIM.x0 - OVERRUN, y0: TRIM.y0 - OVERRUN, x1: TRIM.x1 + OVERRUN, y1: TRIM.y1 + OVERRUN };
+/** Where art is drawn: the trim (the render clips art to the page margin, the crop marks' line, in any case). */
+export const ART = TRIM;
 
 /** The depth raster, 11 x 17 in units of 148 px: 4.096 Mpx, under the CPU depth pass's 4.19 Mpx budget. */
 const UNIT_PX = 148;
@@ -294,6 +293,8 @@ export interface PavingOptions {
   halfWidth: number;
   /** Where no paver is laid (a pier's footing), by its centre. */
   keepOut?: (x: number, z: number) => boolean;
+  /** The grid's shift across, in modules, so no joint runs straight up the middle to the vanishing point (default 0.37). */
+  shift?: number;
   salt: string;
 }
 
@@ -318,7 +319,7 @@ export function paving(ctx: SketchContext, o: PavingOptions): Slab[] {
       if (across === 2 && (col + 1 >= reach || taken.has(`${row},${col + 1}`))) across = 1;
       if (deep === 2 && row + 1 >= last) deep = 1;
       for (let i = 0; i < across; i++) for (let j = 0; j < deep; j++) taken.add(`${row + j},${col + i}`);
-      const x = (col + across / 2) * o.pitch, z = -(row + deep / 2) * o.pitch;
+      const x = (col + across / 2 + (o.shift ?? 0.37)) * o.pitch, z = -(row + deep / 2) * o.pitch;
       const heave = (rng() - 0.45) * 0.1, rx = (rng() - 0.5) * 0.04, rz = (rng() - 0.5) * 0.04;
       if (o.keepOut?.(x, z)) continue;
       const t = 0.2 + heave;
