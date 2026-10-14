@@ -42,7 +42,7 @@ async function loadGroup(stack: Stack, name: string): Promise<Group> {
 function readSheet(stack: Stack, group: Group, ply: string): Sheet {
   const piece = group.members.find(m => m.ply === ply)?.piece ?? fail(`assembly ${group.name} has no piece for ply ${ply} in the stack`);
   const dir = resolve(ROOT, stack.out, slug(piece.name));
-  for (const file of ['report.json', 'plot-ready.svg', join('source', 'result.json')]) {
+  for (const file of ['report.json', 'plot-ready.svg', 'plot-ready.png', join('source', 'result.json')]) {
     if (!existsSync(join(dir, file))) fail(`ply ${ply} of ${group.name}: ${piece.name} is not finalized (no ${file}); run cli/finalize.ts first`);
   }
   const report = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8')) as { paper: string };
