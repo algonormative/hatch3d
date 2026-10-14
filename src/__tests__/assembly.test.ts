@@ -8,6 +8,7 @@ import { validateSketch } from '../../packages/plot-core/src/index.ts';
 import { GUIDE_DEFAULTS, cutGuides, plyControl, plyRegion, renderPly, validateAssemblySpec, validateCuts } from '../sketch/assembly.ts';
 import { INKS, PAPERS, inkPen, inkReads } from '../sketch/materials.ts';
 import { clipToRegion, distanceToRings, inRegion } from '../sketch/region.ts';
+import { measureStrokeText } from '../sketch/stroke-text.ts';
 import type { Region } from '../sketch/region.ts';
 import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, Point } from '../sketch/types.ts';
 
@@ -289,6 +290,15 @@ describe('cutGuides', () => {
     const width = (paths: Point[][]) => Math.max(...paths.flat().map((p) => p.x)) - Math.min(...paths.flat().map((p) => p.x));
     expect(width(strokes({ id: 'win', rings: big.rings }))).toBeGreaterThan(width(label));
     expect(width(strokes({ id: 'win', rings: big.rings }, { ...options, label: 'CUT A' }))).toBeCloseTo(width(label), 9);
+  });
+
+  it('leaves the label out rather than let it take the only X', () => {
+    // Wide enough for the 2.5 mm label to sit clear in the middle, but with room for just one X, which is where the label would go.
+    const w = measureStrokeText('CUT A', { face: 'sans', height: 2.5 }) + 11;
+    const cut: Cut = { id: 'one', label: 'CUT A', rings: [rect(100 - w / 2, 93, 100 + w / 2, 107)] };
+    const on = cutGuides(cut, 'black', options), off = cutGuides(cut, 'black', { ...options, label: false });
+    expect(marks(cut).centres).toHaveLength(1);
+    expect(on.paths).toEqual(off.paths);
   });
 
   it('tries each height in turn, and omits the label when none fits', () => {
