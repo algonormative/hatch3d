@@ -6,6 +6,7 @@ Headless Node CLIs (run via `tsx`). No browser required.
 | ------ | ------- | ------- |
 | `render` | `npm run render -- -c <id> -o out.svg` | Render a composition to SVG/PNG |
 | `render` (scene) | `npm run render -- --scene s.scene.json -o out.svg` | Render a Scene IR document (see `docs/scene-ir.md`) |
+| `sign` | `npm run sign -- <print-queue-dir>…` | Sign plot-ready SVGs bottom-right with `@algonormative  <edition>  <build>  <created>` on the lettering pen; keeps the recorded `prepared_sha256` in step (`--text "<line>" file.svg…` for loose files) |
 | `stats` | `npm run stats -- -i out.svg` | Deterministic SVG measurement (report below) |
 | `stats:diff` | `npm run stats:diff -- a.svg b.svg …` | Variability across variants (below) |
 | `feed` | `npm run feed` | Render curated/biased presets and push to the feed app |
