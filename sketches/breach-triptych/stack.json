@@ -7,10 +7,10 @@
   "defaults": { "center": "none", "mergeSameColor": false },
   "params": {},
   "pieces": [
-    { "name": "lintel-l-gold", "title": "Lintel L (the hole): gold-yellow ply", "sketch": "sketches/breach-triptych/lintel-l/sketch.ts", "seed": 1, "assembly": "lintel-l", "params": { "ply": "gold" } },
-    { "name": "lintel-l-black", "title": "Lintel L (the hole): black ply", "sketch": "sketches/breach-triptych/lintel-l/sketch.ts", "seed": 1, "assembly": "lintel-l", "params": { "ply": "black" } },
-    { "name": "lintel-c-gold", "title": "Lintel C (the gaze): gold-yellow ply", "sketch": "sketches/breach-triptych/lintel-c/sketch.ts", "seed": 1, "assembly": "lintel-c", "params": { "ply": "gold" } },
-    { "name": "lintel-c-white", "title": "Lintel C (the gaze): white ply", "sketch": "sketches/breach-triptych/lintel-c/sketch.ts", "seed": 1, "assembly": "lintel-c", "params": { "ply": "white" } },
-    { "name": "lintel-r-white", "title": "Lintel R (the weight): white ply", "sketch": "sketches/breach-triptych/lintel-r/sketch.ts", "seed": 1, "assembly": "lintel-r", "params": { "ply": "white" } }
+    { "name": "lintel-l-gold", "title": "Lintel L (the hole): gold-yellow ply", "sketch": "sketches/breach-triptych/lintel-l/sketch.ts", "seed": 3, "assembly": "lintel-l", "params": { "ply": "gold" } },
+    { "name": "lintel-l-black", "title": "Lintel L (the hole): black ply", "sketch": "sketches/breach-triptych/lintel-l/sketch.ts", "seed": 3, "assembly": "lintel-l", "params": { "ply": "black" } },
+    { "name": "lintel-c-gold", "title": "Lintel C (the gaze): gold-yellow ply", "sketch": "sketches/breach-triptych/lintel-c/sketch.ts", "seed": 3, "assembly": "lintel-c", "params": { "ply": "gold" } },
+    { "name": "lintel-c-white", "title": "Lintel C (the gaze): white ply", "sketch": "sketches/breach-triptych/lintel-c/sketch.ts", "seed": 3, "assembly": "lintel-c", "params": { "ply": "white" } },
+    { "name": "lintel-r-white", "title": "Lintel R (the weight): white ply", "sketch": "sketches/breach-triptych/lintel-r/sketch.ts", "seed": 3, "assembly": "lintel-r", "params": { "ply": "white" } }
   ]
 }

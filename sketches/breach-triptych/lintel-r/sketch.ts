@@ -15,7 +15,7 @@ import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/
 import type { Ink, Stroke } from '../../kit/types.ts';
 import {
   ART, ASSEMBLY, BAR_ID, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWord, farJoints, lintelBar, lintelFootprint, lintelRect,
-  pageWord, paverStrokes, paverTone, paving, pensOf, skyLines, sun,
+  pageWord, paving, pensOf, plainStrokes, skyLines, sun,
 } from '../world.ts';
 
 /**
@@ -45,6 +45,8 @@ const GROUPS = ['pier', 'plain', 'far', 'city', 'sky', 'helix', 'word'] as const
 const EYE = 2, PITCH = 1.5, JOINT = 0.09;
 /** The spacing of the ruled faces of the piers, and the hatch pitch of the city, on the sheet (mm). */
 const RULE_MM = 1.1, CITY_MM = 2.4;
+/** The least paper between two forms on the sheet (mm): a city tower and a pier's edge. */
+const CLEAR = 4;
 
 type Tagged = Stroke & { slack: number };
 
@@ -104,20 +106,32 @@ function draw(ctx: SketchContext): Part[] {
 
   // The plain runs up to the gate and on through it; no paver under a pier.
   const near = EYE * f / (ART.y1 - horizonY) * 0.9;
-  const far = Math.sqrt(EYE * f * PITCH / 0.9);
+  const far = Math.sqrt(EYE * f * PITCH / 0.8);
   const keepOut = (x: number, z: number) => centres.some(cx => Math.abs(x - cx) < pierW / 2 + PITCH / 2 && Math.abs(z + D + depth / 2) < depth / 2 + PITCH / 2);
-  const pavers = paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, keepOut, salt: 'gate-paving' });
-  const joints = farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 });
+  const laid = plainStrokes(ctx, paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, keepOut, salt: 'gate-paving' }),
+    { near, far, eyeH: EYE, light, eye, mmPerUnit, pitchMm: n(ctx, 'plainMm', 13, 3, 16), salt: 'gate-tone' });
+  const pavers = laid.map(p => p.slab);
+  const joints = ctx.params.joints === true ? farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 }) : [];
 
-  // The city beyond the gate: towers of slabs standing on the horizon, far off.
+  // The city beyond the gate: towers of slabs standing on the horizon, far off, a few of them seen through the gate.
+  // None stands within `CLEAR` of a pier's edge on the sheet, nor rises near the lintel: no tangencies.
+  const bounds = (sl: Slab) => { const c = corners(sl); return { x0: Math.min(...c.map(p => p.x)), x1: Math.max(...c.map(p => p.x)), y0: Math.min(...c.map(p => p.y)) }; };
+  const pierBounds = piers.map(stack => stack.map(bounds).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), x1: Math.max(a.x1, b.x1), y0: Math.min(a.y0, b.y0) })));
+  const edges = pierBounds.flatMap(b => [b.x0, b.x1]);
+  const gate = { x0: pierBounds[0].x1 + CLEAR, x1: pierBounds[1].x0 - CLEAR };
   const city: Slab[] = [];
   const crng = ctx.random('gate-city');
-  for (let i = 0; i < 16; i++) {
-    const z = -(140 + 320 * crng()), x = (crng() - 0.5) * 2 * Math.tan(halfWidth) * -z * 0.9;
-    const w = 4 + 10 * crng(), h = 6 + 40 * crng() ** 1.8, d = 4 + 6 * crng();
+  for (let i = 0; i < 48 && city.length < 16; i++) {
+    const z = -(140 + 320 * crng());
+    // Every third candidate is sought in the gate's opening.
+    const px = i % 3 === 0 ? gate.x0 + (gate.x1 - gate.x0) * crng() : ART.x0 + (ART.x1 - ART.x0) * crng();
+    const x = (px - PAGE.width / 2) * -z / f;
+    const w = 4 + 10 * crng() * (i % 3 === 0 ? 0.5 : 1), h = 6 + 40 * crng() ** 1.8, d = 4 + 6 * crng();
     const sl = solid(x, h / 2, z, w, h, d, i, 'stack');
     sl.ry = (crng() - 0.5) * 0.4;
     sl.tone = 0.25 * crng();
+    const b = bounds(sl);
+    if (edges.some(e => b.x0 - CLEAR < e && e < b.x1 + CLEAR) || b.y0 < lintel.y1 + 3 * CLEAR) continue;
     city.push(sl);
   }
 
@@ -131,12 +145,7 @@ function draw(ctx: SketchContext): Part[] {
     const unit = mmPerUnit(centreOf(sl));
     push(swapRuledFaces(facetStrokes(sl, light, eye, false, gateMm / unit), ruledFaces(sl, light, view, RULE_MM / unit)), 'pier', 0.03, i);
   });
-  const trng = ctx.random('gate-tone');
-  pavers.forEach((sl, i) => {
-    const unit = mmPerUnit(centreOf(sl));
-    sl.tone = paverTone((-sl.z - near) / (far - near), trng());
-    push(paverStrokes(sl, light, eye, n(ctx, 'plainMm', 13, 3, 16) / unit, (sl.w + sl.d) / 2 * unit), 'plain', 0.004 * -sl.z, 1000 + i);
-  });
+  laid.forEach(({ slab, strokes: list }, i) => push(list, 'plain', 0.004 * -slab.z, 1000 + i));
   // The city: outlines, and the faces the sun misses ruled wide, so it stays far off.
   city.forEach((sl, i) => push([...facetStrokes(sl, light, eye, true), ...ruledFaces(sl, light, view, CITY_MM / mmPerUnit(centreOf(sl)))], 'city', 0.004 * -sl.z, 5000 + i));
 

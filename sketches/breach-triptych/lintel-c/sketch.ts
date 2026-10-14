@@ -12,7 +12,7 @@ import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, eyeHeight, faceWord, farJoints, lintelBar, paverStrokes, paverTone, paving, pensOf, ringOf, skyLines, slotRect, sun } from '../world.ts';
+import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, eyeHeight, faceWord, farJoints, lintelBar, paving, pensOf, plainStrokes, ringOf, skyLines, slotRect, sun } from '../world.ts';
 
 /**
  * Lintel, panel C: "the gaze". A paved plain in raking light, seen from eye height, so its horizon is the eye height
@@ -54,22 +54,15 @@ function draw(ctx: SketchContext): Part[] {
   const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(fov / 2));
   const halfWidth = Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) * W / H);
   const mmPerUnit = (p: THREE.Vector3) => f / -p.clone().applyMatrix4(view.matrixWorldInverse).z;
-  const light = sun(ctx);
 
-  // The plain: pavers from the foot of the sheet out until a paver is a few millimetres deep, then its joints.
+  // The plain: pavers from the foot of the sheet out until a paver is under a millimetre deep, dissolving into the glare.
   const near = EYE * f / (ART.y1 - horizonY) * 0.9;
-  const far = Math.sqrt(EYE * f * PITCH / 0.9);
-  const slabs = paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, salt: 'plain-paving' });
-  const strokes: Tagged[] = [];
-  const pitchMm = n(ctx, 'plainMm', 13, 3, 16);
-  const trng = ctx.random('plain-tone');
-  for (const sl of slabs) {
-    const at = new THREE.Vector3(sl.x, sl.y, sl.z);
-    sl.tone = paverTone((-sl.z - near) / (far - near), trng());
-    const size = (sl.w + sl.d) / 2 * mmPerUnit(at);
-    for (const st of paverStrokes(sl, light, eye, pitchMm / mmPerUnit(at), size)) strokes.push({ ink: st.ink, group: 'plain', family: st.family, points: st.points, slack: 0.004 * -sl.z, owner: sl.beat });
-  }
-  const joints = farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 });
+  const far = Math.sqrt(EYE * f * PITCH / 0.8);
+  const laid = plainStrokes(ctx, paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, salt: 'plain-paving' }),
+    { near, far, eyeH: EYE, light: sun(ctx), eye, mmPerUnit, pitchMm: n(ctx, 'plainMm', 13, 3, 16), salt: 'plain-tone' });
+  const slabs = laid.map(p => p.slab);
+  const strokes: Tagged[] = laid.flatMap(({ slab, strokes: list }, i) => list.map(st => ({ ink: st.ink, group: 'plain', family: st.family, points: st.points, slack: 0.004 * -slab.z, owner: i })));
+  const joints = ctx.params.joints === true ? farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 }) : [];
 
   // "can": on the paver nearest its place on the sheet, painted on the top face, reading across.
   const target = { x: CAN.at.x * PAGE.width, y: CAN.at.y * PAGE.height };

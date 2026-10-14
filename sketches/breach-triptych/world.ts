@@ -79,6 +79,7 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'plainMm', label: 'Paving hatch pitch', default: 13, min: 3, max: 16, step: 0.5, units: 'mm', group: 'Plain' },
   { type: 'slider', id: 'lightUp', label: 'Sun elevation', default: 20, min: 4, max: 70, step: 1, units: '°', group: 'Plain' },
   { type: 'toggle', id: 'sky', label: 'Sky hatch above the plain', default: true, group: 'Plain' },
+  { type: 'toggle', id: 'joints', label: 'Paving joints run on to the horizon (else the plain dissolves into the glare)', default: false, group: 'Plain' },
   { type: 'slider', id: 'gaze', label: 'Gaze lines in the slot', default: 5, min: 1, max: 9, step: 1, group: 'Plain' },
   // The gate (R).
   { type: 'slider', id: 'horizon', label: 'Gate horizon, share of the sheet down', default: 0.74, min: 0.45, max: 0.9, step: 0.01, group: 'Gate' },
@@ -334,11 +335,49 @@ export function paving(ctx: SketchContext, o: PavingOptions): Slab[] {
  * along the gaze, with a seeded scatter so the plain is not a gradient. `t` is the paver's distance as a share of the
  * paving's depth (0 nearest).
  */
-export const paverTone = (t: number, r: number): number => Math.max(0, 0.75 - 0.75 * t ** 0.8 + 0.5 * (r - 0.5));
+export const paverTone = (t: number, r: number): number => Math.max(0, 0.45 - 0.45 * t ** 0.8 + 0.4 * (r - 0.5));
 
-/** A paver in the raking light: `facetStrokes` at a page-millimetre pitch (`pitch` world units); far pavers, smaller on the sheet than `outlineMm`, as outlines. */
-export function paverStrokes(sl: Slab, light: THREE.Vector3, eye: THREE.Vector3, pitch: number, pageSize: number, outlineMm = 9): FacetStroke[] {
-  return facetStrokes(sl, light, eye, pageSize < outlineMm, pitch);
+export interface PlainOptions {
+  /** The paving's depth: its nearest and farthest paver distances (along -z). */
+  near: number;
+  far: number;
+  /** Eye height above the plain, world units. */
+  eyeH: number;
+  light: THREE.Vector3;
+  eye: THREE.Vector3;
+  /** Page millimetres per world unit at a point. */
+  mmPerUnit: (p: THREE.Vector3) => number;
+  /** The raking hatch's pitch on the sheet, mm. */
+  pitchMm: number;
+  salt: string;
+  /** Past this share of the depth a paver is an outline, and more and more of them are left out (default 0.5). */
+  dissolve?: number;
+  /** A paver shallower than this on the sheet (its foreshortened depth, mm) is an outline (default 5). */
+  outlineMm?: number;
+}
+
+/**
+ * The plain, paver by paver: each in the raking light at a page-millimetre pitch, its tone falling off with distance
+ * (`paverTone`). Past `dissolve` of the paving's depth a paver is drawn as its outline only, and more and more of them
+ * are left out toward the far end, so the plain dissolves into the glare along the horizon instead of stopping at a
+ * line. Returns the pavers kept and their strokes.
+ */
+export function plainStrokes(ctx: SketchContext, pavers: Slab[], o: PlainOptions): { slab: Slab; strokes: FacetStroke[] }[] {
+  const rng = ctx.random(o.salt);
+  const dissolve = o.dissolve ?? 0.5, outlineMm = o.outlineMm ?? 5;
+  const out: { slab: Slab; strokes: FacetStroke[] }[] = [];
+  for (const sl of pavers) {
+    const t = Math.max(0, (-sl.z - o.near) / (o.far - o.near));
+    const tone = rng(), keep = rng();
+    const fade = Math.max(0, (t - dissolve) / (1 - dissolve));
+    if (keep < fade ** 0.8) continue;
+    const at = new THREE.Vector3(sl.x, sl.y, sl.z), unit = o.mmPerUnit(at);
+    // The paver's depth on the sheet: the ground foreshortened by the eye's height over its distance.
+    const deep = sl.d * unit * o.eyeH / Math.max(1e-6, -sl.z);
+    sl.tone = paverTone(t, tone);
+    out.push({ slab: sl, strokes: facetStrokes(sl, o.light, o.eye, fade > 0 || deep < outlineMm, o.pitchMm / unit) });
+  }
+  return out;
 }
 
 /**

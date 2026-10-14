@@ -80,7 +80,7 @@ type Tagged = Stroke & { slack: number };
  * "blinds" off its left end, low.
  */
 const WORDS: { word: string; slab: number; at: Point; capMm: number }[] = [
-  { word: 'what', slab: 0, at: { x: 228, y: 131 }, capMm: 2.6 },
+  { word: 'what', slab: 0, at: { x: 251, y: 124 }, capMm: 3 },
   { word: 'blinds', slab: 1, at: { x: 47, y: 186 }, capMm: 2.6 },
 ];
 
@@ -127,7 +127,7 @@ function draw(ctx: SketchContext): Part[] {
     sl.ry = ry;
     slabs.push(sl);
   };
-  place(9, 8, 26, 16, 80, 9, 0.5);
+  place(18, 8, 26, 16, 80, 9, 0.5);
   place(-12, -4, 38, 30, 56, 9, -0.35);
   for (const sl of slabs) {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z), toHead = head.centre.clone().sub(at).normalize();
