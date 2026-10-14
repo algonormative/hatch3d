@@ -7,39 +7,48 @@ import { routeParts } from '../../kit/assembly.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask } from '../../kit/lettering.ts';
-import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
 import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, swapRuledFaces, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import {
-  ART, ASSEMBLY, BAR_ID, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWord, farJoints, lintelBar, lintelFootprint, lintelRect,
-  pageWord, paving, pensOf, plainStrokes, skyLines, sun,
+  ART, ASSEMBLY, BAR_ID, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWord, farLines, lintelBar, lintelFootprint, lintelRect,
+  pageWord, paving, pensOf, plainStrokes, skyRing, sun,
 } from '../world.ts';
 
 /**
- * Lintel, panel R: "the weight". Two monumental piers, slab stacks in carbon and ultramarine on white paper, with a
- * city beyond the gate; L's censor bar is glued level across their tops as the lintel, at the eye height the three
- * panels share. The helix is knotted round the joint where lintel and pier meet. "bear" is painted on a pier in the
- * light; "weight" is plotted under the strip and sealed, the only word with no light.
+ * Lintel, panel R: "the weight". Two monumental piers, slab stacks in carbon and ultramarine on white paper; L's censor
+ * bar is glued level across their tops as the lintel, at the eye height the three panels share. Three sheets, bottom
+ * to top: gold-yellow, white, and the bar as an onlay. The white is cut away above the horizon round the piers, so the
+ * sky is the gold, the piers rise into it, and the black bar stands against it: L's gold hole turned inside out. The
+ * city beyond is drawn on the gold in black, low on the horizon. The helix is knotted where lintel and pier meet; each
+ * piece of it is drawn on whichever sheet shows there, in that sheet's ink. "bear" is painted on a pier in the light;
+ * "weight" is plotted under the strip and sealed, the only word with no light.
  */
 
 const plies = [
+  { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
   { id: 'white', paper: PAPER.white, pens: ['carbon', 'ultramarine'], cutInk: 'carbon' },
   { id: 'bar', paper: PAPER.black, pens: [], cutInk: 'carbon', onlay: { from: `lintel-l/black/${BAR_ID}` } },
 ];
 /** The signature: carbon, in a box at the foot of the sheet, right of the right pier. */
 const SIGNATURE = { ply: 'white', pen: 'carbon', box: { x: 222, y: 394, width: 40, height: 12 } };
 export const spec: AssemblySpec = { ...ASSEMBLY, plies, signature: SIGNATURE };
-const pens = pensOf(['carbon', 'ultramarine']);
+const pens = pensOf(['black', 'carbon', 'ultramarine']);
 
-/** Carbon and ultramarine only: the helix's edges and the raking hatch's crossed field go to carbon, its spine to ultramarine. */
+/**
+ * On the white, carbon and ultramarine only: the helix's edges and the raking hatch's crossed field go to carbon, the
+ * helix's spine to ultramarine. On the gold, everything is black: the city, and the helix where it crosses the sky.
+ */
+const ALL_BLACK = { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' };
 const ROUTES = {
-  white: { groups: ['pier', 'plain', 'far', 'city', 'sky', 'helix', 'word'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', vermilion: 'carbon', acid: 'ultramarine' } },
+  gold: { groups: ['city', 'helixsky'], inks: ALL_BLACK },
+  white: { groups: ['pier', 'plain', 'far', 'helix', 'word'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', vermilion: 'carbon', acid: 'ultramarine' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['pier', 'plain', 'far', 'city', 'sky', 'helix', 'word'] as const;
+const GROUPS = ['pier', 'plain', 'far', 'city', 'helix', 'helixsky', 'word'] as const;
 
 /** Eye height and paving, world units. */
 const EYE = 2, PITCH = 1.5, JOINT = 0.09;
@@ -109,12 +118,11 @@ function draw(ctx: SketchContext): Part[] {
   const far = Math.sqrt(EYE * f * PITCH / 0.8);
   const keepOut = (x: number, z: number) => centres.some(cx => Math.abs(x - cx) < pierW / 2 + PITCH / 2 && Math.abs(z + D + depth / 2) < depth / 2 + PITCH / 2);
   const laid = plainStrokes(ctx, paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, keepOut, salt: 'gate-paving' }),
-    { near, far, eyeH: EYE, light, eye, mmPerUnit, pitchMm: n(ctx, 'plainMm', 13, 3, 16), salt: 'gate-tone' });
+    { near, far, eyeH: EYE, light, eye, mmPerUnit, pitchMm: n(ctx, 'plainMm', 13, 3, 16), salt: 'gate-tone', rings: Math.round(n(ctx, 'rings', 3, 0, 30)) });
   const pavers = laid.map(p => p.slab);
-  const joints = ctx.params.joints === true ? farJoints({ pitch: PITCH, from: far, f, halfWidth, minMm: 1.2 }) : [];
 
-  // The city beyond the gate: towers of slabs standing on the horizon, far off, a few of them seen through the gate.
-  // None stands within `CLEAR` of a pier's edge on the sheet, nor rises near the lintel: no tangencies.
+  // The city beyond the gate, on the gold: low towers of slabs standing on the horizon, far off, a few of them seen
+  // through the gate. None stands within `CLEAR` of a pier's edge on the sheet, nor rises near the lintel: no tangencies.
   const bounds = (sl: Slab) => { const c = corners(sl); return { x0: Math.min(...c.map(p => p.x)), x1: Math.max(...c.map(p => p.x)), y0: Math.min(...c.map(p => p.y)) }; };
   const pierBounds = piers.map(stack => stack.map(bounds).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), x1: Math.max(a.x1, b.x1), y0: Math.min(a.y0, b.y0) })));
   const edges = pierBounds.flatMap(b => [b.x0, b.x1]);
@@ -126,7 +134,7 @@ function draw(ctx: SketchContext): Part[] {
     // Every third candidate is sought in the gate's opening.
     const px = i % 3 === 0 ? gate.x0 + (gate.x1 - gate.x0) * crng() : ART.x0 + (ART.x1 - ART.x0) * crng();
     const x = (px - PAGE.width / 2) * -z / f;
-    const w = 4 + 10 * crng() * (i % 3 === 0 ? 0.5 : 1), h = 6 + 40 * crng() ** 1.8, d = 4 + 6 * crng();
+    const w = 4 + 10 * crng() * (i % 3 === 0 ? 0.5 : 1), h = 3 + 22 * crng() ** 1.8, d = 4 + 6 * crng();
     const sl = solid(x, h / 2, z, w, h, d, i, 'stack');
     sl.ry = (crng() - 0.5) * 0.4;
     sl.tone = 0.25 * crng();
@@ -146,6 +154,12 @@ function draw(ctx: SketchContext): Part[] {
     push(swapRuledFaces(facetStrokes(sl, light, eye, false, gateMm / unit), ruledFaces(sl, light, view, RULE_MM / unit)), 'pier', 0.03, i);
   });
   laid.forEach(({ slab, strokes: list }, i) => push(list, 'plain', 0.004 * -slab.z, 1000 + i));
+  // The paving on to the horizon, where the sky's cut takes it.
+  if (ctx.params.joints !== false) {
+    const { courses: across, joints } = farLines({ pitch: PITCH, from: far * 0.6, eyeH: EYE, f, halfWidth, minMm: 2.2 });
+    across.forEach((points, i) => strokes.push({ ink: 'ultramarine', group: 'far', family: 'edge', points, slack: 0.05, owner: 7000 + i }));
+    joints.forEach((points, i) => strokes.push({ ink: 'carbon', group: 'far', family: 'edge', points, slack: 0.05, owner: 7500 + i }));
+  }
   // The city: outlines, and the faces the sun misses ruled wide, so it stays far off.
   city.forEach((sl, i) => push([...facetStrokes(sl, light, eye, true), ...ruledFaces(sl, light, view, CITY_MM / mmPerUnit(centreOf(sl)))], 'city', 0.004 * -sl.z, 5000 + i));
 
@@ -171,6 +185,9 @@ function draw(ctx: SketchContext): Part[] {
 
   const geometries = [...pierSlabs, ...pavers, ...city].map(slabGeometry).concat(helix.meshes);
   fitDepthRange(view, geometries, 0.1, { exact: true });
+  // The far lines run on to the horizon, beyond the last solid: the depth range reaches them.
+  view.far = Math.max(view.far, EYE * f / 0.3);
+  view.updateProjectionMatrix();
   const depthBuffer = renderDepthBufferCPU(geometries, view, W, H);
   const buckets = new PartBuckets(0.4);
   const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
@@ -189,20 +206,16 @@ function draw(ctx: SketchContext): Part[] {
     projectStrokes(list, { view, depth: depthBuffer, width: W, height: H, bias: hiddenBias(view, list[0].slack, dist(list[0])) }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-          for (const piece of keepAlong(inside, p => !clear(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+          for (const piece of keepAlong(inside, p => !clear(p), 0.15)) {
+            buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+            // The helix crosses the sky too: the same piece on the gold, in black (each sheet keeps the part it shows).
+            if (st.group === 'helix') buckets.add(`helixsky-${st.ink}`, piece, false);
+          }
         }
       },
     });
   }
-  // The far joints and the sky lie behind the piers, the city and the helix: they give way to them on the sheet.
-  const solids = [...pierSlabs, ...city].map(slabGeometry);
-  const behind = meshCoverage([...solids, ...helix.meshes], view, PAGE, 0.8);
-  const open = (path: Point[]) => keepAlong(path, p => !behind(p), 0.2);
-  for (const [a, b] of joints) for (const inside of clipToRect([pageOf(view, a, PAGE), pageOf(view, b, PAGE)], ART)) for (const piece of open(inside)) buckets.add('far-carbon', piece, true);
-  if (ctx.params.sky !== false) {
-    for (const path of skyLines(ctx, 'gate-sky', { x0: ART.x0, x1: ART.x1, top: ART.y0, bottom: horizonY - 30 })) for (const piece of open(path)) buckets.add('sky-ultramarine', piece, true);
-  }
-  for (const g of [...geometries, ...solids]) g.dispose();
+  for (const g of geometries) g.dispose();
 
   // "weight": under the strip, sealed: off-centre in the lintel's footprint, clear of its corner ticks.
   const cap = 4;
@@ -210,7 +223,9 @@ function draw(ctx: SketchContext): Part[] {
   const sealed = { white: [{ id: 'weight-carbon', pen: 'carbon', paths: weight }] };
 
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
-  return renderPly(spec, ctx, pens, { cuts: { bar: [footprint] }, art, sealed });
+  // The white's one cut: the sky above the horizon, round the piers (their outer silhouettes, on straight edges).
+  const sky = skyRing(horizonY, piers.map(stack => stack.flatMap(corners)));
+  return renderPly(spec, ctx, pens, { cuts: { white: [{ id: 'sky', label: 'SKY', rings: [sky] }], bar: [footprint] }, art, sealed });
 }
 
 const sketch: Sketch = {

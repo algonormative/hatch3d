@@ -75,13 +75,13 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'barPitch', label: 'Censor bar hatch pitch (the silver on the part that becomes the lintel)', default: 2.6, min: 0.6, max: 5, step: 0.1, units: 'mm', group: 'Bust' },
   { type: 'toggle', id: 'holeBar', label: 'The censor bar in black ink on the gold under the hole (else bare gold)', default: true, group: 'Bust' },
   // The plain (C).
-  { type: 'slider', id: 'slotMm', label: 'Slot height', default: 5, min: 3.5, max: 14, step: 0.5, units: 'mm', group: 'Plain' },
-  { type: 'slider', id: 'slotInset', label: 'Slot ends, in from the trim', default: 16, min: 8, max: 60, step: 1, units: 'mm', group: 'Plain' },
+  { type: 'slider', id: 'slotMm', label: 'Gold horizon band (the slot) height', default: 5, min: 4, max: 14, step: 0.5, units: 'mm', group: 'Plain' },
   { type: 'slider', id: 'plainFov', label: 'Plain field of view', default: 50, min: 30, max: 80, step: 1, group: 'Plain' },
   { type: 'slider', id: 'plainMm', label: 'Paving hatch pitch', default: 13, min: 3, max: 16, step: 0.5, units: 'mm', group: 'Plain' },
   { type: 'slider', id: 'lightUp', label: 'Sun elevation', default: 20, min: 4, max: 70, step: 1, units: '°', group: 'Plain' },
-  { type: 'toggle', id: 'sky', label: 'Sky hatch above the plain', default: true, group: 'Plain' },
-  { type: 'toggle', id: 'joints', label: 'Paving joints run on to the horizon (else the plain dissolves into the glare)', default: false, group: 'Plain' },
+  { type: 'toggle', id: 'skyEcho', label: 'A sparse silver echo in the black sky (else bare black)', default: false, group: 'Plain' },
+  { type: 'toggle', id: 'joints', label: 'The paving\'s courses and joints run on to the horizon (else it dissolves into glare short of it)', default: true, group: 'Plain' },
+  { type: 'slider', id: 'rings', label: 'Most contour rings on a paver face', default: 3, min: 0, max: 30, step: 1, group: 'Plain' },
   { type: 'slider', id: 'gazeLines', label: 'Gaze lines in the slot', default: 5, min: 1, max: 9, step: 1, group: 'Plain' },
   // The gate (R).
   { type: 'slider', id: 'horizon', label: 'Gate horizon, share of the sheet down', default: 0.74, min: 0.45, max: 0.9, step: 0.01, group: 'Gate' },
@@ -260,11 +260,14 @@ export function lintelRect(bar: LintelBar): { x0: number; x1: number; y0: number
   return { x0: Math.min(...ring.map(p => p.x)), x1: Math.max(...ring.map(p => p.x)), y0: Math.min(...ring.map(p => p.y)), y1: Math.max(...ring.map(p => p.y)) };
 }
 
-/** C's slot: a long, thin, level window at the eye height. */
+/**
+ * C's slot: the gold horizon band at the eye height, the width of the trim. The white ply's sky cut stops at its bottom
+ * edge and the gold ply's at its top, so the band is gold between the black sky and the white plain.
+ */
 export function slotRect(ctx: SketchContext, bar: LintelBar): { x0: number; x1: number; y0: number; y1: number } {
-  const h = n(ctx, 'slotMm', 5, 3.5, 14), inset = n(ctx, 'slotInset', 16, 8, 60);
+  const h = n(ctx, 'slotMm', 5, 4, 14);
   const y = eyeHeight(bar);
-  return { x0: TRIM.x0 + inset, x1: TRIM.x1 - inset, y0: y - h / 2, y1: y + h / 2 };
+  return { x0: TRIM.x0, x1: TRIM.x1, y0: y - h / 2, y1: y + h / 2 };
 }
 
 export const ringOf = (r: { x0: number; x1: number; y0: number; y1: number }): Point[] =>
@@ -421,6 +424,19 @@ export interface PlainOptions {
   dissolve?: number;
   /** A paver shallower than this on the sheet (its foreshortened depth, mm) is an outline (default 5). */
   outlineMm?: number;
+  /** The most contour rings kept on one face (the outermost); the field hatch inside stays (default: all). */
+  rings?: number;
+}
+
+/** A slab's raking hatch with at most `rings` contour rings per face (the outermost ones), the rest of it kept. */
+export function fewerRings(strokes: FacetStroke[], rings: number): FacetStroke[] {
+  const count = new Map<number, number>();
+  return strokes.filter(st => {
+    if (st.family !== 'hatch' || st.points.length !== 5 || st.face === undefined) return true;
+    const k = (count.get(st.face) ?? 0) + 1;
+    count.set(st.face, k);
+    return k <= rings;
+  });
 }
 
 /**
@@ -442,32 +458,41 @@ export function plainStrokes(ctx: SketchContext, pavers: Slab[], o: PlainOptions
     // The paver's depth on the sheet: the ground foreshortened by the eye's height over its distance.
     const deep = sl.d * unit * o.eyeH / Math.max(1e-6, -sl.z);
     sl.tone = paverTone(t, tone);
-    out.push({ slab: sl, strokes: facetStrokes(sl, o.light, o.eye, fade > 0 || deep < outlineMm, o.pitchMm / unit) });
+    const made = facetStrokes(sl, o.light, o.eye, fade > 0 || deep < outlineMm, o.pitchMm / unit);
+    out.push({ slab: sl, strokes: o.rings === undefined ? made : fewerRings(made, o.rings) });
   }
   return out;
 }
 
 /**
- * The joints of the paving beyond its last slab, as lines on the ground converging on the vanishing point, thinning
- * out with distance; none runs on where its neighbour would be closer than `minMm` on the sheet.
+ * The paving on to the horizon, as lines on the ground beyond (and between) its last pavers: courses across, each drawn
+ * where it stands at least `minMm` on the sheet below the last one drawn, and joints along, converging on the vanishing
+ * point, every second one stopping where its neighbours close up, every fourth further on, and so on. Both run until
+ * they are `stopMm` from the horizon on the sheet, where the slot's cut takes them. The grid is shifted `shift` modules
+ * across, as `paving` lays it.
  */
-export function farJoints(o: { pitch: number; from: number; f: number; halfWidth: number; minMm: number }): THREE.Vector3[][] {
-  const lines: THREE.Vector3[][] = [];
-  const ground = 0.01;
-  const deep = o.pitch * o.f / o.minMm;
-  const reach = Math.ceil(deep * Math.tan(o.halfWidth) / o.pitch) + 1;
-  for (let col = -reach; col <= reach; col++) {
-    const x = col * o.pitch;
-    // Every joint runs a little way past the pavers; every second one twice as far, every fourth four times, and so on,
-    // so the joints thin out toward the horizon without crowding.
-    if (col % 2 !== 0) continue;
-    let k = 1;
-    while (k < 64 && col % (4 * k) === 0) k *= 2;
-    const end = Math.min(deep, o.from * (1 + 0.6 * k));
-    const start = Math.max(o.from, Math.abs(x) / Math.tan(o.halfWidth) - o.pitch);
-    if (start < end) lines.push([new THREE.Vector3(x, ground, -start), new THREE.Vector3(x, ground, -end)]);
+export function farLines(o: { pitch: number; from: number; eyeH: number; f: number; halfWidth: number; minMm: number; stopMm?: number; shift?: number }): { courses: THREE.Vector3[][]; joints: THREE.Vector3[][] } {
+  const ground = 0.01, stop = o.eyeH * o.f / (o.stopMm ?? 0.5), shift = o.shift ?? 0.37;
+  const courses: THREE.Vector3[][] = [];
+  let last = Infinity;
+  for (let z = Math.ceil(o.from / o.pitch) * o.pitch; z < stop; z += o.pitch) {
+    const y = o.eyeH * o.f / z;
+    if (last - y < o.minMm) continue;
+    last = y;
+    const half = (z + o.pitch) * Math.tan(o.halfWidth) + o.pitch;
+    courses.push([new THREE.Vector3(-half, ground, -z), new THREE.Vector3(half, ground, -z)]);
   }
-  return lines;
+  const joints: THREE.Vector3[][] = [];
+  const reach = Math.ceil(stop * Math.tan(o.halfWidth) / o.pitch) + 1;
+  for (let col = -reach; col <= reach; col++) {
+    const x = (col + shift) * o.pitch;
+    let k = 1;
+    while (k < 4096 && col % (2 * k) === 0) k *= 2;
+    const end = Math.min(stop, o.pitch * k * o.f / (1.5 * o.minMm));
+    const start = Math.max(o.from, Math.abs(x) / Math.tan(o.halfWidth) - o.pitch);
+    if (start < end) joints.push([new THREE.Vector3(x, ground, -start), new THREE.Vector3(x, ground, -end)]);
+  }
+  return { courses, joints };
 }
 
 /**
@@ -489,4 +514,52 @@ export function skyLines(ctx: SketchContext, salt: string, area: { x0: number; x
     y -= open + (close - open) * t ** 0.7;
   }
   return out;
+}
+
+// ── R's sky cut ──────────────────────────────────────────────────────
+
+/** The convex hull of page points (Andrew's monotone chain), counter-clockwise in page coordinates (y down). */
+export function convexHull(points: Point[]): Point[] {
+  const ps = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (ps.length < 3) return ps;
+  const cross = (o: Point, a: Point, b: Point) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point[] = [], upper: Point[] = [];
+  for (const p of ps) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  for (const p of [...ps].reverse()) { while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
+}
+
+/** A convex polygon cut to the part with y at most `y` (above that line on the page). */
+function above(poly: Point[], y: number): Point[] {
+  const out: Point[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ina = a.y <= y, inb = b.y <= y;
+    if (ina) out.push(a);
+    if (ina !== inb) { const t = (y - a.y) / (b.y - a.y); out.push({ x: a.x + (b.x - a.x) * t, y }); }
+  }
+  return out;
+}
+
+/**
+ * The sky as one simple polygon: the trim's rectangle down to the horizon `y`, less the forms that rise from below the
+ * horizon into it (each given by its page points, taken as their convex hull, so the cut runs on straight edges along
+ * the form's outer silhouette). The forms must stand clear of each other and of the trim's sides, and cross the horizon.
+ */
+export function skyRing(y: number, forms: Point[][]): Point[] {
+  const ring: Point[] = [{ x: TRIM.x0, y: TRIM.y0 }, { x: TRIM.x1, y: TRIM.y0 }, { x: TRIM.x1, y }];
+  const notches = forms.map(points => above(convexHull(points), y)).filter(p => p.length >= 3)
+    .sort((a, b) => Math.max(...b.map(p => p.x)) - Math.max(...a.map(p => p.x)));
+  for (const notch of notches) {
+    // Its two corners on the horizon, then the chain between them that rises into the sky, from the right one round to the left.
+    const onLine = notch.map((p, i) => ({ p, i })).filter(({ p }) => Math.abs(p.y - y) < 1e-6);
+    const right = onLine.reduce((a, b) => (b.p.x > a.p.x ? b : a)), left = onLine.reduce((a, b) => (b.p.x < a.p.x ? b : a));
+    const walk = (step: number) => { const chain: Point[] = []; for (let i = right.i; ; i = (i + step + notch.length) % notch.length) { chain.push(notch[i]); if (i === left.i) break; } return chain; };
+    const forward = walk(1), backward = walk(-1);
+    // The chain along the horizon itself is the two corners alone (or only points on the line).
+    const rises = (chain: Point[]) => chain.some(p => p.y < y - 1e-6);
+    ring.push(...(rises(forward) ? forward : backward));
+  }
+  ring.push({ x: TRIM.x0, y });
+  return ring;
 }
