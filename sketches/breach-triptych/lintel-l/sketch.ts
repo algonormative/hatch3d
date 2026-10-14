@@ -185,7 +185,8 @@ function draw(ctx: SketchContext): Part[] {
   if (threadOn(knotOf(ctx))) {
     const { l } = threadPaths(frame, bar);
     const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0 });
-    for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) buckets.add(`thread-${st.ink}`, inside, true);
+    // Never on the bar: the bar is cut out and glued on R, and must carry only its own hatch.
+    for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
     threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);
   }
   const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
