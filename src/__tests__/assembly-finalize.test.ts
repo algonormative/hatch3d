@@ -133,6 +133,13 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
     await expect(finalize(stackIn(out, [white8, black8]), black8)).rejects.toThrow(/lintel-l-white was finalized with a different seed or params than lintel-l-black-8/);
   }, 60_000);
 
+  it('explains a page fit that moves the plies when the border spacing follows the width of each ply’s cut ink', async () => {
+    // Gold gel (0.5 mm) cuts the black ply and the black fineliner (0.35 mm) the white one: an explicit inset fits the page to each.
+    const s = stackIn(fresh(), [lWhite, lBlack], { border: { style: 'cropmarks', pen: 'black', inset: 12, contentGap: 1 } });
+    await finalize(s, lWhite);
+    await expect(finalize(s, lBlack)).rejects.toThrow(/do not draw one world.*border sets inset or contentGap.*leave both out/);
+  }, 120_000);
+
   it('refuses plies whose worlds differ even though their params agree', async () => {
     const leaky = `${FIXTURES}/assembly-lintel-l-leaky-sketch.ts`;
     const [a, b] = [piece('leaky-white', 'leaky', leaky, 'white'), piece('leaky-black', 'leaky', leaky, 'black')];

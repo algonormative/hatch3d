@@ -309,7 +309,13 @@ async function checkAssemblyWorld(stack: Stack, piece: Piece, plan: AssemblyPlan
     if (earlier.seed !== result.seed || canonical(withoutControl(earlier.params)) !== canonical(withoutControl(result.params))) {
       fail(`assembly ${name}: ${q.name} was finalized with a different seed or params than ${piece.name} (${JSON.stringify(withoutControl(earlier.params))} against ${JSON.stringify(withoutControl(result.params))}); finalize every ply of the assembly together`);
     }
-    if (worldSha256(earlier.parts) !== world) fail(`assembly ${name}: ${q.name} and ${piece.name} do not draw one world: their cuts differ (same seed and params, so the sketch's cuts depend on the ply, or the page fit moved)`);
+    if (worldSha256(earlier.parts) !== world) {
+      const border = stack.border as { inset?: number; contentGap?: number } | undefined;
+      const spaced = border?.inset !== undefined || border?.contentGap !== undefined;
+      fail(`assembly ${name}: ${q.name} and ${piece.name} do not draw one world: their cuts differ (same seed and params, so the sketch's cuts depend on the ply${spaced
+        ? ', or the stack border sets inset or contentGap, which fits the page to the width of the cut ink and so moves the plies whose cut inks differ in width: leave both out'
+        : ', or the page fit moved'})`);
+    }
   }
   await checkOnlays(stack, piece);
   const signature = spec.signature?.ply === ply.id ? { pen: spec.signature.pen, box: signatureBox(result.parts) ?? fail(`ply ${ply.id} has no signature box in its render`) } : undefined;
