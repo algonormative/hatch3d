@@ -6,7 +6,7 @@ Headless Node CLIs (run via `tsx`). No browser required.
 | ------ | ------- | ------- |
 | `render` | `npm run render -- -c <id> -o out.svg` | Render a composition to SVG/PNG |
 | `render` (scene) | `npm run render -- --scene s.scene.json -o out.svg` | Render a Scene IR document (see `docs/scene-ir.md`) |
-| `sign` | `npm run sign -- <print-queue-dir>…` | Sign plot-ready SVGs bottom-right with `@algonormative  <edition>  <build>  <created>` on the lettering pen; keeps the recorded `prepared_sha256` in step (`--text "<line>" file.svg…` for loose files) |
+| `sign` | `npm run sign -- <print-queue-dir>…` | Sign plot-ready SVGs bottom-right with `@algonormative  <edition>  <build>  <created>` on the lettering pen; keeps the recorded `prepared_sha256` in step (`--text "<line>" file.svg…` for loose files). `--pen <id>` signs into that existing layer in its ink and `--box x0,y0,x1,y1` right-aligns at the bottom of a box; a directory reads `sign_pen`/`sign_box` from `index.md`, skips `sign: false`, and never adds a layer to an entry with a `config.json` |
 | `stats` | `npm run stats -- -i out.svg` | Deterministic SVG measurement (report below) |
 | `stats:diff` | `npm run stats:diff -- a.svg b.svg …` | Variability across variants (below) |
 | `feed` | `npm run feed` | Render curated/biased presets and push to the feed app |

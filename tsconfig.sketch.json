@@ -29,6 +29,7 @@
     "cli/baselines.ts",
     "cli/sheet.ts",
     "cli/assembly.ts",
+    "cli/sign.ts",
     "cli/density.ts",
     "cli/print-export.ts",
     "cli/print-export/**/*.ts",
