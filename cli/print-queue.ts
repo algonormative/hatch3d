@@ -18,14 +18,14 @@
  * glue, and where its parts and onlays go. `assembled.png` is copied in when `cli/assembly.ts preview` has made it.
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { artMatch, type ArtMatch } from './art-match.ts';
 import { checkPiece, loadPenPlan } from './plotter-check.ts';
 import { renderSketch } from './sketch/runner.ts';
 import { loadSketch, plainFinishing, plyOf, slug, type Piece, type Stack } from './finalize.ts';
-import { previewDir } from './assembly.ts';
+import { previewDir, previewState } from './assembly.ts';
 import type { AssemblyReport } from './assembly-world.ts';
 import type { AssemblySpec, Page, Params } from '../src/sketch/types.ts';
 
@@ -57,11 +57,15 @@ export interface AssemblyEntry {
   receives: { ply: string; from: string }[];
   /** Whether `assembled.png` sits in the entry. */
   preview: boolean;
+  /** A preview of the panel exists but was composed from other files than the entry's plies now are, so it was not copied. */
+  previewStale?: boolean;
 }
 
 export interface EntryOptions { stackPath: string; prefix: string; date: string; notes: string; branch: string | null; art: { identity: string; match: ArtMatch }; assembly?: AssemblyEntry }
 
 const box = (b: { x: number; y: number; width: number; height: number }) => [b.x, b.y, b.x + b.width, b.y + b.height].map(n => +n.toFixed(3)).join(',');
+
+const GLUE = 'Glue the piece over its placement ticks: they sit 1.5 mm inside its outline and the piece covers them.';
 
 /** The `## Assembly` section: where this ply sits in its panel, what to cut, and how the pieces go together. */
 function assemblySection(a: AssemblyReport, o: AssemblyEntry): string[] {
@@ -75,17 +79,17 @@ function assemblySection(a: AssemblyReport, o: AssemblyEntry): string[] {
     '| ---: | --- | --- |',
     ...o.plies.map((p, i) => `| ${i + 1} ${p.ply} | ${p.paper} | ${p.ply === a.ply ? 'this entry' : p.onlay ? `onlay: cut from \`${p.onlay}\`, not plotted` : p.entry ? `\`${p.entry}\`` : 'not in this stack'} |`),
     '',
-    ...(o.preview ? ['![assembled preview](assembled.png)', ''] : []),
+    ...(o.preview ? ['![assembled preview](assembled.png)', ''] : o.previewStale ? ['- preview is stale: re-run `npm run assembly -- preview`, then queue this entry again with `--force` (the old `assembled.png` was left out).', ''] : []),
     ...(cutRows.length ? ['Cuts on this ply:', '', '| Cut | Kind |', '| --- | --- |', ...cutRows, ''] : ['This ply has no cuts.', '']),
     'To assemble:',
     '',
-    '- Let the gel ink dry before cutting.',
-    '- Cut waste along the **outer edge** of each outline.',
+    '- Let the ink dry before cutting (gel pens: about an hour).',
+    '- Cut waste along the edge of each guide line that faces the kept paper (the line sits inside the waste).',
     '- Cut parts **down the middle** of the line.',
     '- Trim at the crop marks.',
     '- Square in an L-square, bottom ply first.',
-    ...o.keeps.map(k => (k.assembly ? `- Keep \`${k.cut}\`: glue onto \`${k.assembly}\` as \`${k.ply}\`, aligning to the placement ticks.` : `- Keep \`${k.cut}\`: no onlay in this stack is cut from it yet.`)),
-    ...o.receives.map(r => `- This sheet receives onlay \`${r.ply}\`, the part \`${r.from}\`: it lands inside the placement ticks printed on this sheet.`),
+    ...o.keeps.map(k => (k.assembly ? `- Keep \`${k.cut}\`: glue onto \`${k.assembly}\` as \`${k.ply}\`. ${GLUE}` : `- Keep \`${k.cut}\`: no onlay in this stack is cut from it yet.`)),
+    ...o.receives.map(r => `- This sheet receives onlay \`${r.ply}\`, the part \`${r.from}\`. ${GLUE}`),
     '',
   ];
 }
@@ -167,7 +171,7 @@ export function indexMarkdown(piece: Piece, report: Report, config: { pens?: { i
 }
 
 /** The panel of an assembly ply as its entry describes it, read from the sketches of the stack's assemblies. */
-async function assemblyEntry(stack: Stack, here: AssemblyReport, entryPrefix: string, preview: boolean): Promise<AssemblyEntry> {
+async function assemblyEntry(stack: Stack, here: AssemblyReport, entryPrefix: string, preview: boolean, previewStale: boolean): Promise<AssemblyEntry> {
   const groups = new Map<string, { spec: AssemblySpec; members: { piece: Piece; ply: string }[] }>();
   for (const name of new Set(stack.pieces.flatMap(p => (p.assembly ? [p.assembly] : [])))) {
     const pieces = stack.pieces.filter(p => p.assembly === name);
@@ -188,7 +192,7 @@ async function assemblyEntry(stack: Stack, here: AssemblyReport, entryPrefix: st
   const below = own.spec.plies.findIndex(p => p.id === here.ply);
   const above = own.spec.plies[below + 1];
   const receives = above?.onlay ? [{ ply: above.id, from: above.onlay.from }] : [];
-  return { plies, keeps, receives, preview };
+  return { plies, keeps, receives, preview, ...(previewStale ? { previewStale } : {}) };
 }
 
 function arg(argv: string[], name: string): string | undefined {
@@ -229,9 +233,11 @@ async function main(argv: string[]): Promise<number> {
       ['config.json', 'config.json'], ['request.json', 'request.json'], ['report.json', 'finalize-report.json']]) copyFileSync(join(dir, from), join(target, to));
     let assembly: AssemblyEntry | undefined;
     if (report.assembly) {
-      const preview = join(previewDir(stack, report.assembly.name), 'assembled.png');
-      if (existsSync(preview)) copyFileSync(preview, join(target, 'assembled.png'));
-      assembly = await assemblyEntry(stack, report.assembly, `${prefix}-${date}-`, existsSync(preview));
+      // Only a preview composed from the plies as they are now goes in; a copy from an earlier queueing is taken out.
+      const state = previewState(stack, report.assembly.name);
+      if (state === 'fresh') copyFileSync(join(previewDir(stack, report.assembly.name), 'assembled.png'), join(target, 'assembled.png'));
+      else rmSync(join(target, 'assembled.png'), { force: true });
+      assembly = await assemblyEntry(stack, report.assembly, `${prefix}-${date}-`, state === 'fresh', state === 'stale');
     }
     writeFileSync(join(target, 'index.md'), indexMarkdown(piece, report, config, { stackPath: relative(ROOT, resolve(stackPath)), prefix, date, notes: notes[piece.name], branch, art: { identity: plain.identity, match }, ...(assembly ? { assembly } : {}) }));
     console.log(`OK    ${piece.name}: ${target} (${report.minutes} min, ${report.pens} pens)`);

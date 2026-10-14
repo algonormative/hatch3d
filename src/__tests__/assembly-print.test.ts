@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { previewAssembly } from '../../cli/assembly.ts';
@@ -51,7 +51,7 @@ describe.skipIf(!hasVpype || !hasPlotterServer)('assembly entries in the print q
 
   it('says where the part goes and which sheet receives it', () => {
     const l = readFileSync(join(entry('lintel-l-black'), 'index.md'), 'utf8');
-    expect(l).toContain('Keep `bar`: glue onto `lintel-r` as `bar`, aligning to the placement ticks.');
+    expect(l).toContain('Keep `bar`: glue onto `lintel-r` as `bar`. Glue the piece over its placement ticks: they sit 1.5 mm inside its outline and the piece covers them.');
     expect(l).toContain('| 1 white | white | `lintel-2026-10-14-Lintel L White` |');
     const r = readFileSync(join(entry('lintel-r-white'), 'index.md'), 'utf8');
     expect(r).toContain('This sheet receives onlay `bar`, the part `lintel-l/black/bar`');
@@ -79,4 +79,28 @@ describe.skipIf(!hasVpype || !hasPlotterServer)('assembly entries in the print q
     const check = spawnSync(process.execPath, ['--import', 'tsx', 'cli/plotter-check.ts', target], { cwd: process.cwd(), encoding: 'utf8' });
     expect(check.stdout).toMatch(/^OK .*negative control rejected/m);
   });
+
+  it('does not copy in a preview that was composed from other files, and says it is stale', () => {
+    // The same stack and finalized plies, but the black ply's plot-ready.svg has changed since the preview was made.
+    const outCopy = fresh(), intoStale = mkdtempSync(join(tmpdir(), 'assembly-queue-'));
+    cpSync(out, outCopy, { recursive: true });
+    appendFileSync(join(outCopy, 'lintel-l-black', 'plot-ready.svg'), '\n');
+    const staleStack = { ...stack, out: outCopy };
+    writeFileSync(join(outCopy, 'stack.json'), JSON.stringify(staleStack));
+    const run = spawnSync(process.execPath, ['--import', 'tsx', 'cli/print-queue.ts', join(outCopy, 'stack.json'), '--into', intoStale, '--prefix', 'lintel', '--notes', join(out, 'notes.json'), '--date', '2026-10-14'], { cwd: process.cwd(), encoding: 'utf8' });
+    expect(run.stdout.match(/^OK /gm)).toHaveLength(3);
+    for (const name of ['Lintel L White', 'lintel-l-black']) {
+      const target = join(intoStale, `lintel-2026-10-14-${name}`);
+      expect(existsSync(join(target, 'assembled.png')), `${name}: the old picture is not offered`).toBe(false);
+      const md = readFileSync(join(target, 'index.md'), 'utf8');
+      expect(md).toContain('preview is stale: re-run `npm run assembly -- preview`');
+      expect(md).not.toContain('![assembled preview]');
+    }
+    // Panel R was never previewed: nothing to copy, and nothing to call stale either.
+    expect(readFileSync(join(intoStale, 'lintel-2026-10-14-lintel-r-white', 'index.md'), 'utf8')).not.toContain('preview is stale');
+    // Run again over the same entries, as a re-queue would, and a stale picture that was copied before is removed.
+    cpSync(join(into, 'lintel-2026-10-14-lintel-l-black', 'assembled.png'), join(intoStale, 'lintel-2026-10-14-lintel-l-black', 'assembled.png'));
+    spawnSync(process.execPath, ['--import', 'tsx', 'cli/print-queue.ts', join(outCopy, 'stack.json'), '--into', intoStale, '--prefix', 'lintel', '--notes', join(out, 'notes.json'), '--date', '2026-10-14', '--force'], { cwd: process.cwd(), encoding: 'utf8' });
+    expect(existsSync(join(intoStale, 'lintel-2026-10-14-lintel-l-black', 'assembled.png'))).toBe(false);
+  }, 120_000);
 });
