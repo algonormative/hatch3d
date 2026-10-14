@@ -9,7 +9,7 @@ import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
-import { fitDepthRange, horizonCamera, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, horizonCamera, onGround, pageOf } from '../../kit/perspective.ts';
 import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, swapRuledFaces, type FacetStroke, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -53,6 +53,20 @@ const GROUPS = ['pier', 'plain', 'far', 'city', 'helix', 'helixsky', 'word'] as 
 
 /** Eye height and paving, world units. */
 const EYE = 2, PITCH = 1.5, JOINT = 0.09;
+
+/**
+ * The piers' readings: their width on the sheet at their feet, courses, the horizon (share of the sheet down), how far
+ * above the trim's foot they stand (mm), the field of view, whether the camera tilts up (three-point), how much each
+ * course narrows (`taper`), and whether the course under the lintel is crushed with spalls fallen at the feet (`crush`).
+ */
+interface PierReading { pierMm: number; courses: number; horizon: number; foot: number; fov: number; tilt: boolean; taper: number; crush: boolean }
+const PIERS: Record<string, PierReading> = {
+  thick: { pierMm: 48, courses: 4, horizon: 0.74, foot: 22, fov: 50, tilt: false, taper: 0, crush: false },
+  slim: { pierMm: 27, courses: 6, horizon: 0.86, foot: 14, fov: 50, tilt: false, taper: 0.035, crush: false },
+  low: { pierMm: 30, courses: 5, horizon: 0.9, foot: 12, fov: 58, tilt: true, taper: 0, crush: false },
+  crushed: { pierMm: 28, courses: 6, horizon: 0.86, foot: 14, fov: 50, tilt: true, taper: 0, crush: true },
+};
+const DEFAULT_PIERS = 'low';
 /** The spacing of the ruled faces of the piers, and the hatch pitch of the city, on the sheet (mm). */
 const RULE_MM = 1.1, CITY_MM = 2.4;
 /** The least paper between two forms on the sheet (mm): a city tower and a pier's edge. */
@@ -99,36 +113,53 @@ function draw(ctx: SketchContext): Part[] {
   const footprint = lintelFootprint(bar);
   const lintel = lintelRect(bar);
 
-  const fov = 50;
-  const horizonY = n(ctx, 'horizon', 0.74, 0.45, 0.9) * PAGE.height;
-  const view = horizonCamera({ fov, eye: [0, EYE, 0], target: [0, EYE, -100], far: 1e4, page: PAGE, depth: { width: W, height: H }, horizonY });
-  const eye = view.position.clone();
+  const reading = PIERS[String(ctx.params.piers)] ?? PIERS[DEFAULT_PIERS];
+  const fov = reading.fov;
+  const horizonY = reading.horizon * PAGE.height;
   const f = PAGE.height / 2 / Math.tan(THREE.MathUtils.degToRad(fov / 2));
+  // A level camera keeps the piers plumb on the sheet; a camera tilted up (`low`) puts the horizon at the same place by
+  // looking up, so the piers converge toward the lintel (three-point perspective, like the bust's own low camera).
+  const view = reading.tilt
+    ? (() => {
+      const pitch = Math.atan((horizonY - PAGE.height / 2) / f);
+      const c = new THREE.PerspectiveCamera(fov, W / H, 0.5, 1e4);
+      c.position.set(0, EYE, 0);
+      c.lookAt(0, EYE + Math.sin(pitch) * 100, -Math.cos(pitch) * 100);
+      c.updateMatrixWorld();
+      c.updateProjectionMatrix();
+      return c;
+    })()
+    : horizonCamera({ fov, eye: [0, EYE, 0], target: [0, EYE, -100], far: 1e4, page: PAGE, depth: { width: W, height: H }, horizonY });
+  const eye = view.position.clone();
   const halfWidth = Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) * W / H);
   const mmPerUnit = (p: THREE.Vector3) => f / -p.clone().applyMatrix4(view.matrixWorldInverse).z;
   const light = sun(ctx);
   const rng = ctx.random('gate-courses');
 
-  // The piers: their front faces at depth D, standing on the ground at the foot of the sheet; their tops run up under
-  // the lintel's middle, so the strip covers the joint. Page millimetres to world at that depth: `D / f`.
-  const footY = ART.y1 - 22;
-  const D = EYE * f / (footY - horizonY);
-  const toWorld = D / f;
-  const pierW = n(ctx, 'pierMm', 48, 24, 70) * toWorld, depth = pierW * 0.85;
+  // The piers: their front faces at depth D, standing on the ground near the foot of the sheet; their tops run up under
+  // the lintel's middle, so the strip covers the joint. Page millimetres to world at their feet: `toWorld`.
+  const footY = ART.y1 - reading.foot;
+  const D = -onGround(view, { x: PAGE.width / 2, y: footY }, PAGE).z;
+  const toWorld = 1 / mmPerUnit(new THREE.Vector3(0, 0, -D));
+  const pierW = reading.pierMm * toWorld, depth = pierW * 0.85;
   const over = n(ctx, 'overhang', 6, 0, 20);
   const splay = THREE.MathUtils.degToRad(n(ctx, 'splay', 22, 0, 45));
-  const courses = Math.round(n(ctx, 'courses', 4, 3, 12));
+  const courses = reading.courses;
   const weights = Array.from({ length: courses }, () => 0.7 + 0.6 * rng());
   const jitter = Array.from({ length: 2 * courses }, () => [rng() - 0.5, rng() - 0.5, rng() - 0.5]);
-  // Each pier is turned `splay` about its axis, its inner face toward the eye, like the jamb of a splayed doorway. Its
-  // place and the piers' height are solved on the sheet: the outer edges stand `overhang` inside the lintel's ends, and
-  // the highest corner of the top course sits just under the lintel's top edge, so the strip covers the whole joint.
+  // Each pier is turned `splay` about its axis, its inner face toward the eye, like the jamb of a splayed doorway, each
+  // course `taper` narrower than the one below. With `crush` the course under the lintel is pressed down and bulges: the
+  // weight's consequence. Its place and the piers' height are solved on the sheet: the outer edges stand `overhang`
+  // inside the lintel's ends, and the highest corner of the top course sits just under the lintel's top edge, so the
+  // strip covers the whole joint.
   const build = (cx: number, side: number, top: number): Slab[] => {
-    const total = weights.reduce((a, b) => a + b, 0);
+    // Crushed: the top course (under the strip) and the one below it (the first one seen under the lintel) pressed short.
+    const ws = weights.map((w, i) => (reading.crush && i >= courses - 2 ? (i === courses - 1 ? 0.5 : 0.55) * w : w));
+    const total = ws.reduce((a, b) => a + b, 0);
     let y = 0;
-    return weights.map((w, i) => {
+    return ws.map((w, i) => {
       const h = top * w / total, [jx, jw, jr] = jitter[(side > 0 ? courses : 0) + i];
-      const wide = i === courses - 1 ? 1.06 : 1 + jw * 0.05;
+      const wide = (i === courses - 1 ? 1.06 : reading.crush && i === courses - 2 ? 1.18 : 1 + jw * 0.05) * (1 - reading.taper * i);
       const sl = solid(cx + jx * 0.03, y + h / 2, -D - depth / 2, pierW * wide, h, depth * wide, i, 'pier');
       sl.ry = side * splay + jr * 0.02;
       y += h;
@@ -136,20 +167,42 @@ function draw(ctx: SketchContext): Part[] {
     });
   };
   const corners = (sl: Slab) => [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => pageOf(view, new THREE.Vector3(x * sl.w / 2, y * sl.h / 2, z * sl.d / 2).applyMatrix4(slabMatrix(sl)), PAGE))));
-  const xOf = (x: number) => (x - PAGE.width / 2) * toWorld;
-  const centres = [xOf(lintel.x0 + over) + pierW / 2, xOf(lintel.x1 - over) - pierW / 2];
-  let top = EYE + (horizonY - lintel.y0) * toWorld;
-  for (let it = 0; it < 12; it++) {
-    const caps = [-1, 1].map((side, k) => corners(build(centres[k], side, top)[courses - 1]));
-    centres[0] += (lintel.x0 + over - Math.min(...caps[0].map(p => p.x))) * toWorld;
-    centres[1] += (lintel.x1 - over - Math.max(...caps[1].map(p => p.x))) * toWorld;
-    top += (Math.min(...caps.flat().map(p => p.y)) - (lintel.y0 + 2.5)) * toWorld;
+  // Solved by Newton steps on the sheet, each measured numerically (the camera may look up, so the scale varies).
+  const centres = [(lintel.x0 + over - PAGE.width / 2) * toWorld + pierW / 2, (lintel.x1 - over - PAGE.width / 2) * toWorld - pierW / 2];
+  let top = (ART.y1 - lintel.y0) * toWorld;
+  const measure = (c: number[], t: number) => {
+    const caps = [-1, 1].map((side, k) => corners(build(c[k], side, t)[courses - 1]));
+    return [Math.min(...caps[0].map(p => p.x)) - (lintel.x0 + over), Math.max(...caps[1].map(p => p.x)) - (lintel.x1 - over), Math.min(...caps.flat().map(p => p.y)) - (lintel.y0 + 2.5)];
+  };
+  for (let it = 0; it < 24; it++) {
+    const e = measure(centres, top);
+    if (Math.max(...e.map(Math.abs)) < 0.02) break;
+    const h = 1e-3 * Math.max(1, top);
+    const dx0 = (measure([centres[0] + h, centres[1]], top)[0] - e[0]) / h;
+    const dx1 = (measure([centres[0], centres[1] + h], top)[1] - e[1]) / h;
+    const dy = (measure(centres, top + h)[2] - e[2]) / h;
+    centres[0] -= e[0] / dx0;
+    centres[1] -= e[1] / dx1;
+    top -= e[2] / dy;
   }
   const piers = [-1, 1].map((side, k) => build(centres[k], side, top));
-  const pierSlabs = piers.flat();
+  // The crushed reading's spalls: chips of the pressed course fallen on the ground before each pier's foot.
+  const spalls: Slab[] = [];
+  if (reading.crush) {
+    const srng = ctx.random('gate-spalls');
+    for (const stack of piers) for (let i = 0; i < 6; i++) {
+      const size = (0.1 + 0.2 * srng()) * pierW;
+      const side = srng() < 0.5 ? -1 : 1;
+      const sl = solid(stack[0].x + side * (0.75 + 0.8 * srng()) * pierW, size * 0.25, stack[0].z + (srng() - 0.3) * depth, size, size * 0.5, size * 0.8, i, 'debris');
+      sl.ry = srng() * Math.PI;
+      sl.rz = (srng() - 0.5) * 0.5;
+      spalls.push(sl);
+    }
+  }
+  const pierSlabs = [...piers.flat(), ...spalls];
 
   // The plain runs up to the gate and on through it; no paver under a pier.
-  const near = EYE * f / (ART.y1 - horizonY) * 0.9;
+  const near = -onGround(view, { x: PAGE.width / 2, y: ART.y1 }, PAGE).z * 0.9;
   const far = Math.sqrt(EYE * f * PITCH / 0.8);
   const keepOut = (x: number, z: number) => centres.some(cx => Math.abs(x - cx) < pierW / 2 + PITCH / 2 && Math.abs(z + D + depth / 2) < depth / 2 + PITCH / 2);
   const laid = plainStrokes(ctx, paving(ctx, { pitch: PITCH, joint: JOINT, near, far, halfWidth, keepOut, salt: 'gate-paving' }),

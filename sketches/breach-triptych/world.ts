@@ -88,11 +88,10 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'rings', label: 'Most contour rings on a paver face', default: 3, min: 0, max: 30, step: 1, group: 'Plain' },
   { type: 'slider', id: 'gazeLines', label: 'Gaze lines in the slot', default: 5, min: 1, max: 9, step: 1, group: 'Plain' },
   // The gate (R).
-  { type: 'slider', id: 'horizon', label: 'Gate horizon, share of the sheet down', default: 0.74, min: 0.45, max: 0.9, step: 0.01, group: 'Gate' },
-  { type: 'slider', id: 'pierMm', label: 'Pier width on the sheet', default: 48, min: 24, max: 70, step: 1, units: 'mm', group: 'Gate' },
+  { type: 'select', id: 'piers', label: 'R\'s piers', default: 'low', options: ['thick', 'slim', 'low', 'crushed'],
+    optionLabels: { thick: 'Thick (R1): four broad courses, level camera', slim: 'Slim: six tapering courses, a low horizon', low: 'Low camera: slim piers seen looking up, converging on the lintel', crushed: 'Crushed: low camera, the course under the lintel pressed out, spalls at the feet' }, group: 'Gate' },
   { type: 'slider', id: 'overhang', label: 'Lintel overhang past each pier', default: 6, min: 0, max: 20, step: 0.5, units: 'mm', group: 'Gate' },
   { type: 'slider', id: 'splay', label: 'Piers turned in, like splayed jambs', default: 22, min: 0, max: 45, step: 1, units: '°', group: 'Gate' },
-  { type: 'slider', id: 'courses', label: 'Courses per pier', default: 4, min: 3, max: 12, step: 1, group: 'Gate' },
   { type: 'slider', id: 'gateMm', label: 'Pier hatch pitch', default: 6.5, min: 3, max: 16, step: 0.5, units: 'mm', group: 'Gate' },
   { type: 'select', id: 'knot', label: 'What the helix does', default: 'all', options: ['joints', 'thread', 'lashings', 'all'],
     optionLabels: { joints: 'Joints: it lashes both ends of the lintel to the piers', thread: 'Thread: one strand from L\'s head across C\'s horizon to R\'s left joint', lashings: 'Lashings: it binds the piers\' courses', all: 'All: the thread binds both joints, and the courses are lashed' }, group: 'Gate' },
