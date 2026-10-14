@@ -10,6 +10,11 @@ import type { AssemblySpec, Box, Control, Cut, Cuts, Page, Part, Pen, Point, Ske
  * Each ply is plotted as its own SVG job, then knife-cut: a window cut in an upper ply shows the ply below. A sketch
  * draws the whole world on every render and a select control picks the ply this render is; `renderPly` then clips the
  * art to what that ply shows and adds the cut guides, plotted on the front of the ply inside the waste.
+ *
+ * Three opt-in extensions: a `part` cut is cut out and kept, so the art survives on both sides of its line; an
+ * `onlay` ply is a kept piece glued on top (its outline is a `footprint` cut), which the plies below see around and
+ * which the ply directly below gets placement marks for; and `world.sealed` art is deliberately hidden under paper,
+ * clipped only by its own ply's cuts.
  */
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -56,6 +61,7 @@ export function validateAssemblySpec(spec: AssemblySpec, pens: Pen[], controls: 
     declared(ply.cutInk, `ply ${ply.id} cutInk`);
     assert(ply.bleed === undefined || (finite(ply.bleed) && ply.bleed >= 0), `Ply ${ply.id} bleed must be nonnegative`);
     assert(ply.lift === undefined || finite(ply.lift), `Ply ${ply.id} lift must be a finite number`);
+    assert(ply.onlay === undefined || (isObject(ply.onlay) && nonempty(ply.onlay.from)), `Ply ${ply.id} onlay needs a nonempty from naming its source`);
   }
   declared(spec.cutPen, 'cutPen');
   assert(finite(spec.margin) && spec.margin > 0, 'Assembly margin must be greater than 0');
@@ -68,6 +74,7 @@ export function validateAssemblySpec(spec: AssemblySpec, pens: Pen[], controls: 
   if (spec.signature !== undefined) {
     const sig = spec.signature;
     assert(isObject(sig) && validId(sig.ply) && plyIds.has(sig.ply), `Assembly signature ply ${String(isObject(sig) ? sig.ply : sig)} is not a ply of the assembly`);
+    assert(!spec.plies.find((ply) => ply.id === sig.ply)?.onlay, `Assembly signature ply ${sig.ply} is an onlay, which cannot carry a signature`);
     declared(sig.pen, 'signature pen');
     assert(isObject(sig.box) && finite(sig.box.x) && finite(sig.box.y) && finite(sig.box.width) && finite(sig.box.height) && sig.box.width > 0 && sig.box.height > 0, 'Assembly signature box must have a positive size');
   }
@@ -75,22 +82,51 @@ export function validateAssemblySpec(spec: AssemblySpec, pens: Pen[], controls: 
 
 // ── The visible region of a ply ──────────────────────────────────────
 
+/** The region terms of a ply's own cuts. */
+function cutTerms(spec: AssemblySpec, cuts: Cuts, ply: string): Region[] {
+  const terms: Region[] = [];
+  for (const cut of cutsOf(cuts, ply)) {
+    const kind = cut.kind ?? 'waste';
+    if (kind === 'footprint') continue; // an onlay's outline is where the piece lands, not a cut in the ply
+    // A window's paper is thrown away, so art is kept off it and its edge; a part is kept, so only the edge band goes.
+    terms.push(kind === 'part'
+      ? { not: { near: cut.rings, distance: spec.margin } }
+      : { not: { or: [{ rings: cut.rings }, { near: cut.rings, distance: spec.margin }] } });
+  }
+  return terms;
+}
+
+/** The signature box, kept clear of art on the signing ply. */
+const signatureTerm = (spec: AssemblySpec, ply: string): Region[] => (spec.signature?.ply === ply ? [{ not: { rings: [boxRing(spec.signature.box)] } }] : []);
+
+/** Where a ply's art may be whatever sits above it: off its own cuts, and clear of its signature box. */
+const ownRegion = (spec: AssemblySpec, cuts: Cuts, ply: string): Region => ({ and: [...cutTerms(spec, cuts, ply), ...signatureTerm(spec, ply)] });
+
 /**
  * Where ply `ply` may carry art: on kept paper, at least `margin` from its own cuts, and only where it is seen
  * through the window of every ply above it, each window grown by that ply's bleed (so the art runs a little under
  * the upper ply's edge and a misregistered cut still shows ink). The signing ply also keeps the signature box clear.
  * An upper ply with no cuts shows nothing of the ply below.
+ *
+ * Part cuts: art is kept on both sides of a part cut of its own ply (only the `margin` band along the line goes), and
+ * the plies below see through a part cut exactly as through a window. Onlay plies above: the piece covers its
+ * footprint, so lower art shows outside the footprint, or within the onlay's bleed of its edge so a piece placed
+ * slightly off never shows a gap.
  */
 export function plyRegion(spec: AssemblySpec, cuts: Cuts, ply: string): Region {
   const index = spec.plies.findIndex((p) => p.id === ply);
   assert(index >= 0, `Unknown ply: ${ply}`);
   const parts: Region[] = [];
-  for (const cut of cutsOf(cuts, ply)) parts.push({ not: { or: [{ rings: cut.rings }, { near: cut.rings, distance: spec.margin }] } });
+  parts.push(...cutTerms(spec, cuts, ply));
   for (const above of spec.plies.slice(index + 1)) {
     const bleed = above.bleed ?? spec.bleed;
-    parts.push({ or: cutsOf(cuts, above.id).map((cut): Region => ({ or: [{ rings: cut.rings }, { near: cut.rings, distance: bleed }] })) });
+    if (above.onlay) {
+      for (const cut of cutsOf(cuts, above.id)) if (cut.kind === 'footprint') parts.push({ or: [{ not: { rings: cut.rings } }, { near: cut.rings, distance: bleed }] });
+    } else {
+      parts.push({ or: cutsOf(cuts, above.id).map((cut): Region => ({ or: [{ rings: cut.rings }, { near: cut.rings, distance: bleed }] })) });
+    }
   }
-  if (spec.signature?.ply === ply) parts.push({ not: { rings: [boxRing(spec.signature.box)] } });
+  parts.push(...signatureTerm(spec, ply));
   return { and: parts };
 }
 
@@ -138,9 +174,10 @@ const insideRing = (p: Point, ring: Point[]): boolean => inRegion(p, { rings: [r
 /**
  * Checks every cut of the assembly against the page. Throws, listing every problem, when a ring is not a simple
  * polygon, two rings of one cut cross, two cuts on one ply cross or nest, a vertex lies outside the page margin, a cut
- * id is unsafe or repeated, or a cut's waste is nowhere 3 mm wide (its greatest inscribed clearance is under
- * 1.5 mm, sampled on a 0.5 mm grid). Returns the warnings: a cut with a hole inside its waste (kept paper that comes
- * away loose, unless it is a shaped ply), and a lower ply fully hidden by an upper ply with no cuts.
+ * id is unsafe or repeated, a cut's area (its window, part or piece) is nowhere 3 mm wide (its greatest inscribed
+ * clearance is under 1.5 mm, sampled on a 0.5 mm grid), an onlay ply does not have exactly one footprint cut, or a
+ * footprint cut sits on a ply that is not an onlay. Returns the warnings: a window with a hole inside its waste (kept
+ * paper that comes away loose, unless it is a shaped ply), and a lower ply fully hidden by an upper ply with no cuts.
  */
 export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string[] {
   const errors: string[] = [];
@@ -151,6 +188,7 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
   const partIds = new Set<string>();
   for (const ply of spec.plies) {
     const list = cutsOf(cuts, ply.id);
+    if (ply.onlay && list.length !== 1) errors.push(`ply ${ply.id} is an onlay and needs exactly one footprint cut (it has ${list.length})`);
     const usable: Cut[] = [];
     const seen = new Set<string>();
     for (const cut of list) {
@@ -161,6 +199,10 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
       const partId = `asm-${ply.id}-${cut.id}`;
       if (partIds.has(partId)) errors.push(`${where}: the diagnostic part id ${partId} is already taken`);
       partIds.add(partId);
+      const kind = cut.kind ?? 'waste';
+      if (kind !== 'waste' && kind !== 'part' && kind !== 'footprint') { errors.push(`${where}: unknown cut kind ${String(kind)}`); continue; }
+      if (kind === 'footprint' && !ply.onlay) errors.push(`${where}: a footprint cut belongs on an onlay ply`);
+      if (ply.onlay && kind !== 'footprint') errors.push(`${where}: an onlay ply carries only its footprint, not a ${kind} cut`);
       if (!Array.isArray(cut.rings) || cut.rings.length === 0) { errors.push(`${where}: a cut needs at least one ring`); continue; }
       const malformed = cut.rings.findIndex((ring) => !Array.isArray(ring) || ring.length < 3 || ring.some((p) => !isObject(p) || !finite(p.x) || !finite(p.y)));
       if (malformed >= 0) { errors.push(`${where}: ring ${malformed} needs at least three finite points`); continue; }
@@ -175,9 +217,9 @@ export function validateCuts(spec: AssemblySpec, cuts: Cuts, page: Page): string
       usable.push(cut);
       const best = greatestClearance(cut.rings, MIN_CLEARANCE - 1e-9);
       if (!best || best.clearance < MIN_CLEARANCE - 1e-9) {
-        errors.push(`${where}: the window is nowhere 3 mm wide (greatest inscribed clearance ${(best?.clearance ?? 0).toFixed(2)} mm, under ${MIN_CLEARANCE} mm)`);
+        errors.push(`${where}: the ${kind === 'part' ? 'part' : kind === 'footprint' ? 'piece' : 'window'} is nowhere 3 mm wide (greatest inscribed clearance ${(best?.clearance ?? 0).toFixed(2)} mm, under ${MIN_CLEARANCE} mm)`);
       }
-      const hole = cut.rings.some((ring, i) => cut.rings.some((other, j) => i !== j && insideRing(ring[0], other)));
+      const hole = kind === 'waste' && cut.rings.some((ring, i) => cut.rings.some((other, j) => i !== j && insideRing(ring[0], other)));
       if (hole) warnings.push(`${where}: a hole inside the waste leaves kept paper that will come away loose, unless this is a shaped ply`);
     }
     for (let a = 0; a < usable.length; a++) for (let b = a + 1; b < usable.length; b++) {
@@ -249,8 +291,17 @@ function distanceBoxToRings(box: Bounds, rings: Point[][]): number {
  *     pen and a guard; if none fits, one X at the point of greatest clearance, shrunk to fit;
  *   - a label in Hershey sans, in the first height that fits clear of the cut, with the X marks under it left out.
  * Throws when the outline is finer than the pen or no X fits. Returns one part, `cut-<id>`, whose boundary is the rings.
+ *
+ * A `part` cut is kept, not thrown away: its guide is the boundary ring itself, closed, with no inset, no X marks and
+ * no label. A `footprint` has no guides.
  */
 export function cutGuides(cut: Cut, pen: string, o: GuideOptions): Part {
+  const kind = cut.kind ?? 'waste';
+  assert(kind !== 'footprint', `cut ${cut.id}: a footprint is where an onlay lands and has no guides`);
+  if (kind === 'part') {
+    // The knife cuts down the middle of the line and half of it stays on each side, so the ring itself is drawn, uninset.
+    return { id: `cut-${cut.id}`, pen, paths: cut.rings.map(closed), boundary: cut.rings.map((ring) => ring.map((p) => ({ x: p.x, y: p.y }))) };
+  }
   assert(finite(o.penWidth) && o.penWidth > 0 && finite(o.pitch) && o.pitch > 0 && finite(o.size) && o.size > 0 && finite(o.guard) && o.guard >= 0
     && Number.isInteger(o.maxMarks) && o.maxMarks >= 1 && Array.isArray(o.heights) && o.heights.every((h) => finite(h) && h > 0), `cut ${cut.id}: invalid guide options`);
   const rings = cut.rings;
@@ -342,29 +393,126 @@ export function cutGuides(cut: Cut, pen: string, o: GuideOptions): Part {
   return { id: `cut-${cut.id}`, pen, paths, boundary: rings.map((ring) => ring.map((p) => ({ x: p.x, y: p.y }))) };
 }
 
+// ── Placement marks ──────────────────────────────────────────────────
+
+/** Corner ticks have arms this long, and sit this far inside the footprint's edges, millimetres. */
+const TICK_ARM = 3;
+const TICK_INSET = 1.5;
+/** Vertices of a footprint sharper than this get a tick. */
+const TICK_ANGLE = (170 * Math.PI) / 180;
+
+/** The ring without a closing repeat or consecutive duplicate points. */
+function distinctPoints(ring: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of ring) if (!out.length || p.x !== out[out.length - 1].x || p.y !== out[out.length - 1].y) out.push(p);
+  while (out.length > 1 && out[0].x === out[out.length - 1].x && out[0].y === out[out.length - 1].y) out.pop();
+  return out;
+}
+
+/**
+ * Small L-shaped corner ticks that show where an onlay lands: one at each vertex of its footprint whose interior angle
+ * is under 170 degrees, with 3 mm arms along the footprint's edges, inset 1.5 mm so the piece covers them. A footprint
+ * with fewer than two such vertices (a smooth blob) gets ticks at the corners of its bounding box instead, pulled to
+ * the nearest point of the outline and inside. Every tick is clipped to the part of the footprint at least 1.5 mm from
+ * its edge, so a short edge or a thin piece shortens a tick rather than letting it out.
+ */
+function placementTicks(rings: Point[][]): Point[][] {
+  const polys = rings.map(distinctPoints).filter((ring) => ring.length >= 3);
+  const area: Region = { rings: polys };
+  const ticks: Point[][] = [];
+  polys.forEach((ring, r) => {
+    // The piece lies inside a ring nested an even number of rings deep, and outside a hole.
+    const depth = polys.filter((other, o) => o !== r && insideRing(ring[0], other)).length;
+    const counterClockwise = signedArea(ring) >= 0;
+    ring.forEach((v, i) => {
+      const prev = ring[(i + ring.length - 1) % ring.length], next = ring[(i + 1) % ring.length];
+      const ul = Math.hypot(next.x - v.x, next.y - v.y), wl = Math.hypot(prev.x - v.x, prev.y - v.y);
+      const u = { x: (next.x - v.x) / ul, y: (next.y - v.y) / ul }, w = { x: (prev.x - v.x) / wl, y: (prev.y - v.y) / wl };
+      // The angle inside the ring, from the edge to the next vertex round to the edge from the previous one.
+      let inner = Math.atan2(u.x * w.y - u.y * w.x, u.x * w.x + u.y * w.y);
+      if (!counterClockwise) inner = -inner;
+      if (inner < 0) inner += 2 * Math.PI;
+      const piece = depth % 2 === 0 ? inner : 2 * Math.PI - inner;
+      if (!(piece < TICK_ANGLE)) return;
+      const sum = { x: u.x + w.x, y: u.y + w.y }, sl = Math.hypot(sum.x, sum.y);
+      const sign = (inner < Math.PI ? 1 : -1) * (depth % 2 === 0 ? 1 : -1); // the bisector that points into the piece
+      const reach = TICK_INSET / Math.sin(piece / 2);
+      const c = { x: v.x + (sign * sum.x / sl) * reach, y: v.y + (sign * sum.y / sl) * reach };
+      ticks.push([{ x: c.x + u.x * TICK_ARM, y: c.y + u.y * TICK_ARM }, c, { x: c.x + w.x * TICK_ARM, y: c.y + w.y * TICK_ARM }]);
+    });
+  });
+  if (ticks.length < 2) {
+    ticks.length = 0;
+    const b = boundsOf(polys);
+    if (b) for (const [kx, ky] of [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]]) {
+      // The nearest point of the outline to the bounding-box corner, then in towards the box's centre until it is 1.5 mm
+      // from every edge (found by walking, then bisecting, so a curved outline gets the exact inset).
+      let q: Point | undefined, best = Infinity;
+      for (const ring of polys) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[j], e = ring[i], dx = e.x - a.x, dy = e.y - a.y;
+        const t = Math.max(0, Math.min(1, ((kx - a.x) * dx + (ky - a.y) * dy) / (dx * dx + dy * dy)));
+        const p = { x: a.x + dx * t, y: a.y + dy * t }, d = Math.hypot(kx - p.x, ky - p.y);
+        if (d < best) { best = d; q = p; }
+      }
+      const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+      const span = Math.hypot(cx - q!.x, cy - q!.y);
+      if (!(span > 0)) continue;
+      const at = (t: number): Point => ({ x: q!.x + ((cx - q!.x) / span) * t, y: q!.y + ((cy - q!.y) / span) * t });
+      const clear = (t: number) => inRegion(at(t), area) && distanceToRings(at(t), polys) >= TICK_INSET;
+      let lo = 0, hi = 0;
+      while (hi <= span && !clear(hi)) { lo = hi; hi += 0.25; }
+      if (hi > span) continue;
+      for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (clear(mid)) hi = mid; else lo = mid; }
+      const c = at(hi);
+      ticks.push([{ x: c.x + (cx >= kx ? TICK_ARM : -TICK_ARM), y: c.y }, c, { x: c.x, y: c.y + (cy >= ky ? TICK_ARM : -TICK_ARM) }]);
+    }
+  }
+  // Tolerance of 1e-6 mm so a tick exactly one inset from the edge is kept.
+  return clipToRegion(ticks, { and: [area, { not: { near: polys, distance: TICK_INSET - 1e-6 } }] });
+}
+
 // ── Rendering one ply ────────────────────────────────────────────────
 
 /**
- * The parts of the ply this render is (`ctx.params[spec.control]`): the ply's art clipped to what it shows, the guides
- * of each of its cuts on `spec.cutPen`, and diagnostics. The diagnostics, one per cut of every ply (`asm-<ply>-<cut>`)
- * and one for the signature box (`asm-signature`), ride in `result.json` so tools can check that every ply drew the
- * same world. Throws for an unknown ply or art in a pen the ply does not carry.
+ * The parts of the ply this render is (`ctx.params[spec.control]`): the ply's art clipped to what it shows, its sealed
+ * art, the guides of each of its cuts on `spec.cutPen`, placement marks when an onlay sits directly above it, and
+ * diagnostics. The diagnostics, one per cut of every ply (`asm-<ply>-<cut>`, footprints included) and one for the
+ * signature box (`asm-signature`), ride in `result.json` so tools can check that every ply drew the same world.
+ *
+ * `world.sealed[ply]` is art that is meant to be hidden under paper (such as a word under an onlay): it is clipped only
+ * by its own ply's cuts and signature, never by the plies above. The placement marks `place-<onlay>` are the same:
+ * they sit under the piece on purpose, so the onlay does not clip them.
+ *
+ * Throws for an unknown ply, for an onlay ply (it is plotted and cut elsewhere), or art in a pen the ply does not carry.
  */
 export function renderPly(spec: AssemblySpec, ctx: Pick<SketchContext, 'params'>, pens: Pen[],
-  world: { cuts: Cuts; art: Record<string, Part[]> }, guide?: Partial<GuideOptions>): Part[] {
+  world: { cuts: Cuts; art: Record<string, Part[]>; sealed?: Record<string, Part[]> }, guide?: Partial<GuideOptions>): Part[] {
   const id = String(ctx.params[spec.control]);
-  const ply = spec.plies.find((p) => p.id === id);
-  assert(ply, `Unknown ply: ${id}`);
-  const region = plyRegion(spec, world.cuts, ply.id);
+  const index = spec.plies.findIndex((p) => p.id === id);
+  assert(index >= 0, `Unknown ply: ${id}`);
+  const ply = spec.plies[index];
+  assert(!ply.onlay, `ply ${ply.id} is an onlay, plotted and cut on ${ply.onlay?.from}`);
   const parts: Part[] = [];
-  for (const part of Object.prototype.hasOwnProperty.call(world.art, ply.id) ? world.art[ply.id] : []) {
-    assert(ply.pens.includes(part.pen), `Part ${part.id} is drawn in pen ${part.pen}, which ply ${ply.id} does not carry`);
-    const paths = clipToRegion(part.paths, region);
-    if (paths.length > 0) parts.push({ ...part, paths });
-  }
+  const pool = (art: Record<string, Part[]> | undefined, region: Region) => {
+    for (const part of art && Object.prototype.hasOwnProperty.call(art, ply.id) ? art[ply.id] : []) {
+      assert(ply.pens.includes(part.pen), `Part ${part.id} is drawn in pen ${part.pen}, which ply ${ply.id} does not carry`);
+      const paths = clipToRegion(part.paths, region);
+      if (paths.length > 0) parts.push({ ...part, paths });
+    }
+  };
+  pool(world.art, plyRegion(spec, world.cuts, ply.id));
+  pool(world.sealed, ownRegion(spec, world.cuts, ply.id));
   const ink = pens.find((pen) => pen.id === ply.cutInk);
   assert(ink, `Ply ${ply.id} cutInk ${ply.cutInk} is not a declared pen`);
   for (const cut of cutsOf(world.cuts, ply.id)) parts.push(cutGuides(cut, spec.cutPen, { ...GUIDE_DEFAULTS, ...guide, penWidth: ink.width }));
+  // The ply directly below an onlay shows where the piece lands. The line is drawn in cutPen, which the host inks as
+  // this ply's cutInk; the marks are not clipped, being under the onlay by design.
+  const above = spec.plies[index + 1];
+  if (above?.onlay) {
+    const footprint = cutsOf(world.cuts, above.id).filter((cut) => cut.kind === 'footprint').flatMap((cut) => cut.rings);
+    const marks = placementTicks(footprint);
+    if (marks.length > 0) parts.push({ id: `place-${above.id}`, pen: spec.cutPen, paths: marks });
+  }
   for (const q of spec.plies) for (const cut of cutsOf(world.cuts, q.id)) {
     parts.push({ id: `asm-${q.id}-${cut.id}`, pen: spec.cutPen, paths: cut.rings.map(closed), diagnostic: true });
   }

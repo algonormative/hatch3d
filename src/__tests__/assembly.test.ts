@@ -499,6 +499,266 @@ describe('materials', () => {
   });
 });
 
+describe('part cuts: cut out and kept', () => {
+  const part = (kind: Cut['kind'] = 'part'): Cut => ({ id: 'p1', kind, rings: [WINDOW_T] });
+  /** Distance from a point to the rectangle's outline, inside or out. */
+  const boundaryDist = (p: Point, r: R) => (rectDist(p, r) > 0 ? rectDist(p, r) : Math.min(p.x - r.x0, r.x1 - p.x, p.y - r.y0, r.y1 - p.y));
+
+  it('keeps art on both sides of a part cut, except within the margin of its edge', () => {
+    const region = plyRegion(noSignature, { top: [part()] }, 'top');
+    expect(clipToRegion([line(0, 100, 200, 100)], region).map((path) => path.map((p) => p.x))).toEqual([[0, 60 - MARGIN], [60 + MARGIN, 160 - MARGIN], [160 + MARGIN, 200]]);
+    // A window of the same outline throws away what is inside, which is the difference.
+    expect(clipToRegion([line(0, 100, 200, 100)], plyRegion(noSignature, { top: [part('waste')] }, 'top')).map((path) => path.map((p) => p.x))).toEqual([[0, 60 - MARGIN], [160 + MARGIN, 200]]);
+    // Kind-less cuts are windows.
+    expect(plyRegion(noSignature, { top: [{ id: 'p1', rings: [WINDOW_T] }] }, 'top')).toEqual(plyRegion(noSignature, { top: [part('waste')] }, 'top'));
+  });
+
+  it('matches an independent outline-distance oracle on random lines, inside and out', () => {
+    const rng = mulberry32(31);
+    const segments = Array.from({ length: 60 }, () => line(rng() * 200, rng() * 200, rng() * 200, rng() * 200));
+    const { kept, total } = expectMatchesOracle(plyRegion(noSignature, { top: [part()] }, 'top'), (p) => boundaryDist(p, T) >= MARGIN - 1e-6, segments);
+    expect(kept).toBeGreaterThan(total * 0.5);
+    expect(kept).toBeLessThan(total);
+  });
+
+  it('lets the plies below see through a part cut, with bleed, exactly as through a window', () => {
+    const rng = mulberry32(8);
+    const segments = Array.from({ length: 30 }, () => line(rng() * 200, rng() * 200, rng() * 200, rng() * 200));
+    const asPart = plyRegion(noSignature, { middle: cuts.middle, top: [part()] }, 'bottom'), asWindow = plyRegion(noSignature, { middle: cuts.middle, top: [part('waste')] }, 'bottom');
+    expect(clipToRegion(segments, asPart)).toEqual(clipToRegion(segments, asWindow));
+    const across = clipToRegion([line(0, 100, 200, 100)], asPart);
+    expect(across).toHaveLength(1);
+    exact(across[0][0].x, 60 - BLEED);
+    exact(across[0][1].x, 140 + MIDDLE_BLEED);
+  });
+
+  it('draws the boundary ring itself as the guide: closed, uninset, with no X marks or label', () => {
+    const options = { ...GUIDE_DEFAULTS, penWidth: 0.35 };
+    for (const ring of [WINDOW_T, [...WINDOW_T].reverse()]) {
+      const cut: Cut = { id: 'p1', kind: 'part', rings: [ring] };
+      expect(cutGuides(cut, 'black', options)).toEqual({ id: 'cut-p1', pen: 'black', paths: [[...ring, ring[0]]], boundary: [ring] });
+    }
+    const ringed: Cut = { id: 'p2', kind: 'part', label: 'CUT A', rings: [rect(40, 40, 140, 140), rect(60, 60, 120, 120)] };
+    const guide = cutGuides(ringed, 'black', options);
+    expect(guide.paths).toEqual(ringed.rings.map((ring) => [...ring, ring[0]]));
+    expect(guide.boundary).toEqual(ringed.rings);
+    // Through renderPly it is the ply's own cut guide, drawn on the cut pen.
+    const world = { cuts: { middle: [part()], top: [] }, art: {} };
+    const parts = renderPly(spec, { params: { ply: 'middle' } }, pens, world);
+    expect(parts.find((p) => p.id === 'cut-p1')!.paths).toEqual([[...WINDOW_T, WINDOW_T[0]]]);
+  });
+
+  it('is checked like any cut, without the loose-island warning', () => {
+    const holed: Cut = { id: 'p1', kind: 'part', rings: [rect(20, 20, 180, 180), rect(60, 60, 140, 140)] };
+    expect(validateCuts(spec, { middle: [holed], top: cuts.top }, page)).toEqual([]);
+    expect(() => validateCuts(spec, { middle: [{ id: 'p1', kind: 'part', rings: [rect(60, 60, 62.9, 120)] }], top: cuts.top }, page)).toThrow(/ply middle cut p1: the part is nowhere 3 mm wide/);
+    expect(() => validateCuts(spec, { top: [{ id: 'p1', kind: 'sticker' as Cut['kind'], rings: [WINDOW_T] }] }, page)).toThrow(/unknown cut kind sticker/);
+    // A part cut counts as a window in a ply above, so it does not hide the plies below.
+    expect(validateCuts(spec, { middle: [part()], top: [part()] }, page)).toEqual([]);
+  });
+});
+
+describe('onlay plies', () => {
+  const lintel: AssemblySpec = {
+    control: 'ply', cutPen: 'black', margin: MARGIN, bleed: BLEED,
+    plies: [
+      { id: 'black', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold' },
+      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: ['carbon'], cutInk: 'black' },
+      { id: 'bar', paper: { id: 'black', color: PAPERS.black.color }, pens: [], cutInk: 'gold', onlay: { from: 'lintel-l/black/bar' } },
+    ],
+  };
+  const BAR = rect(40, 80, 160, 92);
+  const footprint = (rings: Point[][] = [BAR]): Cut => ({ id: 'bar', kind: 'footprint', rings });
+  const lintelCuts: Cuts = { white: [{ id: 'w', rings: [rect(30, 120, 170, 180)] }], bar: [footprint()] };
+  const lintelControls = (): Control[] => [plyControl(lintel)];
+  const xs = (paths: Point[][]) => paths.map((path) => path.map((p) => p.x));
+  const ys = (paths: Point[][]) => paths.map((path) => path.map((p) => p.y));
+
+  it('validateAssemblySpec accepts an onlay with no pens, and rejects an empty source or a signature on it', () => {
+    expect(() => validateAssemblySpec(lintel, pens, lintelControls())).not.toThrow();
+    const edit = (mutate: (s: AssemblySpec) => void) => () => { const copy = structuredClone(lintel); mutate(copy); validateAssemblySpec(copy, pens, lintelControls()); };
+    expect(edit((s) => { s.plies[2].onlay = { from: '  ' }; })).toThrow(/onlay needs a nonempty from/);
+    expect(edit((s) => { s.plies[2].onlay = {} as { from: string }; })).toThrow(/onlay needs a nonempty from/);
+    expect(edit((s) => { s.signature = { ply: 'bar', pen: 'carbon', box: { x: 100, y: 100, width: 10, height: 5 } }; })).toThrow(/signature ply bar is an onlay/);
+    expect(edit((s) => { s.signature = { ply: 'white', pen: 'carbon', box: { x: 100, y: 100, width: 10, height: 5 } }; })).not.toThrow();
+  });
+
+  it('validateCuts wants exactly one footprint cut on an onlay ply, and footprints only there', () => {
+    expect(validateCuts(lintel, lintelCuts, page)).toEqual([]);
+    expect(() => validateCuts(lintel, { white: lintelCuts.white }, page)).toThrow(/ply bar is an onlay and needs exactly one footprint cut \(it has 0\)/);
+    expect(() => validateCuts(lintel, { ...lintelCuts, bar: [footprint(), { ...footprint([rect(100, 20, 150, 40)]), id: 'bar2' }] }, page)).toThrow(/needs exactly one footprint cut \(it has 2\)/);
+    expect(() => validateCuts(lintel, { ...lintelCuts, bar: [{ ...footprint(), kind: 'part' }] }, page)).toThrow(/an onlay ply carries only its footprint, not a part cut/);
+    expect(() => validateCuts(lintel, { ...lintelCuts, bar: [{ id: 'bar', rings: [BAR] }] }, page)).toThrow(/not a waste cut/);
+    expect(() => validateCuts(lintel, { ...lintelCuts, white: [{ id: 'w', kind: 'footprint', rings: [rect(30, 120, 170, 180)] }] }, page)).toThrow(/ply white cut w: a footprint cut belongs on an onlay ply/);
+    // The footprint is checked like any cut: inside the page margin, and wide enough to carry the marks.
+    expect(() => validateCuts(lintel, { ...lintelCuts, bar: [footprint([rect(5, 80, 160, 92)])] }, page)).toThrow(/page margin/);
+    expect(() => validateCuts(lintel, { ...lintelCuts, bar: [footprint([rect(40, 80, 160, 82.5)])] }, page)).toThrow(/the piece is nowhere 3 mm wide/);
+    // An onlay is a cut for hiding purposes: it does not blanket the plies below.
+    expect(validateCuts(lintel, { bar: [footprint()] }, page)).toEqual(['ply black is fully hidden: ply white above it has no cuts']);
+  });
+
+  it('shows lower art outside the footprint, and within the onlay’s bleed of its edge, exactly', () => {
+    const region = plyRegion(lintel, lintelCuts, 'white');
+    // Along y = 86 the piece covers x in 40..160; the paper shows within 1 mm of each end.
+    expect(xs(clipToRegion([line(0, 86, 200, 86)], region))).toEqual([[0, 40 + BLEED], [160 - BLEED, 200]]);
+    // Down x = 100 the piece covers y in 80..92, and white's own window (120..180) takes its margin band out of the art.
+    expect(ys(clipToRegion([line(100, 0, 100, 200)], region)).map((p) => p.map((v) => Math.round(v * 1e6) / 1e6)))
+      .toEqual([[0, 80 + BLEED], [92 - BLEED, 120 - MARGIN], [180 + MARGIN, 200]]);
+    // Just outside the piece, or within the bleed of its long edge, is all visible.
+    expect(xs(clipToRegion([line(0, 79.5, 200, 79.5)], region))).toEqual([[0, 200]]);
+    expect(xs(clipToRegion([line(0, 80.5, 200, 80.5)], region))).toEqual([[0, 200]]);
+    // The onlay's own bleed overrides the assembly's, like any ply's.
+    const wide = structuredClone(lintel);
+    wide.plies[2].bleed = 2;
+    expect(xs(clipToRegion([line(0, 86, 200, 86)], plyRegion(wide, lintelCuts, 'white')))).toEqual([[0, 42], [158, 200]]);
+  });
+
+  it('matches an independent oracle for the plies below an onlay', () => {
+    const rng = mulberry32(44);
+    const segments = Array.from({ length: 60 }, () => line(rng() * 200, rng() * 200, rng() * 200, rng() * 200));
+    const bar = { x0: 40, y0: 80, x1: 160, y1: 92 };
+    const white = { x0: 30, y0: 120, x1: 170, y1: 180 };
+    const covered = (p: Point) => rectDist(p, bar) === 0 && Math.min(p.x - bar.x0, bar.x1 - p.x, p.y - bar.y0, bar.y1 - p.y) >= BLEED; // under the piece, past the bleed band
+    // The black ply shows through white's window, grown by the assembly's bleed, and wherever the bar does not cover it.
+    const { kept, total } = expectMatchesOracle(plyRegion(lintel, lintelCuts, 'black'), (p) => (rectDist(p, white) < BLEED + 1e-6) && !covered(p), segments);
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(total * 0.5);
+  });
+
+  it('renderPly refuses an onlay ply, naming its source', () => {
+    expect(() => renderPly(lintel, { params: { ply: 'bar' } }, pens, { cuts: lintelCuts, art: {} })).toThrow('ply bar is an onlay, plotted and cut on lintel-l/black/bar');
+  });
+
+  it('puts the footprint in every ply’s diagnostics like any other cut', () => {
+    const world = { cuts: lintelCuts, art: {} };
+    const diag = (ply: string) => renderPly(lintel, { params: { ply } }, pens, world).filter((p) => p.id.startsWith('asm-'));
+    expect(diag('white').map((p) => p.id)).toEqual(['asm-white-w', 'asm-bar-bar']);
+    expect(diag('white')[1].paths).toEqual([[...BAR, BAR[0]]]);
+    expect(diag('black')).toEqual(diag('white'));
+  });
+
+  describe('placement marks', () => {
+    const marksFor = (rings: Point[][], ply = 'white') => {
+      const parts = renderPly(lintel, { params: { ply } }, pens, { cuts: { ...lintelCuts, bar: [footprint(rings)] }, art: {} });
+      return parts.find((p) => p.id === 'place-bar');
+    };
+    const clear = (rings: Point[][], paths: Point[][]) => {
+      for (const path of paths) for (const p of path) {
+        expect(inRegion(p, { rings })).toBe(true);
+        expect(distanceToRings(p, rings)).toBeGreaterThanOrEqual(1.5 - 1e-6);
+      }
+    };
+
+    it('are L-shaped ticks with 3 mm arms at each corner of the footprint, inset 1.5 mm, on the cut pen', () => {
+      const place = marksFor([BAR])!;
+      expect(place.pen).toBe('black');
+      expect(place.diagnostic).toBeUndefined();
+      expect(place.paths).toHaveLength(4);
+      const corners = place.paths.map((path) => path[1]);
+      expect(corners).toEqual([P(41.5, 81.5), P(158.5, 81.5), P(158.5, 90.5), P(41.5, 90.5)]);
+      for (const path of place.paths) {
+        expect(path).toHaveLength(3);
+        exact(Math.hypot(path[0].x - path[1].x, path[0].y - path[1].y), 3);
+        exact(Math.hypot(path[2].x - path[1].x, path[2].y - path[1].y), 3);
+      }
+      expect(place.paths[0]).toEqual([P(44.5, 81.5), P(41.5, 81.5), P(41.5, 84.5)]);
+      clear([BAR], place.paths);
+    });
+
+    it('are under the onlay on purpose: the onlay does not clip them, though it would', () => {
+      const place = marksFor([BAR])!;
+      const region = plyRegion(lintel, { ...lintelCuts, bar: [footprint()] }, 'white');
+      for (const path of place.paths) expect(inRegion(path[1], region)).toBe(false); // clipped by the visible region they would vanish
+      expect(clipToRegion(place.paths, region)).toEqual([]);
+    });
+
+    it('go on the ply directly below the onlay only', () => {
+      expect(marksFor([BAR], 'black')).toBeUndefined();
+      expect(marksFor([BAR], 'white')).toBeDefined();
+    });
+
+    it('skip the reflex corner of an L, and stay inside and 1.5 mm from every edge', () => {
+      const ell = [P(40, 40), P(120, 40), P(120, 52), P(52, 52), P(52, 120), P(40, 120)];
+      const place = marksFor([ell])!;
+      expect(place.paths).toHaveLength(5); // six vertices, one of them reflex
+      expect(place.paths.some((path) => Math.hypot(path[1].x - 52, path[1].y - 52) < 3)).toBe(false);
+      clear([ell], place.paths);
+    });
+
+    it('shorten a tick rather than let it out of a sharp or thin piece', () => {
+      const triangle = [P(40, 40), P(160, 40), P(100, 60)];
+      const sharp = marksFor([triangle])!;
+      expect(sharp.paths.length).toBeGreaterThanOrEqual(3);
+      clear([triangle], sharp.paths);
+      const thin = [P(40, 80), P(160, 80), P(160, 84), P(40, 84)]; // 4 mm tall: the 1.5 mm inset leaves 1 mm
+      const strip = marksFor([thin])!;
+      expect(strip.paths.length).toBeGreaterThanOrEqual(2);
+      clear([thin], strip.paths);
+    });
+
+    it('fall back to the bounding-box corners for a smooth footprint', () => {
+      const blob = Array.from({ length: 64 }, (_, i) => P(100 + 20 * Math.cos((i / 64) * 2 * Math.PI), 100 + 20 * Math.sin((i / 64) * 2 * Math.PI)));
+      const place = marksFor([blob])!;
+      expect(place.paths).toHaveLength(4);
+      clear([blob], place.paths);
+      // One tick in each quadrant.
+      expect(new Set(place.paths.map((path) => `${path[1].x > 100}${path[1].y > 100}`)).size).toBe(4);
+    });
+
+    it('handle a footprint with a hole by keeping clear of it too', () => {
+      const ring = [rect(40, 60, 160, 100), rect(80, 70, 120, 90)];
+      const place = marksFor(ring)!;
+      clear(ring, place.paths);
+      expect(place.paths).toHaveLength(4); // the outer corners: the piece wraps 270 degrees round each corner of the hole
+    });
+  });
+});
+
+describe('sealed art', () => {
+  const lintel: AssemblySpec = {
+    control: 'ply', cutPen: 'black', margin: MARGIN, bleed: BLEED,
+    plies: [
+      { id: 'black', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold' },
+      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: ['carbon'], cutInk: 'black' },
+      { id: 'bar', paper: { id: 'black', color: PAPERS.black.color }, pens: [], cutInk: 'gold', onlay: { from: 'lintel-l/black/bar' } },
+    ],
+    signature: { ply: 'white', pen: 'carbon', box: { x: 150, y: 20, width: 30, height: 10 } },
+  };
+  const cutsL: Cuts = { white: [{ id: 'w', rings: [rect(30, 120, 170, 180)] }], bar: [{ id: 'bar', kind: 'footprint', rings: [rect(40, 80, 160, 92)] }] };
+  const word = (id: string, y = 86): Part => ({ id, pen: 'carbon', paths: [line(60, y, 140, y)] });
+  const render = (world: { art: Record<string, Part[]>; sealed?: Record<string, Part[]> }) =>
+    renderPly(lintel, { params: { ply: 'white' } }, pens, { cuts: cutsL, ...world });
+
+  it('survives under an onlay on the lower ply, where the same part in art is clipped away', () => {
+    const sealed = render({ art: {}, sealed: { white: [word('word')] } });
+    expect(sealed.find((p) => p.id === 'word')!.paths).toEqual([line(60, 86, 140, 86)]);
+    expect(render({ art: { white: [word('word')] } }).find((p) => p.id === 'word')).toBeUndefined();
+  });
+
+  it('is clipped by its own ply’s cuts and signature, but never by the plies above', () => {
+    const across = (y: number) => render({ art: {}, sealed: { white: [{ id: 'across', pen: 'carbon', paths: [line(0, y, 200, y)] }] } }).find((p) => p.id === 'across')!.paths;
+    // y = 150 crosses white's own window (30..170): the window and its margin band come out.
+    const xs = (y: number) => across(y).map((path) => path.map((p) => Math.round(p.x * 1e9) / 1e9));
+    expect(xs(150)).toEqual([[0, 30 - MARGIN], [170 + MARGIN, 200]]);
+    // y = 25 crosses the signature box (150..180 wide).
+    expect(xs(25)).toEqual([[0, 150], [180, 200]]);
+    // y = 86 is under the onlay and outside every ply above's windows: all of it stays.
+    expect(xs(86)).toEqual([[0, 200]]);
+  });
+
+  it('carries the other fields of a part, drops one that clips to nothing, and checks the pen', () => {
+    const lettered: Part = { ...word('word'), boundary: [rect(60, 80, 140, 92)] };
+    expect(render({ art: {}, sealed: { white: [lettered] } }).find((p) => p.id === 'word')!.boundary).toEqual(lettered.boundary);
+    const gone: Part = { id: 'gone', pen: 'carbon', paths: [line(155, 25, 175, 25)] }; // inside the signature box
+    expect(render({ art: {}, sealed: { white: [gone] } }).find((p) => p.id === 'gone')).toBeUndefined();
+    expect(() => render({ art: {}, sealed: { white: [{ id: 'wrong', pen: 'gold', paths: [line(60, 86, 140, 86)] }] } })).toThrow(/pen gold, which ply white does not carry/);
+  });
+
+  it('is optional: a world without it renders as before', () => {
+    expect(() => render({ art: { white: [word('word', 150)] } })).not.toThrow();
+  });
+});
+
 describe('an assembly sketch end to end', () => {
   let dir: string | undefined;
   afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });

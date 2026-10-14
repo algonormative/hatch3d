@@ -79,8 +79,12 @@ export interface Part {
  * One ply of an assembly: a physical sheet of one paper, plotted as its own SVG job and then knife-cut. `pens` are the
  * pens its art may use (declared pens, by id); `cutInk` is the pen its cut guides are drawn with, whose width sizes them.
  * `bleed` overrides the assembly's for the windows cut in this ply; `lift` is carried for the host and not read by plot-core.
+ * An `onlay` is not a full sheet but a piece glued on top, plotted and cut elsewhere: `from` is free text naming its
+ * source (such as `"lintel-l/black/bar"`) and the world's one `footprint` cut for the ply is its outline as placed. It
+ * is never rendered here; the ply directly below it gets placement marks, and the plies below see through whatever
+ * the piece does not cover. Its `pens` may be empty, and a signature cannot sit on it.
  */
-export interface PlySpec { id: string; paper: { id: string; color: string }; pens: string[]; cutInk: string; bleed?: number; lift?: number }
+export interface PlySpec { id: string; paper: { id: string; color: string }; pens: string[]; cutInk: string; bleed?: number; lift?: number; onlay?: { from: string } }
 
 /**
  * Several plies stacked into one artwork. `plies` runs bottom to top; a window cut in an upper ply shows the ply
@@ -92,8 +96,13 @@ export interface PlySpec { id: string; paper: { id: string; color: string }; pen
 export interface AssemblySpec { control: string; plies: PlySpec[]; cutPen: string; margin: number; bleed: number;
   signature?: { ply: string; pen: string; box: Box } }
 
-/** A window cut in a ply. `rings` is the even-odd waste area; an outer ring with a hole keeps only the hole's inside (a "shaped ply"). */
-export interface Cut { id: string; rings: Point[][]; label?: string }
+/**
+ * A cut in a ply. `rings` is the even-odd area. By default (`kind: 'waste'`) it is a window: the paper inside is thrown
+ * away, so an outer ring with a hole keeps only the hole's inside (a "shaped ply"). A `'part'` is cut out and kept
+ * (glued elsewhere), so the ply's art survives on both sides of its line; plies below still see through it. A
+ * `'footprint'` is the outline of an onlay ply's piece as placed, and appears only on onlay plies.
+ */
+export interface Cut { id: string; rings: Point[][]; label?: string; kind?: 'waste' | 'part' | 'footprint' }
 /** Cuts by ply id. */
 export type Cuts = Record<string, Cut[]>;
 
