@@ -17,7 +17,10 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
-import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWordAt, hatchedUnder, holeBarPaths, lintelBar, pensOf } from '../world.ts';
+import {
+  ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, knotOf, lintelBar, pensOf,
+  threadOn, threadPaths,
+} from '../world.ts';
 
 /**
  * Lintel, panel L: "the hole". The Plenipotentiary as a bust from below, filling the sheet, drawn in silver with gold
@@ -43,10 +46,10 @@ const pens = pensOf(['silver', 'gold', 'black']);
  */
 const ROUTES = {
   gold: { groups: ['hole'], inks: { carbon: 'black' } },
-  black: { groups: ['slab', 'figure', 'contour', 'helix', 'bar', 'word'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
+  black: { groups: ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['slab', 'figure', 'contour', 'helix', 'bar', 'word', 'hole'] as const;
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole'] as const;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -176,13 +179,22 @@ function draw(ctx: SketchContext): Part[] {
 
   const buckets = new PartBuckets(0.4);
   const BANDS = 12;
+  // The thread (knot `thread` or `all`): the helix's strand leaves the crown of the coil and runs out across the right
+  // edge at the height C takes it up. It lies in front of everything; all else gives way to it.
+  let threadArea: (p: Point) => boolean = () => false;
+  if (threadOn(knotOf(ctx))) {
+    const { l } = threadPaths(frame, bar);
+    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0 });
+    for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) buckets.add(`thread-${st.ink}`, inside, true);
+    threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);
+  }
   const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
   // Words first, so the hatch round them can give way.
   const wordPaths: Point[][] = [];
   projectStrokes(words, { view, depth, width: W, height: H, bias: hiddenBias(view, 0.12, dist(words[0] ?? strokes[0])) }, {
     begin: () => (runs: ProjectedPoint[][]) => {
       for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-        for (const piece of keepAlong(inside, p => !onBar(p) && !solids(p), 0.1)) if (buckets.add('word-carbon', piece, true)) wordPaths.push(piece);
+        for (const piece of keepAlong(inside, p => !onBar(p) && !solids(p) && !threadArea(p), 0.1)) if (buckets.add('word-carbon', piece, true)) wordPaths.push(piece);
       }
     },
   });
@@ -206,7 +218,7 @@ function draw(ctx: SketchContext): Part[] {
         for (const run of runs) {
           const keep = st.owner === undefined ? () => true : (p: Point) => !solids(p);
           for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && keep(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && !threadArea(p) && keep(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
           }
         }
       },

@@ -5,7 +5,7 @@ import type { ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
-import { helixAlong } from '../../kit/helix.ts';
+import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
@@ -14,8 +14,8 @@ import { facetStrokes, ruledFaces, slabGeometry, slabMatrix, solid, swapRuledFac
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import {
-  ART, ASSEMBLY, BAR_ID, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, W, bustFrame, faceWord, farLines, lintelBar, lintelFootprint, lintelRect,
-  pageWord, paving, pensOf, plainStrokes, skyRing, sun,
+  ART, ASSEMBLY, BAR_ID, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWord, farLines, flatRibbon, knotOf, lintelBar, lintelFootprint, lintelRect,
+  pageWord, paving, pensOf, plainStrokes, skyRing, sun, threadOn, threadPaths,
 } from '../world.ts';
 
 /**
@@ -23,8 +23,9 @@ import {
  * bar is glued level across their tops as the lintel, at the eye height the three panels share. Three sheets, bottom
  * to top: gold-yellow, white, and the bar as an onlay. The white is cut away above the horizon round the piers, so the
  * sky is the gold, the piers rise into it, and the black bar stands against it: L's gold hole turned inside out. The
- * city beyond is drawn on the gold in black, low on the horizon. The helix is knotted where lintel and pier meet; each
- * piece of it is drawn on whichever sheet shows there, in that sheet's ink. "bear" is painted on a pier in the light;
+ * city beyond is drawn on the gold in black, low on the horizon. The helix (`knot`) binds the joints where lintel and
+ * pier meet, comes in as the thread from C, or lashes the piers' courses; each piece of it is drawn on whichever sheet
+ * shows there, in that sheet's ink. "bear" is painted on a pier in the light;
  * "weight" is plotted under the strip and sealed, the only word with no light.
  */
 
@@ -59,8 +60,42 @@ const CLEAR = 4;
 
 type Tagged = Stroke & { slack: number };
 
+/**
+ * A strap of the helix wound round a slab: a band `width` tall, wound `turns` times round the slab's four side faces
+ * (in its own frame, `lift` proud of them) while its middle climbs from `y0` to `y1` (local heights), starting `phase`
+ * of the way round. Its edges, two laminations, a spine and ribs across, in the kit's helix inks; lines that fill it,
+ * for a mask; and its surface for the depth pass.
+ */
+function strap(sl: Slab, o: { y0: number; y1: number; turns: number; phase: number; width: number }, lift: number): { strokes: { ink: Ink; points: THREE.Vector3[] }[]; mask: THREE.Vector3[][]; mesh: THREE.BufferGeometry } {
+  const m = slabMatrix(sl), hx = sl.w / 2 + lift, hz = sl.d / 2 + lift, round = 4 * (hx + hz);
+  const around = (t: number): [number, number] => {
+    let d = (((t % 1) + 1) % 1) * round;
+    if (d < 2 * hx) return [hx - d, hz];
+    d -= 2 * hx;
+    if (d < 2 * hz) return [-hx, hz - d];
+    d -= 2 * hz;
+    if (d < 2 * hx) return [-hx + d, -hz];
+    return [hx, -hz + d - 2 * hx];
+  };
+  const point = (u: number, v: number) => {
+    const [x, z] = around(o.phase + u * o.turns);
+    return new THREE.Vector3(x, o.y0 + (o.y1 - o.y0) * u + v * o.width / 2, z).applyMatrix4(m);
+  };
+  const N = Math.ceil(o.turns * 480);
+  const along = (v: number) => Array.from({ length: N + 1 }, (_, i) => point(i / N, v));
+  const strokes: { ink: Ink; points: THREE.Vector3[] }[] = [
+    { ink: 'vermilion', points: along(-1) }, { ink: 'vermilion', points: along(1) }, { ink: 'acid', points: along(0) },
+    { ink: 'ultramarine', points: along(-0.5) }, { ink: 'violet', points: along(0.5) },
+  ];
+  const ribs = Math.round(o.turns * round / (0.09 * sl.w + 0.09 * sl.d));
+  for (let i = 1; i < ribs; i++) strokes.push({ ink: i % 8 === 0 ? 'vermilion' : i % 3 === 0 ? 'violet' : 'ultramarine', points: [point(i / ribs, -1), point(i / ribs, 1)] });
+  const mask = Array.from({ length: 11 }, (_, k) => along(-1 + k / 5));
+  return { strokes, mask, mesh: buildSurfaceMesh((u, v) => point(u, 2 * v - 1), {}, N, 2) };
+}
+
 function draw(ctx: SketchContext): Part[] {
-  const bar = lintelBar(ctx, bustFrame(ctx));
+  const frame = bustFrame(ctx);
+  const bar = lintelBar(ctx, frame);
   const footprint = lintelFootprint(bar);
   const lintel = lintelRect(bar);
 
@@ -163,27 +198,37 @@ function draw(ctx: SketchContext): Part[] {
   // The city: outlines, and the faces the sun misses ruled wide, so it stays far off.
   city.forEach((sl, i) => push([...facetStrokes(sl, light, eye, true), ...ruledFaces(sl, light, view, CITY_MM / mmPerUnit(centreOf(sl)))], 'city', 0.004 * -sl.z, 5000 + i));
 
-  // The helix, knotted round the joint: three turns round the pier's top course, climbing into the lintel's end.
-  const k = ctx.params.knot === 'right' ? 1 : 0;
-  const capital = piers[k][courses - 1];
-  const coil: THREE.Vector3[] = [];
-  const turns = 1.7, r0 = pierW * 1.05;
-  const lift0 = top - 1.3 * pierW, lift1 = top + 0.2 * pierW;
-  for (let i = 0; i <= 240; i++) {
-    const t = i / 240, th = 2 * Math.PI * turns * t + (k ? Math.PI : 0);
-    const r = r0 * (1 - 0.15 * Math.sin(Math.PI * t));
-    coil.push(new THREE.Vector3(capital.x + r * Math.cos(th), lift0 + (lift1 - lift0) * t, capital.z + r * 0.8 * Math.sin(th)));
+  // The helix (`knot`). joints: crossed straps bind each pier's top course under the lintel's ends. thread: the strand
+  // from C comes in across the left edge at THREAD.h2 to the left joint, and binds both joints. lashings: a strap binds
+  // each course of each pier just under its joint with the next. Straps lie on the courses' faces, a hair proud of them.
+  const knot = knotOf(ctx);
+  const straps: { sl: Slab; y0: number; y1: number; turns: number; phase: number; width: number }[] = [];
+  if (knot !== 'lashings') for (const stack of piers) {
+    const cap = stack[courses - 1];
+    straps.push({ sl: cap, y0: -0.46 * cap.h, y1: -0.04 * cap.h, turns: 1.5, phase: 0, width: 0.2 * pierW });
+    straps.push({ sl: cap, y0: -0.04 * cap.h, y1: -0.46 * cap.h, turns: 1.5, phase: 0.5, width: 0.2 * pierW });
   }
-  const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(coil, false, 'centripetal'),
-    { radius: 0.05, width: 0.42, pitch: 7, spread: 0.06, narrow: 0.06, density: 0.28, interruption: 0.2 });
-  for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack: 0.04, owner: 9000 });
+  if (knot === 'lashings' || knot === 'all') for (const stack of piers) for (const sl of stack.slice(0, -1)) {
+    straps.push({ sl, y0: 0.5 * sl.h - 0.22 * pierW, y1: 0.5 * sl.h - 0.08 * pierW, turns: 1.25, phase: 0.2, width: 0.11 * pierW });
+  }
+  const strapStrokes: Tagged[] = [], strapMask: Tagged[] = [], strapMeshes: THREE.BufferGeometry[] = [];
+  straps.forEach((o, k) => {
+    const made = strap(o.sl, o, 0.025);
+    for (const st of made.strokes) strapStrokes.push({ ink: st.ink, group: 'helix', family: 'membrane', points: st.points, slack: 0.02, owner: 9000 + k });
+    for (const points of made.mask) strapMask.push({ ink: 'carbon', group: 'mask', family: 'membrane', points, slack: 0.02, owner: 9000 + k });
+    strapMeshes.push(made.mesh);
+  });
+  // The thread's way in, flat on the sheet in front of the sky, to the left pier's outer edge at THREAD.h2.
+  const pierEdge = Math.min(...piers[0].flatMap(corners).filter(p => Math.abs(p.y - THREAD.h2) < 40).map(p => p.x));
+  const way = threadPaths(frame, bar, pierEdge).r;
+  const thread = threadOn(knot) ? flatRibbon(way.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: way.phase0 }) : undefined;
 
   // "bear": painted on the right pier's splayed inner face, the face the sun lights, low on its second course.
   const face = piers[1][1];
   const words: Tagged[] = faceWord(face, 'bear', { normal: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, 1, 0), at: [0.25, -0.3], cap: 3.4 * toWorld })
     .map(points => ({ ink: 'carbon' as Ink, group: 'word', family: 'text' as const, points, slack: 0.03 }));
 
-  const geometries = [...pierSlabs, ...pavers, ...city].map(slabGeometry).concat(helix.meshes);
+  const geometries = [...pierSlabs, ...pavers, ...city].map(slabGeometry).concat(strapMeshes);
   fitDepthRange(view, geometries, 0.1, { exact: true });
   // The far lines run on to the horizon, beyond the last solid: the depth range reaches them.
   view.far = Math.max(view.far, EYE * f / 0.3);
@@ -200,17 +245,33 @@ function draw(ctx: SketchContext): Part[] {
   });
   const clear = glyphMask(wordPaths, 0.9, 6, PAGE);
 
+  // The helix first, so all behind it gives way: the thread flat on the sheet, the straps with their hidden lines.
+  const helixPaths: Point[][] = [];
+  if (thread) {
+    for (const st of thread.strokes) for (const inside of clipToRect(st.points, ART)) for (const group of ['helix', 'helixsky']) buckets.add(`${group}-${st.ink}`, inside, true);
+    helixPaths.push(...thread.mask);
+  }
+  const strapOwners = new Map<number, Tagged[]>();
+  for (const st of [...strapStrokes, ...strapMask]) { const list = strapOwners.get(st.owner!); if (list) list.push(st); else strapOwners.set(st.owner!, [st]); }
+  for (const list of strapOwners.values()) {
+    projectStrokes(list, { view, depth: depthBuffer, width: W, height: H, bias: hiddenBias(view, list[0].slack, dist(list[0])) }, {
+      begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
+        for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
+          if (st.group === 'mask') { helixPaths.push(inside); continue; }
+          for (const piece of keepAlong(inside, p => !clear(p), 0.15)) for (const group of ['helix', 'helixsky']) buckets.add(`${group}-${st.ink}`, piece, false);
+        }
+      },
+    });
+  }
+  const helixArea = glyphMask(helixPaths, 0.7, 6, PAGE);
+
   const byOwner = new Map<number, Tagged[]>();
   for (const st of strokes) { const list = byOwner.get(st.owner!); if (list) list.push(st); else byOwner.set(st.owner!, [st]); }
   for (const list of byOwner.values()) {
     projectStrokes(list, { view, depth: depthBuffer, width: W, height: H, bias: hiddenBias(view, list[0].slack, dist(list[0])) }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-          for (const piece of keepAlong(inside, p => !clear(p), 0.15)) {
-            buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
-            // The helix crosses the sky too: the same piece on the gold, in black (each sheet keeps the part it shows).
-            if (st.group === 'helix') buckets.add(`helixsky-${st.ink}`, piece, false);
-          }
+          for (const piece of keepAlong(inside, p => !clear(p) && !helixArea(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
         }
       },
     });

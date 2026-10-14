@@ -12,7 +12,10 @@ import { fitDepthRange, horizonCamera } from '../../kit/perspective.ts';
 import { slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, eyeHeight, faceWordAt, farLines, lintelBar, paving, pensOf, plainStrokes, ringOf, skyLines, slotRect, sun } from '../world.ts';
+import {
+  ART, ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, eyeHeight, faceWordAt, farLines, flatRibbon, knotOf, lintelBar, paving, pensOf,
+  plainStrokes, ringOf, skyLines, slotRect, sun, threadOn, threadPaths,
+} from '../world.ts';
 
 /**
  * Lintel, panel C: "the gaze". A plain seen from eye height, so its horizon is the eye height the three panels share.
@@ -30,14 +33,19 @@ const plies = [
 export const spec: AssemblySpec = { ...ASSEMBLY, plies };
 const pens = pensOf(['silver', 'gold', 'black', 'carbon', 'ultramarine']);
 
-/** Carbon and ultramarine only on the white (the raking hatch's crossed violet field goes to carbon); black on the gold; silver on the black. */
+/**
+ * Each sheet in its own inks. White: carbon and ultramarine (the raking hatch's crossed violet field and the thread's
+ * edges go to carbon, its spine to ultramarine). Gold: black. Black: silver, and gold for the thread's edges and spine,
+ * as on L. The thread is drawn on all three and each sheet keeps the part of it that it shows.
+ */
 const ROUTES = {
-  black: { groups: ['echo'], inks: { ultramarine: 'silver' } },
-  gold: { groups: ['gaze'], inks: { carbon: 'black' } },
-  white: { groups: ['plain', 'far', 'word'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon' } },
+  black: { groups: ['echo', 'threadblack'], inks: { ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
+  gold: { groups: ['gaze', 'threadgold'], inks: { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' } },
+  white: { groups: ['plain', 'far', 'word', 'thread'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', vermilion: 'carbon', acid: 'ultramarine' } },
 };
-const INKS: Ink[] = ['carbon', 'ultramarine', 'violet'];
-const GROUPS = ['plain', 'far', 'word', 'gaze', 'echo'] as const;
+const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
+const GROUPS = ['plain', 'far', 'word', 'thread', 'gaze', 'threadgold', 'echo', 'threadblack'] as const;
+
 
 /** Eye height above the plain, and the paving pitch and joint, world units. */
 const EYE = 4, PITCH = 1.5, JOINT = 0.09;
@@ -56,7 +64,8 @@ interface Ground { strokes: Tagged[]; solids: Slab[]; lines: Tagged[]; canOn: Sl
 const rect = (x0: number, y0: number, x1: number, y1: number): Point[] => ringOf({ x0, y0, x1, y1 });
 
 function draw(ctx: SketchContext): Part[] {
-  const bar = lintelBar(ctx, bustFrame(ctx));
+  const frame = bustFrame(ctx);
+  const bar = lintelBar(ctx, frame);
   const horizonY = eyeHeight(bar);
   const slot = slotRect(ctx, bar);
 
@@ -84,6 +93,26 @@ function draw(ctx: SketchContext): Part[] {
     return { strokes, solids: slabs, lines, canOn: slabs };
   };
   const ground = pavingGround();
+
+  // The thread (knot `thread` or `all`): in at the left edge at THREAD.h1, stitching through the horizon band (over the
+  // band, then under it, by turns) and out at the right edge at h2. It lies in front of everything; all else gives way.
+  let threadArea: (p: Point) => boolean = () => false;
+  const thread: { ink: Ink; points: Point[] }[] = [];
+  if (threadOn(knotOf(ctx))) {
+    const { c } = threadPaths(frame, bar);
+    // Where the centreline is in the band, and which crossing of it that is: every second one passes under the band.
+    const inBand = (p: Point) => Math.abs(p.y - horizonY) < (slot.y1 - slot.y0) / 2 + 2.5;
+    const under: [number, number][] = [];
+    let s = 0, start = -1, crossing = 0;
+    for (let i = 0; i < c.path.length; i++) {
+      if (i) s += Math.hypot(c.path[i].x - c.path[i - 1].x, c.path[i].y - c.path[i - 1].y);
+      if (inBand(c.path[i]) && start < 0) start = s;
+      if (!inBand(c.path[i]) && start >= 0) { if (crossing++ % 2 === 1) under.push([start, s]); start = -1; }
+    }
+    const ribbon = flatRibbon(c.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: c.phase0, skip: v => under.some(([a, b]) => v > a && v < b) });
+    thread.push(...ribbon.strokes);
+    threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);
+  }
 
   // "can": painted flat on the top of whichever solid lies under its place on the sheet, reading across.
   const target = { x: CAN.at.x * PAGE.width, y: CAN.at.y * PAGE.height };
@@ -114,7 +143,7 @@ function draw(ctx: SketchContext): Part[] {
     projectStrokes(list, { view, depth, width: W, height: H, bias: hiddenBias(view, list[0].slack, dist(list[0])) }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-          for (const piece of keepAlong(inside, p => !clear(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+          for (const piece of keepAlong(inside, p => !clear(p) && !threadArea(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
         }
       },
     });
@@ -131,8 +160,10 @@ function draw(ctx: SketchContext): Part[] {
   for (let i = 0; i < count; i++) {
     const k = count === 1 ? 0 : i / (count - 1) * 2 - 1;
     const a = { x: slot.x0 - 1, y: horizonY + k * half * 0.25 }, b = { x: slot.x1 + 1, y: horizonY + k * (half - 0.9) };
-    buckets.add('gaze-carbon', [a, b], true);
+    for (const piece of keepAlong([a, b], p => !threadArea(p), 0.15)) buckets.add('gaze-carbon', piece, true);
   }
+  // The thread on every sheet, each in its inks: each sheet keeps the part of it that it shows.
+  for (const st of thread) for (const inside of clipToRect(st.points, ART)) for (const group of ['thread', 'threadgold', 'threadblack']) buckets.add(`${group}-${st.ink}`, inside, true);
   for (const g of geometries) g.dispose();
 
   // One cut per sheet: the white loses the sky and the band, the gold the sky alone.

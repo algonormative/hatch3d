@@ -10,6 +10,7 @@ import { keepAlong } from '../kit/page.ts';
 import { pageOf } from '../kit/perspective.ts';
 import { faceDarkness, facetStrokes, slabMatrix, solid, type FacetStroke, type Slab } from '../kit/slabs.ts';
 import type { JointAngles, JointName, Proportions } from '../kit/mannequin/skeleton.ts';
+import type { Ink } from '../kit/types.ts';
 
 /**
  * The Breach triptych "Lintel": the world the three panels share. The censor bar is cut from the Plenipotentiary's
@@ -90,7 +91,8 @@ export const CONTROLS: Control[] = [
   { type: 'slider', id: 'splay', label: 'Piers turned in, like splayed jambs', default: 22, min: 0, max: 45, step: 1, units: '°', group: 'Gate' },
   { type: 'slider', id: 'courses', label: 'Courses per pier', default: 4, min: 3, max: 12, step: 1, group: 'Gate' },
   { type: 'slider', id: 'gateMm', label: 'Pier hatch pitch', default: 6.5, min: 3, max: 16, step: 0.5, units: 'mm', group: 'Gate' },
-  { type: 'select', id: 'knot', label: 'The joint the helix knots', default: 'left', options: ['left', 'right'], group: 'Gate' },
+  { type: 'select', id: 'knot', label: 'What the helix does', default: 'all', options: ['joints', 'thread', 'lashings', 'all'],
+    optionLabels: { joints: 'Joints: it lashes both ends of the lintel to the piers', thread: 'Thread: one strand from L\'s head across C\'s horizon to R\'s left joint', lashings: 'Lashings: it binds the piers\' courses', all: 'All: the thread binds both joints, and the courses are lashed' }, group: 'Gate' },
 ];
 
 // ── The bust and the bar ─────────────────────────────────────────────
@@ -272,6 +274,124 @@ export function slotRect(ctx: SketchContext, bar: LintelBar): { x0: number; x1: 
 
 export const ringOf = (r: { x0: number; x1: number; y0: number; y1: number }): Point[] =>
   [{ x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 }];
+
+// ── The helix thread ─────────────────────────────────────────────────
+
+/**
+ * The thread: one strand of the helix through the three panels. It leaves L's head and crosses L's right edge at page
+ * height `h1`, enters C's left edge at the same height (a hung triptych lines it up), stitches across C's horizon band,
+ * crosses C's right edge at `h2` and enters R's left edge there, where it binds the lintel's joints. Its ribbon is
+ * `widthMm` across on the sheet wherever it crosses an edge, and turns once in about `pitchMm`.
+ */
+export const THREAD = { h1: 70, h2: 166, widthMm: 8, pitchMm: 46 };
+
+export type Knot = 'joints' | 'thread' | 'lashings' | 'all';
+export const knotOf = (ctx: SketchContext): Knot => (['joints', 'thread', 'lashings', 'all'].includes(String(ctx.params.knot)) ? ctx.params.knot as Knot : 'all');
+/** Whether the thread runs through the panels. */
+export const threadOn = (knot: Knot): boolean => knot === 'thread' || knot === 'all';
+
+/** A smooth curve through page points (centripetal Catmull-Rom), sampled about every `step` mm. */
+export function smoothPath(points: Point[], step = 0.4): Point[] {
+  const curve = new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(p.x, p.y, 0)), false, 'centripetal');
+  return curve.getSpacedPoints(Math.max(2, Math.ceil(curve.getLength() / step))).map(v => ({ x: v.x, y: v.y }));
+}
+
+/** Arc length along a polyline to its point nearest `x` crossing (the first sample at or past it). */
+function lengthTo(path: Point[], x: number): number {
+  let s = 0;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i], d = Math.hypot(b.x - a.x, b.y - a.y);
+    if ((a.x - x) * (b.x - x) <= 0 && a.x !== b.x) return s + d * (x - a.x) / (b.x - a.x);
+    s += d;
+  }
+  return s;
+}
+
+export interface ThreadPath { path: Point[]; phase0: number; enter: number }
+
+/**
+ * The thread's centreline on each panel's sheet, and its twist phase where it starts. L: from the crown of the head's
+ * coil up and out across the right edge at THREAD.h1, level as it leaves. C: in across the left edge at h1, down
+ * through the horizon band and back several times (the stitches), out across the right edge at h2. R: in across the
+ * left edge at h2 to the left pier. Each path runs a few millimetres past the trim, and the twist is continuous across
+ * the panels: C's phase at its left trim is L's at its right trim, and R's at its left is C's at its right, so the
+ * ribbon's width matches where the panels meet. `enter` is the arc length to the panel's left trim (0 on L). `pierEdge`
+ * is the page x where R's path meets the left pier (it moves no phase).
+ */
+export function threadPaths(frame: BustFrame, bar: LintelBar, pierEdge = 60): { l: ThreadPath; c: ThreadPath; r: ThreadPath } {
+  const crown = pageOf(frame.view, headCoil(frame.fig.head).at(-1)!, PAGE);
+  const { h1, h2 } = THREAD, y = eyeHeight(bar);
+  const l = smoothPath([crown, { x: crown.x + 22, y: crown.y - 14 }, { x: TRIM.x1 - 40, y: h1 - 4 }, { x: TRIM.x1 - 14, y: h1 }, { x: TRIM.x1, y: h1 }, { x: TRIM.x1 + 6, y: h1 }]);
+  const c = smoothPath([{ x: TRIM.x0 - 6, y: h1 }, { x: TRIM.x0, y: h1 }, { x: TRIM.x0 + 16, y: h1 }, ...STITCHES.map(([x, dy]) => ({ x, y: y + dy })),
+    { x: TRIM.x1 - 16, y: h2 }, { x: TRIM.x1, y: h2 }, { x: TRIM.x1 + 6, y: h2 }]);
+  const r = smoothPath([{ x: TRIM.x0 - 6, y: h2 }, { x: TRIM.x0, y: h2 }, { x: (TRIM.x0 + pierEdge) / 2, y: h2 + 1 }, { x: pierEdge + 3, y: h2 + 2 }]);
+  const turn = (mm: number) => 2 * Math.PI * mm / THREAD.pitchMm;
+  const sL = lengthTo(l, TRIM.x1);
+  const cIn = lengthTo(c, TRIM.x0), cOut = lengthTo(c, TRIM.x1);
+  const rIn = lengthTo(r, TRIM.x0);
+  return {
+    l: { path: l, phase0: 0, enter: 0 },
+    c: { path: c, phase0: turn(sL - cIn), enter: cIn },
+    r: { path: r, phase0: turn(sL - cIn + cOut - rIn), enter: rIn },
+  };
+}
+/** C's stitches: page x of each turn of the thread, and how far above (negative) or below the horizon it swings. */
+const STITCHES: [x: number, dy: number][] = [[48, 26], [92, -24], [136, 26], [180, -24], [222, 26]];
+
+export interface RibbonStroke { ink: Ink; points: Point[] }
+
+/**
+ * The helix as a flat twisted ribbon along a page path: two edges that cross where the ribbon turns edge-on, laminations
+ * along it (fewer on its back face), a spine down the middle and ribs across. `phase0` is its twist at the path's start;
+ * it turns once every `pitch` mm. `skip(s)` drops everything at arc length `s` (where the thread passes under
+ * something). Returns its strokes in the kit's helix inks and `mask`, lines that fill it, for a page mask of where it
+ * lies (`glyphMask`).
+ */
+export function flatRibbon(path: Point[], o: { width: number; pitch: number; phase0?: number; laminations?: number; ribMm?: number; skip?: (s: number) => boolean }): { strokes: RibbonStroke[]; mask: Point[][] } {
+  const half = o.width / 2, L = o.laminations ?? 6, ribMm = o.ribMm ?? 2.4;
+  const s: number[] = [0];
+  for (let i = 1; i < path.length; i++) s.push(s[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
+  const normal = path.map((_, i) => {
+    const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d };
+  });
+  const twist = s.map(v => Math.cos((o.phase0 ?? 0) + 2 * Math.PI * v / o.pitch));
+  const at = (i: number, v: number): Point => ({ x: path[i].x + normal[i].x * v * half * twist[i], y: path[i].y + normal[i].y * v * half * twist[i] });
+  const hidden = (i: number) => o.skip?.(s[i]) ?? false;
+  const strokes: RibbonStroke[] = [];
+  const line = (ink: Ink | ((i: number) => Ink | null), v: number, show: (i: number) => boolean = () => true) => {
+    let run: Point[] = [], inkOf: Ink | null = null;
+    const flush = () => { if (run.length > 1 && inkOf) strokes.push({ ink: inkOf, points: run }); run = []; };
+    for (let i = 0; i < path.length; i++) {
+      const here = hidden(i) || !show(i) ? null : typeof ink === 'function' ? ink(i) : ink;
+      if (here !== inkOf) { flush(); inkOf = here; }
+      if (here) run.push(at(i, v));
+    }
+    flush();
+  };
+  line('vermilion', -1); line('vermilion', 1); line('acid', 0);
+  for (let k = 1; k < L; k++) {
+    const v = -1 + 2 * k / L;
+    if (Math.abs(v) < 1e-9) continue;
+    line(i => (twist[i] > 0 ? (k % 3 === 0 ? 'violet' : 'ultramarine') : k % 2 === 0 ? 'violet' : null), v, i => Math.abs(twist[i]) * o.width >= 0.6 * L);
+  }
+  let next = 0, n = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (s[i] < next) continue;
+    next = s[i] + ribMm;
+    n++;
+    if (hidden(i) || Math.abs(twist[i]) * o.width < 1.2) continue;
+    strokes.push({ ink: n % 8 === 0 ? 'vermilion' : n % 3 === 0 ? 'violet' : 'ultramarine', points: [at(i, -1), at(i, 1)] });
+  }
+  const mask: Point[][] = [];
+  for (let k = 0; k <= 20; k++) {
+    const v = -1 + k / 10;
+    let run: Point[] = [];
+    for (let i = 0; i < path.length; i++) { if (hidden(i)) { if (run.length > 1) mask.push(run); run = []; } else run.push(at(i, v)); }
+    if (run.length > 1) mask.push(run);
+  }
+  return { strokes, mask };
+}
 
 // ── Words ────────────────────────────────────────────────────────────
 
