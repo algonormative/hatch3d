@@ -77,6 +77,9 @@ export const CONTROLS: Control[] = [
   { type: 'toggle', id: 'holeBar', label: 'The censor bar in black ink on the gold under the hole (else bare gold)', default: true, group: 'Bust' },
   // The plain (C).
   { type: 'slider', id: 'slotMm', label: 'Gold horizon band (the slot) height', default: 5, min: 4, max: 14, step: 0.5, units: 'mm', group: 'Plain' },
+  { type: 'select', id: 'ground', label: 'What C\'s ground is', default: 'field', options: ['paving', 'corridor', 'field', 'water'],
+    optionLabels: { paving: 'Paving (R1): a paved plain in raking light', corridor: 'Corridor: two rows of low stelae converging on the band', field: 'Restraint field: standing slabs in the bar\'s proportions, at its tilt', water: 'Still water: level ripples, a few monoliths and their reflections' }, group: 'Plain' },
+  { type: 'slider', id: 'fieldCount', label: 'Restraint field: how many slabs', default: 70, min: 10, max: 120, step: 1, group: 'Plain' },
   { type: 'slider', id: 'plainFov', label: 'Plain field of view', default: 50, min: 30, max: 80, step: 1, group: 'Plain' },
   { type: 'slider', id: 'plainMm', label: 'Paving hatch pitch', default: 13, min: 3, max: 16, step: 0.5, units: 'mm', group: 'Plain' },
   { type: 'slider', id: 'lightUp', label: 'Sun elevation', default: 20, min: 4, max: 70, step: 1, units: '°', group: 'Plain' },
