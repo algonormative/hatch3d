@@ -244,7 +244,8 @@ describe('print export: the stack back', () => {
 
   it('refuses a stack whose back or face params name a control the sketch does not declare, naming the piece and the key', async () => {
     const stack = JSON.parse(readFileSync(stackPath, 'utf8'));
-    const write = (edit: (s: any) => void) => {
+    type Params = Record<string, unknown>;
+    const write = (edit: (s: { back: { params?: Params }; pieces: { params?: Params }[] }) => void) => {
       const copy = structuredClone(stack);
       edit(copy);
       const path = join(mkdtempSync(join(tmpdir(), 'print-export-stack-')), 'stack.json');
