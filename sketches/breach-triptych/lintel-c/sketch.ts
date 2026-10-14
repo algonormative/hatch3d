@@ -213,7 +213,7 @@ function draw(ctx: SketchContext): Part[] {
     return { strokes, solids, lines: [], flat, canOn: solids };
   };
 
-  const kind: GroundKind = GROUND_KINDS.includes(ctx.params.ground as GroundKind) ? ctx.params.ground as GroundKind : 'field';
+  const kind: GroundKind = GROUND_KINDS.includes(ctx.params.ground as GroundKind) ? ctx.params.ground as GroundKind : 'corridor';
   const ground = { paving: pavingGround, corridor: corridorGround, field: fieldGround, water: waterGround }[kind]();
 
   // The thread (knot `thread` or `all`): in at the left edge at THREAD.h1, stitching through the horizon band (over the

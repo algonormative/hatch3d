@@ -256,13 +256,28 @@ function draw(ctx: SketchContext): Part[] {
   // each course of each pier just under its joint with the next. Straps lie on the courses' faces, a hair proud of them.
   const knot = knotOf(ctx);
   const straps: { sl: Slab; y0: number; y1: number; turns: number; phase: number; width: number }[] = [];
+  /** A course's local height at page height `y` on its front centre line (found by bisection; the course is upright). */
+  const localAt = (sl: Slab, y: number): number => {
+    const m = slabMatrix(sl);
+    let lo = -sl.h / 2, hi = sl.h / 2;
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (pageOf(view, new THREE.Vector3(0, mid, sl.d / 2).applyMatrix4(m), PAGE).y > y) lo = mid; else hi = mid; }
+    return (lo + hi) / 2;
+  };
+  const JOINT_MM = 10, LASH_MM = 6;
   if (knot !== 'lashings') for (const stack of piers) {
-    const cap = stack[courses - 1];
-    straps.push({ sl: cap, y0: -0.46 * cap.h, y1: -0.04 * cap.h, turns: 1.5, phase: 0, width: 0.2 * pierW });
-    straps.push({ sl: cap, y0: -0.04 * cap.h, y1: -0.46 * cap.h, turns: 1.5, phase: 0.5, width: 0.2 * pierW });
+    // The knot sits on the highest part of the pier seen under the lintel: from just under the strip down about two
+    // and a half strap widths, wound round the top course (and on down past it where that course is short).
+    const course = stack[courses - 1], m = slabMatrix(course);
+    const yTop = lintel.y1 + 1.5;
+    const mmPerUnitY = Math.abs(pageOf(view, new THREE.Vector3(0, course.h / 2, course.d / 2).applyMatrix4(m), PAGE).y - pageOf(view, new THREE.Vector3(0, -course.h / 2, course.d / 2).applyMatrix4(m), PAGE).y) / course.h;
+    const w = JOINT_MM / mmPerUnitY;
+    const a = localAt(course, yTop), b = a - 2.6 * w;
+    straps.push({ sl: course, y0: b + w / 2, y1: a - w / 2, turns: 1.5, phase: 0, width: w });
+    straps.push({ sl: course, y0: a - w / 2, y1: b + w / 2, turns: 1.5, phase: 0.5, width: w });
   }
   if (knot === 'lashings' || knot === 'all') for (const stack of piers) for (const sl of stack.slice(0, -1)) {
-    straps.push({ sl, y0: 0.5 * sl.h - 0.22 * pierW, y1: 0.5 * sl.h - 0.08 * pierW, turns: 1.25, phase: 0.2, width: 0.11 * pierW });
+    const w = LASH_MM * toWorld;
+    straps.push({ sl, y0: 0.5 * sl.h - 2.4 * w, y1: 0.5 * sl.h - 0.7 * w, turns: 1.25, phase: 0.2, width: w });
   }
   const strapStrokes: Tagged[] = [], strapMask: Tagged[] = [], strapMeshes: THREE.BufferGeometry[] = [];
   straps.forEach((o, k) => {
