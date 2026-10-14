@@ -210,7 +210,8 @@ describe('cutGuides', () => {
 
   it('places X marks on a lattice from the window centre, each clear of the cut, and no others', () => {
     const { centres, strokes } = marks(big);
-    const need = 4 / Math.SQRT2 + half + GUIDE_DEFAULTS.guard;
+    // An X of two strokes of length `size` reaches size / 2 from its centre (not the half-diagonal of its square).
+    const need = 4 / 2 + half + GUIDE_DEFAULTS.guard;
     const key = (c: Point) => `${c.x.toFixed(6)},${c.y.toFixed(6)}`;
     const expected: string[] = [];
     for (let j = -5; j <= 5; j++) for (let i = -5; i <= 5; i++) {
@@ -219,12 +220,20 @@ describe('cutGuides', () => {
     }
     expect(centres.map(key).sort()).toEqual(expected.sort());
     expect(expected).toContain(key(P(100, 100)));
-    expect(expected).not.toContain(key(P(148, 100))); // 4 mm in from the edge: inside the guard
+    expect(expected).not.toContain(key(P(148, 100))); // 4 mm in from the edge: its reach fits (2.175) but not the guard
     // Each X is two strokes of length `size`, and the ink stays a guard clear of the cut.
     for (const stroke of strokes) {
       exact(Math.hypot(stroke[1].x - stroke[0].x, stroke[1].y - stroke[0].y), GUIDE_DEFAULTS.size);
       for (const end of stroke) expect(distanceToRings(end, big.rings) - half).toBeGreaterThanOrEqual(GUIDE_DEFAULTS.guard - 1e-9);
     }
+  });
+
+  it('keeps a lattice X that is 4.5 mm in from the edge: size / 2 + pen / 2 + guard = 4.175 clears', () => {
+    // The old budget used size / sqrt 2 (2.83), which wanted 5.0 mm and dropped this mark.
+    const wide: Cut = { id: 'wide5', rings: [rect(47.5, 80, 152.5, 120)] };
+    const { centres } = marks(wide);
+    expect(centres.some((c) => Math.abs(c.x - 148) < 1e-9 && Math.abs(c.y - 100) < 1e-9)).toBe(true);
+    expect(centres.some((c) => Math.abs(c.x - 160) < 1e-9)).toBe(false); // outside the window
   });
 
   it('grows the pitch by 1.25 until at most maxMarks fit', () => {
@@ -244,15 +253,38 @@ describe('cutGuides', () => {
       const cut: Cut = { id: 's', rings: [rect(100, 100, 100 + side, 100 + side)] };
       const { centres, strokes } = marks(cut);
       expect(centres.length).toBeGreaterThanOrEqual(1);
-      for (const stroke of strokes) for (const end of stroke) expect(distanceToRings(end, cut.rings) - half).toBeGreaterThanOrEqual(0.75 - 1e-9);
+      for (const stroke of strokes) for (const end of stroke) expect(distanceToRings(end, cut.rings) - half).toBeGreaterThanOrEqual(0.5 - 1e-9);
     }
     const small = marks({ id: 's', rings: [rect(100, 100, 108, 108)] });
     expect(small.centres).toHaveLength(1);
     expect(Math.abs(small.centres[0].x - 104)).toBeLessThan(1e-9);
   });
 
+  it('shrinks the lone X to 2 x (clearance - pen / 2 - 0.5), so its ink stops 0.5 mm short of the cut', () => {
+    // A 4 mm wide slot: clearance 2, so the X is 2 x (2 - 0.175 - 0.5) = 2.65 long, not the default 4.
+    const slot: Cut = { id: 'slot4', rings: [rect(100, 50, 104, 110)] };
+    const { strokes } = marks(slot);
+    expect(strokes).toHaveLength(2);
+    for (const stroke of strokes) {
+      exact(Math.hypot(stroke[1].x - stroke[0].x, stroke[1].y - stroke[0].y), 2 * (2 - half - 0.5));
+      for (const end of stroke) expect(distanceToRings(end, slot.rings) - half).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    }
+    // In a diamond the strokes point straight at the walls, so the budget is exact: the ink ends 0.5 mm from them.
+    const diamond: Cut = { id: 'dia', rings: [[P(100, 97), P(103, 100), P(100, 103), P(97, 100)]] };
+    const lone = marks(diamond);
+    expect(lone.centres).toHaveLength(1);
+    const clearance = distanceToRings(lone.centres[0], diamond.rings);
+    for (const stroke of lone.strokes) exact(Math.hypot(stroke[1].x - stroke[0].x, stroke[1].y - stroke[0].y), 2 * (clearance - half - 0.5));
+    const ends = lone.strokes.flat().map((end) => distanceToRings(end, diamond.rings) - half);
+    expect(Math.min(...ends)).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    expect(Math.min(...ends)).toBeLessThan(0.5 + 1e-6);
+  });
+
   it('throws when a window is too narrow for any X, or finer than the guide pen', () => {
-    expect(() => cutGuides({ id: 'slot', rings: [rect(100, 50, 103.5, 110)] }, 'black', options)).toThrow(/slot: no room for an X mark/);
+    // The X needs 2 x (clearance - pen / 2 - 0.5) >= 1.5, which is clearance >= 1.425: a 2.9 mm slot draws a 1.55 X, 2.8 does not.
+    expect(() => cutGuides({ id: 'slot', rings: [rect(100, 50, 102.8, 110)] }, 'black', options)).toThrow(/slot: no room for an X mark/);
+    expect(marks({ id: 'slot', rings: [rect(100, 50, 102.9, 110)] }).strokes).toHaveLength(2);
+    exact(Math.hypot(...(([a, b]) => [b.x - a.x, b.y - a.y])(marks({ id: 'slot', rings: [rect(100, 50, 102.9, 110)] }).strokes[0]) as [number, number]), 2 * (1.45 - half - 0.5));
     expect(() => cutGuides({ id: 'sliver', rings: [rect(100, 50, 100.3, 110)] }, 'black', options)).toThrow(/sliver: feature finer than the guide pen/);
     // A neck narrower than the pen folds the outline over itself.
     const dumbbell = [P(40, 40), P(80, 40), P(80, 59.9), P(100, 59.9), P(100, 40), P(140, 40), P(140, 80), P(100, 80), P(100, 60.2), P(80, 60.2), P(80, 80), P(40, 80)];
@@ -299,6 +331,36 @@ describe('cutGuides', () => {
     const on = cutGuides(cut, 'black', options), off = cutGuides(cut, 'black', { ...options, label: false });
     expect(marks(cut).centres).toHaveLength(1);
     expect(on.paths).toEqual(off.paths);
+  });
+
+  it('keeps every guide point clear of the cut line on a 45 degree strip, and leaves out the label that has no room', () => {
+    // A 4.6 mm wide, 90 mm long strip at 45 degrees: its bounding box is huge, but only the strip is waste.
+    const w = 4.6, L = 90, r = Math.SQRT1_2;
+    const nx = (-r * w) / 2, ny = (r * w) / 2, ex = L * r, ey = L * r;
+    const ring = [P(30 + nx, 30 + ny), P(30 - nx, 30 - ny), P(30 - nx + ex, 30 - ny + ey), P(30 + nx + ex, 30 + ny + ey)];
+    const cut: Cut = { id: 'strip', label: 'CUT A', rings: [ring] };
+    const on = cutGuides(cut, 'black', options), off = cutGuides(cut, 'black', { ...options, label: false });
+    for (const path of on.paths) for (const p of path) {
+      expect(inRegion(p, { rings: [ring] })).toBe(true);
+      expect(distanceToRings(p, [ring])).toBeGreaterThanOrEqual(half - 1e-6);
+    }
+    const same = (a: Point[], b: Point[]) => a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y);
+    const label = on.paths.filter((path) => !off.paths.some((other) => same(path, other)));
+    for (const p of label.flat()) expect(distanceToRings(p, [ring])).toBeGreaterThanOrEqual(GUIDE_DEFAULTS.guard);
+    expect(label).toEqual([]); // no height of lettering fits clear of a strip this narrow
+  });
+
+  it('sizes the guide by the ply’s cutInk but emits it on the cutPen layer', () => {
+    // cutInk gold is 0.5 mm wide and cutPen black is 0.35 mm: the layer is black's, the outline is offset by gold's 0.25.
+    const goldInk = structuredClone(spec);
+    goldInk.plies[2].cutInk = 'gold';
+    const guide = renderPly(goldInk, { params: { ply: 'top' } }, pens, { cuts: { top: [{ id: 'w', rings: [WINDOW_T] }] }, art: {} }).find((p) => p.id === 'cut-w')!;
+    expect(guide.pen).toBe(goldInk.cutPen);
+    expect(Math.min(...guide.paths[0].map((p) => p.x))).toBeCloseTo(60 + 0.25, 9);
+    expect(Math.max(...guide.paths[0].map((p) => p.y))).toBeCloseTo(160 - 0.25, 9);
+    const blackInk = renderPly(spec, { params: { ply: 'top' } }, pens, { cuts: { top: [{ id: 'w', rings: [WINDOW_T] }] }, art: {} }).find((p) => p.id === 'cut-w')!;
+    expect(blackInk.pen).toBe(goldInk.cutPen);
+    expect(Math.min(...blackInk.paths[0].map((p) => p.x))).toBeCloseTo(60 + 0.175, 9);
   });
 
   it('tries each height in turn, and omits the label when none fits', () => {
@@ -394,6 +456,78 @@ describe('validators', () => {
     expect(() => validateCuts(spec, { top: [frame(5)] }, page)).not.toThrow();
   });
 
+  it('validateCuts checks all four sides of the page margin', () => {
+    const at = (x0: number, y0: number, x1: number, y1: number) => () => validateCuts(spec, { top: [{ id: 'a', rings: [rect(x0, y0, x1, y1)] }] }, page);
+    expect(at(100, 100, 190, 190)).not.toThrow(); // right and bottom exactly on the margin
+    expect(at(10, 10, 60, 60)).not.toThrow(); // left and top exactly on it
+    expect(at(100, 100, 190.5, 150)).toThrow(/vertex \(190\.5, 100\) is outside the 10 mm page margin/);
+    expect(at(100, 100, 150, 190.5)).toThrow(/outside the 10 mm page margin/);
+    expect(at(9.5, 100, 60, 150)).toThrow(/outside the 10 mm page margin/);
+    expect(at(100, 9.5, 150, 60)).toThrow(/outside the 10 mm page margin/);
+    // Without a page there is no margin to check.
+    expect(() => validateCuts(spec, { top: [{ id: 'a', rings: [rect(100, 100, 400, 400)] }] }, undefined)).not.toThrow();
+  });
+
+  it('validateCuts finds a nested cut whichever of the two is inside', () => {
+    const inner = rect(60, 60, 100, 100), outer = rect(40, 40, 140, 140);
+    expect(() => validateCuts(spec, { top: [{ id: 'a', rings: [outer] }, { id: 'b', rings: [inner] }] }, page)).toThrow(/cuts a and b nest/);
+    expect(() => validateCuts(spec, { top: [{ id: 'a', rings: [inner] }, { id: 'b', rings: [outer] }] }, page)).toThrow(/cuts a and b nest/);
+  });
+
+  it('a ply named like an Object.prototype member has no cuts unless the cuts say so', () => {
+    const odd: AssemblySpec = {
+      ...noSignature,
+      plies: [
+        { id: 'constructor', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold' },
+        { id: 'toString', paper: { id: 'white', color: PAPERS.white.color }, pens: ['carbon'], cutInk: 'black' },
+      ],
+    };
+    expect(validateCuts(odd, {}, page)).toEqual(['ply constructor is fully hidden: ply toString above it has no cuts']);
+    expect(clipToRegion([line(0, 100, 200, 100)], plyRegion(odd, {}, 'toString'))).toEqual([line(0, 100, 200, 100)]);
+    expect(renderPly(odd, { params: { ply: 'toString' } }, pens, { cuts: {}, art: {} })).toEqual([]);
+    const own = { toString: [{ id: 'w', rings: [WINDOW_T] }] };
+    expect(renderPly(odd, { params: { ply: 'toString' } }, pens, { cuts: own, art: {} }).map((p) => p.id)).toEqual(['cut-w', 'asm-toString-w']);
+    expect(validateCuts(odd, own, page)).toEqual([]);
+  });
+
+  it('validateCuts refuses two cuts whose diagnostic part id asm-<ply>-<cut> is the same', () => {
+    const dashed: AssemblySpec = {
+      ...noSignature,
+      plies: [
+        { id: 'a-b', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold' },
+        { id: 'a', paper: { id: 'white', color: PAPERS.white.color }, pens: ['carbon'], cutInk: 'black' },
+      ],
+    };
+    const ok = { 'a-b': [{ id: 'c', rings: [rect(40, 40, 100, 100)] }], a: [{ id: 'd', rings: [rect(40, 40, 100, 100)] }] };
+    expect(() => validateCuts(dashed, ok, page)).not.toThrow();
+    const clash = { 'a-b': [{ id: 'c', rings: [rect(40, 40, 100, 100)] }], a: [{ id: 'b-c', rings: [rect(40, 40, 100, 100)] }] };
+    expect(() => validateCuts(dashed, clash, page)).toThrow(/ply a cut b-c: the diagnostic part id asm-a-b-c is already taken/);
+  });
+
+  it('validateAssemblySpec wants a signature box with a positive size, and a nonnegative ply bleed', () => {
+    for (const width of [0, -5, Number.NaN]) expect(bad((s) => { s.signature!.box.width = width; })).toThrow(/signature box must have a positive size/);
+    for (const height of [0, -5, Number.NaN]) expect(bad((s) => { s.signature!.box.height = height; })).toThrow(/signature box must have a positive size/);
+    expect(bad((s) => { s.signature!.box = { x: 150, y: 175, width: 0.1, height: 0.1 }; })).not.toThrow();
+    expect(bad((s) => { s.plies[1].bleed = -0.1; })).toThrow(/Ply middle bleed must be nonnegative/);
+    expect(bad((s) => { s.plies[1].bleed = Number.NaN; })).toThrow(/Ply middle bleed must be nonnegative/);
+    expect(bad((s) => { s.plies[1].bleed = 0; })).not.toThrow();
+  });
+
+  it('validateCuts refuses a label the stroke face cannot draw, which would throw in cutGuides', () => {
+    const labelled = (label: unknown, kind: Cut['kind'] = 'waste'): Cuts => ({ top: [{ id: 'a', label: label as string, kind, rings: [rect(40, 40, 100, 100)] }] });
+    expect(() => validateCuts(spec, labelled('CUT A'), page)).not.toThrow();
+    expect(() => validateCuts(spec, labelled('Door 2-B, left (n.1)'), page)).not.toThrow();
+    expect(() => validateCuts(spec, labelled('caf\u00e9'), page)).toThrow(/cut a: label has unsupported character U\+00E9/);
+    expect(() => validateCuts(spec, labelled('\u65e5\u672c'), page)).toThrow(/cut a: label has unsupported character U\+65E5/);
+    expect(() => validateCuts(spec, labelled('caf\u00e9', 'part'), page)).toThrow(/label has unsupported character U\+00E9/); // every cut's label is checked
+    expect(() => validateCuts(spec, labelled(42), page)).toThrow(/cut a: label must be a string/);
+    expect(() => validateCuts(spec, labelled('x'.repeat(257)), page)).toThrow(/label is longer than 256 characters/);
+    expect(() => validateCuts(spec, labelled('x'.repeat(256)), page)).not.toThrow();
+    // It names the cut that failed, and is one of the collected problems.
+    expect(() => validateCuts(spec, { top: [{ id: 'a', label: '\u00e9', rings: [rect(5, 40, 60, 100)] }] }, page)).toThrow(/unsupported character[\s\S]*page margin/);
+    expect(() => cutGuides({ id: 'a', label: 'caf\u00e9', rings: [rect(40, 40, 100, 100)] }, 'black', { ...GUIDE_DEFAULTS, penWidth: 0.35 })).toThrow(/Unsupported stroke character U\+E9/);
+  });
+
   it('validateCuts collects every problem into one error', () => {
     const run = () => validateCuts(spec, { top: [{ id: 'a', rings: [rect(5, 40, 60, 100)] }, { id: 'b', rings: [rect(60, 60, 62, 100)] }] }, page);
     expect(run).toThrow(/page margin[\s\S]*3 mm wide/);
@@ -406,6 +540,76 @@ describe('validators', () => {
     const hidden = validateCuts(spec, { top: cuts.top }, page);
     expect(hidden).toEqual(['ply bottom is fully hidden: ply middle above it has no cuts']);
     expect(validateCuts(spec, {}, page)).toEqual(['ply bottom is fully hidden: ply middle above it has no cuts', 'ply middle is fully hidden: ply top above it has no cuts']);
+  });
+});
+
+describe('the window minimum: every window validateCuts accepts, cutGuides can mark', () => {
+  const options = { ...GUIDE_DEFAULTS, penWidth: inkPen('black').width };
+  const felt: Pen = { id: 'felt', color: '#222222', width: 1.2 };
+  const allPens = [...pens, felt];
+
+  it('a 50 mm long window at 3.0, 3.4 and 3.8 mm wide validates and renders its guides', () => {
+    for (const w of [3.0, 3.4, 3.8]) {
+      const cut: Cut = { id: 'w', rings: [rect(20, 20, 20 + w, 70)] };
+      const world = { cuts: { top: [cut] }, art: {} };
+      expect(() => validateCuts(spec, world.cuts, page, pens)).not.toThrow();
+      const guide = renderPly(spec, { params: { ply: 'top' }, page }, pens, world).find((p) => p.id === 'cut-w')!;
+      expect(guide.paths.length).toBeGreaterThanOrEqual(3); // the outline and the strokes of at least one X
+    }
+  });
+
+  it('a window of 2.8 mm is refused by both, and one wider than 3 mm is refused when a wide pen cannot mark it', () => {
+    expect(() => validateCuts(spec, { top: [{ id: 'w', rings: [rect(20, 20, 22.8, 70)] }] }, page, pens)).toThrow(/the window is nowhere 3 mm wide/);
+    expect(() => cutGuides({ id: 'w', rings: [rect(20, 20, 22.8, 70)] }, 'black', options)).toThrow(/no room for an X mark/);
+    // A 1.2 mm pen needs a clearance of 0.75 + 0.6 + 0.5 = 1.85, a 3.7 mm window: 3.4 mm is wide enough for the 0.35 pen only.
+    const wide = structuredClone(spec);
+    wide.plies[2].cutInk = 'felt';
+    const cut: Cut = { id: 'w', rings: [rect(20, 20, 23.4, 70)] };
+    expect(() => validateCuts(spec, { top: [cut] }, page, allPens)).not.toThrow();
+    expect(() => validateCuts(wide, { top: [cut] }, page, allPens)).toThrow(/ply top cut w: the window is nowhere 3.7 mm wide \(greatest inscribed clearance 1.70 mm, under 1.85 mm\)/);
+    expect(() => cutGuides(cut, 'black', { ...options, penWidth: 1.2 })).toThrow(/no room for an X mark/);
+    expect(() => validateCuts(wide, { top: [{ id: 'w', rings: [rect(20, 20, 23.8, 70)] }] }, page, allPens)).not.toThrow();
+    expect(() => cutGuides({ id: 'w', rings: [rect(20, 20, 23.8, 70)] }, 'black', { ...options, penWidth: 1.2 })).not.toThrow();
+  });
+
+  it('a part or piece (no X marks) keeps the plain 3 mm floor whatever the pen', () => {
+    const wide = structuredClone(spec);
+    wide.plies[1].cutInk = 'felt';
+    expect(() => validateCuts(wide, { middle: [{ id: 'p', kind: 'part', rings: [rect(20, 20, 23.2, 70)] }] }, page, allPens)).not.toThrow();
+  });
+
+  it('property: over random rectangles and rotated strips and three pens, validateCuts OK means cutGuides marks it', () => {
+    const rng = mulberry32(99);
+    let accepted = 0, rejected = 0;
+    for (let n = 0; n < 240; n++) {
+      const ink = ['black', 'gold', 'felt'][n % 3];
+      const w = 2.4 + rng() * 3.2, len = 20 + rng() * 60;
+      const angle = n % 2 === 0 ? 0 : rng() * Math.PI;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const ring = ([[-len / 2, -w / 2], [len / 2, -w / 2], [len / 2, w / 2], [-len / 2, w / 2]] as [number, number][]).map(([u, v]) => P(100 + u * cos - v * sin, 100 + u * sin + v * cos));
+      const inked: AssemblySpec = { ...spec, plies: spec.plies.map((ply) => (ply.id === 'top' ? { ...ply, cutInk: ink } : ply)) };
+      const cut: Cut = { id: 'r', rings: [ring] };
+      let valid = true;
+      try { validateCuts(inked, { top: [cut] }, page, allPens); } catch { valid = false; }
+      if (!valid) { rejected++; continue; }
+      accepted++;
+      expect(() => cutGuides(cut, 'black', { ...GUIDE_DEFAULTS, penWidth: allPens.find((pen) => pen.id === ink)!.width }), `${ink} w=${w} angle=${angle}`).not.toThrow();
+    }
+    expect(accepted).toBeGreaterThan(60);
+    expect(rejected).toBeGreaterThan(60);
+  });
+
+  it('does not reject a diamond the 0.5 mm grid under-measures', () => {
+    // Inscribed clearance 2.2 / sqrt 2 = 1.556: the grid points nearest the centre are only 1.27..1.41 from the edges.
+    const diamond = (r: number): Point[] => [P(50, 50 - r), P(50 + r, 50), P(50, 50 + r), P(50 - r, 50)];
+    const cut: Cut = { id: 'd', rings: [diamond(2.2)] };
+    expect(() => validateCuts(spec, { top: [cut] }, page)).not.toThrow();
+    expect(() => validateCuts(spec, { top: [cut] }, page, pens)).not.toThrow();
+    expect(cutGuides(cut, 'black', options).paths.length).toBeGreaterThanOrEqual(3);
+    expect(() => validateCuts(spec, { top: [{ id: 'd', rings: [diamond(2.0)] }] }, page)).toThrow(/3 mm wide/); // 1.414: really too narrow
+    // 2.125 / sqrt 2 = 1.5026, just over the floor: the centre is 0.125 off the 0.5 grid, which only the finer refinement lands on.
+    expect(() => validateCuts(spec, { top: [{ id: 'd', rings: [diamond(2.125)] }] }, page)).not.toThrow();
+    expect(() => validateCuts(spec, { top: [{ id: 'd', rings: [diamond(2.115)] }] }, page)).toThrow(/3 mm wide/); // 1.4956: just under
   });
 });
 
@@ -459,6 +663,58 @@ describe('renderPly', () => {
     expect(() => render('attic')).toThrow(/Unknown ply: attic/);
     expect(() => render('bottom', { cuts, art: { bottom: [art('carbon', 'wrong')], middle: [], top: [] } })).toThrow(/pen carbon, which ply bottom does not carry/);
     expect(() => renderPly({ ...spec, plies: spec.plies.map((p) => ({ ...p, cutInk: 'gold', pens: p.pens })) }, { params: { ply: 'top' } }, [pens[1], pens[2]], world)).toThrow(/cutInk gold is not a declared pen/);
+  });
+});
+
+describe('renderPly checks its world before it draws', () => {
+  const felt: Pen = { id: 'felt', color: '#222222', width: 1.2 };
+  const part = (id: string, pen = 'carbon'): Part => ({ id, pen, paths: [line(0, 150, 200, 150)] });
+  const run = (world: { cuts?: Cuts; art?: Record<string, Part[]>; sealed?: Record<string, Part[]> }, ctx: { page?: typeof page } = {}, s: AssemblySpec = spec, ply = 'top') =>
+    () => renderPly(s, { params: { ply }, ...ctx }, [...pens, felt], { cuts, art: {}, ...world });
+
+  it('validates the cuts with the guide pen widths, and the page margin only when a page is known', () => {
+    const narrow: Cuts = { ...cuts, top: [{ id: 's', rings: [rect(20, 20, 22.5, 70)] }] };
+    expect(run({ cuts: narrow })).toThrow(/ply top cut s: the window is nowhere 3 mm wide/);
+    // The cuts of every ply are checked whichever ply is rendered, so all the plies of a world are accepted or refused alike.
+    expect(run({ cuts: { ...cuts, middle: narrow.top } }, {}, spec, 'bottom')).toThrow(/ply middle cut s: the window is nowhere 3 mm wide/);
+    // A wide cut ink needs a wider window than the same cut in a fine one.
+    const wideInk = structuredClone(spec);
+    wideInk.plies[2].cutInk = 'felt';
+    const slot: Cuts = { ...cuts, top: [{ id: 's', rings: [rect(20, 20, 23.4, 70)] }] };
+    expect(run({ cuts: slot })).not.toThrow();
+    expect(run({ cuts: slot }, {}, wideInk)).toThrow(/ply top cut s: the window is nowhere 3.7 mm wide/);
+    // The page margin: a cut at x = 5 is outside a 10 mm margin only if the page is given.
+    const edge: Cuts = { ...cuts, top: [{ id: 'e', rings: [rect(5, 20, 60, 70)] }] };
+    expect(run({ cuts: edge }, { page })).toThrow(/ply top cut e: vertex \(5, 20\) is outside the 10 mm page margin/);
+    expect(run({ cuts: edge })).not.toThrow();
+    expect(run({ cuts: { ...cuts, attic: [] } })).toThrow(/Cuts name an unknown ply: attic/);
+  });
+
+  it('refuses art or sealed art keyed by something that is not a ply', () => {
+    expect(run({ art: { top: [], attic: [] } })).toThrow(/World art names an unknown ply: attic/);
+    expect(run({ sealed: { attic: [part('word')] } })).toThrow(/World sealed art names an unknown ply: attic/);
+    expect(run({ art: { toString: [] } })).toThrow(/World art names an unknown ply: toString/);
+    expect(run({ art: { top: [part('ok')] }, sealed: { top: [part('word')] } })).not.toThrow();
+  });
+
+  it('refuses a part id that starts with asm-, cut- or place-, on any ply and in art or sealed art', () => {
+    for (const id of ['asm-x', 'cut-w', 'place-bar']) {
+      expect(run({ art: { top: [part(id)] } }), id).toThrow(/World art part .* uses the reserved id prefix/);
+      expect(run({ sealed: { top: [part(id)] } }), id).toThrow(/World sealed art part .* uses the reserved id prefix/);
+      expect(run({ art: { bottom: [part(id, 'gold')] } }), id).toThrow(/reserved id prefix/); // art for a ply this render is not
+    }
+    for (const id of ['asmodeus', 'cutlery', 'places', 'a-asm-', 'cut']) expect(run({ art: { top: [part(id)] } }), id).not.toThrow();
+  });
+
+  it('refuses a signature box that is not on the page, when the page is known', () => {
+    const off = (box: { x: number; y: number; width: number; height: number }): AssemblySpec => ({ ...spec, signature: { ...spec.signature!, box } });
+    expect(run({}, { page })).not.toThrow();
+    expect(run({}, { page }, off({ x: 175, y: 175, width: 30, height: 10 }))).toThrow(/signature box lies outside the 200 x 200 mm page/);
+    expect(run({}, { page }, off({ x: 150, y: 195, width: 30, height: 10 }))).toThrow(/signature box lies outside/);
+    expect(run({}, { page }, off({ x: -1, y: 175, width: 30, height: 10 }))).toThrow(/signature box lies outside/);
+    expect(run({}, { page }, off({ x: 150, y: -1, width: 30, height: 10 }))).toThrow(/signature box lies outside/);
+    expect(run({}, { page }, off({ x: 170, y: 190, width: 30, height: 10 }))).not.toThrow(); // flush with the corner
+    expect(run({}, {}, off({ x: 175, y: 175, width: 30, height: 10 }))).not.toThrow(); // no page, no check
   });
 });
 
