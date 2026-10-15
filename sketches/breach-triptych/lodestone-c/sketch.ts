@@ -8,7 +8,7 @@ import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
-import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
+import { facetStrokes, slabGeometry, slabMatrix, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
@@ -48,13 +48,15 @@ const GROUPS = ['field', 'filing', 'hand', 'word'] as const;
 
 /** The hand's camera: page millimetres per world unit at the hand's depth, and its distance. */
 const MM_PER_UNIT = 10, DIST = 150;
+/** The fist's facet hatch pitch (`facetStrokes`' scale): its darkest faces about 1.2 mm apart on the sheet, its lit ones about 6. */
+const HAND_PITCH = 1.6;
 /**
  * "falls" and "into", each along a closed loop under the bar: which loop (counted outward from the bar) and the page x
  * where the word starts on it, left of centre for "falls", right for "into", so they stagger.
  */
 const WORDS: { word: string; loop: number; x: number }[] = [{ word: 'falls', loop: 2, x: 66 }, { word: 'into', loop: 4, x: 176 }];
 
-type Tagged = Stroke & { slack: number };
+type Tagged = Stroke & { slack: number; face?: string };
 
 const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: SketchContext): Part[] {
   const frame = bustFrame(ctx);
@@ -117,12 +119,42 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   for (const t of [sleeve, shirt]) cloth(silhouettes(t, { forward, eye }, { ink: 'carbon', group: 'hand' }));
   // The hand's planes: outlines, and one ring on the faces turned from the light, no more.
   const light = new THREE.Vector3(-0.5, 0.8, 0.4).normalize();
-  for (const sl of hand) for (const st of fewerRings(facetStrokes(sl, light, eye, false, 7 / MM_PER_UNIT), 1)) if (st.family === 'edge' || st.points.length === 5) strokes.push({ ink: 'carbon', group: 'hand', family: st.family, points: st.points, slack: 0.04 });
+  // (`handTexture` hatch, R10) The faces in the raking-light hatch, as the triptych's slabs are: up to two contour rings
+  // and a diagonal field, crossed on the darkest faces, about 1.2 mm apart there and wider as a face turns to the light,
+  // so the fist reads as a solid among the field's curves. Else (R2 to R9) outlines and one ring.
+  const textured = ctx.params.handTexture !== 'outline';
+  // (A face seen at a slant, under 0.35 of square on, keeps its rings but not its field: a sliver of hatch would float.)
+  const NORMALS = [[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]];
+  const facing = (sl: Slab, k: number) => {
+    const n = new THREE.Vector3(...NORMALS[k]).applyMatrix4(new THREE.Matrix4().extractRotation(slabMatrix(sl)));
+    return n.dot(eye.clone().sub(new THREE.Vector3(sl.x, sl.y, sl.z)).normalize());
+  };
+  hand.forEach((sl, i) => {
+    for (const st of fewerRings(facetStrokes(sl, light, eye, false, textured ? HAND_PITCH : 7 / MM_PER_UNIT), textured ? 2 : 1)) {
+      const ring = st.family === 'edge' || st.points.length === 5;
+      if (textured ? ring || st.face === undefined || facing(sl, st.face) >= 0.35 : ring) strokes.push({ ink: 'carbon', group: 'hand', family: st.family, points: st.points, slack: 0.04, ...(ring || st.face === undefined ? {} : { face: `${i}:${st.face}` }) });
+    }
+  });
   const geos = [...hand.map(slabGeometry), sleeve.mesh(64, 36), shirt.mesh(16, 36)];
   fitDepthRange(view, geos, 0.1, { exact: true });
   const depth = renderDepthBufferCPU(geos, view, W, H);
   const handArea = meshCoverage(geos, view, PAGE, 1.4);
-  projectStrokes(strokes, { view, depth, width: W, height: H, bias: hiddenBias(view, 0.04, DIST) }, {
+  // The lines the fist grips run into it: they end on its outline, not short of it (`handCore`); the rest pass behind.
+  const handCore = textured ? meshCoverage(geos, view, PAGE, 0.3) : handArea;
+  // A face whose field shows less than 0.4 of itself (the rest hidden behind other slabs) keeps its rings only: a patch of
+  // hatch with no edge round it would float.
+  const seen = new Map<string, { shown: number; whole: number }>();
+  const length = (pts: Point[]) => pts.slice(1).reduce((t, q, k) => t + Math.hypot(q.x - pts[k].x, q.y - pts[k].y), 0);
+  projectStrokes(strokes.filter(st => st.face), { view, depth, width: W, height: H, bias: hiddenBias(view, 0.04, DIST) }, {
+    begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
+      const f = seen.get(st.face!) ?? { shown: 0, whole: 0 };
+      f.whole += length(st.points.map(q => pageOf(view, q, PAGE)));
+      for (const run of runs) f.shown += length(scalePoints(run, MM_X, MM_Y));
+      seen.set(st.face!, f);
+    },
+  });
+  const shows = (st: Tagged) => { const f = st.face ? seen.get(st.face) : undefined; return !f || f.shown >= 0.4 * f.whole; };
+  projectStrokes(strokes.filter(shows), { view, depth, width: W, height: H, bias: hiddenBias(view, 0.04, DIST) }, {
     begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
       for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) buckets.add(`hand-${st.ink}`, inside, false);
     },
@@ -176,8 +208,10 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   // window's edge never crops it (`underBand`).
   const underBand: Point[][] = [];
   const field = (line: Point[]) => {
-    for (const piece of keepAlong(line, p => !handArea(p) && !clear(p) && !framed(p), 0.2)) buckets.add('field-carbon', piece, true);
-    if (frames.length) underBand.push(...keepAlong(line, p => !handArea(p) && !clear(p) && framed(p), 0.2));
+    const gripped = !!grip && [line[0], line[line.length - 1]].some(q => Math.hypot(q.x - grip.x, q.y - grip.y) < 6);
+    const behind = gripped ? handCore : handArea;
+    for (const piece of keepAlong(line, p => !behind(p) && !clear(p) && !framed(p), 0.2)) buckets.add('field-carbon', piece, true);
+    if (frames.length) underBand.push(...keepAlong(line, p => !behind(p) && !clear(p) && framed(p), 0.2));
   };
   for (const line of clipTrim(lines)) field(line);
   for (const dash of filings(ctx, m, Math.round(1000 * n(ctx, 'filings', 9, 0, 30)), p => handArea(p) || clear(p) || framedFar(p))) buckets.add('filing-carbon', dash, true);
@@ -201,13 +235,14 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
     return renderPly(spec, ctx, pens, { cuts: { gold: windows, bar: [barFootprint(bar, ctx)] }, art });
   }
   // The bar as a window in the gold where it lies (L's bar placed by `barPose`, a waste cut), the black beneath carrying
-  // (`cBarFill`) the cosmos (R9: galaxies and stars in silver, one star gold) or the bar's hatch in silver (R7, R8, as
+  // (`cBarFill`) the cosmos (R10: stars in silver, its galaxies suggested; R9's drawn out, `cosmos-explicit`; one star
+  // gold) or the bar's hatch in silver (R7, R8, as
   // L's gold carries it in black ink), out under the window's edge by the bleed; the gold's marks run on in silver on the
   // black, but not into the bar, where the lines and filings stop at its edge.
   // (The gold's marks stop short of the bar on the black by the bleed, so a window a little off never shows them.)
   const inBar = inGrown(barRing, grow);
   const pose = m.pose ?? { cx: (m.rect.x0 + m.rect.x1) / 2, cy: (m.rect.y0 + m.rect.y1) / 2, angle: 0 };
-  const sky = ctx.params.cBarFill === 'hatch' ? undefined : cosmos(ctx.random('lodestone-cosmos'), { cx: pose.cx, cy: pose.cy, angle: pose.angle, l: bar.l, h: bar.h }, { grow, galaxies: 2 });
+  const sky = ctx.params.cBarFill === 'hatch' ? undefined : cosmos(ctx.random('lodestone-cosmos'), { cx: pose.cx, cy: pose.cy, angle: pose.angle, l: bar.l, h: bar.h }, { grow, galaxies: 2, explicit: ctx.params.cBarFill === 'cosmos-explicit' });
   art.black = [
     ...art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver', paths: part.paths.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) })).filter(part => part.paths.length),
     ...(underBand.length ? [{ id: 'under-field-band', pen: 'silver', paths: underBand.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) }] : []),

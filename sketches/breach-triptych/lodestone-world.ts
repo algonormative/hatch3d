@@ -46,6 +46,8 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'slider', id: 'sleeveLength', label: 'Gripping hand from the bottom: the sleeve from the bottom trim to the cuff', default: 150, min: 60, max: 300, step: 5, units: 'mm', group: 'Magnet' },
   { type: 'select', id: 'handFrom', label: 'Where the gripping hand comes in', default: 'bottom', options: ['bottom', 'top'],
     optionLabels: { bottom: 'From the bottom edge, pulling lines down from under the bar', top: 'From the top edge (R2)' }, group: 'Magnet' },
+  { type: 'select', id: 'handTexture', label: 'C: the fist\'s faces', default: 'hatch', options: ['hatch', 'outline'],
+    optionLabels: { hatch: 'Hatch (R10): raking-light hatch on its facets, the gripped lines running into it', outline: 'Outline (R2 to R9): outlines and one ring' }, group: 'Magnet' },
   { type: 'select', id: 'fist', label: 'The gripping hand', default: 'slabs', options: ['slabs', 'clean'],
     optionLabels: { slabs: 'Slabs: palm, curled finger segments and thumb (R2)', clean: 'Clean: a squared fist, fingers folded in right angles in one row' }, group: 'Magnet' },
   { type: 'slider', id: 'pullStrength', label: 'The hand\'s pole, against the bar\'s', default: 0.3, min: 0.05, max: 0.8, step: 0.01, group: 'Magnet' },
@@ -65,8 +67,8 @@ export const LODESTONE_CONTROLS: Control[] = [
     optionLabels: { lens: 'Lens (R9): the head behind the bar, larger and shifted, as through a glass block, in a double rule', hatch: 'Hatch (R1 to R8): the bar\'s crossing hatch in a double rule' }, group: 'Magnet' },
   { type: 'select', id: 'lensFill', label: 'The lens faces (L\'s bar, R\'s head): how much of the skull shows', default: 'rings', options: ['rings', 'r9'],
     optionLabels: { rings: 'Rings (R10): the skull\'s planes as rings between the coil\'s turns, brows over the eyes', r9: 'R9: the features and the coil only' }, group: 'Magnet' },
-  { type: 'select', id: 'cBarFill', label: 'C: what the black shows inside the bar\'s window', default: 'cosmos', options: ['cosmos', 'hatch'],
-    optionLabels: { cosmos: 'Cosmos (R9): galaxies and stars in silver, one gold star', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
+  { type: 'select', id: 'cBarFill', label: 'C: what the black shows inside the bar\'s window', default: 'cosmos', options: ['cosmos', 'cosmos-explicit', 'hatch'],
+    optionLabels: { cosmos: 'Cosmos (R10): stars in silver, the galaxies only suggested (crowds thickening to a centre, a short arc, edge-on smudges), one gold star', 'cosmos-explicit': 'Cosmos, explicit (R9): two drawn spiral galaxies with cores', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
   { type: 'select', id: 'rCuts', label: 'R: what the black shows in the white\'s windows', default: 'lens', options: ['lens', 'squares', 'cosmos'],
     optionLabels: { lens: 'Lens (R9): the head square shows the head larger and shifted, as L\'s bar; the rest as R8', squares: 'Squares (R8): the figure, strands and tie stripes in silver, the ground\'s pulse', cosmos: 'Cosmos: the same cosmos as C\'s bar behind them, the tie all stars, the ground a spiral galaxy with a pink core' }, group: 'Ground' },
   { type: 'select', id: 'emphasis', label: 'Emphasis: key outlines doubled or tripled', default: 'on', options: ['on', 'off'],
@@ -920,10 +922,12 @@ export interface CosmosFrame { cx: number; cy: number; angle: number; l: number;
  * dashes), some small crosses and a few four-pointed with a smaller diagonal; and `galaxies` spirals (two log-spiral
  * arms of short dashes about a core of close rings, tilted away by a random inclination). Every mark lies inside the
  * frame grown by `grow`, never closer than `GAP` to another star, so no two fuse. Returns the silver marks, the cores
- * (for an accent ink where wanted) and `accent`, one bright star.
+ * (for an accent ink where wanted) and `accent`, one bright star. This drawn-out version (R9) is `explicit`; R10's
+ * default only suggests its galaxies (`cosmosSuggested`).
  */
 export const COSMOS = { starsPerMm2: 0.03, band: 0.4, gap: 1.3, armDash: 1.0, armGap: 0.7, coreRings: 4, coreStep: 0.6 };
-export function cosmos(rng: () => number, f: CosmosFrame, o: { grow: number; galaxies: number }): { silver: Point[][]; cores: Point[][]; accent: Point[][] } {
+export function cosmos(rng: () => number, f: CosmosFrame, o: { grow: number; galaxies: number; explicit?: boolean }): { silver: Point[][]; cores: Point[][]; accent: Point[][] } {
+  if (!o.explicit) return cosmosSuggested(rng, f, o);
   const ux = Math.cos(f.angle), uy = Math.sin(f.angle);
   const at = (s: number, t: number): Point => ({ x: f.cx + ux * s - uy * t, y: f.cy + uy * s + ux * t });
   const S = f.l / 2 + o.grow, T = f.h / 2 + o.grow;
@@ -986,6 +990,89 @@ export function cosmos(rng: () => number, f: CosmosFrame, o: { grow: number; gal
     else keep(silver, ray(0.25, a));
   });
   return { silver, cores, accent };
+}
+
+/**
+ * The cosmos with its galaxies suggested, not drawn (R10): the eye infers them. Stars thick along a band down the
+ * window's long axis (larger near its middle line) and thinner off it; about each of `galaxies` places the stars thicken
+ * toward a centre, closer packed and smaller there, in a tilted ellipse, with one short arc of stars dashed along its
+ * own curve (a hint of an arm, never a spiral); and a few smudges of short parallel dashes at an angle (galaxies seen
+ * edge on). No cores, no arms. One bright star in the accent ink. Every mark inside the frame grown by `grow`.
+ */
+export function cosmosSuggested(rng: () => number, f: CosmosFrame, o: { grow: number; galaxies: number }): { silver: Point[][]; cores: Point[][]; accent: Point[][] } {
+  const ux = Math.cos(f.angle), uy = Math.sin(f.angle);
+  const at = (s: number, t: number): Point => ({ x: f.cx + ux * s - uy * t, y: f.cy + uy * s + ux * t });
+  const S = f.l / 2 + o.grow, T = f.h / 2 + o.grow;
+  const inFrame = (s: number, t: number) => Math.abs(s) <= S && Math.abs(t) <= T;
+  const silver: Point[][] = [], accent: Point[][] = [];
+  const marks: { s: number; t: number; r: number }[] = [];
+  const clear = (s: number, t: number, gap: number) => marks.every(q => Math.hypot(q.s - s, q.t - t) >= gap + q.r);
+  const line = (into: Point[][], s: number, t: number, len: number, ang: number) => {
+    const a = { s: s - len * Math.cos(ang), t: t - len * Math.sin(ang) }, b = { s: s + len * Math.cos(ang), t: t + len * Math.sin(ang) };
+    if (inFrame(a.s, a.t) && inFrame(b.s, b.t)) into.push([at(a.s, a.t), at(b.s, b.t)]);
+  };
+  const star = (s: number, t: number, size: number, into = silver) => {
+    const a = rng() * Math.PI;
+    if (size > 0.9) { line(into, s, t, 1.1 * size, a); line(into, s, t, 1.1 * size, a + Math.PI / 2); line(into, s, t, 0.45 * size, a + Math.PI / 4); line(into, s, t, 0.45 * size, a - Math.PI / 4); }
+    else if (size > 0.45) { line(into, s, t, size, a); line(into, s, t, size, a + Math.PI / 2); }
+    else line(into, s, t, 0.25, a);
+    marks.push({ s, t, r: Math.max(0.3, size) });
+  };
+  const gauss = () => { let u = 0; for (let i = 0; i < 4; i++) u += rng(); return (u - 2) / 0.577; };
+  // Where the galaxies are suggested: one left of the middle, one right, tilted at random.
+  const places = Array.from({ length: o.galaxies }, (_, g) => ({
+    s: (g % 2 ? 1 : -1) * (0.18 + 0.12 * rng()) * f.l, t: (rng() - 0.5) * 0.25 * f.h, R: Math.min(0.5 * f.h, (g ? 9 : 13) + 3 * rng()),
+    cos: 0.45 + 0.35 * rng(), rot: 2 * Math.PI * rng(),
+  }));
+  const inPlace = (p: typeof places[number], x: number, y: number) => ({ s: p.s + x * Math.cos(p.rot) - y * p.cos * Math.sin(p.rot), t: p.t + x * Math.sin(p.rot) + y * p.cos * Math.cos(p.rot) });
+  // The bright star first, near the band, off the galaxies.
+  for (let tries = 0; tries < 200; tries++) {
+    const s = (2 * rng() - 1) * 0.9 * f.l / 2, t = gauss() * 0.12 * f.h;
+    if (places.some(p => Math.hypot(p.s - s, p.t - t) < p.R + 4)) continue;
+    const a = 0;
+    line(accent, s, t, 2.4, a); line(accent, s, t, 2.4, a + Math.PI / 2); line(accent, s, t, 1, a + Math.PI / 4); line(accent, s, t, 1, a - Math.PI / 4);
+    marks.push({ s, t, r: 2.6 });
+    break;
+  }
+  // Each galaxy: its short arc of aligned stars, then the crowd thickening toward its centre.
+  for (const p of places) {
+    const a0 = 2 * Math.PI * rng(), b = 0.25, r0 = 0.35 * p.R;
+    for (let th = 0; th < 1.3; th += 0.07 + 0.05 * rng()) {
+      const r = r0 * Math.exp(b * th) + (rng() - 0.5) * 0.6, q = inPlace(p, r * Math.cos(a0 + th), r * Math.sin(a0 + th));
+      const q2 = inPlace(p, (r + 0.5) * Math.cos(a0 + th + 0.05), (r + 0.5) * Math.sin(a0 + th + 0.05));
+      if (rng() < 0.8 && clear(q.s, q.t, 0.8)) { line(silver, q.s, q.t, 0.35 + 0.25 * rng(), Math.atan2(q2.t - q.t, q2.s - q.s)); marks.push({ s: q.s, t: q.t, r: 0.5 }); }
+    }
+    const n = Math.round(1.6 * p.R * p.R * 0.3);
+    for (let k = 0, tries = 0; k < n && tries < 30 * n; tries++) {
+      const r = Math.min(p.R, p.R * -Math.log(1 - 0.95 * rng()) / 2.6), th = 2 * Math.PI * rng(), q = inPlace(p, r * Math.cos(th), r * Math.sin(th));
+      if (!inFrame(q.s, q.t) || !clear(q.s, q.t, 0.75 + 0.5 * r / p.R)) continue;
+      star(q.s, q.t, r < 0.3 * p.R ? 0.2 : rng() < 0.15 ? 0.6 : 0.2);
+      k++;
+    }
+  }
+  // Smudges: short parallel dashes in a slim streak, at an angle to the band.
+  const smudges = 2 + Math.floor(2 * rng());
+  for (let m = 0, tries = 0; m < smudges && tries < 100; tries++) {
+    const s = (2 * rng() - 1) * 0.85 * f.l / 2, t = (2 * rng() - 1) * 0.6 * f.h / 2;
+    if (places.some(p => Math.hypot(p.s - s, p.t - t) < p.R + 3) || !clear(s, t, 4)) continue;
+    const ang = (rng() - 0.5) * 1.2, count = 5 + Math.floor(4 * rng());
+    for (let k = 0; k < count; k++) {
+      const along = (k / (count - 1) - 0.5) * 6, off = (rng() - 0.5) * 1.2, len = (0.4 + 0.5 * rng()) * (1 - Math.abs(along) / 4);
+      const q = { s: s + along * Math.cos(ang) - off * Math.sin(ang), t: t + along * Math.sin(ang) + off * Math.cos(ang) };
+      if (clear(q.s, q.t, 0.7)) { line(silver, q.s, q.t, Math.max(0.3, len), ang); marks.push({ s: q.s, t: q.t, r: 0.4 }); }
+    }
+    m++;
+  }
+  // The field: a band down the long axis, its stars larger near its middle line, and a thinner scatter.
+  const count = Math.round(COSMOS.starsPerMm2 * 4 * S * T);
+  for (let k = 0, tries = 0; k < count && tries < 40 * count; tries++) {
+    const inBand = rng() < COSMOS.band, s = (2 * rng() - 1) * S, t = inBand ? gauss() * 0.18 * f.h : (2 * rng() - 1) * T;
+    if (!inFrame(s, t) || places.some(p => Math.hypot(p.s - s, p.t - t) < 0.6 * p.R) || !clear(s, t, COSMOS.gap)) continue;
+    const near = Math.exp(-((t / (0.2 * f.h)) ** 2)), u = rng();
+    star(s, t, u > 0.97 - 0.04 * near ? 1 : u > 0.75 - 0.15 * near ? 0.45 + 0.3 * rng() : 0.2);
+    k++;
+  }
+  return { silver, cores: [], accent };
 }
 
 // ── Hands ────────────────────────────────────────────────────────────
