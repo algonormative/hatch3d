@@ -1,7 +1,7 @@
 import { plyControl, renderPly } from '../../src/sketch/assembly.ts';
 import { PAPERS, inkOnTrial, inkPen } from '../../src/sketch/materials.ts';
 import { measureStrokeText, strokeText } from '../../src/sketch/stroke-text.ts';
-import type { AssemblySpec, Control, Cuts, Part, Pen, PlySpec, Point, Sketch } from '../../src/sketch/types.ts';
+import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketch } from '../../src/sketch/types.ts';
 
 /**
  * Assembly calibration: three sheets (black, gold-yellow and white paper) that are plotted, knife-cut, trimmed at the
@@ -21,6 +21,8 @@ const paper = (id: keyof typeof PAPERS) => ({ id: PAPERS[id].id, color: PAPERS[i
 const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow'];
 const GOLD_INKS = ['black', 'gold']; // gold is on trial on gold-yellow paper
 const WHITE_INKS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']; // the last three are on trial
+/** The inks the triptych draws in on white (Lodestone R's white sheet): the white's spacing, marks and crossing tests, for want of room for all eight. */
+const TRIPTYCH_WHITE_INKS = ['carbon', 'ultramarine', 'fluoro-pink'];
 
 const plies: PlySpec[] = [
   { id: 'black', paper: paper('black'), pens: BLACK_INKS, cutInk: 'silver' },
@@ -61,8 +63,8 @@ function dashed(x0: number, y: number, length: number, on = 2, off = 1.2): Point
 
 const FACE = { face: 'sans' as const };
 /** Stroke text with its top edge at `top` (cap height `h`; descenders hang below), its left edge at `x`. */
-const text = (s: string, x: number, top: number, h: number): Point[][] => strokeText(s, x, top, { ...FACE, height: h });
-const textWidth = (s: string, h: number): number => measureStrokeText(s, { ...FACE, height: h });
+const text = (s: string, x: number, top: number, h: number, face: 'sans' | 'script' = FACE.face): Point[][] => strokeText(s, x, top, { face, height: h });
+const textWidth = (s: string, h: number, face: 'sans' | 'script' = FACE.face): number => measureStrokeText(s, { face, height: h });
 const centered = (s: string, cx: number, top: number, h: number): Point[][] => text(s, cx - textWidth(s, h) / 2, top, h);
 const rightAligned = (s: string, right: number, top: number, h: number): Point[][] => text(s, right - textWidth(s, h), top, h);
 
@@ -94,7 +96,7 @@ export const GHOST_BLACK = box(100, 262, 40, 25);
 
 export function cuts(): Cuts {
   return {
-    gold: [{ id: 'g1', label: 'G1', rings: [ring(G1)] }],
+    gold: [{ id: 'g1', label: 'G1', rings: [ring(G1)] }, ...cutLadder()],
     white: [
       { id: 'w1', label: 'W1', rings: [ring(W1)] },
       { id: 'w2', label: 'W2', rings: [ring(W2)] },
@@ -137,6 +139,198 @@ const title = (ply: PlySpec, date: string, seed: number, pen: string, x: number,
     ...text(`${date} | seed ${seed}`, x, y + 9, 2.5),
   ],
 });
+
+// ── Font test ────────────────────────────────────────────────────────
+
+/**
+ * The font test: the stroke faces the triptych writes in (Hershey sans; and script) at the sizes worth trying, the
+ * triptych's phrase words being 2.6 mm (cap height). One cell per ink, `FONT_CELL` wide and tall: the ink id (with
+ * "(trial)" where it is on trial on this paper), then "line" in sans at each of `FONT_SIZES` left to right on one
+ * baseline, the same in script, and the phrase at 2.6 mm in sans. All in the ink itself.
+ */
+export const FONT_SIZES = [1.5, 2, 2.6, 3.5, 5];
+export const FONT_CELL = { w: 50, h: 20, gap: 1.8, sample: 'line', phrase: 'everything falls into line' };
+export function fontCell(ink: string, paperId: string, x: number, y: number): Part {
+  const paths: Point[][] = [...text(`${ink}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`, x, y, 2)];
+  (['sans', 'script'] as const).forEach((face, row) => {
+    const base = y + 7.5 + row * 6;
+    let cx = x;
+    for (const h of FONT_SIZES) { paths.push(...text(FONT_CELL.sample, cx, base - h, h, face)); cx += textWidth(FONT_CELL.sample, h, face) + FONT_CELL.gap; }
+  });
+  paths.push(...text(FONT_CELL.phrase, x, y + 15.3, 2.6));
+  return { id: `font-${ink}`, pen: ink, paths };
+}
+
+/** A sheet's font test: a header in the sheet's own ink, then its inks' cells two to a row from (x, y). */
+function fontTest(inks: string[], paperId: string, pen: string, x: number, y: number, note?: string): Part[] {
+  const lines = ['font test: "line" in sans, then script, at 1.5 2.0 2.6 3.5 5 mm;', 'the phrase in sans at 2.6 mm (the triptych\'s size)', ...(note ? [note] : [])];
+  const header: Part = { id: 'font-header', pen, paths: lines.flatMap((l, i) => text(l, x, y + 3.5 * i, 2)) };
+  const top = y + 3.5 * lines.length + 2;
+  return [header, ...inks.map((ink, i) => fontCell(ink, paperId, x + (i % 2) * (FONT_CELL.w + 6), top + Math.floor(i / 2) * FONT_CELL.h))];
+}
+/** Where each sheet's font test sits: the gold's in W1 below its swatches, the white's in the lower half's right side,
+ * the black's in its lower half (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
+export const FONT_AT = { black: P(161, 204), gold: P(28, 116), white: P(161, 296) };
+
+// ── Test blocks (R11): spacing, marks, crossings, cuts, the paper edge ──
+
+/** Small stroke text for the blocks' labels and rungs, millimetres. */
+const SMALL = 1.5;
+const trialMark = (ink: string, paperId: string): string => `${ink}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`;
+const squareRing = (cx: number, cy: number, half: number): Point[] => [P(r4(cx - half), r4(cy - half)), P(r4(cx + half), r4(cy - half)), P(r4(cx + half), r4(cy + half)), P(r4(cx - half), r4(cy + half)), P(r4(cx - half), r4(cy - half))];
+const circle = (cx: number, cy: number, r: number, n = Math.max(24, Math.ceil(r * 24))): Point[] => Array.from({ length: n + 1 }, (_, i) => P(r4(cx + r * Math.cos((2 * Math.PI * i) / n)), r4(cy + r * Math.sin((2 * Math.PI * i) / n))));
+
+/**
+ * The spacing and emphasis ladder: per ink a row of 5 x 5 mm hatch patches at `SPACINGS` (centre to centre), then a 3 mm
+ * square outlined twice at each of `EMPHASIS_SPACINGS`, then three times: the tightest that stays separate is the
+ * pitch the art can use for hatch and for doubled and tripled outlines. `SPACING_ROW`: the columns' x offsets.
+ */
+export const SPACINGS = [0.4, 0.5, 0.55, 0.66, 0.8, 1.0];
+export const EMPHASIS_SPACINGS = [0.6, 0.7, 0.8, 1.0, 1.2];
+export const SPACING_ROW = { h: 11, patch: 5, cell: 6.5, doubles: 41, triples: 75.5, tripleCell: 8.5, square: 3, w: 118 };
+export function spacingRow(ink: string, paperId: string, x: number, y: number): Part {
+  const top = y + 2.8, paths: Point[][] = [...text(trialMark(ink, paperId), x, y, SMALL)];
+  SPACINGS.forEach((pitch, i) => paths.push(...hatch(x + i * SPACING_ROW.cell, top, SPACING_ROW.patch, SPACING_ROW.patch, pitch)));
+  for (const [x0, cell, lines] of [[SPACING_ROW.doubles, SPACING_ROW.cell, 2], [SPACING_ROW.triples, SPACING_ROW.tripleCell, 3]]) {
+    EMPHASIS_SPACINGS.forEach((pitch, i) => {
+      for (let k = 0; k < lines; k++) paths.push(squareRing(x + x0 + i * cell + cell / 2, top + 4, SPACING_ROW.square / 2 + k * pitch));
+    });
+  }
+  return { id: `spacing-${ink}`, pen: ink, paths };
+}
+function spacingLadder(inks: string[], paperId: string, pen: string, x: number, y: number): Part[] {
+  const fmt = (v: number) => v.toFixed(2).replace(/^0/, '');
+  const header: Part = { id: 'spacing-header', pen, paths: [
+    ...text('spacing (mm): hatch; double; triple', x, y, SMALL),
+    ...SPACINGS.flatMap((v, i) => text(fmt(v), x + i * SPACING_ROW.cell, y + 2.6, 1.2)),
+    ...EMPHASIS_SPACINGS.flatMap((v, i) => text(v.toFixed(1), x + SPACING_ROW.doubles + i * SPACING_ROW.cell + 1.2, y + 2.6, 1.2)),
+    ...EMPHASIS_SPACINGS.flatMap((v, i) => text(v.toFixed(1), x + SPACING_ROW.triples + i * SPACING_ROW.tripleCell + 2, y + 2.6, 1.2)),
+  ] };
+  return [header, ...inks.map((ink, i) => spacingRow(ink, paperId, x, y + 5 + i * SPACING_ROW.h))];
+}
+
+/**
+ * Dots, dashes and tight curves: per ink, dashes `DASHES` mm on (the gap the same), one row each; a row of
+ * dots, three each of the strokes `DOTS` mm long; crosses `CROSSES` mm across (the cosmos's star
+ * sizes); circles of radius `CIRCLES`; a spiral from 1 to 4 mm radius (2 to 8 mm across). The ink id to the left.
+ * Dots: see `DOTS`.
+ */
+export const DASHES = [0.3, 0.5, 1.0, 1.6];
+export const CROSSES = [0.8, 1.2, 1.6];
+export const CIRCLES = [0.5, 1, 2, 4];
+/**
+ * The dots' lengths. A zero-length stroke never reaches the plotter (the render's clipping drops it), nor does any
+ * under 0.3 mm (finalize's `filter --min-length 0.3mm`): the dots are the shortest strokes that do, and a little longer.
+ */
+export const DOTS = [0.3, 0.35, 0.4];
+export const MARKS_ROW = { h: 9.5, label: 23, dashes: 16, dots: 9, w: 102 };
+export function marksRow(ink: string, paperId: string, x: number, y: number): Part {
+  const paths: Point[][] = [...text(trialMark(ink, paperId), x, y + 3.5, SMALL)];
+  let cx = x + MARKS_ROW.label;
+  DASHES.forEach((d, i) => paths.push(...dashed(cx, y + 0.6 + i * 1.9, MARKS_ROW.dashes, d, d)));
+  cx += MARKS_ROW.dashes + 3;
+  for (let i = 0; i < MARKS_ROW.dots; i++) { const q = P(r4(cx + i * 2), r4(y + 4.2)), d = DOTS[Math.floor(i / 3)]; paths.push([q, P(r4(q.x + d), q.y)]); }
+  cx += 2 * (MARKS_ROW.dots - 1) + 3;
+  for (const size of CROSSES) { const c = cx + size / 2; paths.push(line(c - size / 2, y + 4.2, c + size / 2, y + 4.2), line(c, y + 4.2 - size / 2, c, y + 4.2 + size / 2)); cx += size + 1.6; }
+  cx += 1.4;
+  for (const r of CIRCLES) { paths.push(circle(cx + r, y + 4.2, r)); cx += 2 * r + 1.5; }
+  cx += 1.5;
+  const spiral: Point[] = [];
+  for (let i = 0; i <= 360; i++) { const t = i / 360, a = 3 * 2 * Math.PI * t, r = 1 + 3 * t; spiral.push(P(r4(cx + 4 + r * Math.cos(a)), r4(y + 4.2 + r * Math.sin(a)))); }
+  paths.push(spiral);
+  return { id: `marks-${ink}`, pen: ink, paths };
+}
+function marksLadder(inks: string[], paperId: string, pen: string, x: number, y: number): Part[] {
+  const header: Part = { id: 'marks-header', pen, paths: text('left to right: dashes .3 .5 1 1.6 on (gap the same); dots .3 .35 .4 long; crosses .8 1.2 1.6; circles r .5 1 2 4; spiral 2-8 mm', x, y, 1.2) };
+  return [header, ...inks.map((ink, i) => marksRow(ink, paperId, x, y + 2.5 + i * MARKS_ROW.h))];
+}
+
+/**
+ * Ink crossings: each ordered pair of `inks` crossing in the middle of a cell, the row's ink across, the column's ink
+ * down, so every pair crosses twice (once each way), and each crossing shows the later pen in the plot order over the
+ * earlier pen's ink. The rows are labelled with the inks, the columns numbered as the rows.
+ */
+export const CROSSING_CELL = 7;
+export function crossings(inks: string[], paperId: string, pen: string, x: number, y: number): Part[] {
+  const left = x + 22, top = y + 3, c = CROSSING_CELL, arm = c / 2 - 0.6;
+  const labels: Part = { id: 'crossings-labels', pen, paths: [
+    ...text('crossings: row ink across, column ink down', x, y - 2.5, SMALL),
+    ...inks.flatMap((ink, i) => [...text(`${i + 1} ${trialMark(ink, paperId)}`, x, top + i * c + c / 2 - 0.6, 1.2), ...centered(String(i + 1), left + i * c + c / 2, y, 1.2)]),
+  ] };
+  const parts: Part[] = [labels];
+  inks.forEach((ink, i) => {
+    const across: Point[][] = [], down: Point[][] = [];
+    inks.forEach((_, j) => {
+      if (i === j) return;
+      const cx = left + j * c + c / 2, cy = top + i * c + c / 2;
+      across.push(line(cx - arm, cy, cx + arm, cy));
+      const dx = left + i * c + c / 2, dy = top + j * c + c / 2;
+      down.push(line(dx, dy - arm, dx, dy + arm));
+    });
+    parts.push({ id: `crossings-${ink}`, pen: ink, paths: [...across, ...down] });
+  });
+  return parts;
+}
+
+/**
+ * The cut ladder (gold sheet, in what the white hides): waste windows with guides that probe the knife: wedges whose
+ * tips close to `WEDGES` degrees (8 mm bases), slots `SLOTS` mm wide and 30 long, three windows round a kept island held
+ * by one bridge `BRIDGES` mm wide (as the shirt cut holds L's tie at its knot and tip), and a notch open to the bottom
+ * trim. Each is at least 3 mm wide somewhere, as `validateCuts` asks, so the tooling cuts all of them as they are.
+ */
+export const WEDGES = [60, 45, 30, 20];
+export const SLOTS = [3, 4, 5, 6];
+export const BRIDGES = [2, 3, 4];
+export const LADDER_AT = P(22, 300);
+export const NOTCH = box(100, 412.8, 10, 8);
+export function cutLadder(): Cut[] {
+  const { x, y } = LADDER_AT, out: Cut[] = [];
+  WEDGES.forEach((deg, i) => {
+    const h = 4 / Math.tan((deg * Math.PI) / 360), cx = x + 4 + i * 16, base = y + 35;
+    out.push({ id: `wedge-${deg}`, rings: [[P(cx - 4, base), P(cx + 4, base), P(r4(cx), r4(base - h))]] });
+  });
+  let sx = x + 70;
+  for (const w of SLOTS) { out.push({ id: `slot-${w}`, rings: [ring(box(sx, y + 5, w, 30))] }); sx += w + 4; }
+  BRIDGES.forEach((b, i) => {
+    const ox = x + i * 28, oy = y + 50, o = 18, isl = 8, ix0 = ox + (o - isl) / 2, iy0 = oy + (o - isl) / 2, my = oy + o / 2;
+    // One ring: round the outside, in along the bridge's top edge, round the island backwards, out along its bottom edge.
+    out.push({ id: `bridge-${b}`, rings: [[
+      P(ox, oy), P(ox + o, oy), P(ox + o, my - b / 2), P(ix0 + isl, my - b / 2), P(ix0 + isl, iy0), P(ix0, iy0), P(ix0, iy0 + isl),
+      P(ix0 + isl, iy0 + isl), P(ix0 + isl, my + b / 2), P(ox + o, my + b / 2), P(ox + o, oy + o), P(ox, oy + o),
+    ].map((q) => P(r4(q.x), r4(q.y)))] });
+  });
+  out.push({ id: 'notch', rings: [ring(NOTCH)] });
+  return out;
+}
+function cutLadderLabels(pen: string): Part {
+  const { x, y } = LADDER_AT;
+  return { id: 'knife-ladder-labels', pen, paths: [
+    ...text('cut ladder: wedge tips (deg), slots (mm wide), bridges (mm), a notch open to the trim', x, y - 3, SMALL),
+    ...WEDGES.flatMap((deg, i) => centered(String(deg), x + 4 + i * 16, y + 37, SMALL)),
+    ...SLOTS.reduce<{ at: number; paths: Point[][] }>((acc, w) => ({ at: acc.at + w + 4, paths: [...acc.paths, ...centered(String(w), acc.at + w / 2, y + 37, SMALL)] }), { at: x + 70, paths: [] }).paths,
+    ...BRIDGES.flatMap((b, i) => centered(`bridge ${b}`, x + i * 28 + 9, y + 70, SMALL)),
+    ...centered('notch', NOTCH.x0 + 5, NOTCH.y0 - 3, SMALL),
+  ] };
+}
+
+/**
+ * Edge rulers: at the middle of each side, four short lines parallel to the paper's edge, 12, 13, 14 and 16 mm from it
+ * (1, 2, 3 and 5 mm inside the crop line: the finishing clips all art to the crop line, so nothing can be drawn in
+ * the margin itself), each labelled with its distance from the paper edge. Measured from the real paper edge with a
+ * rule, the difference is how far the plot landed from where it was placed.
+ */
+export const EDGE_DISTANCES = [12, 13, 14, 16];
+export function edgeRulers(pen: string, id: string): Part {
+  const W = PAGE.width, H = PAGE.height, mx = W / 2 - 3, my = H / 2 - 3, len = 6, paths: Point[][] = [];
+  EDGE_DISTANCES.forEach((d, k) => {
+    paths.push(line(mx, d, mx + len, d), ...text(String(d), mx + len + 1 + k * 3, d - 0.6, 1.2));
+    paths.push(line(mx, H - d, mx + len, H - d), ...rightAligned(String(d), mx - 1 - k * 3, H - d - 0.6, 1.2));
+    paths.push(line(d, my, d, my + len), ...text(String(d), d - 0.6, my + len + 1 + k * 2, 1.2));
+    paths.push(line(W - d, my, W - d, my + len), ...rightAligned(String(d), W - d + 0.6, my - 2.2 - k * 2, 1.2));
+  });
+  paths.push(...text('mm from the paper edge', mx + len + 14, 12, 1.2));
+  return { id, pen, paths };
+}
 
 // ── Ladders ──────────────────────────────────────────────────────────
 
@@ -262,6 +456,7 @@ export function buildWorld(date: string, seed: number): World {
         title(gold, date, seed, 'black', 28, 26),
         ...goldSwatches,
         bleedLadder('black', 28, W1.y1, 9, 'bleed-gold'),
+        ...fontTest(GOLD_INKS, gold.paper.id, 'black', FONT_AT.gold.x, FONT_AT.gold.y),
         marginLadder('black', 172, G1.y0, -1, 'margin-gold'),
         part('vernier-w-x-main-labels', 'black', W_X.mainLabels),
         part('vernier-w-y-main-labels', 'black', W_Y.mainLabels),
@@ -271,6 +466,11 @@ export function buildWorld(date: string, seed: number): World {
       white: [
         title(white, date, seed, 'carbon', WHITE_TITLE_AT.x, WHITE_TITLE_AT.y),
         ...whiteSwatches,
+        ...fontTest(WHITE_INKS, white.paper.id, 'carbon', FONT_AT.white.x, FONT_AT.white.y),
+        ...spacingLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 256.5),
+        ...marksLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 387.5),
+        ...crossings(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 80, 394),
+        edgeRulers('carbon', 'edge-white'),
         ...VARIANTS.map((v) => part(`caption-${v.id}`, 'carbon', text(v.caption, v.area.x0, VARIANT.y + VARIANT.h + 4.5, 2.5))),
         marginLadder('carbon', LADDER_WINDOW.x0 + 2, LADDER_WINDOW.y1, 1, 'margin-white'),
         part('caption-ladder', 'carbon', text('E  margin ladder', LADDER_WINDOW.x0, LADDER_WINDOW.y1 + 12, 2.5)),
@@ -285,11 +485,22 @@ export function buildWorld(date: string, seed: number): World {
         part('vernier-g-x-main', 'silver', G_X.main),
         part('vernier-g-y-main', 'silver', G_Y.main),
         part('ghost-silver', 'silver', hatch(GHOST_SILVER.x0, GHOST_SILVER.y0, GHOST_SILVER.x1 - GHOST_SILVER.x0, GHOST_SILVER.y1 - GHOST_SILVER.y0, 0.4)),
+        // (R11) The test blocks, under the gold and white papers: read on the loose sheet before gluing.
+        ...fontTest(BLACK_INKS, black.paper.id, 'silver', FONT_AT.black.x, FONT_AT.black.y, 'hidden once glued: read it before gluing'),
+        ...spacingLadder(BLACK_INKS, black.paper.id, 'silver', 20, 20),
+        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 98),
+        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 172),
+        edgeRulers('silver', 'edge-black'),
       ],
       gold: [
         part('vernier-w-x-main', 'black', W_X.main),
         part('vernier-w-y-main', 'black', W_Y.main),
         part('ghost-black', 'black', hatch(GHOST_BLACK.x0, GHOST_BLACK.y0, GHOST_BLACK.x1 - GHOST_BLACK.x0, GHOST_BLACK.y1 - GHOST_BLACK.y0, 0.4)),
+        // (R11) The test blocks, under the white paper, and the cut ladder's labels: read on the loose sheet.
+        ...spacingLadder(GOLD_INKS, gold.paper.id, 'black', 145, 250),
+        ...marksLadder(GOLD_INKS, gold.paper.id, 'black', 145, 282),
+        cutLadderLabels('black'),
+        edgeRulers('black', 'edge-gold'),
       ],
     },
   };

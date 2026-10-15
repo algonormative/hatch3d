@@ -8,6 +8,10 @@ A three-sheet test for the Breach triptych's paper stack: black paper at the bot
 - how far lower art must run under an upper edge (the bleed ladders);
 - how far apart the sheets register, read to 0.1 mm (four verniers);
 - whether art ghosts through the paper above it (two sealed hatch boxes).
+- the smallest legible stroke-text size per ink per paper, in sans and script (the font test).
+- the tightest hatch and outline spacing that stays separate, the shortest clean dash and smallest clean circle, smear at ink crossings, what the knife can cut (wedges, slots, bridges, a notch) and where the plot lands on the paper (edge rulers).
+
+The blocks a lower sheet hides once glued (the black's tests, the gold's lower half) are drawn as sealed art: they are read on the loose sheets.
 
 ## Layout
 
@@ -23,6 +27,12 @@ One tabloid page (279.4 x 431.8 mm, margin 11 mm, so the finished trim is about 
 | Bleed ladders | seven lines ending -1 to 3 mm past an edge: gold toward W1's bottom edge, black toward G1's |
 | Verniers | white over gold at W1, gold over black at G1, each an x vernier (bottom edge) and a y vernier (right edge) |
 | Ghost boxes | silver hatch (black sheet) under gold and white; black hatch (gold sheet) under white; white captions above |
+| Font test | per ink: "line" in Hershey sans and script at 1.5, 2.0, 2.6, 3.5, 5 mm, and "everything falls into line" at 2.6 mm: gold's in W1 below its swatches, white's in the lower half on the right, black's in its lower right (hidden once glued; G1 has no room) |
+| Spacing ladder | per ink: hatch patches at 0.40 to 1.00 mm, squares outlined twice and three times at 0.6 to 1.2 mm (white: carbon, ultramarine, fluoro pink) |
+| Dots, dashes, curves | per ink: dashes 0.3 to 1.6 mm, dots (0.3 to 0.4 mm strokes), crosses 0.8 to 1.6 mm, circles r 0.5 to 4 mm, a spiral |
+| Ink crossings | black: every pair of its six inks; white: carbon, ultramarine, fluoro pink; the later pen on top |
+| Cut ladder (gold, lower left, hidden under the white) | wedges 60 to 20 degrees, slots 3 to 6 mm, islands held by bridges 2 to 4 mm, a notch open to the trim |
+| Edge rulers | every sheet, the middle of each side: lines 12, 13, 14, 16 mm from the paper edge (art cannot go past the crop line) |
 
 The `black`, `gold` and `white` plies are separate pieces of `stack.json` (`assembly: "calibration"`, the same seed). The stack allows trial inks (`defaults.trialInks`): gold on the gold-yellow paper and silver, fluoro pink and fluoro orange on the white. The page is fixed (the layout is in page millimetres); `date` is the only control besides the ply.
 

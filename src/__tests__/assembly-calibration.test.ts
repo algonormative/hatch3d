@@ -7,7 +7,7 @@ import { GUIDE_DEFAULTS, cutGuides, renderPly } from '../sketch/assembly.ts';
 import { clipToRegion, distanceToRings, inRegion } from '../sketch/region.ts';
 import type { Part, Point } from '../sketch/types.ts';
 import sketch, {
-  BLEED_OFFSETS, DEFAULT_DATE, G1, GHOST_BLACK, GHOST_SILVER, MARGIN_OFFSETS, PAGE, SWATCH, VARIANTS, W1, W2, bleedLadder, buildWorld, cuts,
+  BLEED_OFFSETS, DEFAULT_DATE, DOTS, G1, GHOST_BLACK, GHOST_SILVER, MARGIN_OFFSETS, NOTCH, PAGE, SWATCH, VARIANTS, W1, W2, bleedLadder, buildWorld, cuts,
   marginLadder, pens, spec, swatch, vernier,
 } from '../../sketches/assembly-calibration/sketch.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
@@ -32,7 +32,7 @@ describe('assembly calibration', () => {
   it('cuts the windows as designed: W1 and W2 in the white, G1 inside W2 in the gold, five small windows with guide options', () => {
     const c = cuts();
     expect(Object.keys(c).sort()).toEqual(['gold', 'white']);
-    expect(c.gold.map((cut) => cut.id)).toEqual(['g1']);
+    expect(c.gold.map((cut) => cut.id)).toEqual(['g1', 'wedge-60', 'wedge-45', 'wedge-30', 'wedge-20', 'slot-3', 'slot-4', 'slot-5', 'slot-6', 'bridge-2', 'bridge-3', 'bridge-4', 'notch']);
     expect(c.white.map((cut) => cut.id)).toEqual(['w1', 'w2', 'va', 'vb', 'vc', 'vd', 'ml']);
     expect([W1.x1 - W1.x0, W1.y1 - W1.y0, W2.x1 - W2.x0, W2.y1 - W2.y0]).toEqual([115, 180, 105, 180]);
     expect([G1.x0 - W2.x0, G1.y0 - W2.y0, W2.x1 - G1.x1, W2.y1 - G1.y1]).toEqual([12, 12, 12, 12]);
@@ -199,6 +199,42 @@ describe('assembly calibration: verniers', () => {
     expect(Math.min(...upperArt('gold', 'vernier-g-y-scale').slice(0, 11).flat().map((p) => p.x))).toBeCloseTo(G1.x1 + 0.31, 6);
     // The sealed main scale stays whole under the upper paper: renderPly does not clip it.
     expect(render('gold').find((p) => p.id === 'vernier-w-x-main')!.paths).toHaveLength(21);
+  });
+});
+
+describe('assembly calibration: test blocks (R11)', () => {
+  it('give each sheet its font test, spacing ladder, dots and dashes, crossings and edge rulers, inside the trim; a lower sheet\'s hidden ones sealed', () => {
+    const inks = (ply: string, prefix: string) => [...(world.art[ply] ?? []), ...(world.sealed[ply] ?? [])].filter((p) => p.id.startsWith(prefix) && !/-(header|labels)$/.test(p.id)).map((p) => p.pen);
+    const black = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow'], triptychWhite = ['carbon', 'ultramarine', 'fluoro-pink'];
+    expect(inks('black', 'font-')).toEqual(black);
+    expect(inks('gold', 'font-')).toEqual(['black', 'gold']);
+    expect(inks('white', 'font-')).toEqual(['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
+    for (const [ply, list] of [['black', black], ['gold', ['black', 'gold']], ['white', triptychWhite]] as const) {
+      expect(inks(ply, 'spacing-')).toEqual(list);
+      expect(inks(ply, 'marks-')).toEqual(list);
+    }
+    expect(inks('black', 'crossings-')).toEqual(black);
+    expect(inks('white', 'crossings-')).toEqual(triptychWhite);
+    // Black's tests and the gold's lower ones are sealed (hidden once glued, read on the loose sheet); the white's are art.
+    expect(world.art.black.some((p) => /^(font|spacing|marks|crossings|edge)-/.test(p.id))).toBe(false);
+    expect(world.sealed.gold.filter((p) => /^(spacing|marks|edge|knife)-/.test(p.id)).length).toBe(8);
+    for (const ply of ['black', 'gold', 'white']) {
+      const blocks = [...(world.art[ply] ?? []), ...(world.sealed[ply] ?? [])].filter((p) => /^(font|spacing|marks|crossings|edge|knife)-/.test(p.id));
+      for (const q of blocks.flatMap((p) => p.paths.flat())) expect(q.x >= 11 && q.x <= PAGE.width - 11 && q.y >= 11 && q.y <= PAGE.height - 11, `${ply} inside the trim`).toBe(true);
+    }
+    // Dots are the shortest strokes finalize passes (its min length is 0.3 mm).
+    // (The row's dots start past its 23 mm label and 16 mm of dashes, 3 mm on: x 62 on the black's ladder at x 20.)
+    const dots = world.sealed.black.find((p) => p.id === 'marks-gold')!.paths.filter((path) => path.length === 2 && path[0].y === path[1].y && path[0].x > 61 && path[1].x - path[0].x <= 0.41);
+    expect(dots.map((d) => Number((d[1].x - d[0].x).toFixed(2)))).toEqual(DOTS.flatMap((d) => [d, d, d]));
+  });
+
+  it('cuts its ladder in the gold where the white hides it, every rung a window validateCuts accepts, the notch open to the trim', () => {
+    const ladder = cuts().gold.filter((cut) => cut.id !== 'g1');
+    expect(() => renderPly(spec, { params: { ply: 'gold' }, page: PAGE }, pens, world)).not.toThrow();
+    for (const cut of ladder) for (const p of cut.rings.flat()) expect(cut.id === 'notch' || p.y < 420, cut.id).toBe(true);
+    expect(Math.max(...cuts().gold.find((cut) => cut.id === 'notch')!.rings[0].map((p) => p.y))).toBeCloseTo(PAGE.height - PAGE.margin, 9);
+    expect(NOTCH.y1).toBeCloseTo(PAGE.height - PAGE.margin, 9);
+    for (const cut of ladder) for (const w of cuts().white) for (const p of cut.rings.flat()) expect(inRegion(p, { rings: w.rings }), `${cut.id} under ${w.id}`).toBe(false);
   });
 });
 
