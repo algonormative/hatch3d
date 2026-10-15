@@ -51,7 +51,8 @@ export function lune(c1: Point, r1: number, c2: Point, r2: number, n = 64): Poin
   // The outer arc of circle 1, away from circle 2, then back along circle 2's arc inside circle 1.
   const s1 = base + spread1, e1 = base - spread1 + TAU;
   for (let i = 0; i <= n; i++) out.push(at(c1, r1, s1 + (e1 - s1) * i / n));
-  const s2 = base - spread2, e2 = base + spread2;
+  // Back along circle 2 the short way round, through the side facing circle 1's centre.
+  const s2 = base - spread2, e2 = base + spread2 - TAU;
   for (let i = 1; i < n; i++) out.push(at(c2, r2, s2 + (e2 - s2) * i / n));
   return out;
 }
@@ -122,8 +123,9 @@ const C: Record<CutSchemeId, (a: CAnchors) => Cut[]> = {
   k3: a => {
     const mid = (a.rect.x0 + a.rect.x1) / 2, w = a.rect.x1 - a.rect.x0;
     return [
-      { id: 'over', label: 'OVER', rings: [lune({ x: mid, y: a.rect.y0 - 22 }, 0.55 * w, { x: mid, y: a.rect.y0 + 4 }, 0.55 * w)] },
-      { id: 'under', label: 'UNDER', rings: [lune({ x: mid, y: a.rect.y1 + 26 }, 0.55 * w, { x: mid, y: a.rect.y1 }, 0.55 * w)] },
+      // An arch over the bar and a bowl under it, each a crescent 18 mm thick, horns just clear of the bar's ends.
+      { id: 'over', label: 'OVER', rings: [clipToTrim(lune({ x: mid, y: a.rect.y0 - 12 }, 0.45 * w, { x: mid, y: a.rect.y0 + 6 }, 0.45 * w))] },
+      { id: 'under', label: 'UNDER', rings: [clipToTrim(lune({ x: mid, y: a.rect.y1 + 12 }, 0.45 * w, { x: mid, y: a.rect.y1 - 6 }, 0.45 * w))] },
     ];
   },
   k4: a => { const { south } = poles(a); return [{ id: 'south', label: 'S', rings: [disc({ x: south.x + 15, y: south.y }, 12)] }, { id: 'pull', label: 'PULL', rings: [pullWedge(a, 30)] }]; },
