@@ -21,7 +21,7 @@ import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LENS, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, eyeCentre, faceMarks, faceOutline, fieldLines, fieldPull, gapOf, lensCamera, lensImage, lensShift, rEntries, seenBy, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -135,10 +135,11 @@ const RAVEL = { portalAt: 16, length: 55, dash: 1.6, gap: 1.1, loose: 0.4 };
  * portal as short dashes, a little loose, so a few millimetres' misalignment with C's lines reads as natural; passes
  * the portal as it is; and from the portal's far edge its line draws in, over RAVEL.length, to its place across a
  * twisting ribbon (its edges, laminations and spine, the pink strand its +1 edge), which runs on along the middle
- * strand's course to the hands and down to the floor. Returns the strands cut short after the ravel (in place), the
+ * strand's course to the hands and down to the floor, `widen` times the thread's width (R9: twice, `rRibbonWidth`; its
+ * laminations as many times over). Returns the strands cut short after the ravel (in place), the
  * dashes, the ribbon (flatRibbon's strokes: its first two the -1 and +1 edges) and its centreline.
  */
-function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: number): { dashes: { path: Point[]; ink: Ink }[]; ribbon: { strokes: RibbonStroke[]; mask: Point[][] }; centre: Point[] } | undefined {
+function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: number, widen = 1): { dashes: { path: Point[]; ink: Ink }[]; ribbon: { strokes: RibbonStroke[]; mask: Point[][] }; centre: Point[] } | undefined {
   const cut = strands.map(st => { const inside = st.path.map(q => insideRing(portal, q)); return { i0: inside.indexOf(true), i1: inside.lastIndexOf(true) }; });
   if (cut.some(c => c.i0 < 1 || c.i1 < c.i0 || c.i1 >= strands[0].path.length - 2)) return undefined;
   const mid = Math.floor(strands.length / 2);
@@ -150,7 +151,7 @@ function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: nu
   const centre = guide.map((q, i) => { const w = 1 - smooth(0, RAVEL.length, gs[i]); return { x: q.x + (ec.x - guide[0].x) * w, y: q.y + (ec.y - guide[0].y) * w }; });
   const cs = lengths(centre);
   const normal = centre.map((_, i) => { const a = centre[Math.max(0, i - 1)], b = centre[Math.min(centre.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d }; });
-  const half = THREAD.widthMm / 2;
+  const half = widen * THREAD.widthMm / 2;
   let phase = 0;
   const cosPhase = centre.map((_, i) => { if (i) phase += 2 * Math.PI * (cs[i] - cs[i - 1]) / THREAD.pitchMm; return Math.cos(phase); });
   // Each strand's place across the ribbon: in order of where it leaves the portal, the pink strand on the +1 edge.
@@ -179,7 +180,7 @@ function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: nu
     }
     st.path = [...st.path.slice(cut[k].i0, cut[k].i1 + 1), ...ravelled];
   });
-  const ribbon = flatRibbon(centre.slice(iR), { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: 2 * Math.PI * cs[iR] / THREAD.pitchMm });
+  const ribbon = flatRibbon(centre.slice(iR), { width: widen * THREAD.widthMm, pitch: THREAD.pitchMm, laminations: Math.round(6 * widen), phase0: 2 * Math.PI * cs[iR] / THREAD.pitchMm });
   return { dashes, ribbon, centre };
 }
 
@@ -414,14 +415,25 @@ function draw(ctx: SketchContext): Part[] {
     const fx = String(ctx.params.portalFx ?? 'align');
     strands.forEach((st, k) => { st.path = throughPortal(st.path, portal, fx, k, strands.length); });
   }
-  const reformed = toRibbon && portal ? ravel(strands, portal, pink) : undefined;
+  const widen = n(ctx, 'rRibbonWidth', 2, 1, 3);
+  const reformed = toRibbon && portal ? ravel(strands, portal, pink, widen) : undefined;
   const strandArea = glyphMask([...strands.map(st => st.path), ...(reformed?.ribbon.mask ?? [])], 0.9, 6, PAGE);
   // "line", along the pink strand where it falls from the hands toward the floor (with the ribbon, beside it).
   const pinkPath = strands[pink]?.path ?? [];
   const word = reformed
-    ? wordAlong('line', reformed.centre, 0.62 * lengths(reformed.centre).at(-1)!, 2.4, -(THREAD.widthMm / 2 + 2.6))
+    ? wordAlong('line', reformed.centre, 0.62 * lengths(reformed.centre).at(-1)!, 2.4, -(widen * THREAD.widthMm / 2 + 2.6))
     : wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
   const clear = glyphMask(word, 0.8, 6, PAGE);
+
+  // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
+  // strands drawn on it in silver (the `under` marks); with `rCuts` lens (R9) the head's window shows the head larger
+  // and shifted instead, as L's bar, and with cosmos every window looks out on stars.
+  const headPage = pullHead(pageOf(view, head.centre, PAGE));
+  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, tie, ...(portal ? { portal } : {}) });
+  const rMode = String(ctx.params.rCuts ?? 'lens');
+  const headWindow = windows.find(w => w.id === 'head')?.rings[0];
+  const lensWindow = rMode === 'lens' ? headWindow : undefined;
+  const inLens = lensWindow ? inGrown(lensWindow, grow) : () => false;
 
   const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...cut.flatMap(cutMeshes), ...[...hands, ...shoes].map(slabGeometry), ...headGeos];
   fitDepthRange(view, figureGeos, 0.1, { exact: true });
@@ -439,7 +451,7 @@ function draw(ctx: SketchContext): Part[] {
           for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) {
             buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, piece, false);
             // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
-            for (const part of keepAlong(piece, q => !inTie(q), 0.15)) buckets.add(`under-${st.ink}`, part, false);
+            for (const part of keepAlong(piece, q => !inTie(q) && !inLens(q), 0.15)) buckets.add(`under-${st.ink}`, part, false);
           }
         }
       },
@@ -477,6 +489,20 @@ function draw(ctx: SketchContext): Part[] {
     for (let r = 1.3 * stepW; r < 1.6 * radius; r += 1.3 * stepW) keepOnDisc(ringAt(bundle, r), fxSilver);
     for (let r = 1.45 * stepW; r < 1.6 * radius; r += 1.45 * stepW) keepOnDisc(ringAt(centre, r), fxSilver);
     for (let k = 1; k <= 3; k++) keepOnDisc(ringAt(pinkAt, 0.6 * k * stepW), fxPink);
+  } else if (rMode === 'cosmos') {
+    // The cosmos (R9): the ground a spiral galaxy seen at the floor's angle, about where the strands land: two arms of
+    // three dashed tracks each, and a pink core of close rings.
+    const rng = ctx.random('lodestone-floor-galaxy'), mm = stepW / 2.4, a = 3 * mm, b = 0.2, thMax = Math.log(1.6 * radius / a) / b;
+    for (let k = 1; k <= 4; k++) keepOnDisc(ringAt(bundle, k * 0.6 * mm), fxPink);
+    const turn = 2 * Math.PI * rng();
+    for (const arm of [0, Math.PI]) for (const track of [-1, 0, 1]) {
+      let th = 0.3 * rng();
+      while (th < thMax) {
+        const r = a * Math.exp(b * th), w = track * (0.45 * mm + 0.06 * r), len = (0.8 + 0.8 * rng()) * mm;
+        if (rng() > 0.15 * Math.abs(track)) keepOnDisc(ringAt(bundle, r + w, turn + arm + th, turn + arm + th + len / r, 4), fxSilver);
+        th += (len + (0.7 + 1.0 * rng()) * mm) / r;
+      }
+    }
   } else if (fx === 'pulse') {
     // Rings spreading from where the strands land, ever further apart, dashed by turns; between them, filings pointing
     // into the ground (radial dashes). The third ring is pink.
@@ -512,10 +538,36 @@ function draw(ctx: SketchContext): Part[] {
     art.black.push({ id: 'tie-silver', pen: 'silver', paths: stripeFill(tie, axis + Math.PI / 2 - 0.35, 1.5, grow) });
   }
   if (fxPink.length) art.black.push({ id: 'fx-pink', pen: 'fluoro-pink', paths: fxPink });
-  // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
-  // strands drawn on it in silver (the `under` marks).
-  const headPage = pullHead(pageOf(view, head.centre, PAGE));
-  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, tie, ...(portal ? { portal } : {}) });
+  // The lens (`rCuts` lens): the head through the head's window, as L's bar shows it, in silver on the black.
+  if (lensWindow) {
+    const cam = lensCamera(view, head), sk = skull(head), d = eye.distanceTo(head.centre);
+    const faceSeen = seenBy(cam, [...faceMarks(head), faceOutline(head, cam)].map(points => ({ ink: 'carbon' as Ink, group: 'face', family: 'text' as const, points })), [sk], slack, d);
+    const coilSeen = seenBy(cam, strokes.filter(t => t.group === 'helix'), [...headGeos, sk], slack, d);
+    sk.dispose();
+    const mid = { x: lensWindow.reduce((t, q) => t + q.x, 0) / lensWindow.length, y: lensWindow.reduce((t, q) => t + q.y, 0) / lensWindow.length };
+    const shift = lensShift(-Math.PI / 6), from = pageOf(cam, eyeCentre(head), PAGE), to = { x: mid.x + shift.x, y: mid.y + shift.y };
+    const face = lensImage(faceSeen, from, to, LENS.mag), coil = lensImage(coilSeen, from, to, LENS.mag), onFace = glyphMask(face, 1.2, 6, PAGE);
+    art.black.push({ id: 'lens-silver', pen: 'silver', paths: [
+      ...face.flatMap(path => keepAlong(path, inLens, 0.1)),
+      ...coil.flatMap(path => keepAlong(path, q => inLens(q) && !onFace(q), 0.1)),
+    ] });
+  }
+  // The cosmos (`rCuts` cosmos): stars behind what each window shows (and in the tie, in place of its stripes), the
+  // head's window a small galaxy too, kept clear of the black's own marks; one star pink.
+  if (rMode === 'cosmos') {
+    if (tieCut) art.black = art.black.filter(part => part.id !== 'tie-silver');
+    const marks = glyphMask(art.black.flatMap(part => part.paths), 1.0, 6, PAGE);
+    const stars: Point[][] = [], bright: Point[][] = [];
+    for (const w of windows.filter(c => c.id !== 'floor')) {
+      const ring = w.rings[0], xs = ring.map(q => q.x), ys = ring.map(q => q.y), inside = inGrown(ring, grow);
+      const sky = cosmos(ctx.random(`lodestone-cosmos-${w.id}`), { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2, angle: 0, l: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }, { grow, galaxies: w.id === 'head' ? 1 : 0 });
+      const whole = (path: Point[]) => path.every(q => inside(q) && !marks(q));
+      stars.push(...[...sky.silver, ...sky.cores].filter(whole));
+      if (w.id === 'head') bright.push(...sky.accent.filter(whole));
+    }
+    art.black.push({ id: 'cosmos-silver', pen: 'silver', paths: stars });
+    if (bright.length) art.black.push({ id: 'cosmos-pink', pen: 'fluoro-pink', paths: bright });
+  }
   return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
 
