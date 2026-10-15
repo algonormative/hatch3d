@@ -250,7 +250,8 @@ function draw(ctx: SketchContext): Part[] {
   const pink = Math.floor(exits.length / 2);
   const strands = exits.map((y, k) => {
     const t = exits.length > 1 ? k / (exits.length - 1) - 0.5 : 0;
-    const path = smoothPath([{ x: TRIM.x0 - 6, y }, { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
+    // Level through the trim, so each strand meets its field line from C at exactly the height it left C's edge.
+    const path = smoothPath([{ x: TRIM.x0 - 6, y }, { x: TRIM.x0, y }, { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
       { x: g.x - 10 + 14 * t + bow, y: (g.y + discCentre.y) / 2 }, { x: discCentre.x + 22 * t, y: discCentre.y + 3 * Math.abs(t) }]);
     return { path, ink: (k === pink ? 'vermilion' : 'ultramarine') as Ink };
   });
