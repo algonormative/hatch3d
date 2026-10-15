@@ -30,6 +30,15 @@ export const cutSchemeOf = (ctx: SketchContext): CutSchemeId => (SCHEMES.include
 /** R's floor: the disc (R1 to R4's schemes) or, in the angular sets, a square on the ground seen corner-on. */
 export const floorKind = (ctx: SketchContext): 'disc' | 'square' => (['angular', 'tie'].includes(cutSchemeOf(ctx)) ? 'square' : 'disc');
 
+/** Whether the cut set has R's portal: the rectangle across the strands where they come in (the tie set; angular keeps R5's band). */
+export const hasPortal = (ctx: SketchContext): boolean => cutSchemeOf(ctx) === 'tie';
+
+export const PORTAL_CONTROL: Control = {
+  type: 'select', id: 'portalFx', label: 'R: what the portal (the band where the strands come in) does to them', default: 'align', options: ['align', 'refract', 'none'],
+  optionLabels: { refract: 'Refract: as through a glass block, each line shifted along the band and carried on moved', align: 'Align: inside the band the lines run straight, parallel and evenly spaced, then relax', none: 'None (R5)' },
+  group: 'Cuts',
+};
+
 export const LCUT_CONTROL: Control = {
   type: 'select', id: 'lCut', label: 'L, in the tie cut set: what is cut from the suit\'s front', default: 'tie', options: ['tie', 'shirt'],
   optionLabels: { tie: 'The tie: gold, its stripes drawn on it in black', shirt: 'The shirt about the tie: gold, with shirt stripes in black; the tie stays black, held at its knot and tip' },
@@ -98,7 +107,7 @@ export interface CAnchors { rect: { x0: number; x1: number; y0: number; y1: numb
  * R: the head (its page centre and radius, after the field's pull), the gather point at the hands, the heights the
  * strands come in at, and the floor's outline (`floorKind`), cut in every scheme.
  */
-export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[]; floor: Point[] }
+export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[]; floor: Point[]; portal?: Point[] }
 
 const deg = (d: number) => d * Math.PI / 180;
 const poles = (a: CAnchors) => { const cy = (a.rect.y0 + a.rect.y1) / 2; return { north: { x: a.rect.x0, y: cy }, south: { x: a.rect.x1, y: cy }, cy }; };
@@ -172,14 +181,14 @@ function entryArc(a: Pick<RAnchors, 'gather' | 'entries'>): Point[] {
 /** The angular set's shape behind R's head: a square tilted 15 degrees, its half diagonal 1.3 times the head's radius. */
 const headSquare = (a: RAnchors): Point[] => [0, 1, 2, 3].map(k => at(a.head, 1.3 * a.headR, deg(15 + 90 * k)));
 /** The angular set's band where the strands come in: the corners of `entryArc`'s sector, joined straight. */
-export function entryBand(a: Pick<RAnchors, 'gather' | 'entries'>): Point[] {
+function entryBand(a: Pick<RAnchors, 'gather' | 'entries'>): Point[] {
   const arc = entryArc(a), n = arc.length / 2;
   return [arc[0], arc[n - 1], arc[n], arc[2 * n - 1]];
 }
 const floorCut = (a: RAnchors): Cut => ({ id: 'disc', label: 'DISC', rings: [a.floor] });
 
 const R: Record<CutSchemeId, (a: RAnchors) => Cut[]> = {
-  tie: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [entryBand(a)] }],
+  tie: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [a.portal ?? entryBand(a)] }],
   angular: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [entryBand(a)] }],
   field: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }, { id: 'entry', label: 'IN', rings: [entryArc(a)] }],
   r3: a => [floorCut(a)],

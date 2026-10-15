@@ -11,7 +11,7 @@ import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, onGround, pageOf } from '../../kit/perspective.ts';
 import { insideRing } from '../../kit/page.ts';
-import { floorKind, rCuts } from '../lodestone-cuts.ts';
+import { floorKind, hasPortal, rCuts } from '../lodestone-cuts.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -119,6 +119,83 @@ function clipPolygon(poly: Point[], r: { x0: number; x1: number; y0: number; y1:
       const a = input[(i + input.length - 1) % input.length], b = input[i];
       if (inside(b)) { if (!inside(a)) out.push(cross(a, b)); out.push(b); } else if (inside(a)) out.push(cross(a, b));
     }
+  }
+  return out;
+}
+
+/** Arc lengths along a page path. */
+const lengths = (path: Point[]): number[] => { const s = [0]; for (let i = 1; i < path.length; i++) s.push(s[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)); return s; };
+/** Where segment p0-p1 meets segment q0-q1, as the fraction along q, or undefined. */
+function meetAlong(p0: Point, p1: Point, q0: Point, q1: Point): number | undefined {
+  const rx = p1.x - p0.x, ry = p1.y - p0.y, sx = q1.x - q0.x, sy = q1.y - q0.y, d = rx * sy - ry * sx;
+  if (Math.abs(d) < 1e-12) return undefined;
+  const t = ((q0.x - p0.x) * sy - (q0.y - p0.y) * sx) / d, u = ((q0.x - p0.x) * ry - (q0.y - p0.y) * rx) / d;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? u : undefined;
+}
+
+/** How far a line through the portal is moved along it (`refract`), and how far before and after it the lines ease into and out of their aligned course (`align`), mm. */
+const PORTAL = { shift: 6, relax: 34, ease: 16, at: 0.35, thick: 12, margin: 7 };
+
+/**
+ * The portal: a rectangle across the incoming strands where they cross x = `x` (PORTAL.at of the way from R's left
+ * edge to the hands), square to their mean course, PORTAL.thick along it and spanning them all with PORTAL.margin to
+ * spare either side. Corners: the near edge (that the strands come in through) then the far edge, end to end.
+ */
+function portalBand(paths: Point[][], x: number): Point[] | undefined {
+  const at: { p: Point; t: Point }[] = [];
+  for (const path of paths) for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    if ((a.x - x) * (b.x - x) <= 0 && a.x !== b.x) { const f = (x - a.x) / (b.x - a.x), l = Math.hypot(b.x - a.x, b.y - a.y) || 1; at.push({ p: { x, y: a.y + (b.y - a.y) * f }, t: { x: (b.x - a.x) / l, y: (b.y - a.y) / l } }); break; }
+  }
+  if (at.length < 2) return undefined;
+  const c = { x: at.reduce((s, q) => s + q.p.x, 0) / at.length, y: at.reduce((s, q) => s + q.p.y, 0) / at.length };
+  const tx = at.reduce((s, q) => s + q.t.x, 0), ty = at.reduce((s, q) => s + q.t.y, 0), tl = Math.hypot(tx, ty) || 1, t = { x: tx / tl, y: ty / tl }, e = { x: -t.y, y: t.x };
+  const offs = at.map(q => (q.p.x - c.x) * e.x + (q.p.y - c.y) * e.y), lo = Math.min(...offs) - PORTAL.margin, hi = Math.max(...offs) + PORTAL.margin, h = PORTAL.thick / 2;
+  const P = (along: number, across: number): Point => ({ x: c.x + t.x * along + e.x * across, y: c.y + t.y * along + e.y * across });
+  return [P(-h, lo), P(-h, hi), P(h, hi), P(h, lo)];
+}
+
+/**
+ * A strand through the portal, a four-sided band (`portalBand`: its near edge, corners 0 and 1, faces the strands as they
+ * come in; its far edge, corners 3 and 2, lets them out). `refract`: as through a block of glass, the line runs
+ * straight across the band to a point PORTAL.shift along its far edge, and comes out parallel to its course but moved
+ * by that much, which eases off over PORTAL.relax. `align`: inside the band the lines run straight across it, square
+ * to its outer edge, evenly spaced along it (the `k`-th of `n`), the field ruled into line; they ease into that course
+ * over PORTAL.ease before the band and back to their own over PORTAL.relax after it. `none`: as it is.
+ */
+function throughPortal(path: Point[], portal: Point[], mode: string, k: number, n: number): Point[] {
+  if (mode === 'none') return path;
+  const inside = path.map(q => insideRing(portal, q));
+  const i0 = inside.indexOf(true), i1 = inside.lastIndexOf(true);
+  if (i0 < 1 || i1 <= i0 || i1 >= path.length - 1) return path;
+  const s = lengths(path);
+  const [o0, o1, n1, n0] = portal;
+  const len = Math.hypot(o1.x - o0.x, o1.y - o0.y), e = { x: (o1.x - o0.x) / len, y: (o1.y - o0.y) / len };
+  const ease = (x: number) => x * x * (3 - 2 * x);
+  if (mode === 'refract') {
+    const a = path[i0], b = path[i1], d = { x: e.x * PORTAL.shift, y: e.y * PORTAL.shift };
+    const out: Point[] = path.slice(0, i0);
+    for (let i = i0; i <= i1; i++) { const f = (s[i] - s[i0]) / (s[i1] - s[i0]); out.push({ x: a.x + (b.x + d.x - a.x) * f, y: a.y + (b.y + d.y - a.y) * f }); }
+    for (let i = i1 + 1; i < path.length; i++) { const w = 1 - ease(Math.min(1, (s[i] - s[i1]) / PORTAL.relax)); out.push({ x: path[i].x + d.x * w, y: path[i].y + d.y * w }); }
+    return out;
+  }
+  // align: the k-th line crosses at fraction f along the near edge, square to it, to the far edge.
+  const f = (k + 1) / (n + 1);
+  const A = { x: o0.x + (o1.x - o0.x) * f, y: o0.y + (o1.y - o0.y) * f };
+  const norm = { x: -e.y, y: e.x }, far = { x: A.x + norm.x * 100, y: A.y + norm.y * 100 };
+  const toward = (n0.x - o0.x) * norm.x + (n0.y - o0.y) * norm.y < 0 ? -1 : 1;
+  const farPt = { x: A.x + toward * (far.x - A.x), y: A.y + toward * (far.y - A.y) };
+  const u = meetAlong(A, farPt, n0, n1);
+  const B = u === undefined ? { x: A.x + toward * norm.x * 9, y: A.y + toward * norm.y * 9 } : { x: n0.x + (n1.x - n0.x) * u, y: n0.y + (n1.y - n0.y) * u };
+  const out: Point[] = [];
+  for (let i = 0; i < i0; i++) {
+    const w = ease(Math.max(0, 1 - (s[i0] - s[i]) / PORTAL.ease));
+    out.push({ x: path[i].x + (A.x - path[i0].x) * w, y: path[i].y + (A.y - path[i0].y) * w });
+  }
+  for (let j = 0; j <= 12; j++) out.push({ x: A.x + (B.x - A.x) * j / 12, y: A.y + (B.y - A.y) * j / 12 });
+  for (let i = i1 + 1; i < path.length; i++) {
+    const w = 1 - ease(Math.min(1, (s[i] - s[i1]) / PORTAL.relax));
+    out.push({ x: path[i].x + (B.x - path[i1].x) * w, y: path[i].y + (B.y - path[i1].y) * w });
   }
   return out;
 }
@@ -255,16 +332,22 @@ function draw(ctx: SketchContext): Part[] {
   const pink = Math.floor(exits.length / 2);
   const strands = exits.map((y, k) => {
     const t = exits.length > 1 ? k / (exits.length - 1) - 0.5 : 0;
-    // Level through the trim, so each strand meets its field line from C at exactly the height it left C's edge.
     // In along the field line's own slope at the edge (level with no gap, as R2 to R5), so it meets its line from C.
     const slope = gapOf(m) > 0 ? entering[k].slope : 0;
     const path = smoothPath([{ x: TRIM.x0 - 6, y: y - 6 * slope }, { x: TRIM.x0, y }, ...(slope ? [{ x: TRIM.x0 + 8, y: y + 8 * slope }] : []), { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
       { x: g.x - 10 + 14 * t + bow, y: (g.y + discCentre.y) / 2 }, { x: discCentre.x + 22 * t, y: discCentre.y + 3 * Math.abs(t) }]);
     return { path, ink: (k === pink ? 'vermilion' : 'ultramarine') as Ink };
   });
+  // The portal (`portalFx`): where the strands come in through the band cut in the white, the lines change there.
+  const portal = hasPortal(ctx) ? portalBand(strands.map(st => st.path), TRIM.x0 + PORTAL.at * (g.x - TRIM.x0)) : undefined;
+  if (portal) {
+    const fx = String(ctx.params.portalFx ?? 'align');
+    strands.forEach((st, k) => { st.path = throughPortal(st.path, portal, fx, k, strands.length); });
+  }
   const strandArea = glyphMask(strands.map(st => st.path), 0.9, 6, PAGE);
   // "line", along the pink strand where it falls from the hands toward the floor.
   const pinkPath = strands[pink]?.path ?? [];
+  // (The pink strand's path is the one after the portal.)
   const word = wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
   const clear = glyphMask(word, 0.8, 6, PAGE);
 
@@ -346,7 +429,7 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
   // strands drawn on it in silver (the `under` marks).
   const headPage = pullHead(pageOf(view, head.centre, PAGE));
-  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc });
+  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, ...(portal ? { portal } : {}) });
   return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
 

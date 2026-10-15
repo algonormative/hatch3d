@@ -6,7 +6,7 @@ import { solid, type Slab } from '../kit/slabs.ts';
 import { CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
 import { footprintOf } from '../kit/assembly.ts';
 import type { Ink } from '../kit/types.ts';
-import { CUT_CONTROL, LCUT_CONTROL } from './lodestone-cuts.ts';
+import { CUT_CONTROL, LCUT_CONTROL, PORTAL_CONTROL } from './lodestone-cuts.ts';
 import { n } from '../kit/params.ts';
 
 /**
@@ -50,6 +50,7 @@ export const LODESTONE_CONTROLS: Control[] = [
     optionLabels: { interference: 'Interference: two ring families, from where the strands land and from the disc\'s centre, crossing into moiré', pulse: 'Pulse: rings spreading from where the strands land, filings pointing into the ground between them', rings: 'Rings (R1 to R3): three silver rings' }, group: 'Ground' },
   CUT_CONTROL,
   LCUT_CONTROL,
+  PORTAL_CONTROL,
 ];
 
 // ── The magnet and its field ─────────────────────────────────────────
