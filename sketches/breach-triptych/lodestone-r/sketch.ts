@@ -429,10 +429,28 @@ function draw(ctx: SketchContext): Part[] {
   const strandArea = glyphMask([...strands.map(st => st.path), ...(reformed?.ribbon.mask ?? [])], 0.9, 6, PAGE);
   // "line", along the pink strand where it falls from the hands toward the floor (with the ribbon, beside it).
   const pinkPath = strands[pink]?.path ?? [];
-  const word = reformed
-    ? wordAlong('line', reformed.centre, 0.62 * lengths(reformed.centre).at(-1)!, 2.4, -(widen * THREAD.widthMm / 2 + 2.6))
-    : wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
-  const clear = glyphMask(word, 0.8, 6, PAGE);
+  // `lineWord` strand (R11): "line" rides the pink strand itself just after it leaves the portal, as "everything" rides
+  // its gold line in L and "falls" and "into" C's loops (cap 2.6 mm, the line just inside its baseline, in its pink),
+  // starting past the portal grown by the bleed and its frame; the strand and its neighbours give way round the letters.
+  // Else (R1 to R10) beside the ribbon, or along the pink strand where it falls toward the floor.
+  const onStrand = ctx.params.lineWord !== 'ribbon' && !!portal && pinkPath.length > 2;
+  const exitAt = (() => {
+    if (!onStrand) return 0;
+    let s = 0, inside = false;
+    for (let i = 1; i < pinkPath.length; i++) {
+      s += Math.hypot(pinkPath[i].x - pinkPath[i - 1].x, pinkPath[i].y - pinkPath[i - 1].y);
+      const now = insideRing(portal!, pinkPath[i]);
+      if (inside && !now) return s;
+      inside = now;
+    }
+    return 0;
+  })();
+  const word = onStrand && exitAt
+    ? wordAlong('line', pinkPath, exitAt + spec.bleed + FILL_OVER + 0.5, 2.6, -2.2)
+    : reformed
+      ? wordAlong('line', reformed.centre, 0.62 * lengths(reformed.centre).at(-1)!, 2.4, -(widen * THREAD.widthMm / 2 + 2.6))
+      : wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
+  const clear = glyphMask(word, onStrand ? 0.9 : 0.8, 6, PAGE);
 
   // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
   // strands drawn on it in silver (the `under` marks); with `rCuts` lens (R9) the head's window shows the head larger
@@ -496,7 +514,8 @@ function draw(ctx: SketchContext): Part[] {
       else { buckets.add(`ribbon-${st.ink}`, part, true); buckets.add(`ribbonunder-${st.ink}`, part, true); }
     }
   });
-  for (const w of word) for (const piece of clipToRect(w, ART)) buckets.add('word-ultramarine', piece, true);
+  // (On the strand the word is the strand's: pink, routed with it.)
+  for (const w of word) for (const piece of clipToRect(w, ART)) buckets.add(onStrand && exitAt ? 'strand-vermilion' : 'word-ultramarine', piece, true);
   // The ground (`groundFx`), on the black sheet under the floor disc: R1's three silver rings, or the field going on into
   // the ground. A ring about a ground point, sampled on the floor plane and kept inside the floor disc.
   const fx = String(ctx.params.groundFx ?? 'pulse');

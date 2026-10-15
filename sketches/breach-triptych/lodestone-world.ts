@@ -74,6 +74,8 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'select', id: 'emphasis', label: 'Emphasis: key outlines doubled or tripled', default: 'on', options: ['on', 'off'],
     optionLabels: { on: 'On (R9): the windows that carry the composition framed on the paper kept round them (two or three lines), the bust\'s and the kneeling figure\'s silhouettes and the ribbon\'s widest edges doubled', off: 'Off (R8): every outline single' }, group: 'Cuts' },
   { type: 'slider', id: 'rRibbonWidth', label: 'R: the re-formed ribbon\'s width, out of the portal (R8 and R10 1, R9 2)', default: 1, min: 1, max: 3, step: 0.1, units: '×', group: 'Ground' },
+  { type: 'select', id: 'lineWord', label: 'R: where "line" sits', default: 'strand', options: ['strand', 'ribbon'],
+    optionLabels: { strand: 'On the pink strand (R11): riding it just after it leaves the portal, in pink, as the other words ride their lines', ribbon: 'Beside the ribbon (R6 to R10)' }, group: 'Ground' },
   { type: 'select', id: 'rHead', label: 'R: the kneeling figure\'s coil head', default: 'full', options: ['full', 'slim'],
     optionLabels: { full: 'Full (R10): the coil larger and wound a turn more, its twin ribbons broader, so the lens square sits inside a fuller head', slim: 'Slim (R1 to R9)' }, group: 'Ground' },
   CUT_CONTROL,
