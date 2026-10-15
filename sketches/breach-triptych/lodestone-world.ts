@@ -221,7 +221,8 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
   for (let s = 0; s < LOOSEN.to + 40 && p.x < TRIM.x1 + 6; s += step) {
     const design = dirTo(THREE.MathUtils.degToRad(-65 + 70 * smoothstep(0, 110, s)));
     const w = smoothstep(60, LOOSEN.to - 10, s), f = toNorth(p);
-    let dx = design.x * (1 - w) + f.x * w, dy = design.y * (1 - w) + f.y * w;
+    const dx = design.x * (1 - w) + f.x * w;
+    let dy = design.y * (1 - w) + f.y * w;
     // Kept under the top trim: near it the heading bends level.
     if (p.y < TRIM.y0 + 16 && dy < 0) dy *= Math.max(0, (p.y - TRIM.y0 - 9) / 7);
     const l = Math.hypot(dx, dy) || 1;
