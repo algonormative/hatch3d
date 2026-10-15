@@ -16,7 +16,7 @@ import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, pensOf } from '../world.ts';
 import { cCuts } from '../lodestone-cuts.ts';
-import { LODESTONE_CONTROLS, barEnd, barFootprint, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, barFootprint, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -74,9 +74,9 @@ function draw(ctx: SketchContext): Part[] {
   // the lines it has gathered, the fist's lowest point just under the pole the lines run into.
   // From the bottom (`handFrom`, default): the arm rises from the bottom edge, fingers up, the fist under the bar.
   const fromBottom = pulling && handFromBottom(ctx);
-  // With the bar slipping (`barPose`), the fist reaches up toward the bar's right end, leaning halfway from upright
-  // toward it, and closes just short of it.
-  const toEnd = (() => { const e = barEnd(m), g = m.poles[0] ?? e, l = Math.hypot(e.x - g.x, e.y - g.y) || 1; return new THREE.Vector3((e.x - g.x) / l, -(e.y - g.y) / l, 0); })();
+  // With the bar slipping (`barPose`), the fist reaches up toward the bar's middle (or, R5, its right end; `reachFor`),
+  // leaning halfway from upright toward it, and closes just short of it.
+  const toEnd = (() => { const e = reachTarget(m, ctx), g = m.poles[0] ?? e, l = Math.hypot(e.x - g.x, e.y - g.y) || 1; return new THREE.Vector3((e.x - g.x) / l, -(e.y - g.y) / l, 0); })();
   const along = !pulling ? new THREE.Vector3(-0.32, -1, 0.18).normalize()
     : fromBottom ? (m.pose ? toEnd.clone().add(new THREE.Vector3(0, 1, 0)).normalize().setZ(0.22).normalize() : new THREE.Vector3(0.12, 1, 0.22).normalize())
     : new THREE.Vector3(-0.12, -1, 0.22).normalize();

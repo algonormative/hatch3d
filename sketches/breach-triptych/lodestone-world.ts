@@ -24,6 +24,8 @@ const BUST_IDS = ['scale', 'density', 'slack', 'elbow', 'gaze', 'fov', 'fitMargi
 export const LODESTONE_CONTROLS: Control[] = [
   ...CONTROLS.filter(c => BUST_IDS.includes(c.id)),
   { type: 'slider', id: 'hangGap', label: 'Gap between the hung panels (the field runs on across it; 0 is R5\'s panels edge to edge)', default: 76.2, min: 0, max: 101.6, step: 0.1, units: 'mm', group: 'Magnet' },
+  { type: 'select', id: 'reachFor', label: 'What the fist reaches for (bar slipping)', default: 'middle', options: ['middle', 'end'],
+    optionLabels: { middle: 'The bar\'s middle, from below near the sheet\'s middle, at a slight angle', end: 'Its raised right end (R5)' }, group: 'Magnet' },
   { type: 'select', id: 'barPose', label: 'Where C\'s bar lies', default: 'slipping', options: ['slipping', 'r4'],
     optionLabels: { slipping: 'Slipping: near the middle, tilted steeply, just out of the reaching hand\'s grasp', r4: 'R4: level at the eye height of L\'s hole' }, group: 'Magnet' },
   { type: 'slider', id: 'fieldLines', label: 'Field lines leaving each pole', default: 26, min: 8, max: 48, step: 1, group: 'Magnet' },
@@ -120,7 +122,7 @@ export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
   if (ctx && ctx.params.handPull !== false) {
     // The hand is a small magnet of its own: its south pole in the fist, its north up the arm, off the top of the sheet,
     // so it pulls lines into the grip without turning the whole far field (a lone pole would draw lines in from all round).
-    const g = pose ? reachPoint({ rect, pose }) : gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
+    const g = pose ? reachPoint({ rect, pose }, ctx) : gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
     const arm = handFromBottom(ctx) ? { x: g.x + ARM.x, y: TRIM.y1 + ARM_OFF } : { x: g.x + ARM.x, y: g.y + ARM.y };
     poles.push({ ...g, q: -q, r: GRIP_R }, { ...arm, q, r: GRIP_R });
     for (const pole of poles) charges.push({ x: pole.x, y: pole.y, q: pole.q });
@@ -131,10 +133,22 @@ export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
   return made;
 }
 
-/** The slipping bar's right end (the middle of its end face) on the page, and where the reaching fist closes, just short of it. */
+/** The slipping bar's right end (the middle of its end face) on the page. */
 export const barEnd = (m: Pick<Magnet, 'rect' | 'pose'>): Point => barToPage(m, { x: m.rect.x1, y: (m.rect.y0 + m.rect.y1) / 2 });
-const REACH = { x: 14, y: 34 };
-export const reachPoint = (m: Pick<Magnet, 'rect' | 'pose'>): Point => { const e = barEnd(m); return { x: e.x + REACH.x, y: e.y + REACH.y }; };
+/** The middle of the slipping bar's lower edge on the page. */
+export const barUnder = (m: Pick<Magnet, 'rect' | 'pose'>): Point => barToPage(m, { x: (m.rect.x0 + m.rect.x1) / 2, y: m.rect.y1 });
+/** Whether the fist reaches for the bar's middle (`reachFor`, the default) rather than its right end (R5). */
+export const reachesMiddle = (ctx?: SketchContext): boolean => !ctx || ctx.params.reachFor !== 'end';
+/** What the fist reaches for: the bar's lower edge's middle, or its right end. */
+export const reachTarget = (m: Pick<Magnet, 'rect' | 'pose'>, ctx?: SketchContext): Point => (reachesMiddle(ctx) ? barUnder(m) : barEnd(m));
+/** R5: from the right end, this far right and down; to the middle, this far out from the lower edge, square to the bar (mm). */
+const REACH = { x: 14, y: 34 }, REACH_UNDER = 30;
+/** Where the reaching fist closes, just short of what it reaches for. */
+export const reachPoint = (m: Pick<Magnet, 'rect' | 'pose'>, ctx?: SketchContext): Point => {
+  if (!reachesMiddle(ctx)) { const e = barEnd(m); return { x: e.x + REACH.x, y: e.y + REACH.y }; }
+  const u = barUnder(m), a = m.pose?.angle ?? 0;
+  return { x: u.x - Math.sin(a) * REACH_UNDER, y: u.y + Math.cos(a) * REACH_UNDER };
+};
 
 /** How far above the bar the gripping hand's pole sits (mm), and the radius field lines end in round it. */
 const GRIP_RISE = 30, GRIP_R = 3;
