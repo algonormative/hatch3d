@@ -19,9 +19,9 @@ import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
-  ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, lintelBar, pensOf, threadPaths,
+  ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, holeBarRules, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, LENS, eyeCentre, faceMarks, faceOutline, lensCamera, lensImage, lensShift, seenBy } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -308,8 +308,28 @@ function draw(ctx: SketchContext): Part[] {
   }
   for (const path of bar.paths) buckets.add('bar-carbon', path, true);
 
-  // The censor bar in black ink on the gold, seen through the hole (the gold runs `bleed` under the hole's edge).
-  if (ctx.params.holeBar !== false) for (const path of holeBarPaths(bar, spec.bleed + FILL_OVER)) buckets.add('hole-carbon', path, true);
+  // The censor bar in black ink on the gold, seen through the hole (the gold runs `bleed` under the hole's edge): its
+  // hatch (`barFill` hatch, R1 to R8), or (lens, R9) the head behind it, the coil and the face it hides, larger and
+  // shifted as through a glass block (`LENS`), in the bar's double rule. The head's marks are projected again for it,
+  // hidden lines and all but without the bar, so the lens shows what the bar covers.
+  if (ctx.params.holeBar !== false) {
+    const grow = spec.bleed + FILL_OVER;
+    if (ctx.params.barFill === 'hatch') for (const path of holeBarPaths(bar, grow)) buckets.add('hole-carbon', path, true);
+    else {
+      // The face is hidden only by the skull (the coil crosses its front at the eyes): the coil gives way round it.
+      const cam = lensCamera(view, head), lensSkull = skull(head), d = eye.distanceTo(head.centre);
+      const faceSeen = seenBy(cam, [...faceMarks(head), faceOutline(head, cam)].map(points => ({ ink: 'carbon' as Ink, group: 'face', family: 'text' as const, points })), [lensSkull], slack, d);
+      const coilSeen = seenBy(cam, strokes.filter(t => t.group === 'helix'), [...helix.meshes, lensSkull], slack, d);
+      lensSkull.dispose();
+      const rules = holeBarRules(bar);
+      const shift = lensShift(bar.tilt), from = pageOf(cam, eyeCentre(head), PAGE), to = { x: bar.centre.x + shift.x, y: bar.centre.y + shift.y };
+      const face = lensImage(faceSeen, from, to, LENS.mag), coil = lensImage(coilSeen, from, to, LENS.mag);
+      const onFace = glyphMask(face, 1.2, 6, PAGE);
+      for (const ring of rules.rings) buckets.add('hole-carbon', ring, true);
+      for (const path of face) for (const piece of keepAlong(path, p => rules.inside(p, grow) && !rules.between(p), 0.1)) buckets.add('hole-carbon', piece, true);
+      for (const path of coil) for (const piece of keepAlong(path, p => rules.inside(p, grow) && !rules.between(p) && !onFace(p), 0.1)) buckets.add('hole-carbon', piece, true);
+    }
+  }
   for (const g of geometries) g.dispose();
 
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark

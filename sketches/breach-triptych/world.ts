@@ -233,15 +233,27 @@ export function lintelBar(ctx: SketchContext, frame: BustFrame): LintelBar {
  * read. Sparse, so the gold still glows.
  */
 export function holeBarPaths(bar: LintelBar, bleed: number, pitch = 2, rules: [number, number] = [1.6, 2.7]): Point[][] {
+  const { rings, between } = holeBarRules(bar, rules);
+  const grown = hatchedBar({ cx: bar.centre.x, cy: bar.centre.y, l: bar.l + 2 * bleed, h: bar.h + 2 * bleed }, bar.tilt, [[Math.PI / 3, pitch], [-Math.PI / 3, 1.3 * pitch]], 0, 0.2, 1);
+  const hatch = grown.paths.slice(1).flatMap(path => keepAlong(path, p => !between(p), 0.2));
+  return [...rings, ...hatch];
+}
+
+/**
+ * The bar's double rule, `rules` mm inside its edge, and the band about the rules where a fill gives way so they read;
+ * `inside(p, grow)`: whether a page point lies in the bar grown by `grow` mm.
+ */
+export function holeBarRules(bar: Pick<LintelBar, 'centre' | 'tilt' | 'l' | 'h'>, rules: [number, number] = [1.6, 2.7]): { rings: Point[][]; between: (p: Point) => boolean; inside: (p: Point, grow: number) => boolean } {
   const ux = Math.cos(bar.tilt), uy = Math.sin(bar.tilt);
   const local = (p: Point) => { const dx = p.x - bar.centre.x, dy = p.y - bar.centre.y; return { s: dx * ux + dy * uy, t: -dx * uy + dy * ux }; };
   const at = (s: number, t: number): Point => ({ x: bar.centre.x + ux * s - uy * t, y: bar.centre.y + uy * s + ux * t });
   const inset = (p: Point) => { const q = local(p); return Math.min(bar.l / 2 - Math.abs(q.s), bar.h / 2 - Math.abs(q.t)); };
   const ring = (d: number): Point[] => { const a = bar.l / 2 - d, b = bar.h / 2 - d; return [at(-a, -b), at(a, -b), at(a, b), at(-a, b), at(-a, -b)]; };
-  const grown = hatchedBar({ cx: bar.centre.x, cy: bar.centre.y, l: bar.l + 2 * bleed, h: bar.h + 2 * bleed }, bar.tilt, [[Math.PI / 3, pitch], [-Math.PI / 3, 1.3 * pitch]], 0, 0.2, 1);
-  const between = (p: Point) => { const e = inset(p); return e > rules[0] - 0.6 && e < rules[1] + 0.6; };
-  const hatch = grown.paths.slice(1).flatMap(path => keepAlong(path, p => !between(p), 0.2));
-  return [ring(rules[0]), ring(rules[1]), ...hatch];
+  return {
+    rings: [ring(rules[0]), ring(rules[1])],
+    between: p => { const e = inset(p); return e > rules[0] - 0.6 && e < rules[1] + 0.6; },
+    inside: (p, grow) => inset(p) > -grow,
+  };
 }
 
 /** The eye height: the page y the hole, the slot and the lintel share. */

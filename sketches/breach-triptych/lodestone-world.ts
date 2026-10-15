@@ -2,14 +2,18 @@ import * as THREE from 'three';
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
-import { pageOf } from '../kit/perspective.ts';
+import { fitDepthRange, pageOf } from '../kit/perspective.ts';
+import { hiddenBias, projectStrokes, scalePoints } from '../kit/strokes.ts';
+import type { ProjectedPoint } from '../../src/projection.ts';
+import { renderDepthBufferCPU } from '../../src/sketch/depth-buffer.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
-import { ASSEMBLY, CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
+import { ASSEMBLY, CONTROLS, H, MM_X, MM_Y, PAGE, TRIM, W, convexHull, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
 import { footprintOf } from '../kit/assembly.ts';
-import type { Ink } from '../kit/types.ts';
+import type { Ink, Stroke } from '../kit/types.ts';
 import { CUT_CONTROL, LCUT_CONTROL, PORTAL_CONTROL } from './lodestone-cuts.ts';
 import { BUTTON, COLLAR, opening } from '../kit/mannequin/suit.ts';
 import type { Tube } from '../kit/mannequin/tube.ts';
+import type { AgentHead } from '../kit/agent.ts';
 import { n } from '../kit/params.ts';
 
 /**
@@ -55,6 +59,13 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'toggle', id: 'groundRings', label: 'Ground rings in silver on the black disc (else bare; under groundFx rings)', default: true, group: 'Ground' },
   { type: 'select', id: 'groundFx', label: 'What the field does in the ground (on R\'s black sheet)', default: 'pulse', options: ['pulse', 'interference', 'rings'],
     optionLabels: { interference: 'Interference: two ring families, from where the strands land and from the disc\'s centre, crossing into moiré', pulse: 'Pulse: rings spreading from where the strands land, filings pointing into the ground between them', rings: 'Rings (R1 to R3): three silver rings' }, group: 'Ground' },
+  { type: 'select', id: 'barFill', label: 'L: what the gold shows inside the bar\'s window', default: 'lens', options: ['lens', 'hatch'],
+    optionLabels: { lens: 'Lens (R9): the head behind the bar, larger and shifted, as through a glass block, in a double rule', hatch: 'Hatch (R1 to R8): the bar\'s crossing hatch in a double rule' }, group: 'Magnet' },
+  { type: 'select', id: 'cBarFill', label: 'C: what the black shows inside the bar\'s window', default: 'cosmos', options: ['cosmos', 'hatch'],
+    optionLabels: { cosmos: 'Cosmos (R9): galaxies and stars in silver, one gold star, in a double rule', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
+  { type: 'select', id: 'rCuts', label: 'R: what the black shows in the white\'s windows', default: 'lens', options: ['lens', 'squares', 'cosmos'],
+    optionLabels: { lens: 'Lens (R9): the head square shows the head larger and shifted, as L\'s bar; the rest as R8', squares: 'Squares (R8): the figure, strands and tie stripes in silver, the ground\'s pulse', cosmos: 'Cosmos: the same cosmos as C\'s bar behind them, the tie all stars, the ground a spiral galaxy with a pink core' }, group: 'Ground' },
+  { type: 'slider', id: 'rRibbonWidth', label: 'R: the re-formed ribbon\'s width, out of the portal (R8 was 1)', default: 2, min: 1, max: 3, step: 0.1, units: '×', group: 'Ground' },
   CUT_CONTROL,
   LCUT_CONTROL,
   PORTAL_CONTROL,
@@ -621,6 +632,89 @@ export function wordAlong(word: string, line: Point[], from: number, height: num
 
 /** Clip page paths to the trim. */
 export const clipTrim = (paths: Point[][]): Point[][] => paths.flatMap(p => clipToRect(p, TRIM));
+
+// ── Lenses (R9) ─────────────────────────────────────────────────────
+
+/**
+ * A lens: what a window shows of the head behind it, larger and shifted, as through a glass block. `mag` times as large
+ * about the face's eye-line, which lands `along` and `across` the window's long axis (mm) from the window's middle, so
+ * it reads as refracted, not aligned, and the face is in the window whatever the bar covers. Through the glass the head
+ * also turns to face out (`turn`: 0 as the sheet sees it, 1 square on to its face), so the face shows between the coil's
+ * turns.
+ */
+export const LENS = { mag: 1.8, along: -14, across: 3, turn: 0.7 };
+
+/** The lens's camera: the sheet's, swung about the head toward its face by `LENS.turn`, as far off, looking at the head. */
+export function lensCamera(view: THREE.PerspectiveCamera, head: AgentHead): THREE.PerspectiveCamera {
+  const cam = view.clone();
+  const toEye = view.position.clone().sub(head.centre), d = toEye.length();
+  const dir = toEye.normalize().lerp(head.face, LENS.turn).normalize();
+  cam.position.copy(head.centre).addScaledVector(dir, d);
+  cam.up.copy(view.up);
+  cam.lookAt(head.centre);
+  cam.updateMatrixWorld();
+  return cam;
+}
+
+/** Strokes as a camera sees them, hidden lines removed against `geometries` alone: page paths (mm). */
+export function seenBy(cam: THREE.PerspectiveCamera, strokes: Stroke[], geometries: THREE.BufferGeometry[], slack: number, d: number): Point[][] {
+  fitDepthRange(cam, geometries, 0.1, { exact: true });
+  const depth = renderDepthBufferCPU(geometries, cam, W, H);
+  const seen: Point[][] = [];
+  projectStrokes(strokes, { view: cam, depth, width: W, height: H, bias: hiddenBias(cam, slack, d) }, {
+    begin: () => (runs: ProjectedPoint[][]) => { for (const run of runs) seen.push(scalePoints(run, MM_X, MM_Y)); },
+  });
+  return seen;
+}
+
+/** Page marks seen through a lens: `mag` times as large about `from`, which lands at `to`. */
+export function lensImage(paths: Point[][], from: Point, to: Point, mag: number): Point[][] {
+  return paths.map(path => path.map(p => ({ x: to.x + mag * (p.x - from.x), y: to.y + mag * (p.y - from.y) })));
+}
+
+/** The lens's shift on the sheet for a window whose long axis lies at `angle` (radians). */
+export const lensShift = (angle: number): Point => ({ x: LENS.along * Math.cos(angle) - LENS.across * Math.sin(angle), y: LENS.along * Math.sin(angle) + LENS.across * Math.cos(angle) });
+
+/**
+ * What says "face" behind a lens, abstractly: an eye-line round the front of the skull and an almond for each eye (an
+ * upper and a lower lid), on an egg a little outside the skull's (`skull` in L: 0.52, 0.66 and 0.52 of the head's
+ * radius), so the coil hides them where it passes in front. World points, for the hidden-line pass.
+ */
+const onFace = (head: AgentHead, phi: number, lat: number): THREE.Vector3 => head.centre.clone()
+  .addScaledVector(head.side, 0.55 * head.r * Math.cos(phi) * Math.cos(lat))
+  .addScaledVector(head.axis, 0.69 * head.r * Math.sin(lat))
+  .addScaledVector(head.face, 0.55 * head.r * Math.sin(phi) * Math.cos(lat));
+
+/** The middle of the face's eye-line (`faceMarks`), in the world: where a lens is anchored. */
+export const eyeCentre = (head: AgentHead): THREE.Vector3 => onFace(head, Math.PI / 2, 0.02);
+
+/**
+ * The face's outline, abstractly: the skull's egg (as `faceMarks`) as the eye sees it, its silhouette traced through the
+ * egg's own points, so the hidden-line pass can hide it behind the coil. Closed.
+ */
+export function faceOutline(head: AgentHead, view: THREE.Camera): THREE.Vector3[] {
+  const world = new Map<Point, THREE.Vector3>(), pts: Point[] = [];
+  for (let i = 0; i < 36; i++) for (let j = 0; j < 72; j++) {
+    const q = onFace(head, 2 * Math.PI * j / 72, -Math.PI / 2 + Math.PI * (i + 0.5) / 36), p = pageOf(view, q, PAGE);
+    world.set(p, q);
+    pts.push(p);
+  }
+  const hull = convexHull(pts).map(p => world.get(p)!);
+  return [...hull, hull[0]];
+}
+
+export function faceMarks(head: AgentHead): THREE.Vector3[][] {
+  const deg = Math.PI / 180, front = Math.PI / 2;
+  const on = (phi: number, lat: number) => onFace(head, phi, lat);
+  const arc = (phi0: number, phi1: number, lat: (u: number) => number, n = 48) => Array.from({ length: n + 1 }, (_, i) => on(phi0 + (phi1 - phi0) * i / n, lat(i / n)));
+  return [
+    arc(front - 62 * deg, front + 62 * deg, () => 0.02),
+    ...[-1, 1].flatMap(sd => [
+      arc(front + (sd * 22 - 11) * deg, front + (sd * 22 + 11) * deg, u => 0.1 + 0.07 * Math.sin(Math.PI * u), 24),
+      arc(front + (sd * 22 - 11) * deg, front + (sd * 22 + 11) * deg, u => 0.1 - 0.035 * Math.sin(Math.PI * u), 24),
+    ]),
+  ];
+}
 
 // ── Hands ────────────────────────────────────────────────────────────
 
