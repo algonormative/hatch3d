@@ -15,7 +15,7 @@ const SCHEMES: CutSchemeId[] = ['tie', 'angular', 'field', 'r3', 'k1', 'k2', 'k3
 export const CUT_CONTROL: Control = {
   type: 'select', id: 'cutScheme', label: 'Cut set (shapes showing the sheet beneath)', default: 'tie', options: SCHEMES,
   optionLabels: {
-    tie: 'Tie (R6): angular; in L the tie (or the shirt about it, `lCut`) and the corner; C and R as angular',
+    tie: 'Tie (R6, R7): angular; in L the tie (or the shirt about it, `lCut`), the corner and the notch where the lines run out to C; C and R as angular',
     angular: 'Angular (R5): no arcs or circles; a suit plane and a corner in L; black behind C\'s sleeve; a tilted square behind R\'s head, a band where the strands come in, a floor in perspective',
     field: 'Field: a suit plane and a corner in L; a pole disc, an arc at the other pole and the pull\'s wedge in C; a head disc and an arc where the strands come in in R',
     r3: 'R3: only the bar and the floor disc',
@@ -99,8 +99,11 @@ export function clipToTrim(poly: Point[], r = TRIM): Point[] {
 
 // ── Anchors and schemes ──────────────────────────────────────────────
 
-/** L: the suit plane picked for a cut, the tie, and the shirt either side of the tie (page outlines), on the black sheet over the gold. */
-export interface LAnchors { facet: Point[]; tie?: Point[]; shirt?: Point[][] }
+/**
+ * L: the suit plane picked for a cut, the tie, the shirt either side of the tie, and the notch at L's right edge where
+ * the unravelled lines run out toward C (page outlines), on the black sheet over the gold.
+ */
+export interface LAnchors { facet: Point[]; tie?: Point[]; shirt?: Point[][]; notch?: Point[] }
 /** C: the bar (level) and its poles, where the gripping hand closes, and the sleeve's page points, on the gold sheet over the black. */
 export interface CAnchors { rect: { x0: number; x1: number; y0: number; y1: number }; grip: Point; sleeve: Point[] }
 /**
@@ -119,6 +122,7 @@ const L: Record<CutSchemeId, (a: LAnchors, ctx: SketchContext) => Cut[]> = {
   tie: (a, ctx) => [
     ...(ctx.params.lCut === 'shirt' ? (a.shirt ?? []).map((ring, k) => ({ id: `shirt${k ? 'r' : 'l'}`, label: 'SHIRT', rings: [clipToTrim(ring)] })) : [{ id: 'tie', label: 'TIE', rings: [clipToTrim(a.tie ?? [])] }]),
     { id: 'corner', label: 'CORNER', rings: [corner()] },
+    ...(a.notch ? [{ id: 'notch', label: 'OUT', rings: [a.notch] }] : []),
   ],
   angular: a => [{ id: 'suit', label: 'SUIT', rings: [clipToTrim(a.facet)] }, { id: 'corner', label: 'CORNER', rings: [corner()] }],
   field: a => [{ id: 'suit', label: 'SUIT', rings: [clipToTrim(a.facet)] }, { id: 'corner', label: 'CORNER', rings: [corner()] }],

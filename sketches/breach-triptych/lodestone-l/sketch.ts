@@ -19,9 +19,9 @@ import { BUTTON, COLLAR, HEMS, front, opening, pinstripeTube, suitFront } from '
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { lCuts } from '../lodestone-cuts.ts';
 import {
-  ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
+  ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { LODESTONE_CONTROLS, magnet, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, crossingY, gapOf, magnet, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -110,6 +110,23 @@ function suitFrontOutlines(trunk: Tube, view: THREE.Camera): { tie: Point[]; shi
     return ring;
   });
   return { tie, shirt };
+}
+
+/**
+ * The notch where the unravelled lines run out of L toward C: from NOTCH.above the level height they cross the gap at
+ * (where they come down over the shoulder) to just below the lowest of them at L's edge, from just left of where they
+ * come down to the right trim (its right side on the trim line, so trimmed it is a notch in the edge and the gold runs
+ * right up to it). A pentagon: the top edge falling a little toward the edge, the bottom-left corner cut off.
+ */
+const NOTCH = { above: 48, margin: 6, below: 7 };
+function exitNotch(lines: Point[][], level: number | undefined): Point[] | undefined {
+  if (level === undefined || !lines.length) return undefined;
+  const y0 = level - NOTCH.above;
+  const pts = lines.flatMap(l => l.filter(p => p.y >= y0 && p.x <= TRIM.x1 && p.x >= TRIM.x1 - 90));
+  if (pts.length < 2) return undefined;
+  const x0 = Math.min(...pts.map(p => p.x)) - NOTCH.margin, y1 = Math.max(...lines.map(l => crossingY(l, TRIM.x1) ?? -Infinity)) + NOTCH.below;
+  if (!Number.isFinite(y1) || TRIM.x1 - x0 < 8) return undefined;
+  return [{ x: x0, y: y0 }, { x: TRIM.x1, y: y0 + 6 }, { x: TRIM.x1, y: y1 }, { x: x0 + 12, y: y1 }, { x: x0, y: y1 - 12 }];
 }
 
 /** Shirt stripes: lines down the shirt's front about the tie, a little over a millimetre apart on the sheet. */
@@ -245,6 +262,7 @@ function draw(ctx: SketchContext): Part[] {
   // The helix's strand leaves the crown of the coil and runs out across the right edge, toward the magnet. It lies in
   // front of everything; all else gives way to it.
   let threadArea: (p: Point) => boolean = () => false;
+  let exiting: Point[][] = [];
   {
     // With `ribbonField` the magnet in C pulls the strand along its field toward the north pole, and its twist
     // tightens where the field is strong; else R1's path to the right edge.
@@ -259,6 +277,7 @@ function draw(ctx: SketchContext): Part[] {
     const l = bleed ? { path: bleed.ribbon, phase0: 0 } : pulled ? { path: ribbonPath(crown, m), phase0: 0 } : threadPaths(frame, bar).l;
     const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: unravel?.pitchAt ?? ribbonPitch(m, bar) } : {}) });
     for (const rib of unravel?.ribs ?? []) for (const inside of clipToRect(rib, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add('thread-ultramarine', piece, true);
+    exiting = (bleed?.strands ?? []).map(st => st.path);
     for (const st of bleed?.strands ?? []) {
       for (const inside of clipToRect(st.path, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
       ribbon.mask.push(st.path);
@@ -312,7 +331,8 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
   // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
   const front = suitFrontOutlines(body.trunk, view);
-  const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front });
+  const notch = exitNotch(exiting, gapOf(magnet(bar, ctx)) > 0 ? seamLevel(magnet(bar, ctx)) : undefined);
+  const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front, ...(notch ? { notch } : {}) });
   // The shirt cut out (`lCut` shirt): its stripes, fine lines down it, drawn in black on the gold beneath.
   if (windows.some(c => c.id.startsWith('shirt'))) for (const path of shirtStripes(body.trunk, view)) for (const inside of clipToRect(path, ART)) buckets.add('shirt-carbon', inside, true);
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
