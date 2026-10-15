@@ -16,7 +16,7 @@ import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, holeBarPaths, lintelBar, pensOf } from '../world.ts';
 import { cCuts } from '../lodestone-cuts.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barFootprint, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barFootprint, cosmos, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -33,13 +33,13 @@ import { headCoil } from '../../kit/agent.ts';
 
 export type BarMode = 'window' | 'onlay';
 const pliesFor = (mode: BarMode) => [
-  { id: 'black', paper: PAPER.black, pens: ['silver'], cutInk: 'silver' },
+  { id: 'black', paper: PAPER.black, pens: mode === 'onlay' ? ['silver'] : ['silver', 'gold'], cutInk: 'silver' },
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
   ...(mode === 'onlay' ? [{ id: 'bar', paper: PAPER.black, pens: [], cutInk: 'black', onlay: { from: `lodestone-l/black/${BAR_ID}` } }] : []),
 ];
 /** R1 to R6's onlay keeps Lintel's 2 mm bleed; the window (R7) Lodestone's 4 mm. */
 const specFor = (mode: BarMode): AssemblySpec => ({ ...(mode === 'onlay' ? ASSEMBLY : LODESTONE_ASSEMBLY), plies: pliesFor(mode) });
-const pens = pensOf(['silver', 'black']);
+const pens = pensOf(['silver', 'gold', 'black']);
 
 const ALL_BLACK = { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' };
 const ROUTES = { gold: { groups: ['field', 'filing', 'hand', 'word'], inks: ALL_BLACK } };
@@ -184,14 +184,18 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
     return renderPly(spec, ctx, pens, { cuts: { gold: windows, bar: [barFootprint(bar, ctx)] }, art });
   }
   // The bar as a window in the gold where it lies (L's bar placed by `barPose`, a waste cut), the black beneath carrying
-  // the bar's hatch in silver (as L's gold carries it in black ink), out under the window's edge by the bleed; the gold's
-  // marks run on in silver on the black, but not into the bar, where the lines and filings stop at its edge.
+  // (`cBarFill`) the cosmos (R9: galaxies and stars in silver, one star gold) or the bar's hatch in silver (R7, R8, as
+  // L's gold carries it in black ink), out under the window's edge by the bleed; the gold's marks run on in silver on the
+  // black, but not into the bar, where the lines and filings stop at its edge.
   const barRing = barFootprint(bar, ctx).rings[0], inBar = (p: Point) => insideRing(barRing, p);
   const pose = m.pose ?? { cx: (m.rect.x0 + m.rect.x1) / 2, cy: (m.rect.y0 + m.rect.y1) / 2, angle: 0 };
-  const hatch = holeBarPaths({ ...bar, centre: { x: pose.cx, y: pose.cy }, tilt: pose.angle }, spec.bleed + FILL_OVER, n(ctx, 'barPitch', 2.6, 0.6, 5));
+  const grow = spec.bleed + FILL_OVER;
+  const sky = ctx.params.cBarFill === 'hatch' ? undefined : cosmos(ctx.random('lodestone-cosmos'), { cx: pose.cx, cy: pose.cy, angle: pose.angle, l: bar.l, h: bar.h }, { grow, galaxies: 2 });
   art.black = [
     ...art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver', paths: part.paths.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) })).filter(part => part.paths.length),
-    { id: 'bar-silver', pen: 'silver', paths: hatch },
+    ...(sky
+      ? [{ id: 'cosmos-silver', pen: 'silver', paths: [...sky.silver, ...sky.cores] }, { id: 'cosmos-gold', pen: 'gold', paths: sky.accent }]
+      : [{ id: 'bar-silver', pen: 'silver', paths: holeBarPaths({ ...bar, centre: { x: pose.cx, y: pose.cy }, tilt: pose.angle }, grow, n(ctx, 'barPitch', 2.6, 0.6, 5)) }]),
   ];
   return renderPly(spec, ctx, pens, { cuts: { gold: [{ id: BAR_ID, label: 'BAR', rings: [barRing] }, ...windows] }, art });
 };

@@ -716,6 +716,85 @@ export function faceMarks(head: AgentHead): THREE.Vector3[][] {
   ];
 }
 
+// ── The cosmos (R9) ─────────────────────────────────────────────────
+
+/** A window's frame for the cosmos: its middle, the angle of its long axis (radians), its length and height (mm). */
+export interface CosmosFrame { cx: number; cy: number; angle: number; l: number; h: number }
+
+/**
+ * The cosmos seen through a window (R9: C's bar; in R, its windows with `rCuts` cosmos), seeded: stars thick along a
+ * faint band down the window's long axis (a galactic plane) and scattered thinner off it, most of them points (short
+ * dashes), some small crosses and a few four-pointed with a smaller diagonal; and `galaxies` spirals (two log-spiral
+ * arms of short dashes about a core of close rings, tilted away by a random inclination). Every mark lies inside the
+ * frame grown by `grow`, never closer than `GAP` to another star, so no two fuse. Returns the silver marks, the cores
+ * (for an accent ink where wanted) and `accent`, one bright star.
+ */
+export const COSMOS = { starsPerMm2: 0.03, band: 0.4, gap: 1.3, armDash: 1.0, armGap: 0.7, coreRings: 4, coreStep: 0.6 };
+export function cosmos(rng: () => number, f: CosmosFrame, o: { grow: number; galaxies: number }): { silver: Point[][]; cores: Point[][]; accent: Point[][] } {
+  const ux = Math.cos(f.angle), uy = Math.sin(f.angle);
+  const at = (s: number, t: number): Point => ({ x: f.cx + ux * s - uy * t, y: f.cy + uy * s + ux * t });
+  const S = f.l / 2 + o.grow, T = f.h / 2 + o.grow;
+  const inFrame = (s: number, t: number) => Math.abs(s) <= S && Math.abs(t) <= T;
+  const silver: Point[][] = [], cores: Point[][] = [], accent: Point[][] = [];
+  const keep = (into: Point[][], local: { s: number; t: number }[]) => {
+    let run: Point[] = [];
+    for (const q of local) { if (inFrame(q.s, q.t)) run.push(at(q.s, q.t)); else { if (run.length > 1) into.push(run); run = []; } }
+    if (run.length > 1) into.push(run);
+  };
+  // Galaxies: the first left of the middle, the next right, each clear of the window's ends.
+  const discs: { s: number; t: number; R: number; cos: number; rot: number }[] = [];
+  for (let g = 0; g < o.galaxies; g++) {
+    const R = Math.min(0.46 * f.h, (g ? 9 : 14) + 3 * rng());
+    discs.push({ s: (g % 2 ? 1 : -1) * (0.18 + 0.12 * rng()) * f.l, t: (rng() - 0.5) * 0.25 * f.h, R, cos: g ? 0.4 + 0.15 * rng() : 0.62 + 0.2 * rng(), rot: 2 * Math.PI * rng() });
+  }
+  for (const d of discs) {
+    const place = (r: number, th: number) => { const x = r * Math.cos(th), y = r * Math.sin(th) * d.cos; return { s: d.s + x * Math.cos(d.rot) - y * Math.sin(d.rot), t: d.t + x * Math.sin(d.rot) + y * Math.cos(d.rot) }; };
+    // The core: close rings, the disc's own tilt.
+    for (let k = 1; k <= COSMOS.coreRings; k++) keep(cores, Array.from({ length: 41 }, (_, i) => place(k * COSMOS.coreStep, 2 * Math.PI * i / 40)));
+    // Two arms, r = a e^(b θ) out from the core's edge to the disc's rim, each three tracks of dashes (the arm widening
+    // as it winds out), dash and gap at random, and a haze of points about it.
+    const a = (COSMOS.coreRings + 0.6) * COSMOS.coreStep, b = 0.22, thMax = Math.log(d.R / a) / b;
+    for (const arm of [0, Math.PI]) for (const track of [-1, 0, 1]) {
+      let th = 0.3 * rng();
+      while (th < thMax) {
+        const r = a * Math.exp(b * th), w = track * (0.35 + 0.07 * r), len = 0.6 + 0.6 * rng();
+        if (rng() > 0.15 * Math.abs(track)) keep(silver, Array.from({ length: 4 }, (_, i) => place(r + w, arm + th + len / r * i / 3)));
+        th += (len + 0.6 + 0.9 * rng()) / r;
+      }
+    }
+    for (let k = 0; k < 28; k++) {
+      const th = thMax * rng(), r = a * Math.exp(b * th) + (rng() - 0.5) * 0.35 * a * Math.exp(b * th), arm = rng() < 0.5 ? 0 : Math.PI;
+      const q = place(Math.max(a, r), arm + th + (rng() - 0.5) * 0.3), sp = 2 * Math.PI * rng();
+      if (inFrame(q.s, q.t)) silver.push([at(q.s - 0.25 * Math.cos(sp), q.t - 0.25 * Math.sin(sp)), at(q.s + 0.25 * Math.cos(sp), q.t + 0.25 * Math.sin(sp))]);
+    }
+  }
+  const inDisc = (s: number, t: number, pad: number) => discs.some(d => {
+    const ds = s - d.s, dt = t - d.t, x = ds * Math.cos(d.rot) + dt * Math.sin(d.rot), y = (-ds * Math.sin(d.rot) + dt * Math.cos(d.rot)) / d.cos;
+    return Math.hypot(x, y) < d.R + pad;
+  });
+  // Stars: a band along the long axis and a thinner scatter, kept apart.
+  const stars: { s: number; t: number }[] = [];
+  const count = Math.round(COSMOS.starsPerMm2 * 4 * S * T);
+  const gauss = () => { let u = 0; for (let i = 0; i < 4; i++) u += rng(); return (u - 2) / 0.577; };
+  for (let tries = 0; stars.length < count && tries < 40 * count; tries++) {
+    const s = (2 * rng() - 1) * S, t = rng() < COSMOS.band ? gauss() * 0.18 * f.h : (2 * rng() - 1) * T;
+    if (!inFrame(s, t) || inDisc(s, t, 1) || stars.some(q => Math.hypot(q.s - s, q.t - t) < COSMOS.gap)) continue;
+    stars.push({ s, t });
+  }
+  // The brightest: one, in the accent ink, near the band, off the galaxies.
+  let bright = stars.findIndex(q => Math.abs(q.t) < 0.2 * f.h && Math.abs(q.s) > 0.05 * f.l && !inDisc(q.s, q.t, 4));
+  if (bright < 0) bright = 0;
+  stars.forEach((q, i) => {
+    const kind = i === bright ? 3 : rng(), a = rng() * Math.PI;
+    const ray = (len: number, ang: number) => [{ s: q.s - len * Math.cos(ang), t: q.t - len * Math.sin(ang) }, { s: q.s + len * Math.cos(ang), t: q.t + len * Math.sin(ang) }];
+    if (kind === 3) { keep(accent, ray(2.4, 0)); keep(accent, ray(2.4, Math.PI / 2)); keep(accent, ray(1, Math.PI / 4)); keep(accent, ray(1, -Math.PI / 4)); }
+    else if (kind > 0.95) { keep(silver, ray(1.1, a)); keep(silver, ray(1.1, a + Math.PI / 2)); keep(silver, ray(0.45, a + Math.PI / 4)); keep(silver, ray(0.45, a - Math.PI / 4)); }
+    else if (kind > 0.72) { const len = 0.45 + 0.3 * rng(); keep(silver, ray(len, a)); keep(silver, ray(len, a + Math.PI / 2)); }
+    else keep(silver, ray(0.25, a));
+  });
+  return { silver, cores, accent };
+}
+
 // ── Hands ────────────────────────────────────────────────────────────
 
 /** A slab whose own axes are `x` (across), `y` (along) and `z` (through), centred at `c`. */
