@@ -56,6 +56,9 @@ const STRAND_PEN = { white: { ultramarine: 'ultramarine', vermilion: 'fluoro-pin
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
 const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings', 'emph', 'emphunder'] as const;
 
+/** R's full coil head (`rHead`, R10): its coil's size against the head's, its turns, and its twin ribbons' radius and width (of K). */
+const HEAD = { scale: 1.35, turns: 2.8, radius: 0.2, width: 1.1 };
+
 /** The kneeling pose: the kit's kneel, the arms raised forward to gather at head height, the head bowed to its hands. */
 // Each upper arm forward and up, turned in so the bent forearms come across: the two hands meet before the chest.
 const KNEEL: Partial<Record<JointName, JointAngles>> = {
@@ -362,8 +365,12 @@ function draw(ctx: SketchContext): Part[] {
       headGeos.push(band.mesh(6, 72));
     }
   } else {
-    const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
-      { radius: 0.12 * K, width: 0.6 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.4, interruption: 0.1 });
+    // `rHead` full (R10): the coil HEAD.scale times as large and wound HEAD.turns, its twin ribbons broader, so it wraps
+    // round and past the lens square; the head's own size (the square, the skull, the framing) is unchanged.
+    const full = ctx.params.rHead !== 'slim';
+    const coil = full ? headCoil({ ...head, r: HEAD.scale * head.r }, HEAD.turns) : headCoil(head);
+    const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(coil, false, 'centripetal'),
+      { radius: (full ? HEAD.radius : 0.12) * K, width: (full ? HEAD.width : 0.6) * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.4, interruption: 0.1 });
     for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });
     headGeos.push(...helix.meshes, skull(head));
   }
@@ -417,7 +424,7 @@ function draw(ctx: SketchContext): Part[] {
     const fx = String(ctx.params.portalFx ?? 'align');
     strands.forEach((st, k) => { st.path = throughPortal(st.path, portal, fx, k, strands.length); });
   }
-  const widen = n(ctx, 'rRibbonWidth', 2, 1, 3);
+  const widen = n(ctx, 'rRibbonWidth', 1, 1, 3);
   const reformed = toRibbon && portal ? ravel(strands, portal, pink, widen) : undefined;
   const strandArea = glyphMask([...strands.map(st => st.path), ...(reformed?.ribbon.mask ?? [])], 0.9, 6, PAGE);
   // "line", along the pink strand where it falls from the hands toward the floor (with the ribbon, beside it).
