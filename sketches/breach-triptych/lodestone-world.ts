@@ -30,7 +30,8 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'select', id: 'fist', label: 'The gripping hand', default: 'slabs', options: ['slabs', 'clean'],
     optionLabels: { slabs: 'Slabs: palm, curled finger segments and thumb (R2)', clean: 'Clean: a squared fist, fingers folded in right angles in one row' }, group: 'Magnet' },
   { type: 'slider', id: 'pullStrength', label: 'The hand\'s pole, against the bar\'s', default: 0.3, min: 0.05, max: 0.8, step: 0.01, group: 'Magnet' },
-  { type: 'toggle', id: 'ribbonBleed', label: 'L\'s ribbon unravels into field lines before it leaves L (else R2\'s single line)', default: true, group: 'Magnet' },
+  { type: 'select', id: 'ribbonBleed', label: 'How L\'s ribbon becomes the field', default: 'progressive', options: ['progressive', 'split', 'off'],
+    optionLabels: { progressive: 'Progressive: it loosens turn by turn and unravels into field lines flowing overhead', split: 'Split (R3): it comes apart at one point into field lines', off: 'Off (R2): one line' }, group: 'Magnet' },
   { type: 'toggle', id: 'ribbonField', label: 'L\'s ribbon follows the field toward the near pole (else R1\'s path)', default: true, group: 'Magnet' },
   { type: 'toggle', id: 'figureField', label: 'R\'s figure pulled by the field toward the centre (else R1)', default: true, group: 'Ground' },
   { type: 'select', id: 'figure', label: 'R\'s figure', default: 'r1', options: ['r1', 'clean'],
@@ -175,6 +176,86 @@ export function ribbonBleed(crown: Point, m: Magnet, bar: LintelBar, o: { width:
     return { ink, path };
   });
   return { ribbon: full.slice(0, i0 + 1), strands };
+}
+
+/** The lines L's ribbon unravels into: their place across it (-1 to 1) and ink (the kit's helix inks: edges, laminations, spine). */
+const UNRAVEL: [number, Ink][] = [[-1, 'vermilion'], [-2 / 3, 'violet'], [-1 / 3, 'ultramarine'], [0, 'acid'], [1 / 3, 'ultramarine'], [2 / 3, 'violet'], [1, 'vermilion']];
+/** Along the ribbon (mm): where it starts to loosen, where it has come apart into separate lines, and how far they then spread (times its half width). */
+const LOOSEN = { from: 40, to: 190, spread: 3.2 };
+
+export interface Unravel extends Bleed {
+  /** The twist's pitch multiple at each point of `ribbon` (by identity), for `flatRibbon`'s `pitchAt`. */
+  pitchAt: (p: Point) => number;
+  /** Ribs across the loosening ribbon, thinning out as it comes apart. */
+  ribs: Point[][];
+}
+
+const smoothstep = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/**
+ * L's ribbon unravelling progressively into the field. From the crown of the bust's coil it rises and arcs overhead
+ * (its heading turning from steeply up to level over its first 110 mm, kept under the top trim), while the field takes
+ * it over toward C's north pole. From LOOSEN.from to LOOSEN.to along it, it loosens: its twist slackens (the pitch
+ * growing fourfold), and its edges, laminations and spine drift apart a little more each turn until they are seven
+ * separate lines spread evenly across LOOSEN.spread of its half width; from there each goes on as a field line of its
+ * own toward the north pole, and leaves L's right edge at its own height (C carries each on from there).
+ */
+export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { width: number; pitch: number }): Unravel {
+  const half = o.width / 2, base = ribbonPitch(m, bar), step = 0.5;
+  const dirTo = (a: number) => ({ x: Math.cos(a), y: Math.sin(a) });
+  const toNorth = (p: Point) => { const B = fieldIn(m, 'l', p), l = Math.hypot(B.x, B.y) || 1; return { x: -B.x / l, y: -B.y / l }; };
+  // The centreline, stepped until it is fully the field's.
+  const c: Point[] = [crown], ss: number[] = [0];
+  let p = crown;
+  for (let s = 0; s < LOOSEN.to + 40 && p.x < TRIM.x1 + 6; s += step) {
+    const design = dirTo(THREE.MathUtils.degToRad(-65 + 70 * smoothstep(0, 110, s)));
+    const w = smoothstep(60, LOOSEN.to - 10, s), f = toNorth(p);
+    let dx = design.x * (1 - w) + f.x * w, dy = design.y * (1 - w) + f.y * w;
+    // Kept under the top trim: near it the heading bends level.
+    if (p.y < TRIM.y0 + 16 && dy < 0) dy *= Math.max(0, (p.y - TRIM.y0 - 9) / 7);
+    const l = Math.hypot(dx, dy) || 1;
+    p = { x: p.x + step * dx / l, y: p.y + step * dy / l };
+    c.push(p); ss.push(s + step);
+  }
+  const u = ss.map(s => smoothstep(LOOSEN.from, LOOSEN.to, s));
+  const mul = new Map<Point, number>();
+  let phase = 0;
+  const cosPhase = c.map((q, i) => {
+    const k = base(q) * (1 + 3 * u[i]);
+    mul.set(q, k);
+    if (i) phase += 2 * Math.PI * step / (o.pitch * k);
+    return Math.cos(phase);
+  });
+  const normal = c.map((_, i) => { const a = c[Math.max(0, i - 1)], b = c[Math.min(c.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d }; });
+  const offset = (i: number, v: number) => v * half * ((1 - u[i]) * cosPhase[i] + u[i] * LOOSEN.spread);
+  const at = (i: number, v: number): Point => ({ x: c[i].x + normal[i].x * offset(i, v), y: c[i].y + normal[i].y * offset(i, v) });
+  const iA = ss.findIndex(s => s >= LOOSEN.from), iB = c.length - 1;
+  const strands = UNRAVEL.map(([v, ink]) => {
+    const path: Point[] = [];
+    for (let i = iA; i <= iB; i++) path.push(at(i, v));
+    // Then a field line of its own, to past L's right edge.
+    let q = path[path.length - 1];
+    for (let n = 0; n < 1600 && q.x < TRIM.x1 + 6 && q.y > TRIM.y0 - 30 && q.y < TRIM.y1 + 30; n++) { const f = toNorth(q); q = { x: q.x + step * f.x, y: q.y + step * f.y }; path.push(q); }
+    return { ink, path };
+  });
+  // Ribs across the loosening ribbon, edge to edge, ever further apart, gone by the time it is half undone.
+  const ribs: Point[][] = [];
+  let next = ss[iA];
+  for (let i = iA; i <= iB; i++) {
+    if (u[i] > 0.5 || ss[i] < next) continue;
+    next = ss[i] + 2.4 * (1 + 6 * u[i]);
+    if (Math.abs(offset(i, 1)) * 2 < 1.2) continue;
+    ribs.push([at(i, -1), at(i, 1)]);
+  }
+  return { ribbon: c.slice(0, iA + 1), strands, ribs, pitchAt: q => mul.get(q) ?? base(q) };
+}
+
+/** The lines L's ribbon becomes, by `ribbonBleed` (with `ribbonField` on): the progressive unravel, R3's split, or R2's one line. */
+export function ribbonLines(ctx: SketchContext, crown: Point, m: Magnet, bar: LintelBar, o: { width: number; pitch: number }): Point[][] {
+  const mode = String(ctx.params.ribbonBleed);
+  if (mode === 'off') return [ribbonPath(crown, m)];
+  if (mode === 'split') return ribbonBleed(crown, m, bar, o).strands.map(st => st.path);
+  return ribbonUnravel(crown, m, bar, o).strands.map(st => st.path);
 }
 
 /** Where a page path crosses x = `x` (its first crossing), or undefined. */

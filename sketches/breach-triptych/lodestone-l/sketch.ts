@@ -20,7 +20,7 @@ import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tu
 import {
   ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { LODESTONE_CONTROLS, magnet, ribbonBleed, ribbonPath, ribbonPitch } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, magnet, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -191,10 +191,14 @@ function draw(ctx: SketchContext): Part[] {
     const m = magnet(bar, ctx);
     const pulled = ctx.params.ribbonField !== false;
     const crown = pageOf(view, headCoil(head).at(-1)!, PAGE);
-    // `ribbonBleed`: the ribbon comes apart before the edge, its lines going on as field lines (drawn below).
-    const bleed = pulled && ctx.params.ribbonBleed !== false ? ribbonBleed(crown, m, bar, { width: THREAD.widthMm, pitch: THREAD.pitchMm }) : undefined;
+    // `ribbonBleed`: progressive (it loosens and unravels into field lines overhead), split (R3: it comes apart at one
+    // point), or off (R2: one line). The lines it becomes are drawn below.
+    const mode = String(ctx.params.ribbonBleed), dims = { width: THREAD.widthMm, pitch: THREAD.pitchMm };
+    const unravel = pulled && mode === 'progressive' ? ribbonUnravel(crown, m, bar, dims) : undefined;
+    const bleed = unravel ?? (pulled && mode === 'split' ? ribbonBleed(crown, m, bar, dims) : undefined);
     const l = bleed ? { path: bleed.ribbon, phase0: 0 } : pulled ? { path: ribbonPath(crown, m), phase0: 0 } : threadPaths(frame, bar).l;
-    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: ribbonPitch(m, bar) } : {}) });
+    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: unravel?.pitchAt ?? ribbonPitch(m, bar) } : {}) });
+    for (const rib of unravel?.ribs ?? []) for (const inside of clipToRect(rib, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add('thread-ultramarine', piece, true);
     for (const st of bleed?.strands ?? []) {
       for (const inside of clipToRect(st.path, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
       ribbon.mask.push(st.path);

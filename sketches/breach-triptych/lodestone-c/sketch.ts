@@ -15,7 +15,7 @@ import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, lintelFootprint, pensOf } from '../world.ts';
-import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonBleed, ribbonPath, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -151,7 +151,7 @@ function draw(ctx: SketchContext): Part[] {
   // With `ribbonBleed` it has come apart into several lines in L: each runs on here from the height it left L.
   if (ctx.params.ribbonField !== false) {
     const crown = pageOf(frame.view, headCoil(frame.fig.head).at(-1)!, PAGE);
-    const paths = ctx.params.ribbonBleed !== false ? ribbonBleed(crown, m, bar, { width: THREAD.widthMm, pitch: THREAD.pitchMm }).strands.map(st => st.path) : [ribbonPath(crown, m)];
+    const paths = ribbonLines(ctx, crown, m, bar, { width: THREAD.widthMm, pitch: THREAD.pitchMm });
     for (const path of paths) {
       const y = crossingY(path, TRIM.x1);
       if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0, y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
