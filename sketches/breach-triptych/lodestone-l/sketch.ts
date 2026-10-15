@@ -15,8 +15,9 @@ import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
-import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
+import { HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
+import { lCuts } from '../lodestone-cuts.ts';
 import {
   ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
@@ -78,6 +79,28 @@ const inQuad = (quad: Point[], margin: number) => (p: Point) => quad.every((a, i
 
 /** The vertical faces of a slab, as outward normals in its own frame. */
 const SIDES = [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)];
+
+/**
+ * A plane of the suit to cut out: of the trunk's six flat planes, the largest on the sheet that faces the eye and is
+ * not the front one (the lapels and shirt), between SUIT_U's two places along the trunk; its outline traced along both of
+ * its long edges.
+ */
+const SUIT_U: [number, number] = [0.58, 0.76];
+function suitFacet(trunk: Tube, view: THREE.Camera, eye: THREE.Vector3): Point[] {
+  let best: Point[] = [], area = 0;
+  for (let k = 0; k < trunk.facets; k++) {
+    const v0 = k / trunk.facets, v1 = (k + 1) / trunk.facets, vc = (v0 + v1) / 2;
+    if (front(vc) < 0.12) continue;
+    const u = (SUIT_U[0] + SUIT_U[1]) / 2, p = trunk.point(u, vc);
+    if (trunk.normal(u, vc).dot(eye.clone().sub(p).normalize()) < 0.25) continue;
+    const N = 16, ring: Point[] = [];
+    for (let i = 0; i <= N; i++) ring.push(pageOf(view, trunk.point(SUIT_U[0] + (SUIT_U[1] - SUIT_U[0]) * i / N, v0), PAGE));
+    for (let i = N; i >= 0; i--) ring.push(pageOf(view, trunk.point(SUIT_U[0] + (SUIT_U[1] - SUIT_U[0]) * i / N, v1), PAGE));
+    const a = Math.abs(ring.reduce((t, q, i) => { const r = ring[(i + 1) % ring.length]; return t + q.x * r.y - r.x * q.y; }, 0)) / 2;
+    if (a > area) { area = a; best = ring; }
+  }
+  return best;
+}
 
 /** A stroke with the slack its hidden-line test allows. */
 type Tagged = Stroke & { slack: number };
@@ -249,8 +272,12 @@ function draw(ctx: SketchContext): Part[] {
   if (ctx.params.holeBar !== false) for (const path of holeBarPaths(bar, spec.bleed)) buckets.add('hole-carbon', path, true);
   for (const g of geometries) g.dispose();
 
+  // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
+  // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
+  const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye) });
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
-  return renderPly(spec, ctx, pens, { cuts: { black: [bar.cut] }, art });
+  if (windows.length) art.gold.push(...art.black.filter(part => !part.id.startsWith('bar-')).map(part => ({ ...part, id: `under-${part.id}`, pen: 'black' })));
+  return renderPly(spec, ctx, pens, { cuts: { black: [bar.cut, ...windows] }, art });
 }
 
 const sketch: Sketch = {

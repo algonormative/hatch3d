@@ -9,7 +9,9 @@ import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
-import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
+import { fitDepthRange, onGround, pageOf } from '../../kit/perspective.ts';
+import { insideRing } from '../../kit/page.ts';
+import { rCuts } from '../lodestone-cuts.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -287,8 +289,45 @@ function draw(ctx: SketchContext): Part[] {
     for (const part of keepAlong(piece, p => !clear(p), 0.15)) { buckets.add(`strand-${st.ink}`, part, true); buckets.add(`strandunder-${st.ink}`, part, true); }
   }
   for (const w of word) for (const piece of clipToRect(w, ART)) buckets.add('word-ultramarine', piece, true);
-  // The ground rings, in silver on the black.
-  if (ctx.params.groundRings !== false) for (const r of [0.22, 0.42, 0.64]) { const pr = ring(r * radius); for (const piece of clipToRect([...pr, pr[0]], ART)) buckets.add('rings-carbon', piece, true); }
+  // The ground (`groundFx`), on the black sheet under the floor disc: R1's three silver rings, or the field going on into
+  // the ground. A ring about a ground point, sampled on the floor plane and kept inside the floor disc.
+  const fx = String(ctx.params.groundFx ?? 'pulse');
+  const fxSilver: Point[][] = [], fxPink: Point[][] = [];
+  const onDisc = (q: Point) => insideRing(disc, q);
+  const ringAt = (c: THREE.Vector3, r: number, a0 = 0, a1 = 2 * Math.PI, n = 144): Point[] => Array.from({ length: n + 1 }, (_, i) => pageOf(view, c.clone().add(new THREE.Vector3(r * Math.cos(a0 + (a1 - a0) * i / n), 0, r * Math.sin(a0 + (a1 - a0) * i / n))), PAGE));
+  const keepOnDisc = (path: Point[], into: Point[][]) => { for (const piece of keepAlong(path, onDisc, 0.2)) into.push(piece); };
+  const landing = (st: { path: Point[] }) => onGround(view, st.path[st.path.length - 1], PAGE);
+  const bundle = strands.map(landing).reduce((t, q) => t.add(q), new THREE.Vector3()).divideScalar(Math.max(1, strands.length)).setY(0);
+  const pinkAt = strands[pink] ? landing(strands[pink]).setY(0) : bundle;
+  // Ring spacing on the floor: about 2.4 mm across the sheet at the disc.
+  const stepW = 2.4 / mmPerUnit(centre);
+  if (fx === 'interference') {
+    // Two families of rings, from where the strands land and (a touch wider apart) from the disc's own centre: where
+    // they cross they beat into moiré. The three rings round where the pink strand lands are pink.
+    for (let r = 1.3 * stepW; r < 1.6 * radius; r += 1.3 * stepW) keepOnDisc(ringAt(bundle, r), fxSilver);
+    for (let r = 1.45 * stepW; r < 1.6 * radius; r += 1.45 * stepW) keepOnDisc(ringAt(centre, r), fxSilver);
+    for (let k = 1; k <= 3; k++) keepOnDisc(ringAt(pinkAt, 0.6 * k * stepW), fxPink);
+  } else if (fx === 'pulse') {
+    // Rings spreading from where the strands land, ever further apart, dashed by turns; between them, filings pointing
+    // into the ground (radial dashes). The third ring is pink.
+    const rings: number[] = [];
+    for (let r = 1.2 * stepW; r < 1.6 * radius; r *= 1.22) rings.push(r);
+    rings.forEach((r, k) => {
+      const path = ringAt(bundle, r, 0.3 * k, 0.3 * k + 2 * Math.PI, 240);
+      const into = k === 2 ? fxPink : fxSilver;
+      if (k % 2 === 0) keepOnDisc(path, into);
+      else for (let i = 0; i + 4 < path.length; i += 6) keepOnDisc(path.slice(i, i + 5), into);
+      const next = rings[k + 1] ?? 1.22 * r, count = Math.round(18 + 6 * k);
+      for (let i = 0; i < count; i++) {
+        const a = 2 * Math.PI * (i + 0.5 * (k % 2)) / count;
+        const d = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+        const r0 = r + 0.25 * (next - r), r1 = r + 0.6 * (next - r);
+        keepOnDisc([pageOf(view, bundle.clone().addScaledVector(d, r0), PAGE), pageOf(view, bundle.clone().addScaledVector(d, r1), PAGE)], fxSilver);
+      }
+    });
+  } else if (ctx.params.groundRings !== false) {
+    for (const r of [0.22, 0.42, 0.64]) { const pr = ring(r * radius); for (const piece of clipToRect([...pr, pr[0]], ART)) buckets.add('rings-carbon', piece, true); }
+  }
   for (const geo of figureGeos) geo.dispose();
 
   // Route: the white keeps the figure and strands, the black the marks under the disc; the pink strand in pink on both.
@@ -297,7 +336,13 @@ function draw(ctx: SketchContext): Part[] {
   const art = routeParts(parts.filter(p => !p.id.startsWith('strand')), ROUTES);
   for (const p of parts.filter(q => q.id.startsWith('strand-'))) art.white.push({ ...p, pen: STRAND_PEN.white[p.pen as 'ultramarine' | 'vermilion'] });
   for (const p of parts.filter(q => q.id.startsWith('strandunder-'))) art.black.push({ ...p, pen: STRAND_PEN.black[p.pen as 'ultramarine' | 'vermilion'] });
-  return renderPly(spec, ctx, pens, { cuts: { white: [{ id: 'disc', label: 'DISC', rings: [disc] }] }, art });
+  if (fxSilver.length) art.black.push({ id: 'fx-silver', pen: 'silver', paths: fxSilver });
+  if (fxPink.length) art.black.push({ id: 'fx-pink', pen: 'fluoro-pink', paths: fxPink });
+  // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
+  // strands drawn on it in silver (the `under` marks).
+  const headPage = pullHead(pageOf(view, head.centre, PAGE));
+  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits });
+  return renderPly(spec, ctx, pens, { cuts: { white: [{ id: 'disc', label: 'DISC', rings: [disc] }, ...windows] }, art });
 }
 
 const sketch: Sketch = {

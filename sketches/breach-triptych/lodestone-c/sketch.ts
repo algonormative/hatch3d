@@ -15,6 +15,7 @@ import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, lintelFootprint, pensOf } from '../world.ts';
+import { cCuts } from '../lodestone-cuts.ts';
 import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
@@ -24,15 +25,17 @@ import { headCoil } from '../../kit/agent.ts';
  * filings packed at the poles and thinning out; a hand in a pinstriped cuff comes in from the top. With `handPull` it
  * grips and draws a bundle of lines up into its fist, a small south pole superposed on the bar's field; in R1 it had
  * just let the bar go. With `ribbonField` the field line that L's ribbon becomes runs on here into the north pole.
- * Two plies, bottom to top: the gold sheet, and the bar as an onlay.
+ * Three plies, bottom to top: a black sheet, the gold sheet, and the bar as an onlay. The gold is cut by the cut set
+ * (`cutScheme`) so the black shows, the field drawn on in silver there.
  */
 
 const plies = [
+  { id: 'black', paper: PAPER.black, pens: ['silver'], cutInk: 'silver' },
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
   { id: 'bar', paper: PAPER.black, pens: [], cutInk: 'black', onlay: { from: `lodestone-l/black/${BAR_ID}` } },
 ];
 export const spec: AssemblySpec = { ...ASSEMBLY, plies };
-const pens = pensOf(['black']);
+const pens = pensOf(['silver', 'black']);
 
 const ALL_BLACK = { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' };
 const ROUTES = { gold: { groups: ['field', 'filing', 'hand', 'word'], inks: ALL_BLACK } };
@@ -94,7 +97,8 @@ function draw(ctx: SketchContext): Part[] {
   // The sleeve and the shirt cuff, out of the top (or the bottom) of the sheet.
   const up = along.clone().negate();
   const shirt = new Tube('shirt', [wrist.clone().addScaledVector(up, 1.9), wrist.clone().addScaledVector(up, -0.2)], [[0, 1.6, 1.4], [1, 1.55, 1.35]], across, 1, [0, 0], undefined, 6);
-  const reach = fromBottom ? 32 : 18;
+  // From the bottom the sleeve runs from the cuff down past the bottom trim, however long `sleeveLength` makes it.
+  const reach = fromBottom ? (TRIM.y1 + 24 - pageOf(view, wrist, PAGE).y) / (MM_PER_UNIT * Math.max(0.5, Math.abs(up.y))) : 18;
   const sleeve = new Tube('sleeve', [wrist.clone().addScaledVector(up, 1.4), wrist.clone().addScaledVector(up, 8), wrist.clone().addScaledVector(up, reach)],
     [[0, 2.2, 1.95], [1, 2.3, 2.05]], across, 1, [0, 0], undefined, 6);
   const env: ToneEnv = { density: 0.3, dark: () => 0.5, screen: p => pageOf(view, p, PAGE) };
@@ -158,8 +162,12 @@ function draw(ctx: SketchContext): Part[] {
     }
   }
 
+  // The cut set's windows in the gold (`cutScheme`), and the black beneath: every mark of the gold is drawn on the black
+  // too, in silver, and each sheet keeps what it shows, so the field reads on through the windows.
+  const windows = cCuts(ctx, { rect: m.rect, grip: m.poles[0] ?? { x: handX, y: m.rect.y0 - 40 } });
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
-  return renderPly(spec, ctx, pens, { cuts: { bar: [lintelFootprint(bar)] }, art });
+  art.black = windows.length ? art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver' })) : [];
+  return renderPly(spec, ctx, pens, { cuts: { gold: windows, bar: [lintelFootprint(bar)] }, art });
 }
 
 /** A slab's eight corners in the world. */

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type { Control, Point, SketchContext } from '../../src/sketch/types.ts';
-import { strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
+import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
 import { CONTROLS, TRIM, lintelRect, type LintelBar } from './world.ts';
 import type { Ink } from '../kit/types.ts';
+import { CUT_CONTROL } from './lodestone-cuts.ts';
 import { n } from '../kit/params.ts';
 
 /**
@@ -25,6 +26,7 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'slider', id: 'filings', label: 'Filings (candidates, thousands)', default: 9, min: 0, max: 30, step: 0.5, group: 'Magnet' },
   { type: 'slider', id: 'handX', label: 'Hand: where it hangs over the bar (0 its left end, 1 its right)', default: 0.68, min: 0, max: 1, step: 0.01, group: 'Magnet' },
   { type: 'toggle', id: 'handPull', label: 'The hand grips and pulls the field lines (a small opposite pole); else it has let go (R1)', default: true, group: 'Magnet' },
+  { type: 'slider', id: 'sleeveLength', label: 'Gripping hand from the bottom: the sleeve from the bottom trim to the cuff', default: 150, min: 60, max: 300, step: 5, units: 'mm', group: 'Magnet' },
   { type: 'select', id: 'handFrom', label: 'Where the gripping hand comes in', default: 'bottom', options: ['bottom', 'top'],
     optionLabels: { bottom: 'From the bottom edge, pulling lines down from under the bar', top: 'From the top edge (R2)' }, group: 'Magnet' },
   { type: 'select', id: 'fist', label: 'The gripping hand', default: 'slabs', options: ['slabs', 'clean'],
@@ -37,7 +39,10 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'select', id: 'figure', label: 'R\'s figure', default: 'r1', options: ['r1', 'clean'],
     optionLabels: { r1: 'R1: the kit agent, flowing limbs, helix-coil head', clean: 'Clean: straight faceted limbs, stacked-ring head' }, group: 'Ground' },
   { type: 'slider', id: 'kneelTurn', label: 'Kneeling figure: turn toward the centre', default: 50, min: 0, max: 80, step: 1, units: '°', group: 'Ground' },
-  { type: 'toggle', id: 'groundRings', label: 'Ground rings in silver on the black disc (else bare)', default: true, group: 'Ground' },
+  { type: 'toggle', id: 'groundRings', label: 'Ground rings in silver on the black disc (else bare; under groundFx rings)', default: true, group: 'Ground' },
+  { type: 'select', id: 'groundFx', label: 'What the field does in the ground (on R\'s black sheet)', default: 'pulse', options: ['pulse', 'interference', 'rings'],
+    optionLabels: { interference: 'Interference: two ring families, from where the strands land and from the disc\'s centre, crossing into moiré', pulse: 'Pulse: rings spreading from where the strands land, filings pointing into the ground between them', rings: 'Rings (R1 to R3): three silver rings' }, group: 'Ground' },
+  CUT_CONTROL,
 ];
 
 // ── The magnet and its field ─────────────────────────────────────────
@@ -84,10 +89,16 @@ const GRIP_RISE = 30, GRIP_R = 3;
 const ARM = { x: 12, y: -115 }, ARM_OFF = 40;
 /** Whether the gripping hand comes in from the bottom edge (`handFrom`, the default) rather than the top. */
 export const handFromBottom = (ctx: SketchContext): boolean => ctx.params.handFrom !== 'top';
-/** Where the gripping hand closes: at `handX` of the bar's length, GRIP_RISE above it (from the top) or below it (from the bottom). */
+/** Where the gripping hand closes: at `handX` of the bar's length, GRIP_RISE above it (from the top), or from the bottom at the top of a sleeve `sleeveLength` long. */
 export function gripPoint(ctx: SketchContext, rect: Magnet['rect']): Point {
-  return { x: rect.x0 + (rect.x1 - rect.x0) * n(ctx, 'handX', 0.68, 0, 1), y: handFromBottom(ctx) ? rect.y1 + GRIP_RISE : rect.y0 - GRIP_RISE };
+  const x = rect.x0 + (rect.x1 - rect.x0) * n(ctx, 'handX', 0.68, 0, 1);
+  if (!handFromBottom(ctx)) return { x, y: rect.y0 - GRIP_RISE };
+  // From the bottom the sleeve runs `sleeveLength` up from the bottom trim to the cuff, and the fist closes FIST_MM
+  // above the cuff (but never nearer the bar than GRIP_RISE).
+  return { x, y: Math.max(rect.y1 + GRIP_RISE, TRIM.y1 - n(ctx, 'sleeveLength', 150, 60, 300) - FIST_MM) };
 }
+/** From the cuff to the middle of the closed fist, on the sheet (mm). */
+export const FIST_MM = 56;
 
 // ── One field across the triptych ────────────────────────────────────
 
@@ -436,6 +447,10 @@ export function wordAlong(word: string, line: Point[], from: number, height: num
     if (s >= from) guide.push(line[i]);
   }
   if (guide.length < 2) return [];
+  // Where the line runs out (off the sheet, into a pole) before the word fits, there is no room for it here.
+  let length = 0;
+  for (let i = 1; i < guide.length; i++) length += Math.hypot(guide[i].x - guide[i - 1].x, guide[i].y - guide[i - 1].y);
+  if (length < measureStrokeText(word, { face: 'sans', height }) + 0.5) return [];
   return strokeTextOnPath(word, guide, { face: 'sans', height, align: 'start', normalOffset: offset });
 }
 

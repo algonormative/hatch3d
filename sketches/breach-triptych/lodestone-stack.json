@@ -9,6 +9,7 @@
   "pieces": [
     { "name": "lodestone-l-gold", "title": "Lodestone L (the open eyes): gold-yellow ply", "sketch": "sketches/breach-triptych/lodestone-l/sketch.ts", "seed": 3, "assembly": "lodestone-l", "params": { "ply": "gold" } },
     { "name": "lodestone-l-black", "title": "Lodestone L (the open eyes): black ply", "sketch": "sketches/breach-triptych/lodestone-l/sketch.ts", "seed": 3, "assembly": "lodestone-l", "params": { "ply": "black" } },
+    { "name": "lodestone-c-black", "title": "Lodestone C (the magnet): black ply", "sketch": "sketches/breach-triptych/lodestone-c/sketch.ts", "seed": 3, "assembly": "lodestone-c", "params": { "ply": "black" } },
     { "name": "lodestone-c-gold", "title": "Lodestone C (the magnet): gold-yellow ply", "sketch": "sketches/breach-triptych/lodestone-c/sketch.ts", "seed": 3, "assembly": "lodestone-c", "params": { "ply": "gold" } },
     { "name": "lodestone-r-black", "title": "Lodestone R (the ground): black ply", "sketch": "sketches/breach-triptych/lodestone-r/sketch.ts", "seed": 3, "assembly": "lodestone-r", "params": { "ply": "black" } },
     { "name": "lodestone-r-white", "title": "Lodestone R (the ground): white ply", "sketch": "sketches/breach-triptych/lodestone-r/sketch.ts", "seed": 3, "assembly": "lodestone-r", "params": { "ply": "white" } }
