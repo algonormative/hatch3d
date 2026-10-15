@@ -15,13 +15,13 @@ import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
-import { BUTTON, COLLAR, HEMS, front, opening, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
+import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { lCuts } from '../lodestone-cuts.ts';
 import {
   ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { LODESTONE_CONTROLS, crossingY, gapOf, magnet, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -86,31 +86,6 @@ const SIDES = [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1), new THRE
  * its long edges.
  */
 const SUIT_U: [number, number] = [0.58, 0.76];
-
-/** The tie's half width round the front (in turns of the trunk), as the kit draws it (`suitFront`). */
-const TIE = { top: 0.875, end: BUTTON + 0.005, lift: 0.07, edgeLift: 0.05 };
-const tieHalf = (u: number) => (u > 0.85 ? 0.011 : 0.012 + 0.012 * (0.85 - u) / (0.85 - TIE.end));
-
-/**
- * The suit's front on the sheet: the tie's outline (down one edge from the knot to its tip, up the other), and the shirt
- * either side of it, between the lapel's inner edge and the tie, from where the opening first clears the tie up to the
- * collar: two slivers, so the tie stays joined to the black sheet at its knot and its tip.
- */
-function suitFrontOutlines(trunk: Tube, view: THREE.Camera): { tie: Point[]; shirt: Point[][] } {
-  const N = 40, at = (u: number, v: number, lift: number) => pageOf(view, trunk.point(u, v, lift), PAGE);
-  const tie: Point[] = [];
-  for (let i = 0; i <= N; i++) { const u = TIE.top - (TIE.top - TIE.end) * i / N; tie.push(at(u, 0.25 - tieHalf(u), TIE.lift)); }
-  for (let i = N; i >= 0; i--) { const u = TIE.top - (TIE.top - TIE.end) * i / N; tie.push(at(u, 0.25 + tieHalf(u), TIE.lift)); }
-  let meet = BUTTON;
-  while (meet < COLLAR && opening(meet) < tieHalf(meet) + 0.006) meet += 0.001;
-  const shirt = [-1, 1].map(side => {
-    const ring: Point[] = [];
-    for (let i = 0; i <= N; i++) { const u = meet + (COLLAR - meet) * i / N; ring.push(at(u, 0.25 + side * opening(u), TIE.edgeLift)); }
-    for (let i = N; i >= 0; i--) { const u = meet + (COLLAR - meet) * i / N; ring.push(at(u, 0.25 + side * (tieHalf(u) + 0.002), TIE.lift)); }
-    return ring;
-  });
-  return { tie, shirt };
-}
 
 /**
  * The notch where the unravelled lines run out of L toward C: from NOTCH.above the level height they cross the gap at

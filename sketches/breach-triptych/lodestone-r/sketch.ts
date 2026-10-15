@@ -20,8 +20,8 @@ import type { JointAngles, JointName, Proportions } from '../../kit/mannequin/sk
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
-import { ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, lintelBar, pensOf, smoothPath } from '../world.ts';
-import { LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
+import { LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -48,13 +48,13 @@ const pens = pensOf(['silver', 'fluoro-pink', 'carbon', 'ultramarine']);
  * disc: the same marks in silver, the pink strand in pink, and the ground rings.
  */
 const ROUTES = {
-  black: { groups: ['under', 'rings'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', acid: 'silver', vermilion: 'silver' } },
-  white: { groups: ['figure', 'contour', 'helix', 'hand', 'word'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
+  black: { groups: ['under', 'rings', 'ribbonunder'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', acid: 'silver', vermilion: 'silver' } },
+  white: { groups: ['figure', 'contour', 'helix', 'hand', 'word', 'ribbon'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
 };
 /** The strands' pens: blue ones ultramarine on white and silver on black; the pink one (`vermilion`) pink on both. */
 const STRAND_PEN = { white: { ultramarine: 'ultramarine', vermilion: 'fluoro-pink' }, black: { ultramarine: 'silver', vermilion: 'fluoro-pink' } } as const;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'under', 'strandunder', 'rings'] as const;
+const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings'] as const;
 
 /** The kneeling pose: the kit's kneel, the arms raised forward to gather at head height, the head bowed to its hands. */
 // Each upper arm forward and up, turned in so the bent forearms come across: the two hands meet before the chest.
@@ -121,6 +121,66 @@ function clipPolygon(poly: Point[], r: { x0: number; x1: number; y0: number; y1:
     }
   }
   return out;
+}
+
+/**
+ * `rOut` ribbon: where the portal stands (its middle, mm in from R's left trim), how long the lines take to ravel into
+ * the ribbon after it (mm along), and the dashes the lines come in as across the bare paper before it (dash, gap,
+ * how far each is set off its line, mm).
+ */
+const RAVEL = { portalAt: 16, length: 55, dash: 1.6, gap: 1.1, loose: 0.4 };
+
+/**
+ * The strands out of the portal ravelled back into a ribbon. Each strand comes in across the bare paper before the
+ * portal as short dashes, a little loose, so a few millimetres' misalignment with C's lines reads as natural; passes
+ * the portal as it is; and from the portal's far edge its line draws in, over RAVEL.length, to its place across a
+ * twisting ribbon (its edges, laminations and spine, the pink strand its +1 edge), which runs on along the middle
+ * strand's course to the hands and down to the floor. Returns the strands cut short after the ravel (in place), the
+ * dashes, the ribbon (flatRibbon's strokes: its first two the -1 and +1 edges) and its centreline.
+ */
+function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: number): { dashes: { path: Point[]; ink: Ink }[]; ribbon: { strokes: RibbonStroke[]; mask: Point[][] }; centre: Point[] } | undefined {
+  const cut = strands.map(st => { const inside = st.path.map(q => insideRing(portal, q)); return { i0: inside.indexOf(true), i1: inside.lastIndexOf(true) }; });
+  if (cut.some(c => c.i0 < 1 || c.i1 < c.i0 || c.i1 >= strands[0].path.length - 2)) return undefined;
+  const mid = Math.floor(strands.length / 2);
+  const exits = strands.map((st, k) => st.path[cut[k].i1 + 1]);
+  const ec = { x: exits.reduce((t, q) => t + q.x, 0) / exits.length, y: exits.reduce((t, q) => t + q.y, 0) / exits.length };
+  // The centreline: the middle strand's course on from the portal, eased from the middle of the exits onto it.
+  const guide = strands[mid].path.slice(cut[mid].i1 + 1), gs = lengths(guide);
+  const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const centre = guide.map((q, i) => { const w = 1 - smooth(0, RAVEL.length, gs[i]); return { x: q.x + (ec.x - guide[0].x) * w, y: q.y + (ec.y - guide[0].y) * w }; });
+  const cs = lengths(centre);
+  const normal = centre.map((_, i) => { const a = centre[Math.max(0, i - 1)], b = centre[Math.min(centre.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d }; });
+  const half = THREAD.widthMm / 2;
+  let phase = 0;
+  const cosPhase = centre.map((_, i) => { if (i) phase += 2 * Math.PI * (cs[i] - cs[i - 1]) / THREAD.pitchMm; return Math.cos(phase); });
+  // Each strand's place across the ribbon: in order of where it leaves the portal, the pink strand on the +1 edge.
+  const start = exits.map(q => (q.x - centre[0].x) * normal[0].x + (q.y - centre[0].y) * normal[0].y);
+  const order = strands.map((_, k) => k).sort((a, b) => start[a] - start[b]);
+  const target = new Array<number>(strands.length);
+  order.forEach((k, j) => { target[k] = strands.length > 1 ? -1 + 2 * j / (strands.length - 1) : 0; });
+  const swap = target.indexOf(1);
+  if (swap >= 0 && swap !== pink) [target[swap], target[pink]] = [target[pink], 1];
+  const iR = Math.max(1, cs.findIndex(v => v >= RAVEL.length));
+  const dashes: { path: Point[]; ink: Ink }[] = [];
+  strands.forEach((st, k) => {
+    // In as dashes across the bare paper to the portal.
+    const entry = st.path.slice(0, cut[k].i0 + 1), es = lengths(entry);
+    for (let a = 0, n = 0; a < es.at(-1)!; a += RAVEL.dash + RAVEL.gap, n++) {
+      const pts = entry.filter((_, i) => es[i] >= a && es[i] <= a + RAVEL.dash);
+      if (pts.length < 2) continue;
+      const d = (n % 2 ? 1 : -1) * RAVEL.loose, q0 = pts[0], q1 = pts[pts.length - 1], l = Math.hypot(q1.x - q0.x, q1.y - q0.y) || 1;
+      dashes.push({ ink: st.ink, path: pts.map(q => ({ x: q.x - (q1.y - q0.y) / l * d, y: q.y + (q1.x - q0.x) / l * d })) });
+    }
+    // Through the portal as it is, then drawing in to its place across the ribbon.
+    const ravelled: Point[] = [];
+    for (let i = 0; i <= iR; i++) {
+      const u = smooth(0, RAVEL.length, cs[i]), o = (1 - u) * start[k] + u * target[k] * half * cosPhase[i];
+      ravelled.push({ x: centre[i].x + normal[i].x * o, y: centre[i].y + normal[i].y * o });
+    }
+    st.path = [...st.path.slice(cut[k].i0, cut[k].i1 + 1), ...ravelled];
+  });
+  const ribbon = flatRibbon(centre.slice(iR), { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: 2 * Math.PI * cs[iR] / THREAD.pitchMm });
+  return { dashes, ribbon, centre };
 }
 
 /** Arc lengths along a page path. */
@@ -339,16 +399,22 @@ function draw(ctx: SketchContext): Part[] {
     return { path, ink: (k === pink ? 'vermilion' : 'ultramarine') as Ink };
   });
   // The portal (`portalFx`): where the strands come in through the band cut in the white, the lines change there.
-  const portal = hasPortal(ctx) ? portalBand(strands.map(st => st.path), TRIM.x0 + PORTAL.at * (g.x - TRIM.x0)) : undefined;
+  // `rOut` ribbon (the default, with the portal): the portal stands near R's left edge, so the lines cross only a short
+  // span of bare paper before it, and come in as short dashes there; after it they ravel back into a ribbon (the
+  // mirror of L, where the ribbon unravels into lines) that runs on to the hands and down to the floor.
+  const toRibbon = ctx.params.rOut !== 'lines' && hasPortal(ctx);
+  const portal = hasPortal(ctx) ? portalBand(strands.map(st => st.path), toRibbon ? TRIM.x0 + RAVEL.portalAt : TRIM.x0 + PORTAL.at * (g.x - TRIM.x0)) : undefined;
   if (portal) {
     const fx = String(ctx.params.portalFx ?? 'align');
     strands.forEach((st, k) => { st.path = throughPortal(st.path, portal, fx, k, strands.length); });
   }
-  const strandArea = glyphMask(strands.map(st => st.path), 0.9, 6, PAGE);
-  // "line", along the pink strand where it falls from the hands toward the floor.
+  const reformed = toRibbon && portal ? ravel(strands, portal, pink) : undefined;
+  const strandArea = glyphMask([...strands.map(st => st.path), ...(reformed?.ribbon.mask ?? [])], 0.9, 6, PAGE);
+  // "line", along the pink strand where it falls from the hands toward the floor (with the ribbon, beside it).
   const pinkPath = strands[pink]?.path ?? [];
-  // (The pink strand's path is the one after the portal.)
-  const word = wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
+  const word = reformed
+    ? wordAlong('line', reformed.centre, 0.62 * lengths(reformed.centre).at(-1)!, 2.4, -(THREAD.widthMm / 2 + 2.6))
+    : wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
   const clear = glyphMask(word, 0.8, 6, PAGE);
 
   const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...cut.flatMap(cutMeshes), ...[...hands, ...shoes].map(slabGeometry), ...headGeos];
@@ -376,6 +442,14 @@ function draw(ctx: SketchContext): Part[] {
   for (const st of strands) for (const piece of clipToRect(st.path, ART)) {
     for (const part of keepAlong(piece, p => !clear(p), 0.15)) { buckets.add(`strand-${st.ink}`, part, true); buckets.add(`strandunder-${st.ink}`, part, true); }
   }
+  for (const st of reformed?.dashes ?? []) for (const piece of clipToRect(st.path, ART)) { buckets.add(`strand-${st.ink}`, piece, true); buckets.add(`strandunder-${st.ink}`, piece, true); }
+  // The ribbon: its +1 edge is the pink strand's, pink on both sheets; the rest in the ribbon's inks.
+  reformed?.ribbon.strokes.forEach((st, i) => {
+    for (const piece of clipToRect(st.points, ART)) for (const part of keepAlong(piece, p => !clear(p), 0.15)) {
+      if (i === 1) { buckets.add('strand-vermilion', part, true); buckets.add('strandunder-vermilion', part, true); }
+      else { buckets.add(`ribbon-${st.ink}`, part, true); buckets.add(`ribbonunder-${st.ink}`, part, true); }
+    }
+  });
   for (const w of word) for (const piece of clipToRect(w, ART)) buckets.add('word-ultramarine', piece, true);
   // The ground (`groundFx`), on the black sheet under the floor disc: R1's three silver rings, or the field going on into
   // the ground. A ring about a ground point, sampled on the floor plane and kept inside the floor disc.
@@ -385,8 +459,9 @@ function draw(ctx: SketchContext): Part[] {
   const ringAt = (c: THREE.Vector3, r: number, a0 = 0, a1 = 2 * Math.PI, n = 144): Point[] => Array.from({ length: n + 1 }, (_, i) => pageOf(view, c.clone().add(new THREE.Vector3(r * Math.cos(a0 + (a1 - a0) * i / n), 0, r * Math.sin(a0 + (a1 - a0) * i / n))), PAGE));
   const keepOnDisc = (path: Point[], into: Point[][]) => { for (const piece of keepAlong(path, onDisc, 0.2)) into.push(piece); };
   const landing = (st: { path: Point[] }) => onGround(view, st.path[st.path.length - 1], PAGE);
-  const bundle = strands.map(landing).reduce((t, q) => t.add(q), new THREE.Vector3()).divideScalar(Math.max(1, strands.length)).setY(0);
-  const pinkAt = strands[pink] ? landing(strands[pink]).setY(0) : bundle;
+  const landed = reformed ? [{ path: reformed.centre }] : strands;
+  const bundle = landed.map(landing).reduce((t, q) => t.add(q), new THREE.Vector3()).divideScalar(Math.max(1, landed.length)).setY(0);
+  const pinkAt = reformed ? bundle : strands[pink] ? landing(strands[pink]).setY(0) : bundle;
   // Ring spacing on the floor: about 2.4 mm across the sheet at the disc.
   const stepW = 2.4 / mmPerUnit(centre);
   if (fx === 'interference') {
@@ -429,7 +504,10 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
   // strands drawn on it in silver (the `under` marks).
   const headPage = pullHead(pageOf(view, head.centre, PAGE));
-  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, ...(portal ? { portal } : {}) });
+  // The figure's tie, as on L but inverted: cut from the white, it shows black, its stripes in silver (the `under` marks);
+  // traced on the trunk and moved with the field's pull, as the figure's marks are.
+  const tie = suitFrontOutlines(body.trunk, view).tie.map(pullBody);
+  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, tie, ...(portal ? { portal } : {}) });
   return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
 

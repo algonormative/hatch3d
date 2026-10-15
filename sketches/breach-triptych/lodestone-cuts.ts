@@ -15,7 +15,7 @@ const SCHEMES: CutSchemeId[] = ['tie', 'angular', 'field', 'r3', 'k1', 'k2', 'k3
 export const CUT_CONTROL: Control = {
   type: 'select', id: 'cutScheme', label: 'Cut set (shapes showing the sheet beneath)', default: 'tie', options: SCHEMES,
   optionLabels: {
-    tie: 'Tie (R6, R7): angular; in L the tie (or the shirt about it, `lCut`), the corner and the notch where the lines run out to C; C and R as angular',
+    tie: 'Tie (R6, R7): angular; in L the tie (or the shirt about it, `lCut`), the corner and the notch where the lines run out to C; C\'s sleeve; R\'s head square, portal, floor and tie',
     angular: 'Angular (R5): no arcs or circles; a suit plane and a corner in L; black behind C\'s sleeve; a tilted square behind R\'s head, a band where the strands come in, a floor in perspective',
     field: 'Field: a suit plane and a corner in L; a pole disc, an arc at the other pole and the pull\'s wedge in C; a head disc and an arc where the strands come in in R',
     r3: 'R3: only the bar and the floor disc',
@@ -108,9 +108,9 @@ export interface LAnchors { facet: Point[]; tie?: Point[]; shirt?: Point[][]; no
 export interface CAnchors { rect: { x0: number; x1: number; y0: number; y1: number }; grip: Point; sleeve: Point[] }
 /**
  * R: the head (its page centre and radius, after the field's pull), the gather point at the hands, the heights the
- * strands come in at, and the floor's outline (`floorKind`), cut in every scheme.
+ * strands come in at, the floor's outline (`floorKind`), cut in every scheme, the portal, and the figure's tie.
  */
-export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[]; floor: Point[]; portal?: Point[] }
+export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[]; floor: Point[]; portal?: Point[]; tie?: Point[] }
 
 const deg = (d: number) => d * Math.PI / 180;
 const poles = (a: CAnchors) => { const cy = (a.rect.y0 + a.rect.y1) / 2; return { north: { x: a.rect.x0, y: cy }, south: { x: a.rect.x1, y: cy }, cy }; };
@@ -192,7 +192,10 @@ function entryBand(a: Pick<RAnchors, 'gather' | 'entries'>): Point[] {
 const floorCut = (a: RAnchors): Cut => ({ id: 'disc', label: 'DISC', rings: [a.floor] });
 
 const R: Record<CutSchemeId, (a: RAnchors) => Cut[]> = {
-  tie: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [a.portal ?? entryBand(a)] }],
+  tie: a => [
+    { id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [a.portal ?? entryBand(a)] },
+    ...(a.tie ? [{ id: 'tie', label: 'TIE', rings: [clipToTrim(a.tie)] }] : []),
+  ],
   angular: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [entryBand(a)] }],
   field: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }, { id: 'entry', label: 'IN', rings: [entryArc(a)] }],
   r3: a => [floorCut(a)],

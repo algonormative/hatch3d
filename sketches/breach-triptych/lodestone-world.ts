@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
+import { pageOf } from '../kit/perspective.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
 import { CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
 import { footprintOf } from '../kit/assembly.ts';
 import type { Ink } from '../kit/types.ts';
 import { CUT_CONTROL, LCUT_CONTROL, PORTAL_CONTROL } from './lodestone-cuts.ts';
+import { BUTTON, COLLAR, opening } from '../kit/mannequin/suit.ts';
+import type { Tube } from '../kit/mannequin/tube.ts';
 import { n } from '../kit/params.ts';
 
 /**
@@ -41,6 +44,8 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'select', id: 'ribbonBleed', label: 'How L\'s ribbon becomes the field', default: 'progressive', options: ['progressive', 'split', 'off'],
     optionLabels: { progressive: 'Progressive: it loosens turn by turn and unravels into field lines flowing overhead', split: 'Split (R3): it comes apart at one point into field lines', off: 'Off (R2): one line' }, group: 'Magnet' },
   { type: 'toggle', id: 'ribbonField', label: 'L\'s ribbon follows the field toward the near pole (else R1\'s path)', default: true, group: 'Magnet' },
+  { type: 'select', id: 'rOut', label: 'R: what comes out of the portal', default: 'ribbon', options: ['ribbon', 'lines'],
+    optionLabels: { ribbon: 'Ribbon: the portal near R\'s edge, the lines in as dashes, ravelling back into a ribbon to the hands', lines: 'Lines (R6): the portal further in, the lines on to the hands as lines' }, group: 'Ground' },
   { type: 'toggle', id: 'figureField', label: 'R\'s figure pulled by the field toward the centre (else R1)', default: true, group: 'Ground' },
   { type: 'select', id: 'figure', label: 'R\'s figure', default: 'r1', options: ['r1', 'clean'],
     optionLabels: { r1: 'R1: the kit agent, flowing limbs, helix-coil head', clean: 'Clean: straight faceted limbs, stacked-ring head' }, group: 'Ground' },
@@ -689,4 +694,31 @@ export function slabHand(o: HandOptions): Slab[] {
     at = at.clone().addScaledVector(dir, len);
   }
   return slabs;
+}
+
+// ── The suit's front: the tie and the shirt about it ─────────────────
+
+/** The tie's half width round the front (in turns of the trunk), as the kit draws it (`suitFront`). */
+const TIE = { top: 0.875, end: BUTTON + 0.005, lift: 0.07, edgeLift: 0.05 };
+const tieHalf = (u: number) => (u > 0.85 ? 0.011 : 0.012 + 0.012 * (0.85 - u) / (0.85 - TIE.end));
+
+/**
+ * The suit's front on the sheet: the tie's outline (down one edge from the knot to its tip, up the other), and the shirt
+ * either side of it, between the lapel's inner edge and the tie, from where the opening first clears the tie up to the
+ * collar: two slivers, so the tie stays joined to the black sheet at its knot and its tip.
+ */
+export function suitFrontOutlines(trunk: Tube, view: THREE.Camera): { tie: Point[]; shirt: Point[][] } {
+  const N = 40, at = (u: number, v: number, lift: number) => pageOf(view, trunk.point(u, v, lift), PAGE);
+  const tie: Point[] = [];
+  for (let i = 0; i <= N; i++) { const u = TIE.top - (TIE.top - TIE.end) * i / N; tie.push(at(u, 0.25 - tieHalf(u), TIE.lift)); }
+  for (let i = N; i >= 0; i--) { const u = TIE.top - (TIE.top - TIE.end) * i / N; tie.push(at(u, 0.25 + tieHalf(u), TIE.lift)); }
+  let meet = BUTTON;
+  while (meet < COLLAR && opening(meet) < tieHalf(meet) + 0.006) meet += 0.001;
+  const shirt = [-1, 1].map(side => {
+    const ring: Point[] = [];
+    for (let i = 0; i <= N; i++) { const u = meet + (COLLAR - meet) * i / N; ring.push(at(u, 0.25 + side * opening(u), TIE.edgeLift)); }
+    for (let i = N; i >= 0; i--) { const u = meet + (COLLAR - meet) * i / N; ring.push(at(u, 0.25 + side * (tieHalf(u) + 0.002), TIE.lift)); }
+    return ring;
+  });
+  return { tie, shirt };
 }
