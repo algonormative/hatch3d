@@ -7,9 +7,11 @@ import type { Pen } from './types.ts';
 export interface Paper { id: string; label: string; color: string }
 /**
  * `reads` lists the papers the ink shows up on well; `trial` the papers it is still being tried on (not yet trusted).
- * `width` is the line width in millimetres.
+ * `width` is the line width in millimetres the art is drawn and cut-guided with. `pen` is the physical pen, as the
+ * barrel names it (line, size, colour), and `nominal` the maker's line width in millimetres, where it is known: the
+ * calibration plot prints both beside each ink, and its measurements replace `width`.
  */
-export interface Ink { id: string; label: string; color: string; width: number; reads: string[]; trial?: string[]; note?: string }
+export interface Ink { id: string; label: string; color: string; width: number; reads: string[]; trial?: string[]; note?: string; pen?: string; nominal?: number }
 
 export const PAPERS: Record<string, Paper> = {
   black: { id: 'black', label: 'Black', color: '#141416' },
@@ -18,22 +20,36 @@ export const PAPERS: Record<string, Paper> = {
 };
 
 const PLACEHOLDER = 'width is a placeholder until the calibration plot';
-const gel = (id: string, label: string, color: string, trial?: string[]): Ink => ({ id, label, color, width: 0.5, reads: ['black'], ...(trial ? { trial } : {}), note: PLACEHOLDER });
+type GelOptions = { reads?: string[]; trial?: string[]; nominal?: number };
+const gel = (id: string, label: string, color: string, pen: string, { reads = ['black'], trial, nominal }: GelOptions = {}): Ink =>
+  ({ id, label, color, width: 0.5, reads, ...(trial ? { trial } : {}), note: PLACEHOLDER, pen, ...(nominal ? { nominal } : {}) });
+/** Sakura Gelly Roll Moonlight 10: a 1.0 mm ball, a 0.5 mm line. Uni-ball Signo broad (UM-153): a 1.0 mm tip, about a 0.6 mm line. */
+const moonlight = (id: string, label: string, color: string, colour: string, options: GelOptions = {}): Ink =>
+  gel(id, label, color, `Moonlight 10 ${colour}`, { nominal: 0.5, ...options });
+const signo = (id: string, label: string, color: string, colour: string, trial: string[]): Ink => gel(id, label, color, `Signo broad ${colour}`, { trial, nominal: 0.6 });
 
 export const INKS: Record<string, Ink> = {
-  gold: gel('gold', 'Gold gel', '#c9a54a', ['gold-yellow']),
-  silver: gel('silver', 'Silver gel', '#c4c8cc', ['white']),
-  'fluoro-pink': gel('fluoro-pink', 'Fluoro pink gel', '#ff4fa3', ['white']),
-  'fluoro-orange': gel('fluoro-orange', 'Fluoro orange gel', '#ff8a2a', ['white']),
-  'fluoro-green': gel('fluoro-green', 'Fluoro green gel', '#7dff5a'),
-  'fluoro-yellow': gel('fluoro-yellow', 'Fluoro yellow gel', '#f2ff3a'),
-  black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'] },
-  // The Breach cards' own inks (the colours and the 0.25 mm art pen of `sketches/kit/format.ts`).
-  carbon: { id: 'carbon', label: 'Carbon', color: '#22282c', width: 0.25, reads: ['white', 'gold-yellow'] },
-  ultramarine: { id: 'ultramarine', label: 'Ultramarine', color: '#3c49aa', width: 0.25, reads: ['white'] },
+  gold: signo('gold', 'Gold gel', '#c9a54a', 'gold', ['gold-yellow']),
+  silver: signo('silver', 'Silver gel', '#c4c8cc', 'silver', ['white']),
+  'fluoro-pink': moonlight('fluoro-pink', 'Fluoro pink gel', '#ff4fa3', 'fl pink', { trial: ['white'] }),
+  'fluoro-orange': moonlight('fluoro-orange', 'Fluoro orange gel', '#ff8a2a', 'fl orange', { trial: ['white'] }),
+  'fluoro-green': moonlight('fluoro-green', 'Fluoro green gel', '#7dff5a', 'green'),
+  'fluoro-yellow': moonlight('fluoro-yellow', 'Fluoro yellow gel', '#f2ff3a', 'fl yellow'),
+  'fluoro-vermilion': moonlight('fluoro-vermilion', 'Fluoro vermilion gel', '#ff5a36', 'fl vermilion'),
+  // The Moonlight colours that are not fluorescent: tried on black before they are trusted.
+  'gel-red': moonlight('gel-red', 'Red gel', '#e8344e', 'red', { reads: [], trial: ['black'] }),
+  'gel-rose': moonlight('gel-rose', 'Rose gel', '#e0409c', 'rose', { reads: [], trial: ['black'] }),
+  'gel-purple': moonlight('gel-purple', 'Purple gel', '#8a4fd6', 'purple', { reads: [], trial: ['black'] }),
+  'gel-blue': moonlight('gel-blue', 'Blue gel', '#3a6fe0', 'blue', { reads: [], trial: ['black'] }),
+  'gel-teal': moonlight('gel-teal', 'Teal gel', '#1fb5a8', 'teal', { reads: [], trial: ['black'] }),
+  black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'], pen: 'Micron 08 black', nominal: 0.5 },
+  // The Breach cards' own inks (the colours and the 0.25 mm art pen of `sketches/kit/format.ts`), and the Pigma Micron
+  // drawing each; vermilion and acid have no pen yet.
+  carbon: { id: 'carbon', label: 'Carbon', color: '#22282c', width: 0.25, reads: ['white', 'gold-yellow'], pen: 'Micron 01 black', nominal: 0.25 },
+  ultramarine: { id: 'ultramarine', label: 'Ultramarine', color: '#3c49aa', width: 0.25, reads: ['white'], trial: ['gold-yellow'], pen: 'Micron 05 blue', nominal: 0.45 },
   vermilion: { id: 'vermilion', label: 'Vermilion', color: '#d04b3c', width: 0.25, reads: ['white'] },
   acid: { id: 'acid', label: 'Acid', color: '#a5a938', width: 0.25, reads: ['white'] },
-  violet: { id: 'violet', label: 'Violet', color: '#776090', width: 0.25, reads: ['white'] },
+  violet: { id: 'violet', label: 'Violet', color: '#776090', width: 0.25, reads: ['white'], trial: ['gold-yellow'], pen: 'Micron 05 purple', nominal: 0.45 },
 };
 
 const own = (table: Record<string, unknown>, id: string): boolean => Object.prototype.hasOwnProperty.call(table, id);

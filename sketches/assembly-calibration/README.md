@@ -21,20 +21,22 @@ One tabloid page (279.4 x 431.8 mm, margin 11 mm, so the finished trim is about 
 | --- | --- |
 | W1, W2 (upper half, white sheet) | windows through to the gold sheet, 115 x 180 and 105 x 180 mm |
 | G1 (gold sheet, 12 mm inside W2) | a window through to the black sheet, 81 x 156 mm |
-| Swatches | each ply's inks on its own paper: black inside G1, gold inside W1, white in the lower half; trial inks marked "(trial)" |
+| Swatches | each ply's inks on its own paper: the black's first six inside G1 and its other six below its font test, gold's inside W1, white's in the lower half; every test labelled with its pen (see below) |
 | Guide variants A to D (white, lower half) | 44 x 24 mm windows with per-cut guide options (pitch 12 size 4, pitch 8 size 3, pitch 16 size 6, no label) |
 | Margin ladders | four lines at 0.5, 1.0, 1.5, 2.0 mm from a cut: beside window E (white) and above G1 (gold) |
 | Bleed ladders | seven lines ending -1 to 3 mm past an edge: gold toward W1's bottom edge, black toward G1's |
 | Verniers | white over gold at W1, gold over black at G1, each an x vernier (bottom edge) and a y vernier (right edge) |
 | Ghost boxes | silver hatch (black sheet) under gold and white; black hatch (gold sheet) under white; white captions above |
-| Font test | per ink: "line" in Hershey sans and script at 1.5, 2.0, 2.6, 3.5, 5 mm, and "everything falls into line" at 2.6 mm: gold's in W1 below its swatches, white's in the lower half on the right, black's in its lower right (hidden once glued; G1 has no room) |
+| Font test | per ink: "line" in Hershey sans and script at 1.5, 2.0, 2.6, 3.5, 5 mm, and "everything falls into line" at 2.6 mm: gold's in W1 below its swatches, white's in the lower half on the right, black's below G1 (hidden once glued; G1 has no room) |
 | Spacing ladder | per ink: hatch patches at 0.40 to 1.00 mm, squares outlined twice and three times at 0.6 to 1.2 mm (white: carbon, ultramarine, fluoro pink) |
 | Dots, dashes, curves | per ink: dashes 0.3 to 1.6 mm, dots (0.3 to 0.4 mm strokes), crosses 0.8 to 1.6 mm, circles r 0.5 to 4 mm, a spiral |
-| Ink crossings | black: every pair of its six inks; white: carbon, ultramarine, fluoro pink; the later pen on top |
+| Ink crossings | black: every pair of its twelve inks; white: carbon, ultramarine, fluoro pink; the later pen on top |
 | Cut ladder (gold, lower left, hidden under the white) | wedges 60 to 20 degrees, slots 3 to 6 mm, islands held by bridges 2 to 4 mm, a notch open to the trim |
 | Edge rulers | every sheet, the middle of each side: lines 12, 13, 14, 16 mm from the paper edge (art cannot go past the crop line) |
 
-The `black`, `gold` and `white` plies are separate pieces of `stack.json` (`assembly: "calibration"`, the same seed). The stack allows trial inks (`defaults.trialInks`): gold on the gold-yellow paper and silver, fluoro pink and fluoro orange on the white. The page is fixed (the layout is in page millimetres); `date` is the only control besides the ply.
+The `black`, `gold` and `white` plies are separate pieces of `stack.json` (`assembly: "calibration"`, the same seed). The stack allows trial inks (`defaults.trialInks`): the non-fluorescent Moonlights on the black, gold, ultramarine and violet on the gold-yellow, and silver, fluoro pink and fluoro orange on the white.
+
+Since R12 the sheets carry the pens Nick has (each ink's `pen` and `nominal` in `src/sketch/materials.ts`: Pigma Microns on white and gold-yellow, Signo broads and Gelly Roll Moonlight 10s on black), and every test is labelled in its own ink with the pen's name and nominal line width (`penLabel`), so a photo of a sheet says which pen drew each line. Each sheet's notes list its pens in plot order. The page is fixed (the layout is in page millimetres); `date` is the only control besides the ply.
 
 ## Verniers
 

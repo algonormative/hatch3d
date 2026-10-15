@@ -8,7 +8,7 @@ import { clipToRegion, distanceToRings, inRegion } from '../sketch/region.ts';
 import type { Part, Point } from '../sketch/types.ts';
 import sketch, {
   BLEED_OFFSETS, DEFAULT_DATE, DOTS, G1, GHOST_BLACK, GHOST_SILVER, MARGIN_OFFSETS, NOTCH, PAGE, SWATCH, VARIANTS, W1, W2, bleedLadder, buildWorld, cuts,
-  marginLadder, pens, spec, swatch, vernier,
+  marginLadder, penLabel, pens, spec, swatch, vernier,
 } from '../../sketches/assembly-calibration/sketch.ts';
 import { sketchContext } from './helpers/sketch-context.ts';
 
@@ -25,7 +25,9 @@ describe('assembly calibration', () => {
     expect(spec.signature).toBeUndefined(); // a test sheet, not signed
     expect(sketch.page).toEqual(PAGE);
     expect(pens.map((p) => p.id)).toContain('cut');
-    expect(spec.plies.map((p) => checkInksRead(p, { trialInks: true }))).toEqual([[], ['gold'], ['silver', 'fluoro-pink', 'fluoro-orange']]);
+    expect(spec.plies.map((p) => checkInksRead(p, { trialInks: true }))).toEqual([
+      ['gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'], ['gold', 'ultramarine', 'violet'], ['silver', 'fluoro-pink', 'fluoro-orange'],
+    ]);
     expect(() => checkInksRead(spec.plies[2])).toThrow(/ink silver does not read on paper white/);
   });
 
@@ -69,13 +71,25 @@ describe('assembly calibration', () => {
 
 describe('assembly calibration: swatches', () => {
   it('carry each ply’s own inks, marked "(trial)" when the paper has not trusted them yet', () => {
-    const labels = (ply: string) => (world.art[ply] ?? []).filter((p) => p.id.startsWith('swatch-')).map((p) => p.pen);
+    const labels = (ply: string, layer: 'art' | 'sealed' = 'art') => (world[layer][ply] ?? []).filter((p) => p.id.startsWith('swatch-')).map((p) => p.pen);
+    // The black's first six (the triptych's inks) in window G1; the other Moonlight 10s below its font test, sealed.
     expect(labels('black')).toEqual(['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow']);
-    expect(labels('gold')).toEqual(['black', 'gold']);
-    expect(labels('white')).toEqual(['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
+    expect(labels('black', 'sealed')).toEqual(['fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal']);
+    expect(labels('gold')).toEqual(['black', 'carbon', 'gold', 'ultramarine', 'violet']);
+    expect(labels('white')).toEqual(['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
     // The label is the only text: the same swatch on a paper where the ink reads has a shorter label.
     const trial = swatch('silver', 'white', 20, 20), reads = swatch('silver', 'black', 20, 20);
     expect(trial.paths.length).toBeGreaterThan(reads.paths.length);
+  });
+
+  it('label every ink with its physical pen and nominal width (R12), so a photo says which pen drew what', () => {
+    expect(penLabel('carbon', 'white')).toBe('Micron 01 black 0.25mm');
+    expect(penLabel('ultramarine', 'gold-yellow')).toBe('Micron 05 blue 0.45mm (trial)');
+    expect(penLabel('silver', 'black')).toBe('Signo broad silver 0.6mm');
+    expect(penLabel('gel-teal', 'black')).toBe('Moonlight 10 teal 0.5mm (trial)');
+    expect(penLabel('vermilion', 'white')).toBe('vermilion'); // no pen yet: the id
+    // Every ink on the sheets names its pen; none falls back to its id.
+    for (const ply of spec.plies) for (const ink of ply.pens) expect(penLabel(ink, ply.paper.id), `${ply.id} ${ink}`).toMatch(/^(Micron|Signo|Moonlight) /);
   });
 
   it('are a 22 x 12 patch at 0.6 mm, a line, a dashed line and a 3 mm strip at 0.3 mm', () => {
@@ -202,14 +216,15 @@ describe('assembly calibration: verniers', () => {
   });
 });
 
-describe('assembly calibration: test blocks (R11)', () => {
+describe('assembly calibration: test blocks (R11, R12)', () => {
   it('give each sheet its font test, spacing ladder, dots and dashes, crossings and edge rulers, inside the trim; a lower sheet\'s hidden ones sealed', () => {
     const inks = (ply: string, prefix: string) => [...(world.art[ply] ?? []), ...(world.sealed[ply] ?? [])].filter((p) => p.id.startsWith(prefix) && !/-(header|labels)$/.test(p.id)).map((p) => p.pen);
-    const black = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow'], triptychWhite = ['carbon', 'ultramarine', 'fluoro-pink'];
+    const black = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
+    const gold = ['black', 'carbon', 'gold', 'ultramarine', 'violet'], triptychWhite = ['carbon', 'ultramarine', 'fluoro-pink'];
     expect(inks('black', 'font-')).toEqual(black);
-    expect(inks('gold', 'font-')).toEqual(['black', 'gold']);
-    expect(inks('white', 'font-')).toEqual(['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
-    for (const [ply, list] of [['black', black], ['gold', ['black', 'gold']], ['white', triptychWhite]] as const) {
+    expect(inks('gold', 'font-')).toEqual(gold);
+    expect(inks('white', 'font-')).toEqual(['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
+    for (const [ply, list] of [['black', black], ['gold', gold], ['white', triptychWhite]] as const) {
       expect(inks(ply, 'spacing-')).toEqual(list);
       expect(inks(ply, 'marks-')).toEqual(list);
     }
@@ -217,14 +232,14 @@ describe('assembly calibration: test blocks (R11)', () => {
     expect(inks('white', 'crossings-')).toEqual(triptychWhite);
     // Black's tests and the gold's lower ones are sealed (hidden once glued, read on the loose sheet); the white's are art.
     expect(world.art.black.some((p) => /^(font|spacing|marks|crossings|edge)-/.test(p.id))).toBe(false);
-    expect(world.sealed.gold.filter((p) => /^(spacing|marks|edge|knife)-/.test(p.id)).length).toBe(8);
+    expect(world.sealed.gold.filter((p) => /^(spacing|marks|edge|knife)-/.test(p.id)).length).toBe(14);
     for (const ply of ['black', 'gold', 'white']) {
       const blocks = [...(world.art[ply] ?? []), ...(world.sealed[ply] ?? [])].filter((p) => /^(font|spacing|marks|crossings|edge|knife)-/.test(p.id));
       for (const q of blocks.flatMap((p) => p.paths.flat())) expect(q.x >= 11 && q.x <= PAGE.width - 11 && q.y >= 11 && q.y <= PAGE.height - 11, `${ply} inside the trim`).toBe(true);
     }
     // Dots are the shortest strokes finalize passes (its min length is 0.3 mm).
-    // (The row's dots start past its 23 mm label and 16 mm of dashes, 3 mm on: x 62 on the black's ladder at x 20.)
-    const dots = world.sealed.black.find((p) => p.id === 'marks-gold')!.paths.filter((path) => path.length === 2 && path[0].y === path[1].y && path[0].x > 61 && path[1].x - path[0].x <= 0.41);
+    // (The row's dots start past its 40 mm label and 16 mm of dashes, 3 mm on: x 79 on the black's ladder at x 20.)
+    const dots = world.sealed.black.find((p) => p.id === 'marks-gold')!.paths.filter((path) => path.length === 2 && path[0].y === path[1].y && path[0].x > 78 && path[1].x - path[0].x <= 0.41);
     expect(dots.map((d) => Number((d[1].x - d[0].x).toFixed(2)))).toEqual(DOTS.flatMap((d) => [d, d, d]));
   });
 

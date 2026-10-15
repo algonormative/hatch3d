@@ -1,5 +1,5 @@
 import { plyControl, renderPly } from '../../src/sketch/assembly.ts';
-import { PAPERS, inkOnTrial, inkPen } from '../../src/sketch/materials.ts';
+import { INKS, PAPERS, inkOnTrial, inkPen } from '../../src/sketch/materials.ts';
 import { measureStrokeText, strokeText } from '../../src/sketch/stroke-text.ts';
 import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketch } from '../../src/sketch/types.ts';
 
@@ -18,9 +18,14 @@ import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketc
 // ── Materials and plies ──────────────────────────────────────────────
 
 const paper = (id: keyof typeof PAPERS) => ({ id: PAPERS[id].id, color: PAPERS[id].color });
-const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow'];
-const GOLD_INKS = ['black', 'gold']; // gold is on trial on gold-yellow paper
-const WHITE_INKS = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']; // the last three are on trial
+/**
+ * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the two Signo broads and the Moonlight 10s, the
+ * first six (the triptych's) swatched in window G1 and the rest below the black's font test; the last five are on trial.
+ */
+const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
+const G1_SWATCHES = 6;
+const GOLD_INKS = ['black', 'carbon', 'gold', 'ultramarine', 'violet']; // the Micron 08 and 01 blacks; the last three on trial
+const WHITE_INKS = ['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']; // the four Microns; the last three on trial
 /** The inks the triptych draws in on white (Lodestone R's white sheet): the white's spacing, marks and crossing tests, for want of room for all eight. */
 const TRIPTYCH_WHITE_INKS = ['carbon', 'ultramarine', 'fluoro-pink'];
 
@@ -38,7 +43,7 @@ const penIds = [...new Set([...WHITE_INKS, ...GOLD_INKS, ...BLACK_INKS])];
 export const pens: Pen[] = [...penIds.map(inkPen), CUT_PEN];
 
 export const PAGE = { width: 279.4, height: 431.8, margin: 11 };
-export const DEFAULT_DATE = '2026-10-14';
+export const DEFAULT_DATE = '2026-10-15';
 
 // ── Geometry helpers ─────────────────────────────────────────────────
 
@@ -108,17 +113,27 @@ export function cuts(): Cuts {
 
 // ── Swatches ─────────────────────────────────────────────────────────
 
-export const SWATCH = { patch: { w: 22, h: 12, pitch: 0.6 }, gap: 3, strip: { h: 3, pitch: 0.3 }, label: 2.5, labelRise: 4.5, rowPitch: 19 };
+/**
+ * What every test labels its ink with, in the ink itself (R12): the physical pen as its barrel names it, its nominal
+ * line width where the maker gives one, and "(trial)" where the ink is only on trial on this paper, so a photo of the
+ * sheet says which pen drew which line. An ink with no pen yet is labelled with its id.
+ */
+export function penLabel(ink: string, paperId: string): string {
+  const { pen, nominal } = INKS[ink];
+  return `${pen ?? ink}${nominal ? ` ${String(nominal)}mm` : ''}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`;
+}
+
+export const SWATCH = { patch: { w: 22, h: 12, pitch: 0.6 }, gap: 3, strip: { h: 3, pitch: 0.3 }, label: 2, labelRise: 4.5, rowPitch: 19 };
 
 /**
  * One ink on one paper, its patch's top-left corner at (x, y): a 22 x 12 mm hatch patch at 0.6 mm pitch; beside it a
- * single line, a dashed line and a 3 mm tall hatch strip at 0.3 mm pitch; above it the ink id in stroke text, marked
- * "(trial)" when the ink is only on trial on this paper. All in the ink itself.
+ * single line, a dashed line and a 3 mm tall hatch strip at 0.3 mm pitch; above it the pen's label (`penLabel`) in
+ * stroke text. All in the ink itself.
  */
 export function swatch(ink: string, paperId: string, x: number, y: number): Part {
   const { patch, gap, strip } = SWATCH;
   const col = x + patch.w + gap;
-  const label = `${ink}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`;
+  const label = penLabel(ink, paperId);
   return {
     id: `swatch-${ink}`, pen: ink,
     paths: [
@@ -144,20 +159,20 @@ const title = (ply: PlySpec, date: string, seed: number, pen: string, x: number,
 
 /**
  * The font test: the stroke faces the triptych writes in (Hershey sans; and script) at the sizes worth trying, the
- * triptych's phrase words being 2.6 mm (cap height). One cell per ink, `FONT_CELL` wide and tall: the ink id (with
- * "(trial)" where it is on trial on this paper), then "line" in sans at each of `FONT_SIZES` left to right on one
+ * triptych's phrase words being 2.6 mm (cap height). One cell per ink, `FONT_CELL` wide and tall: the pen's label
+ * (`penLabel`), then "line" in sans at each of `FONT_SIZES` left to right on one
  * baseline, the same in script, and the phrase at 2.6 mm in sans. All in the ink itself.
  */
 export const FONT_SIZES = [1.5, 2, 2.6, 3.5, 5];
-export const FONT_CELL = { w: 50, h: 20, gap: 1.8, sample: 'line', phrase: 'everything falls into line' };
+export const FONT_CELL = { w: 50, h: 21, gap: 1.8, sample: 'line', phrase: 'everything falls into line' };
 export function fontCell(ink: string, paperId: string, x: number, y: number): Part {
-  const paths: Point[][] = [...text(`${ink}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`, x, y, 2)];
+  const paths: Point[][] = [...text(penLabel(ink, paperId), x, y, 2)];
   (['sans', 'script'] as const).forEach((face, row) => {
-    const base = y + 7.5 + row * 6;
+    const base = y + 8.5 + row * 6; // (R12) a millimetre lower, clear of the longer pen label above
     let cx = x;
     for (const h of FONT_SIZES) { paths.push(...text(FONT_CELL.sample, cx, base - h, h, face)); cx += textWidth(FONT_CELL.sample, h, face) + FONT_CELL.gap; }
   });
-  paths.push(...text(FONT_CELL.phrase, x, y + 15.3, 2.6));
+  paths.push(...text(FONT_CELL.phrase, x, y + 16.3, 2.6));
   return { id: `font-${ink}`, pen: ink, paths };
 }
 
@@ -169,14 +184,13 @@ function fontTest(inks: string[], paperId: string, pen: string, x: number, y: nu
   return [header, ...inks.map((ink, i) => fontCell(ink, paperId, x + (i % 2) * (FONT_CELL.w + 6), top + Math.floor(i / 2) * FONT_CELL.h))];
 }
 /** Where each sheet's font test sits: the gold's in W1 below its swatches, the white's in the lower half's right side,
- * the black's in its lower half (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
-export const FONT_AT = { black: P(161, 204), gold: P(28, 116), white: P(161, 296) };
+ * the black's below G1 (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
+export const FONT_AT = { black: P(158, 197), gold: P(28, 106), white: P(158, 296) };
 
 // ── Test blocks (R11): spacing, marks, crossings, cuts, the paper edge ──
 
 /** Small stroke text for the blocks' labels and rungs, millimetres. */
 const SMALL = 1.5;
-const trialMark = (ink: string, paperId: string): string => `${ink}${inkOnTrial(ink, paperId) ? ' (trial)' : ''}`;
 const squareRing = (cx: number, cy: number, half: number): Point[] => [P(r4(cx - half), r4(cy - half)), P(r4(cx + half), r4(cy - half)), P(r4(cx + half), r4(cy + half)), P(r4(cx - half), r4(cy + half)), P(r4(cx - half), r4(cy - half))];
 const circle = (cx: number, cy: number, r: number, n = Math.max(24, Math.ceil(r * 24))): Point[] => Array.from({ length: n + 1 }, (_, i) => P(r4(cx + r * Math.cos((2 * Math.PI * i) / n)), r4(cy + r * Math.sin((2 * Math.PI * i) / n))));
 
@@ -189,7 +203,7 @@ export const SPACINGS = [0.4, 0.5, 0.55, 0.66, 0.8, 1.0];
 export const EMPHASIS_SPACINGS = [0.6, 0.7, 0.8, 1.0, 1.2];
 export const SPACING_ROW = { h: 11, patch: 5, cell: 6.5, doubles: 41, triples: 75.5, tripleCell: 8.5, square: 3, w: 118 };
 export function spacingRow(ink: string, paperId: string, x: number, y: number): Part {
-  const top = y + 2.8, paths: Point[][] = [...text(trialMark(ink, paperId), x, y, SMALL)];
+  const top = y + 2.8, paths: Point[][] = [...text(penLabel(ink, paperId), x, y, SMALL)];
   SPACINGS.forEach((pitch, i) => paths.push(...hatch(x + i * SPACING_ROW.cell, top, SPACING_ROW.patch, SPACING_ROW.patch, pitch)));
   for (const [x0, cell, lines] of [[SPACING_ROW.doubles, SPACING_ROW.cell, 2], [SPACING_ROW.triples, SPACING_ROW.tripleCell, 3]]) {
     EMPHASIS_SPACINGS.forEach((pitch, i) => {
@@ -212,7 +226,7 @@ function spacingLadder(inks: string[], paperId: string, pen: string, x: number, 
 /**
  * Dots, dashes and tight curves: per ink, dashes `DASHES` mm on (the gap the same), one row each; a row of
  * dots, three each of the strokes `DOTS` mm long; crosses `CROSSES` mm across (the cosmos's star
- * sizes); circles of radius `CIRCLES`; a spiral from 1 to 4 mm radius (2 to 8 mm across). The ink id to the left.
+ * sizes); circles of radius `CIRCLES`; a spiral from 1 to 4 mm radius (2 to 8 mm across). The pen's label to the left.
  * Dots: see `DOTS`.
  */
 export const DASHES = [0.3, 0.5, 1.0, 1.6];
@@ -223,9 +237,9 @@ export const CIRCLES = [0.5, 1, 2, 4];
  * under 0.3 mm (finalize's `filter --min-length 0.3mm`): the dots are the shortest strokes that do, and a little longer.
  */
 export const DOTS = [0.3, 0.35, 0.4];
-export const MARKS_ROW = { h: 9.5, label: 23, dashes: 16, dots: 9, w: 102 };
+export const MARKS_ROW = { h: 9.5, label: 40, dashes: 16, dots: 9, w: 119 };
 export function marksRow(ink: string, paperId: string, x: number, y: number): Part {
-  const paths: Point[][] = [...text(trialMark(ink, paperId), x, y + 3.5, SMALL)];
+  const paths: Point[][] = [...text(penLabel(ink, paperId), x, y + 3.5, SMALL)];
   let cx = x + MARKS_ROW.label;
   DASHES.forEach((d, i) => paths.push(...dashed(cx, y + 0.6 + i * 1.9, MARKS_ROW.dashes, d, d)));
   cx += MARKS_ROW.dashes + 3;
@@ -248,14 +262,16 @@ function marksLadder(inks: string[], paperId: string, pen: string, x: number, y:
 /**
  * Ink crossings: each ordered pair of `inks` crossing in the middle of a cell, the row's ink across, the column's ink
  * down, so every pair crosses twice (once each way), and each crossing shows the later pen in the plot order over the
- * earlier pen's ink. The rows are labelled with the inks, the columns numbered as the rows.
+ * earlier pen's ink. The rows are labelled with the pens (`penLabel`), the columns numbered as the rows; the grid starts
+ * just right of the longest row label.
  */
 export const CROSSING_CELL = 7;
 export function crossings(inks: string[], paperId: string, pen: string, x: number, y: number): Part[] {
-  const left = x + 22, top = y + 3, c = CROSSING_CELL, arm = c / 2 - 0.6;
+  const rowLabels = inks.map((ink, i) => `${i + 1} ${penLabel(ink, paperId)}`);
+  const left = x + Math.max(...rowLabels.map((label) => textWidth(label, 1.2))) + 2, top = y + 3, c = CROSSING_CELL, arm = c / 2 - 0.6;
   const labels: Part = { id: 'crossings-labels', pen, paths: [
     ...text('crossings: row ink across, column ink down', x, y - 2.5, SMALL),
-    ...inks.flatMap((ink, i) => [...text(`${i + 1} ${trialMark(ink, paperId)}`, x, top + i * c + c / 2 - 0.6, 1.2), ...centered(String(i + 1), left + i * c + c / 2, y, 1.2)]),
+    ...rowLabels.flatMap((label, i) => [...text(label, x, top + i * c + c / 2 - 0.6, 1.2), ...centered(String(i + 1), left + i * c + c / 2, y, 1.2)]),
   ] };
   const parts: Part[] = [labels];
   inks.forEach((ink, i) => {
@@ -423,10 +439,14 @@ export function vernier(axis: 'x' | 'y', edge: number, at: number): Vernier {
 
 export interface World { cuts: Cuts; art: Record<string, Part[]>; sealed: Record<string, Part[]> }
 
-/** The swatch positions: gold sheet's inside W1, black's inside G1 (one column), white's in the lower half (two columns). */
-const GOLD_SWATCH_AT = P(28, 60);
+/**
+ * The swatch positions: gold sheet's inside W1 (two columns, filled row by row), black's first `G1_SWATCHES` inside G1
+ * (one column) and the rest below its font test (sealed, two columns), white's in the lower half (two columns).
+ */
+const GOLD_SWATCH_AT = [P(28, 50), P(82, 50)];
 const BLACK_SWATCH_AT = P(173, 58.5);
-const WHITE_SWATCH_AT = [P(20, 310), P(110, 310)];
+const BLACK_TRIAL_SWATCH_AT = [P(158, 344), P(213, 344)];
+const WHITE_SWATCH_AT = [P(20, 310), P(92, 310)];
 const WHITE_TITLE_AT = P(20, 398);
 
 /** The vernier pairs: white over gold at W1, gold over black at G1, each on a bottom edge (x) and a right edge (y). */
@@ -437,8 +457,10 @@ const G_X = vernier('x', G1.y1, 234), G_Y = vernier('y', G1.x1, 110);
 export function buildWorld(date: string, seed: number): World {
   const [black, gold, white] = plies;
   const stack = (ply: PlySpec, inks: string[], at: Point[]) => inks.map((ink, i) => swatch(ink, ply.paper.id, at[i].x, at[i].y));
-  const blackSwatches = stack(black, BLACK_INKS, BLACK_INKS.map((_, i) => P(BLACK_SWATCH_AT.x, BLACK_SWATCH_AT.y + i * SWATCH.rowPitch)));
-  const goldSwatches = stack(gold, GOLD_INKS, GOLD_INKS.map((_, i) => P(GOLD_SWATCH_AT.x, GOLD_SWATCH_AT.y + i * SWATCH.rowPitch)));
+  const g1Inks = BLACK_INKS.slice(0, G1_SWATCHES), trialInks = BLACK_INKS.slice(G1_SWATCHES);
+  const blackSwatches = stack(black, g1Inks, g1Inks.map((_, i) => P(BLACK_SWATCH_AT.x, BLACK_SWATCH_AT.y + i * SWATCH.rowPitch)));
+  const blackTrialSwatches = stack(black, trialInks, trialInks.map((_, i) => P(BLACK_TRIAL_SWATCH_AT[i % 2].x, BLACK_TRIAL_SWATCH_AT[0].y + Math.floor(i / 2) * SWATCH.rowPitch)));
+  const goldSwatches = stack(gold, GOLD_INKS, GOLD_INKS.map((_, i) => P(GOLD_SWATCH_AT[i % 2].x, GOLD_SWATCH_AT[0].y + Math.floor(i / 2) * SWATCH.rowPitch)));
   const whiteSwatches = stack(white, WHITE_INKS, WHITE_INKS.map((_, i) => P(WHITE_SWATCH_AT[Math.floor(i / 4)].x, WHITE_SWATCH_AT[0].y + (i % 4) * 22)));
   const ghostCaption = (id: string, area: Rect): Part => ({ id, pen: 'carbon', paths: centered('is there a ghost here?', (area.x0 + area.x1) / 2, (area.y0 + area.y1) / 2 - 1.1, 2.2) });
   const part = (id: string, pen: string, ...paths: Point[][][]): Part => ({ id, pen, paths: paths.flat() });
@@ -468,7 +490,7 @@ export function buildWorld(date: string, seed: number): World {
         ...whiteSwatches,
         ...fontTest(WHITE_INKS, white.paper.id, 'carbon', FONT_AT.white.x, FONT_AT.white.y),
         ...spacingLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 256.5),
-        ...marksLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 387.5),
+        ...marksLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 389.5),
         ...crossings(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 80, 394),
         edgeRulers('carbon', 'edge-white'),
         ...VARIANTS.map((v) => part(`caption-${v.id}`, 'carbon', text(v.caption, v.area.x0, VARIANT.y + VARIANT.h + 4.5, 2.5))),
@@ -485,11 +507,13 @@ export function buildWorld(date: string, seed: number): World {
         part('vernier-g-x-main', 'silver', G_X.main),
         part('vernier-g-y-main', 'silver', G_Y.main),
         part('ghost-silver', 'silver', hatch(GHOST_SILVER.x0, GHOST_SILVER.y0, GHOST_SILVER.x1 - GHOST_SILVER.x0, GHOST_SILVER.y1 - GHOST_SILVER.y0, 0.4)),
-        // (R11) The test blocks, under the gold and white papers: read on the loose sheet before gluing.
+        // (R11) The test blocks, under the gold and white papers: read on the loose sheet before gluing. (R12) With
+        // twelve inks: the crossings above the ghost box, the marks below it, the trial swatches below the font test.
         ...fontTest(BLACK_INKS, black.paper.id, 'silver', FONT_AT.black.x, FONT_AT.black.y, 'hidden once glued: read it before gluing'),
         ...spacingLadder(BLACK_INKS, black.paper.id, 'silver', 20, 20),
-        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 98),
-        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 172),
+        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 162),
+        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 292),
+        ...blackTrialSwatches,
         edgeRulers('silver', 'edge-black'),
       ],
       gold: [
@@ -498,7 +522,7 @@ export function buildWorld(date: string, seed: number): World {
         part('ghost-black', 'black', hatch(GHOST_BLACK.x0, GHOST_BLACK.y0, GHOST_BLACK.x1 - GHOST_BLACK.x0, GHOST_BLACK.y1 - GHOST_BLACK.y0, 0.4)),
         // (R11) The test blocks, under the white paper, and the cut ladder's labels: read on the loose sheet.
         ...spacingLadder(GOLD_INKS, gold.paper.id, 'black', 145, 250),
-        ...marksLadder(GOLD_INKS, gold.paper.id, 'black', 145, 282),
+        ...marksLadder(GOLD_INKS, gold.paper.id, 'black', 145, 314),
         cutLadderLabels('black'),
         edgeRulers('black', 'edge-gold'),
       ],
