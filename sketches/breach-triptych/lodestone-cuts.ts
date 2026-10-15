@@ -17,7 +17,7 @@ const SCHEMES: CutSchemeId[] = ['tie', 'angular', 'field', 'r3', 'k1', 'k2', 'k3
 export const CUT_CONTROL: Control = {
   type: 'select', id: 'cutScheme', label: 'Cut set (shapes showing the sheet beneath)', default: 'tie', options: SCHEMES,
   optionLabels: {
-    tie: 'Tie (R6, R7): angular; in L the tie (or the shirt about it, `lCut`), the corner and the notch where the lines run out to C; C\'s sleeve; R\'s head square, portal, floor and tie',
+    tie: 'Tie (R6 to R8): angular; in L the shirt about the tie (R8; or the tie, `lCut`), the corner and the notch where the lines run out to C; C\'s sleeve; R\'s head square, portal, floor and tie',
     angular: 'Angular (R5): no arcs or circles; a suit plane and a corner in L; black behind C\'s sleeve; a tilted square behind R\'s head, a band where the strands come in, a floor in perspective',
     field: 'Field: a suit plane and a corner in L; a pole disc, an arc at the other pole and the pull\'s wedge in C; a head disc and an arc where the strands come in in R',
     r3: 'R3: only the bar and the floor disc',
@@ -42,7 +42,7 @@ export const PORTAL_CONTROL: Control = {
 };
 
 export const LCUT_CONTROL: Control = {
-  type: 'select', id: 'lCut', label: 'L, in the tie cut set: what is cut from the suit\'s front', default: 'tie', options: ['tie', 'shirt'],
+  type: 'select', id: 'lCut', label: 'L, in the tie cut set: what is cut from the suit\'s front', default: 'shirt', options: ['tie', 'shirt'],
   optionLabels: { tie: 'The tie: gold, its stripes drawn on it in black', shirt: 'The shirt about the tie: gold, with shirt stripes in black; the tie stays black, held at its knot and tip' },
   group: 'Cuts',
 };
@@ -122,7 +122,7 @@ const corner = (): Point[] => [{ x: TRIM.x0, y: TRIM.y1 - 74 }, { x: TRIM.x0, y:
 
 const L: Record<CutSchemeId, (a: LAnchors, ctx: SketchContext) => Cut[]> = {
   tie: (a, ctx) => [
-    ...(ctx.params.lCut === 'shirt' ? (a.shirt ?? []).map((ring, k) => ({ id: `shirt${k ? 'r' : 'l'}`, label: 'SHIRT', rings: [clipToTrim(ring)] })) : [{ id: 'tie', label: 'TIE', rings: [clipToTrim(a.tie ?? [])] }]),
+    ...(ctx.params.lCut !== 'tie' ? (a.shirt ?? []).map((ring, k) => ({ id: `shirt${k ? 'r' : 'l'}`, label: 'SHIRT', rings: [clipToTrim(ring)] })) : [{ id: 'tie', label: 'TIE', rings: [clipToTrim(a.tie ?? [])] }]),
     { id: 'corner', label: 'CORNER', rings: [corner()] },
     ...(a.notch ? [{ id: 'notch', label: 'OUT', rings: [a.notch] }] : []),
   ],

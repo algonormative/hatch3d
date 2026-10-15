@@ -19,14 +19,15 @@ import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
-  ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
+  ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
  * hole, silver and gold), its censor bar cut out as a part that is glued on Lodestone's C as the magnet, the helix's
- * strand leaving the head toward the right edge, and "everything" in the glare where Lintel hid "what blinds".
+ * strand leaving the head toward the right edge, and "everything" set along one of the lines it unravels into (R8; in
+ * R1 to R7 it was painted on a slab in the glare, where Lintel hid "what blinds").
  *
  * Lintel's text, kept for the bust: panel L, "the hole". The Plenipotentiary as a bust from below, filling the sheet, drawn in silver with gold
  * edges on black paper over a gold-yellow sheet. The censor bar across its eyes is plotted in silver hatch and cut out
@@ -76,9 +77,6 @@ const inQuad = (quad: Point[], margin: number) => (p: Point) => quad.every((a, i
   const ex = b.x - a.x, ey = b.y - a.y;
   return (ex * (p.y - a.y) - ey * (p.x - a.x)) / Math.hypot(ex, ey) > -margin;
 });
-
-/** The vertical faces of a slab, as outward normals in its own frame. */
-const SIDES = [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)];
 
 /**
  * A plane of the suit to cut out: of the trunk's six flat planes, the largest on the sheet that faces the eye and is
@@ -135,13 +133,50 @@ function suitFacet(trunk: Tube, view: THREE.Camera, eye: THREE.Vector3): Point[]
 type Tagged = Stroke & { slack: number };
 
 /**
- * The two words of "what blinds", beside the hole in the head's glare: which background slab each is painted on, where
- * its centre lands on the sheet (page millimetres, R1's approved places), and its cap height (mm). "what" sits off the
- * bar's right end, high; "blinds" off its left end, low.
+ * "everything", the phrase's first word (R8): set along a line, as C's "falls" and "into" ride its field loops and R's
+ * "line" the pink strand. It rides the leftmost gold line the ribbon unravels into, where the lines drop toward the
+ * notch and run out to C, reading down the line from page height `y`, in the line's gold; as C's words, cap `capMm`
+ * with the line just inside the baseline (`offset`), so the letters stand in the lane between it and its neighbour.
  */
-const WORDS: { word: string; slab: number; at: Point; capMm: number }[] = [
-  { word: 'everything', slab: 1, at: { x: 52, y: 186 }, capMm: 2.6 },
-];
+const WORD = { word: 'everything', y: 150, capMm: 2.6, offset: -2.2 };
+
+/** The arclength where a line, on its way down from its highest point, first reaches page height `y`. */
+function arcAtDescent(line: Point[], y: number): number | undefined {
+  let top = 0;
+  for (let i = 1; i < line.length; i++) if (line[i].y < line[top].y) top = i;
+  let s = 0;
+  for (let i = 1; i < line.length; i++) {
+    s += Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y);
+    if (i > top && line[i].y >= y) return s;
+  }
+  return undefined;
+}
+
+/**
+ * The word on the gold lines: the leftmost at `WORD.y`, or the nearest place down or up it (4 mm steps, out to 24 mm), or
+ * the next gold line, where the word lies whole and `ok` everywhere.
+ */
+function wordOnLines(strands: { ink: Ink; path: Point[] }[], ok: (p: Point) => boolean): { ink: Ink; paths: Point[][] } | undefined {
+  const xAt = (line: Point[]) => { const s = arcAtDescent(line, WORD.y); return s === undefined ? Infinity : pointAt(line, s).x; };
+  const gold = strands.filter(st => st.ink === 'vermilion' || st.ink === 'acid').sort((a, b) => xAt(a.path) - xAt(b.path));
+  for (const st of gold) for (let k = 0; k <= 12; k++) {
+    const from = arcAtDescent(st.path, WORD.y + (k % 2 ? 1 : -1) * 4 * Math.ceil(k / 2));
+    if (from === undefined) continue;
+    const paths = wordAlong(WORD.word, st.path, from, WORD.capMm, WORD.offset);
+    if (paths.length && paths.flat().every(ok)) return { ink: st.ink, paths };
+  }
+  return undefined;
+}
+
+/** The point at arclength `s` along a line. */
+function pointAt(line: Point[], s: number): Point {
+  for (let i = 1, t = 0; i < line.length; i++) {
+    const l = Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y);
+    if (t + l >= s) { const u = l ? (s - t) / l : 0; return { x: line[i - 1].x + u * (line[i].x - line[i - 1].x), y: line[i - 1].y + u * (line[i].y - line[i - 1].y) }; }
+    t += l;
+  }
+  return line[line.length - 1];
+}
 
 function draw(ctx: SketchContext): Part[] {
   const frame = bustFrame(ctx);
@@ -202,32 +237,6 @@ function draw(ctx: SketchContext): Part[] {
   const solids = meshCoverage(figureGeos, view, PAGE, 1.1);
   const onBar = inQuad(bar.quad, 1.4);
 
-  // "what blinds": painted on the slabs' faces that look at the eye, each at its approved place on the sheet, or the
-  // nearest place round it (a spiral of 4 mm steps, out to 64 mm) where the word lies whole on the face, clear of the figure, the bar
-  // and the trim: the gaze readings move the slabs with the camera.
-  const words: Tagged[] = [];
-  const clearOf = (points: THREE.Vector3[][]) => points.flat().every(q => {
-    const p = pageOf(view, q, PAGE);
-    return p.x > ART.x0 + 3 && p.x < ART.x1 - 3 && p.y > ART.y0 + 3 && p.y < ART.y1 - 3 && !solids(p) && !inQuad(bar.quad, 3)(p);
-  });
-  for (const w of WORDS) {
-    const sl = slabs[w.slab];
-    let painted: THREE.Vector3[][] = [];
-    search: for (let ring = 0; ring <= 16; ring++) {
-      const steps = ring === 0 ? 1 : 8 * ring;
-      for (let k = 0; k < steps; k++) {
-        const a = 2 * Math.PI * k / steps, at = { x: w.at.x + 4 * ring * Math.cos(a), y: w.at.y + 4 * ring * Math.sin(a) };
-        for (const normal of SIDES) {
-          // Only where the face's hatch lies, so the word hides in the silver rather than standing on bare black.
-          const up = new THREE.Vector3(0, 1, 0);
-          const made = faceWordAt(sl, w.word, view, at, { normal, up, capMm: w.capMm });
-          if (made && clearOf(made) && hatchedUnder(sl, normal, up, lightOf(sl), made.flat())) { painted = made; break search; }
-        }
-      }
-    }
-    for (const points of painted) words.push({ ink: 'carbon', group: 'word', family: 'text', points, slack: 0.12, owner: w.slab });
-  }
-
   const geometries = [...slabs.map(slabGeometry), ...figureGeos];
   fitDepthRange(view, geometries, 0.1, { exact: true });
   const depth = renderDepthBufferCPU(geometries, view, W, H);
@@ -238,6 +247,10 @@ function draw(ctx: SketchContext): Part[] {
   // front of everything; all else gives way to it.
   let threadArea: (p: Point) => boolean = () => false;
   let exiting: Point[][] = [];
+  let notch: Point[] | undefined;
+  // "everything" (`WORD`), on a gold line of the unravelled ribbon; every other mark gives way round its letters.
+  const wordPaths: Point[][] = [];
+  let clear: (p: Point) => boolean = () => false;
   {
     // With `ribbonField` the magnet in C pulls the strand along its field toward the north pole, and its twist
     // tightens where the field is strong; else R1's path to the right edge.
@@ -251,27 +264,23 @@ function draw(ctx: SketchContext): Part[] {
     const bleed = unravel ?? (pulled && mode === 'split' ? ribbonBleed(crown, m, bar, dims) : undefined);
     const l = bleed ? { path: bleed.ribbon, phase0: 0 } : pulled ? { path: ribbonPath(crown, m), phase0: 0 } : threadPaths(frame, bar).l;
     const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: unravel?.pitchAt ?? ribbonPitch(m, bar) } : {}) });
-    for (const rib of unravel?.ribs ?? []) for (const inside of clipToRect(rib, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add('thread-ultramarine', piece, true);
     exiting = (bleed?.strands ?? []).map(st => st.path);
+    notch = exitNotch(exiting, gapOf(m) > 0 ? seamLevel(m) : undefined);
+    // The word first, clear of the trim, the bar, the figure and the notch, so the lines round its letters can give way.
+    const inNotch = notch ? inGrown(notch, 3) : () => false;
+    const placed = wordOnLines(bleed?.strands ?? [], p => p.x > ART.x0 + 3 && p.x < ART.x1 - 3 && p.y > ART.y0 + 3 && p.y < ART.y1 - 3 && !inQuad(bar.quad, 3)(p) && !solids(p) && !inNotch(p));
+    for (const path of placed?.paths ?? []) for (const piece of clipToRect(path, ART)) if (buckets.add(`word-${placed!.ink}`, piece, true)) wordPaths.push(piece);
+    clear = glyphMask(wordPaths, 0.9, 6, PAGE);
+    for (const rib of unravel?.ribs ?? []) for (const inside of clipToRect(rib, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add('thread-ultramarine', piece, true);
     for (const st of bleed?.strands ?? []) {
-      for (const inside of clipToRect(st.path, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
+      for (const inside of clipToRect(st.path, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
       ribbon.mask.push(st.path);
     }
     // Never on the bar: the bar is cut out and glued on R, and must carry only its own hatch.
-    for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
+    for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
     threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);
   }
   const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
-  // Words first, so the hatch round them can give way.
-  const wordPaths: Point[][] = [];
-  projectStrokes(words, { view, depth, width: W, height: H, bias: hiddenBias(view, 0.12, dist(words[0] ?? strokes[0])) }, {
-    begin: () => (runs: ProjectedPoint[][]) => {
-      for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-        for (const piece of keepAlong(inside, p => !onBar(p) && !solids(p) && !threadArea(p), 0.1)) if (buckets.add('word-carbon', piece, true)) wordPaths.push(piece);
-      }
-    },
-  });
-  const clear = glyphMask(wordPaths, 0.9, 6, PAGE);
 
   // Hidden lines, tested in bands of eye distance (see `sketches/agent-bust`).
   const order = [...strokes].sort((a, b) => dist(a) - dist(b));
@@ -306,7 +315,6 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
   // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
   const front = suitFrontOutlines(body.trunk, view);
-  const notch = exitNotch(exiting, gapOf(magnet(bar, ctx)) > 0 ? seamLevel(magnet(bar, ctx)) : undefined);
   const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front, ...(notch ? { notch } : {}) });
   // The shirt cut out (`lCut` shirt): its stripes, fine lines down it, drawn in black on the gold beneath.
   if (windows.some(c => c.id.startsWith('shirt'))) for (const path of shirtStripes(body.trunk, view)) for (const inside of clipToRect(path, ART)) buckets.add('shirt-carbon', inside, true);
