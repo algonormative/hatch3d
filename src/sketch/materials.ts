@@ -42,6 +42,8 @@ export const INKS: Record<string, Ink> = {
   'gel-purple': moonlight('gel-purple', 'Purple gel', '#8a4fd6', 'purple', { reads: [], trial: ['black'] }),
   'gel-blue': moonlight('gel-blue', 'Blue gel', '#3a6fe0', 'blue', { reads: [], trial: ['black'] }),
   'gel-teal': moonlight('gel-teal', 'Teal gel', '#1fb5a8', 'teal', { reads: [], trial: ['black'] }),
+  // Nick's white gel pens are touchy; the Signo is tried first.
+  'gel-white': gel('gel-white', 'White gel', '#f4f3ee', 'Signo 1.0mm white', { reads: [], trial: ['black'] }),
   black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'], pen: 'Micron 08 black', nominal: 0.5 },
   // The Breach cards' own inks (the colours and the 0.25 mm art pen of `sketches/kit/format.ts`), and the Pigma Micron
   // drawing each; vermilion and acid have no pen yet.

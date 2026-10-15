@@ -19,11 +19,12 @@ import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketc
 
 const paper = (id: keyof typeof PAPERS) => ({ id: PAPERS[id].id, color: PAPERS[id].color });
 /**
- * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the two Signo 1.0mm pens and the Moonlight 10s, the
- * first six (the triptych's) swatched in window G1 and the rest below the black's font test; the last five are on trial.
+ * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the three Signo 1.0mm pens and the Moonlight 10s,
+ * the first seven (the triptych's six and the white Signo) swatched in window G1 and the rest below the black's font
+ * test; the white Signo and the five non-fluorescent Moonlights are on trial.
  */
-const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
-const G1_SWATCHES = 6;
+const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'gel-white', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
+const G1_SWATCHES = 7;
 const GOLD_INKS = ['black', 'carbon', 'gold', 'ultramarine', 'violet']; // the Micron 08 and 01 blacks; the last three on trial
 const WHITE_INKS = ['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']; // the four Microns; the last three on trial
 /** The inks the triptych draws in on white (Lodestone R's white sheet): the white's spacing, marks and crossing tests, for want of room for all eight. */
@@ -154,6 +155,10 @@ const title = (ply: PlySpec, date: string, seed: number, pen: string, x: number,
     ...text(`${date} | seed ${seed}`, x, y + 9, 2.5),
   ],
 });
+/** The title on one line, for the black sheet (R12), whose window G1 has room for its swatches only. */
+const titleLine = (ply: PlySpec, date: string, seed: number, pen: string, x: number, y: number): Part => ({
+  id: `title-${ply.id}`, pen, paths: text(`assembly calibration | ply ${ply.id} | ${ply.paper.id} paper | ${date} | seed ${seed}`, x, y, 2),
+});
 
 // ── Font test ────────────────────────────────────────────────────────
 
@@ -185,7 +190,7 @@ function fontTest(inks: string[], paperId: string, pen: string, x: number, y: nu
 }
 /** Where each sheet's font test sits: the gold's in W1 below its swatches, the white's in the lower half's right side,
  * the black's below G1 (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
-export const FONT_AT = { black: P(158, 197), gold: P(28, 106), white: P(158, 296) };
+export const FONT_AT = { black: P(158, 195), gold: P(28, 106), white: P(158, 296) };
 
 // ── Test blocks (R11): spacing, marks, crossings, cuts, the paper edge ──
 
@@ -266,9 +271,9 @@ function marksLadder(inks: string[], paperId: string, pen: string, x: number, y:
  * just right of the longest row label.
  */
 export const CROSSING_CELL = 7;
-export function crossings(inks: string[], paperId: string, pen: string, x: number, y: number): Part[] {
+export function crossings(inks: string[], paperId: string, pen: string, x: number, y: number, c = CROSSING_CELL): Part[] {
   const rowLabels = inks.map((ink, i) => `${i + 1} ${penLabel(ink, paperId)}`);
-  const left = x + Math.max(...rowLabels.map((label) => textWidth(label, 1.2))) + 2, top = y + 3, c = CROSSING_CELL, arm = c / 2 - 0.6;
+  const left = x + Math.max(...rowLabels.map((label) => textWidth(label, 1.2))) + 2, top = y + 3, arm = c / 2 - 0.6;
   const labels: Part = { id: 'crossings-labels', pen, paths: [
     ...text('crossings: row ink across, column ink down', x, y - 2.5, SMALL),
     ...rowLabels.flatMap((label, i) => [...text(label, x, top + i * c + c / 2 - 0.6, 1.2), ...centered(String(i + 1), left + i * c + c / 2, y, 1.2)]),
@@ -444,8 +449,10 @@ export interface World { cuts: Cuts; art: Record<string, Part[]>; sealed: Record
  * (one column) and the rest below its font test (sealed, two columns), white's in the lower half (two columns).
  */
 const GOLD_SWATCH_AT = [P(28, 50), P(82, 50)];
-const BLACK_SWATCH_AT = P(173, 58.5);
-const BLACK_TRIAL_SWATCH_AT = [P(158, 344), P(213, 344)];
+const BLACK_SWATCH_AT = P(173, 41);
+const BLACK_TRIAL_SWATCH_AT = [P(158, 363), P(213, 363)];
+/** The black's one-line title, along the top edge (sealed: under the gold once glued). */
+const BLACK_TITLE_AT = P(20, 13);
 const WHITE_SWATCH_AT = [P(20, 310), P(92, 310)];
 const WHITE_TITLE_AT = P(20, 398);
 
@@ -468,7 +475,6 @@ export function buildWorld(date: string, seed: number): World {
     cuts: cuts(),
     art: {
       black: [
-        title(black, date, seed, 'silver', 173, 38),
         ...blackSwatches,
         bleedLadder('silver', 172, G1.y1, 7, 'bleed-black'),
         part('vernier-g-x-main-labels', 'silver', G_X.mainLabels),
@@ -508,12 +514,14 @@ export function buildWorld(date: string, seed: number): World {
         part('vernier-g-y-main', 'silver', G_Y.main),
         part('ghost-silver', 'silver', hatch(GHOST_SILVER.x0, GHOST_SILVER.y0, GHOST_SILVER.x1 - GHOST_SILVER.x0, GHOST_SILVER.y1 - GHOST_SILVER.y0, 0.4)),
         // (R11) The test blocks, under the gold and white papers: read on the loose sheet before gluing. (R12) With
-        // twelve inks: the crossings above the ghost box, the marks below it, the trial swatches below the font test.
+        // thirteen inks: the crossings (6 mm cells) above the ghost box, the marks below it, the trial swatches below the
+        // font test, and the title along the top edge.
         ...fontTest(BLACK_INKS, black.paper.id, 'silver', FONT_AT.black.x, FONT_AT.black.y, 'hidden once glued: read it before gluing'),
         ...spacingLadder(BLACK_INKS, black.paper.id, 'silver', 20, 20),
-        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 162),
-        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 292),
+        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 172.5, 6),
+        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 289.5), // its last row's 4 mm circle clear of the bottom ruler
         ...blackTrialSwatches,
+        titleLine(black, date, seed, 'silver', BLACK_TITLE_AT.x, BLACK_TITLE_AT.y),
         edgeRulers('silver', 'edge-black'),
       ],
       gold: [

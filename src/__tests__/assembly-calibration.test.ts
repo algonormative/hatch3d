@@ -26,7 +26,7 @@ describe('assembly calibration', () => {
     expect(sketch.page).toEqual(PAGE);
     expect(pens.map((p) => p.id)).toContain('cut');
     expect(spec.plies.map((p) => checkInksRead(p, { trialInks: true }))).toEqual([
-      ['gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'], ['gold', 'ultramarine', 'violet'], ['silver', 'fluoro-pink', 'fluoro-orange'],
+      ['gel-white', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'], ['gold', 'ultramarine', 'violet'], ['silver', 'fluoro-pink', 'fluoro-orange'],
     ]);
     expect(() => checkInksRead(spec.plies[2])).toThrow(/ink silver does not read on paper white/);
   });
@@ -72,8 +72,8 @@ describe('assembly calibration', () => {
 describe('assembly calibration: swatches', () => {
   it('carry each ply’s own inks, marked "(trial)" when the paper has not trusted them yet', () => {
     const labels = (ply: string, layer: 'art' | 'sealed' = 'art') => (world[layer][ply] ?? []).filter((p) => p.id.startsWith('swatch-')).map((p) => p.pen);
-    // The black's first six (the triptych's inks) in window G1; the other Moonlight 10s below its font test, sealed.
-    expect(labels('black')).toEqual(['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow']);
+    // The black's first seven (the triptych's six and the white Signo) in window G1; the other Moonlight 10s below its font test, sealed.
+    expect(labels('black')).toEqual(['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'gel-white']);
     expect(labels('black', 'sealed')).toEqual(['fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal']);
     expect(labels('gold')).toEqual(['black', 'carbon', 'gold', 'ultramarine', 'violet']);
     expect(labels('white')).toEqual(['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']);
@@ -87,6 +87,7 @@ describe('assembly calibration: swatches', () => {
     expect(penLabel('ultramarine', 'gold-yellow')).toBe('Micron 05 blue 0.45mm (trial)');
     expect(penLabel('silver', 'black')).toBe('Signo 1.0mm silver'); // sold as 1.0 mm: no line width
     expect(penLabel('gel-teal', 'black')).toBe('Moonlight 10 teal 0.5mm (trial)');
+    expect(penLabel('gel-white', 'black')).toBe('Signo 1.0mm white (trial)');
     expect(penLabel('vermilion', 'white')).toBe('vermilion'); // no pen yet: the id
     // Every ink on the sheets names its pen; none falls back to its id.
     for (const ply of spec.plies) for (const ink of ply.pens) expect(penLabel(ink, ply.paper.id), `${ply.id} ${ink}`).toMatch(/^(Micron|Signo|Moonlight) /);
@@ -219,7 +220,7 @@ describe('assembly calibration: verniers', () => {
 describe('assembly calibration: test blocks (R11, R12)', () => {
   it('give each sheet its font test, spacing ladder, dots and dashes, crossings and edge rulers, inside the trim; a lower sheet\'s hidden ones sealed', () => {
     const inks = (ply: string, prefix: string) => [...(world.art[ply] ?? []), ...(world.sealed[ply] ?? [])].filter((p) => p.id.startsWith(prefix) && !/-(header|labels)$/.test(p.id)).map((p) => p.pen);
-    const black = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
+    const black = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'gel-white', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
     const gold = ['black', 'carbon', 'gold', 'ultramarine', 'violet'], triptychWhite = ['carbon', 'ultramarine', 'fluoro-pink'];
     expect(inks('black', 'font-')).toEqual(black);
     expect(inks('gold', 'font-')).toEqual(gold);
