@@ -4,6 +4,7 @@ import { strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
 import { CONTROLS, TRIM, lintelRect, type LintelBar } from './world.ts';
+import type { Ink } from '../kit/types.ts';
 import { n } from '../kit/params.ts';
 
 /**
@@ -24,7 +25,12 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'slider', id: 'filings', label: 'Filings (candidates, thousands)', default: 9, min: 0, max: 30, step: 0.5, group: 'Magnet' },
   { type: 'slider', id: 'handX', label: 'Hand: where it hangs over the bar (0 its left end, 1 its right)', default: 0.68, min: 0, max: 1, step: 0.01, group: 'Magnet' },
   { type: 'toggle', id: 'handPull', label: 'The hand grips and pulls the field lines (a small opposite pole); else it has let go (R1)', default: true, group: 'Magnet' },
+  { type: 'select', id: 'handFrom', label: 'Where the gripping hand comes in', default: 'bottom', options: ['bottom', 'top'],
+    optionLabels: { bottom: 'From the bottom edge, pulling lines down from under the bar', top: 'From the top edge (R2)' }, group: 'Magnet' },
+  { type: 'select', id: 'fist', label: 'The gripping hand', default: 'slabs', options: ['slabs', 'clean'],
+    optionLabels: { slabs: 'Slabs: palm, curled finger segments and thumb (R2)', clean: 'Clean: a squared fist, fingers folded in right angles in one row' }, group: 'Magnet' },
   { type: 'slider', id: 'pullStrength', label: 'The hand\'s pole, against the bar\'s', default: 0.3, min: 0.05, max: 0.8, step: 0.01, group: 'Magnet' },
+  { type: 'toggle', id: 'ribbonBleed', label: 'L\'s ribbon unravels into field lines before it leaves L (else R2\'s single line)', default: true, group: 'Magnet' },
   { type: 'toggle', id: 'ribbonField', label: 'L\'s ribbon follows the field toward the near pole (else R1\'s path)', default: true, group: 'Magnet' },
   { type: 'toggle', id: 'figureField', label: 'R\'s figure pulled by the field toward the centre (else R1)', default: true, group: 'Ground' },
   { type: 'select', id: 'figure', label: 'R\'s figure', default: 'r1', options: ['r1', 'clean'],
@@ -61,7 +67,8 @@ export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
     // The hand is a small magnet of its own: its south pole in the fist, its north up the arm, off the top of the sheet,
     // so it pulls lines into the grip without turning the whole far field (a lone pole would draw lines in from all round).
     const g = gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
-    poles.push({ ...g, q: -q, r: GRIP_R }, { x: g.x + ARM.x, y: g.y + ARM.y, q, r: GRIP_R });
+    const arm = handFromBottom(ctx) ? { x: g.x + ARM.x, y: TRIM.y1 + ARM_OFF } : { x: g.x + ARM.x, y: g.y + ARM.y };
+    poles.push({ ...g, q: -q, r: GRIP_R }, { ...arm, q, r: GRIP_R });
     for (const pole of poles) charges.push({ x: pole.x, y: pole.y, q: pole.q });
   }
   return { rect, charges, poles };
@@ -69,11 +76,16 @@ export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
 
 /** How far above the bar the gripping hand's pole sits (mm), and the radius field lines end in round it. */
 const GRIP_RISE = 30, GRIP_R = 3;
-/** From the fist's pole to the hand's other pole, up the arm off the top of the sheet (mm). */
-const ARM = { x: 12, y: -115 };
-/** Where the gripping hand closes: over the bar at `handX` of its length, GRIP_RISE above it. */
+/**
+ * From the fist's pole to the hand's other pole, up the arm off the top of the sheet (mm, R2's hand from the top); from
+ * the bottom the other pole is down the arm, ARM_OFF below the bottom trim.
+ */
+const ARM = { x: 12, y: -115 }, ARM_OFF = 40;
+/** Whether the gripping hand comes in from the bottom edge (`handFrom`, the default) rather than the top. */
+export const handFromBottom = (ctx: SketchContext): boolean => ctx.params.handFrom !== 'top';
+/** Where the gripping hand closes: at `handX` of the bar's length, GRIP_RISE above it (from the top) or below it (from the bottom). */
 export function gripPoint(ctx: SketchContext, rect: Magnet['rect']): Point {
-  return { x: rect.x0 + (rect.x1 - rect.x0) * n(ctx, 'handX', 0.68, 0, 1), y: rect.y0 - GRIP_RISE };
+  return { x: rect.x0 + (rect.x1 - rect.x0) * n(ctx, 'handX', 0.68, 0, 1), y: handFromBottom(ctx) ? rect.y1 + GRIP_RISE : rect.y0 - GRIP_RISE };
 }
 
 // ── One field across the triptych ────────────────────────────────────
@@ -114,6 +126,55 @@ export function ribbonPitch(m: Magnet, bar: LintelBar): (p: Point) => number {
   const ref = Math.hypot(...Object.values(fieldIn(m, 'l', { x: TRIM.x1, y: (m.rect.y0 + m.rect.y1) / 2 })) as [number, number]);
   void bar;
   return p => Math.max(0.45, Math.min(1.6, (Math.hypot(...Object.values(fieldIn(m, 'l', p)) as [number, number]) / ref) ** -0.4));
+}
+
+/** A flat ribbon's twist (the cosine `flatRibbon` scales its width by) at each point of a path, its pitch varying as `pitchAt`. */
+export function ribbonTwist(path: Point[], pitch: number, phase0: number, pitchAt: (p: Point) => number): number[] {
+  let phase = phase0;
+  return path.map((p, i) => {
+    if (i) phase += 2 * Math.PI * Math.hypot(p.x - path[i - 1].x, p.y - path[i - 1].y) / (pitch * pitchAt(p));
+    return Math.cos(phase);
+  });
+}
+
+/** Where L's ribbon starts to unravel: this far (mm, along the sheet) before L's right edge, at the widest point of its twist nearby. */
+const PEEL_MM = 72, PEEL_SEARCH = 12;
+/** The ribbon's lines that peel off as field lines: their place across it (-1 to 1, as `flatRibbon` draws them) and ink. */
+const PEELS: [number, Ink][] = [[-1, 'vermilion'], [-1 / 3, 'ultramarine'], [0, 'acid'], [1 / 3, 'ultramarine'], [1, 'vermilion']];
+
+export interface Bleed { ribbon: Point[]; strands: { ink: Ink; path: Point[] }[] }
+
+/**
+ * L's ribbon bleeding into the field: it follows `ribbonPath` until about PEEL_MM before L's right edge, where it comes
+ * apart. Its edges, spine and two laminations each go on from where they lie across the ribbon at that point, splayed a
+ * little apart, and the field takes each over within about `pull` mm, along its own field line toward C's north pole:
+ * the ribbon unravels into field lines, which leave L's right edge at their own heights.
+ */
+export function ribbonBleed(crown: Point, m: Magnet, bar: LintelBar, o: { width: number; pitch: number }, pull = 34): Bleed {
+  const full = ribbonPath(crown, m);
+  const twist = ribbonTwist(full, o.pitch, 0, ribbonPitch(m, bar));
+  // The peel: the widest twist within PEEL_SEARCH of the point PEEL_MM before the edge.
+  let target = full.findIndex(p => p.x > TRIM.x1 - PEEL_MM);
+  if (target < 2) target = Math.max(2, Math.floor(full.length / 2));
+  let i0 = target;
+  for (let i = Math.max(2, target - PEEL_SEARCH * 2); i < Math.min(full.length - 1, target + PEEL_SEARCH * 2); i++) if (Math.abs(twist[i]) > Math.abs(twist[i0])) i0 = i;
+  const a = full[i0 - 1], b = full[i0], d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const t0 = { x: (b.x - a.x) / d, y: (b.y - a.y) / d }, nrm = { x: -t0.y, y: t0.x };
+  const half = o.width / 2, sign = Math.sign(twist[i0]) || 1;
+  const strands = PEELS.map(([v, ink]) => {
+    const theta = 0.95 * v * sign;
+    const d0 = { x: t0.x * Math.cos(theta) + nrm.x * Math.sin(theta), y: t0.y * Math.cos(theta) + nrm.y * Math.sin(theta) };
+    let p = { x: b.x + nrm.x * v * half * twist[i0], y: b.y + nrm.y * v * half * twist[i0] };
+    const path: Point[] = [p];
+    for (let s = 0; s < 600 && p.x < TRIM.x1 + 6 && p.y > TRIM.y0 - 20 && p.y < TRIM.y1 + 20; s += 0.5) {
+      const B = fieldIn(m, 'l', p), l = Math.hypot(B.x, B.y) || 1, w = 1 - Math.exp(-s / pull);
+      const dx = d0.x * (1 - w) - (B.x / l) * w, dy = d0.y * (1 - w) - (B.y / l) * w, dl = Math.hypot(dx, dy) || 1;
+      p = { x: p.x + 0.5 * dx / dl, y: p.y + 0.5 * dy / dl };
+      path.push(p);
+    }
+    return { ink, path };
+  });
+  return { ribbon: full.slice(0, i0 + 1), strands };
 }
 
 /** Where a page path crosses x = `x` (its first crossing), or undefined. */
@@ -310,6 +371,35 @@ export function orientedSlab(c: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector
   const sl = solid(c.x, c.y, c.z, w, h, d, beat, 'stub');
   sl.rx = e.x; sl.ry = e.y; sl.rz = e.z;
   return sl;
+}
+
+/**
+ * A squared fist of slabs: a palm, four fingers side by side in one row, each folded twice at right angles (out from
+ * the palm, across, and back in against it), and the thumb laid across the folded fingers. Fewer, cleaner planes than
+ * `slabHand` curled shut.
+ */
+export function squareFist(o: Omit<HandOptions, 'curl' | 'spread'>): Slab[] {
+  const s = o.size, along = o.along.clone().normalize(), across = o.across.clone().normalize();
+  const palmSide = new THREE.Vector3().crossVectors(along, across).normalize();
+  const slabs: Slab[] = [orientedSlab(o.wrist.clone().addScaledVector(along, 0.45 * s), across, along, 0.88 * s, 0.9 * s, 0.3 * s, 0)];
+  const w = 0.2 * s, t = 0.21 * s;
+  for (let f = 0; f < 4; f++) {
+    const side = (f - 1.5) * 0.225 * s;
+    const knuckle = o.wrist.clone().addScaledVector(along, 0.9 * s).addScaledVector(across, side);
+    // Out along the hand, then folded toward the palm side, then back in against the palm.
+    const legs: [THREE.Vector3, number][] = [[along, 0.3 * s], [palmSide, 0.28 * s], [along.clone().negate(), 0.22 * s]];
+    let at = knuckle.clone();
+    legs.forEach(([dir, len], j) => {
+      const x = j === 1 ? across : across;
+      slabs.push(orientedSlab(at.clone().addScaledVector(dir, len / 2), x, dir, w, len + 0.04 * s, t, 1 + f * 3 + j));
+      at = at.clone().addScaledVector(dir, len);
+    });
+  }
+  // The thumb: from the palm's side, across the front of the folded fingers.
+  const base = o.wrist.clone().addScaledVector(along, 0.55 * s).addScaledVector(across, -0.48 * s).addScaledVector(palmSide, 0.22 * s);
+  slabs.push(orientedSlab(base.clone().addScaledVector(across, 0.2 * s), across.clone().negate(), across, 0.22 * s, 0.42 * s, 0.2 * s, 20));
+  slabs.push(orientedSlab(base.clone().addScaledVector(across, 0.55 * s).addScaledVector(palmSide, 0.08 * s), along, across, 0.2 * s, 0.32 * s, 0.19 * s, 21));
+  return slabs;
 }
 
 export interface HandOptions {

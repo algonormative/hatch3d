@@ -14,8 +14,8 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
-import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, fewerRings, lintelBar, lintelFootprint, pensOf } from '../world.ts';
-import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, lineToNorth, magnet, ribbonPath, slabHand, wordAlong } from '../lodestone-world.ts';
+import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, lintelFootprint, pensOf } from '../world.ts';
+import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonBleed, ribbonPath, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -69,16 +69,19 @@ function draw(ctx: SketchContext): Part[] {
   // R1 (no pull): the hand hangs over the bar, fingers down and a little toward us, relaxing open as it lets go, turned
   // toward profile, the back of the hand to the upper right. Pulling: it hangs straighter and closes into a fist round
   // the lines it has gathered, the fist's lowest point just under the pole the lines run into.
-  const along = pulling ? new THREE.Vector3(-0.12, -1, 0.22).normalize() : new THREE.Vector3(-0.32, -1, 0.18).normalize();
-  const across = new THREE.Vector3(0.5, -0.12, 1).normalize();
+  // From the bottom (`handFrom`, default): the arm rises from the bottom edge, fingers up, the fist under the bar.
+  const fromBottom = pulling && handFromBottom(ctx);
+  const along = !pulling ? new THREE.Vector3(-0.32, -1, 0.18).normalize() : fromBottom ? new THREE.Vector3(0.12, 1, 0.22).normalize() : new THREE.Vector3(-0.12, -1, 0.22).normalize();
+  const across = fromBottom ? new THREE.Vector3(0.5, 0.12, -1).normalize() : new THREE.Vector3(0.5, -0.12, 1).normalize();
   const size = pulling ? 5.4 : 4.4;
-  const build = (wrist: THREE.Vector3) => slabHand({ wrist, along, across, size, curl: pulling ? 1.2 : 0.34, spread: pulling ? 0.02 : 0.1 });
+  const squared = pulling && ctx.params.fist === 'clean';
+  const build = (wrist: THREE.Vector3) => squared ? squareFist({ wrist, along, across, size }) : slabHand({ wrist, along, across, size, curl: pulling ? 1.2 : 0.34, spread: pulling ? 0.02 : 0.1 });
   const grip = m.poles[0];
   let wrist = world({ x: pulling ? grip.x : handX, y: 48 });
   for (let it = 0; it < 6; it++) {
     const slabs = build(wrist);
     if (pulling) {
-      // The fist's inside (the middle of its curled fingers, slabs 1 to 12) on the pole: the lines end within the fist.
+      // The fist's inside (the middle of its folded fingers, slabs 1 to 12) on the pole: the lines end within the fist.
       const fingers = slabs.slice(1, 13).map(sl => pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z), PAGE));
       const c = { x: fingers.reduce((t, p) => t + p.x, 0) / fingers.length, y: fingers.reduce((t, p) => t + p.y, 0) / fingers.length };
       wrist = wrist.clone().add(new THREE.Vector3((grip.x - c.x) / MM_PER_UNIT, -(grip.y - c.y) / MM_PER_UNIT, 0));
@@ -88,10 +91,11 @@ function draw(ctx: SketchContext): Part[] {
     }
   }
   const hand = build(wrist);
-  // The sleeve and the shirt cuff, out of the top of the sheet.
+  // The sleeve and the shirt cuff, out of the top (or the bottom) of the sheet.
   const up = along.clone().negate();
   const shirt = new Tube('shirt', [wrist.clone().addScaledVector(up, 1.9), wrist.clone().addScaledVector(up, -0.2)], [[0, 1.6, 1.4], [1, 1.55, 1.35]], across, 1, [0, 0], undefined, 6);
-  const sleeve = new Tube('sleeve', [wrist.clone().addScaledVector(up, 1.4), wrist.clone().addScaledVector(up, 8), wrist.clone().addScaledVector(up, 18)],
+  const reach = fromBottom ? 32 : 18;
+  const sleeve = new Tube('sleeve', [wrist.clone().addScaledVector(up, 1.4), wrist.clone().addScaledVector(up, 8), wrist.clone().addScaledVector(up, reach)],
     [[0, 2.2, 1.95], [1, 2.3, 2.05]], across, 1, [0, 0], undefined, 6);
   const env: ToneEnv = { density: 0.3, dark: () => 0.5, screen: p => pageOf(view, p, PAGE) };
   const strokes: Tagged[] = [];
@@ -118,21 +122,40 @@ function draw(ctx: SketchContext): Part[] {
   const loops = lines.filter(l => Math.max(...l.map(p => p.y)) > m.rect.y1 + 10 && l.every(p => p.y > TRIM.y0 && p.y < TRIM.y1 && p.x > TRIM.x0 && p.x < TRIM.x1))
     .sort((a, b) => Math.max(...a.map(p => p.y)) - Math.max(...b.map(p => p.y)));
   const words: Point[][] = [];
+  // Each word on its loop at its place, or (where the hand is in the way) the nearest loop and place that keep it whole,
+  // clear of the hand and inside the trim. R1's words land on the first try.
+  const place = (w: typeof WORDS[number], loop: number, x: number): Point[][] | undefined => {
+    const line = loops[Math.min(loop, loops.length - 1)];
+    if (!line) return undefined;
+    let s = 0, from = -1;
+    for (let i = 1; i < line.length; i++) { s += Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y); if (line[i].x >= x && line[i].y > m.rect.y1) { from = s; break; } }
+    if (from < 0) return undefined;
+    return wordAlong(w.word, line, from, 2.6, -2.2);
+  };
   for (const w of WORDS) {
-    const line = loops[Math.min(w.loop, loops.length - 1)];
-    if (!line) continue;
-    let s = 0, from = 0;
-    for (let i = 1; i < line.length; i++) { s += Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y); if (line[i].x >= w.x && line[i].y > m.rect.y1) { from = s; break; } }
-    words.push(...wordAlong(w.word, line, from, 2.6, -2.2));
+    const first = place(w, w.loop, w.x);
+    const ok = (paths: Point[][] | undefined) => !!paths?.length && paths.flat().every(p => !handArea(p) && p.x > TRIM.x0 + 3 && p.x < TRIM.x1 - 3 && p.y < TRIM.y1 - 3);
+    let chosen = ok(first) ? first : undefined;
+    search: for (let dl = 0; !chosen && dl <= 4; dl++) for (const loop of [w.loop - dl, w.loop + dl]) for (let dx = 0; dx <= 120; dx += 10) for (const x of [w.x - dx, w.x + dx]) {
+      if (loop < 0) continue;
+      const tried = place(w, loop, x);
+      if (ok(tried)) { chosen = tried; break search; }
+    }
+    words.push(...(chosen ?? []));
   }
   for (const path of clipTrim(words)) for (const piece of keepAlong(path, p => !handArea(p), 0.1)) buckets.add('word-carbon', piece, true);
   const clear = glyphMask(words, 0.8, 6, PAGE);
   for (const line of clipTrim(lines)) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
   for (const dash of filings(ctx, m, Math.round(1000 * n(ctx, 'filings', 9, 0, 30)), p => handArea(p) || clear(p))) buckets.add('filing-carbon', dash, true);
   // L's ribbon, pulled along the field, leaves L's right edge on a field line: here that line goes on into the north pole.
+  // With `ribbonBleed` it has come apart into several lines in L: each runs on here from the height it left L.
   if (ctx.params.ribbonField !== false) {
-    const y = crossingY(ribbonPath(pageOf(frame.view, headCoil(frame.fig.head).at(-1)!, PAGE), m), TRIM.x1);
-    if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0, y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
+    const crown = pageOf(frame.view, headCoil(frame.fig.head).at(-1)!, PAGE);
+    const paths = ctx.params.ribbonBleed !== false ? ribbonBleed(crown, m, bar, { width: THREAD.widthMm, pitch: THREAD.pitchMm }).strands.map(st => st.path) : [ribbonPath(crown, m)];
+    for (const path of paths) {
+      const y = crossingY(path, TRIM.x1);
+      if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0, y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
+    }
   }
 
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
