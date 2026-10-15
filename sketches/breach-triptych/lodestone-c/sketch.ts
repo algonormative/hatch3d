@@ -5,7 +5,7 @@ import type { ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
 import { glyphMask } from '../../kit/lettering.ts';
-import { clipToRect, insideRing, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
@@ -15,8 +15,8 @@ import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, holeBarPaths, lintelBar, pensOf } from '../world.ts';
-import { cCuts } from '../lodestone-cuts.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barFootprint, cosmos, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { cCuts, inGrown } from '../lodestone-cuts.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barFootprint, cosmos, emphasisOn, frameBand, frameRings, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -129,6 +129,19 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   });
   for (const g of geos) g.dispose();
 
+  // The cut set's windows in the gold (`cutScheme`), and the bar's: here, so the field can give way round their frames
+  // (`emphasis`, R9: the bar's window framed three times, the sleeve's twice, in black on the gold kept round them).
+  const sleevePts: Point[] = [];
+  for (let i = 0; i <= 24; i++) for (let j = 0; j < 12; j++) sleevePts.push(pageOf(view, sleeve.point(i / 24, j / 12), PAGE));
+  const windows = cCuts(ctx, { rect: m.rect, grip: m.poles[0] ?? { x: handX, y: m.rect.y0 - 40 }, sleeve: sleevePts });
+  const barRing = barFootprint(bar, ctx).rings[0], grow = spec.bleed + FILL_OVER;
+  const frames = emphasisOn(ctx) && mode === 'window' ? [{ ring: barRing, lines: 3 }, ...windows.filter(w => w.id === 'sleeve').map(w => ({ ring: w.rings[0], lines: 2 }))] : [];
+  const bands = frames.map(f => frameBand(f.ring, f.lines));
+  const framed = (p: Point) => bands.some(b => b(p));
+  // (A filing is tested at its middle: it keeps half its length further off.)
+  const farBands = frames.map(f => frameBand(f.ring, f.lines, 1.2));
+  const framedFar = (p: Point) => farBands.some(b => b(p));
+
   // The field, and the words along two of its lines ("falls into"), which the filings give way to.
   // With the panels hung apart, the lines that carry the field across the gap into R are among them (`withSeamLines`).
   const lines = withSeamLines(m, fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
@@ -148,7 +161,7 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   };
   for (const w of WORDS) {
     const first = place(w, w.loop, w.x);
-    const ok = (paths: Point[][] | undefined) => !!paths?.length && paths.flat().every(p => !handArea(p) && p.x > TRIM.x0 + 3 && p.x < TRIM.x1 - 3 && p.y < TRIM.y1 - 3);
+    const ok = (paths: Point[][] | undefined) => !!paths?.length && paths.flat().every(p => !handArea(p) && !framed(p) && p.x > TRIM.x0 + 3 && p.x < TRIM.x1 - 3 && p.y < TRIM.y1 - 3);
     let chosen = ok(first) ? first : undefined;
     search: for (let dl = 0; !chosen && dl <= 4; dl++) for (const loop of [w.loop - dl, w.loop + dl]) for (let dx = 0; dx <= 120; dx += 10) for (const x of [w.x - dx, w.x + dx]) {
       if (loop < 0) continue;
@@ -159,8 +172,15 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   }
   for (const path of clipTrim(words)) for (const piece of keepAlong(path, p => !handArea(p), 0.1)) buckets.add('word-carbon', piece, true);
   const clear = glyphMask(words, 0.8, 6, PAGE);
-  for (const line of clipTrim(lines)) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
-  for (const dash of filings(ctx, m, Math.round(1000 * n(ctx, 'filings', 9, 0, 30)), p => handArea(p) || clear(p))) buckets.add('filing-carbon', dash, true);
+  // The field gives way to the frames on the gold; under it, on the black, it runs on through the frames' band, so a
+  // window's edge never crops it (`underBand`).
+  const underBand: Point[][] = [];
+  const field = (line: Point[]) => {
+    for (const piece of keepAlong(line, p => !handArea(p) && !clear(p) && !framed(p), 0.2)) buckets.add('field-carbon', piece, true);
+    if (frames.length) underBand.push(...keepAlong(line, p => !handArea(p) && !clear(p) && framed(p), 0.2));
+  };
+  for (const line of clipTrim(lines)) field(line);
+  for (const dash of filings(ctx, m, Math.round(1000 * n(ctx, 'filings', 9, 0, 30)), p => handArea(p) || clear(p) || framedFar(p))) buckets.add('filing-carbon', dash, true);
   // L's ribbon, pulled along the field, leaves L's right edge on a field line: here that line goes on into the north pole.
   // With `ribbonBleed` it has come apart into several lines in L: each runs on here from the height it left L.
   if (ctx.params.ribbonField !== false) {
@@ -169,15 +189,12 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
     for (const path of paths) {
       const y = crossingY(path, TRIM.x1);
       // L hangs the gap to the left: the line leaves L's edge there and runs on across the gap into C.
-      if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0 - gapOf(m), y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
+      if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0 - gapOf(m), y })])) field(line);
     }
   }
 
-  // The cut set's windows in the gold (`cutScheme`), and the black beneath: every mark of the gold is drawn on the black
-  // too, in silver, and each sheet keeps what it shows, so the field reads on through the windows.
-  const sleevePts: Point[] = [];
-  for (let i = 0; i <= 24; i++) for (let j = 0; j < 12; j++) sleevePts.push(pageOf(view, sleeve.point(i / 24, j / 12), PAGE));
-  const windows = cCuts(ctx, { rect: m.rect, grip: m.poles[0] ?? { x: handX, y: m.rect.y0 - 40 }, sleeve: sleevePts });
+  // The black beneath the windows: every mark of the gold is drawn on the black too, in silver, and each sheet keeps
+  // what it shows, so the field reads on through the windows.
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   if (mode === 'onlay') {
     art.black = windows.length ? art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver' })) : [];
@@ -187,16 +204,19 @@ const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: Sketch
   // (`cBarFill`) the cosmos (R9: galaxies and stars in silver, one star gold) or the bar's hatch in silver (R7, R8, as
   // L's gold carries it in black ink), out under the window's edge by the bleed; the gold's marks run on in silver on the
   // black, but not into the bar, where the lines and filings stop at its edge.
-  const barRing = barFootprint(bar, ctx).rings[0], inBar = (p: Point) => insideRing(barRing, p);
+  // (The gold's marks stop short of the bar on the black by the bleed, so a window a little off never shows them.)
+  const inBar = inGrown(barRing, grow);
   const pose = m.pose ?? { cx: (m.rect.x0 + m.rect.x1) / 2, cy: (m.rect.y0 + m.rect.y1) / 2, angle: 0 };
-  const grow = spec.bleed + FILL_OVER;
   const sky = ctx.params.cBarFill === 'hatch' ? undefined : cosmos(ctx.random('lodestone-cosmos'), { cx: pose.cx, cy: pose.cy, angle: pose.angle, l: bar.l, h: bar.h }, { grow, galaxies: 2 });
   art.black = [
     ...art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver', paths: part.paths.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) })).filter(part => part.paths.length),
+    ...(underBand.length ? [{ id: 'under-field-band', pen: 'silver', paths: underBand.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) }] : []),
     ...(sky
       ? [{ id: 'cosmos-silver', pen: 'silver', paths: [...sky.silver, ...sky.cores] }, { id: 'cosmos-gold', pen: 'gold', paths: sky.accent }]
       : [{ id: 'bar-silver', pen: 'silver', paths: holeBarPaths({ ...bar, centre: { x: pose.cx, y: pose.cy }, tilt: pose.angle }, grow, n(ctx, 'barPitch', 2.6, 0.6, 5)) }]),
   ];
+  // The frames give way where the hand passes over them.
+  if (frames.length) art.gold.push({ id: 'emphasis-black', pen: 'black', paths: frames.flatMap(f => frameRings(f.ring, f.lines)).flatMap(r => clipToRect(r, ART)).flatMap(r => keepAlong(r, q => !handArea(q), 0.1)) });
   return renderPly(spec, ctx, pens, { cuts: { gold: [{ id: BAR_ID, label: 'BAR', rings: [barRing] }, ...windows] }, art });
 };
 

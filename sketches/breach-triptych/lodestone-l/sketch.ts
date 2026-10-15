@@ -8,7 +8,7 @@ import { cutTube, headCoil, type AgentHead } from '../../kit/agent.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask } from '../../kit/lettering.ts';
-import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { clipToRect, insideRing, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
 import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts';
@@ -17,11 +17,11 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
-import { inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
+import { clipToTrim, cutSchemeOf, inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
   ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, holeBarRules, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, LENS, eyeCentre, faceMarks, faceOutline, lensCamera, lensImage, lensShift, seenBy } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, LENS, eyeCentre, faceMarks, faceOutline, lensCamera, lensImage, lensShift, seenBy, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -52,10 +52,10 @@ const pens = pensOf(['silver', 'gold', 'black']);
  */
 const ROUTES = {
   gold: { groups: ['hole', 'shirt'], inks: { carbon: 'black' } },
-  black: { groups: ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
+  black: { groups: ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'emph'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'shirt'] as const;
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'shirt', 'emph'] as const;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -235,7 +235,19 @@ function draw(ctx: SketchContext): Part[] {
 
   const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...sleeves.flatMap(cutMeshes), ...helix.meshes, skull(head)];
   const solids = meshCoverage(figureGeos, view, PAGE, 1.1);
-  const onBar = inQuad(bar.quad, 1.4);
+  // With emphasis the slabs' hatch keeps further off the figure, clear of its doubled silhouette; `body` is the figure
+  // itself, for which side of an edge is outside.
+  const halo = emphasisOn(ctx) ? meshCoverage(figureGeos, view, PAGE, 1.1 + EMPHASIS.step + EMPHASIS.clear) : solids;
+  const figureOnly = emphasisOn(ctx) ? meshCoverage(figureGeos, view, PAGE, 0) : solids;
+  // Emphasis (R9): the bar's window framed twice on the black kept round it (so the black's marks stop short of the
+  // frame), the shirt's (or the tie's) windows twice, and the bust's silhouette doubled outward.
+  const emph = emphasisOn(ctx);
+  const onBar = inQuad(bar.quad, emph ? frameReach(2) : 1.4);
+  const front = suitFrontOutlines(body.trunk, view);
+  const suitRings = emph && cutSchemeOf(ctx) === 'tie' ? (ctx.params.lCut !== 'tie' ? front.shirt : [front.tie]).map(r => clipToTrim(r)) : [];
+  const suitBands = suitRings.map(r => { const near = inGrown(r, frameReach(2)); return (p: Point) => near(p) && !insideRing(r, p); });
+  const bySuit = (p: Point) => suitBands.some(b => b(p));
+  const contours: Point[][] = [], marks: Point[][] = [];
 
   const geometries = [...slabs.map(slabGeometry), ...figureGeos];
   fitDepthRange(view, geometries, 0.1, { exact: true });
@@ -298,15 +310,25 @@ function draw(ctx: SketchContext): Part[] {
     projectStrokes(g.strokes, { view, depth, width: W, height: H, bias: g.bias }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) {
-          const keep = st.owner === undefined ? () => true : (p: Point) => !solids(p);
+          const keep = st.owner === undefined ? () => true : (p: Point) => !halo(p);
           for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && !threadArea(p) && keep(p), 0.15)) buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined);
+            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && !threadArea(p) && !bySuit(p) && keep(p), 0.15)) {
+              if (buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined)) { if (st.group === 'contour') contours.push(piece); else marks.push(piece); }
+            }
           }
         }
       },
     });
   }
   for (const path of bar.paths) buckets.add('bar-carbon', path, true);
+  // The bust's silhouette doubled, a line outward of each long outer edge (where it bounds the figure on one side only).
+  const spaced = spacer();
+  if (emph) for (const mark of marks) spaced.add(mark);
+  if (emph) for (const piece of contours) {
+    let len = 0;
+    for (let i = 1; i < piece.length; i++) len += Math.hypot(piece[i].x - piece[i - 1].x, piece[i].y - piece[i - 1].y);
+    if (len >= 30) for (const par of outwardDouble(piece, figureOnly)) for (const part of keepAlong(par, p => !onBar(p) && !clear(p) && !threadArea(p) && !bySuit(p) && !spaced.near(p, 0.6), 0.15)) { buckets.add('emph-vermilion', part, true); spaced.add(part); }
+  }
 
   // The censor bar in black ink on the gold, seen through the hole (the gold runs `bleed` under the hole's edge): its
   // hatch (`barFill` hatch, R1 to R8), or (lens, R9) the head behind it, the coil and the face it hides, larger and
@@ -334,7 +356,6 @@ function draw(ctx: SketchContext): Part[] {
 
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
   // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
-  const front = suitFrontOutlines(body.trunk, view);
   const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front, ...(notch ? { notch } : {}) });
   // The shirt cut out (`lCut` shirt): its stripes, fine lines down it, drawn in black on the gold beneath.
   if (windows.some(c => c.id.startsWith('shirt'))) for (const path of shirtStripes(body.trunk, view)) for (const inside of clipToRect(path, ART)) buckets.add('shirt-carbon', inside, true);
@@ -350,6 +371,12 @@ function draw(ctx: SketchContext): Part[] {
     art.gold.push(...art.black.filter(part => !part.id.startsWith('bar-')).map(part => ({ ...part, id: `under-${part.id}`, pen: 'black', paths: part.paths.flatMap(path => keepAlong(path, q => !filled.some(f => f(q)), 0.15)) })).filter(part => part.paths.length));
     if (stripes.length) art.gold.push({ id: 'fill-black', pen: 'black', paths: stripes });
   }
+  // The frames (`emphasis`): the bar's in silver, the suit's windows' in gold, on the black round them.
+  if (emph && barWindows(ctx)) art.black.push({ id: 'emphasis-silver', pen: 'silver', paths: frameRings(bar.quad, 2).flatMap(r => clipToRect(r, ART)) });
+  if (suitRings.length) art.black.push({ id: 'emphasis-gold', pen: 'gold', paths: suitRings.flatMap(r => {
+    const ring = [...r, r[0]], sign = outwardSign(ring, q => insideRing(r, q));
+    return sign ? parallels(ring, [EMPHASIS.first, EMPHASIS.first + EMPHASIS.step].map(d => sign * d)) : [];
+  }).flatMap(path => clipToRect(path, ART)) });
   // The bar: a window in the black (`barMode` window, R7), or a part cut out and kept for C (onlay, R1 to R6).
   const barCutHere = barWindows(ctx) ? { ...bar.cut, kind: 'waste' as const, label: 'BAR' } : bar.cut;
   return renderPly(spec, ctx, pens, { cuts: { black: [barCutHere, ...windows] }, art });

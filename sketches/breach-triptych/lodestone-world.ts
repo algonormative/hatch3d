@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
-import { clipToRect } from '../kit/page.ts';
+import { clipToRect, insideRing } from '../kit/page.ts';
+import { distanceToRings } from '../../packages/plot-core/src/region.ts';
 import { fitDepthRange, pageOf } from '../kit/perspective.ts';
 import { hiddenBias, projectStrokes, scalePoints } from '../kit/strokes.ts';
 import type { ProjectedPoint } from '../../src/projection.ts';
@@ -62,9 +63,11 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'select', id: 'barFill', label: 'L: what the gold shows inside the bar\'s window', default: 'lens', options: ['lens', 'hatch'],
     optionLabels: { lens: 'Lens (R9): the head behind the bar, larger and shifted, as through a glass block, in a double rule', hatch: 'Hatch (R1 to R8): the bar\'s crossing hatch in a double rule' }, group: 'Magnet' },
   { type: 'select', id: 'cBarFill', label: 'C: what the black shows inside the bar\'s window', default: 'cosmos', options: ['cosmos', 'hatch'],
-    optionLabels: { cosmos: 'Cosmos (R9): galaxies and stars in silver, one gold star, in a double rule', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
+    optionLabels: { cosmos: 'Cosmos (R9): galaxies and stars in silver, one gold star', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
   { type: 'select', id: 'rCuts', label: 'R: what the black shows in the white\'s windows', default: 'lens', options: ['lens', 'squares', 'cosmos'],
     optionLabels: { lens: 'Lens (R9): the head square shows the head larger and shifted, as L\'s bar; the rest as R8', squares: 'Squares (R8): the figure, strands and tie stripes in silver, the ground\'s pulse', cosmos: 'Cosmos: the same cosmos as C\'s bar behind them, the tie all stars, the ground a spiral galaxy with a pink core' }, group: 'Ground' },
+  { type: 'select', id: 'emphasis', label: 'Emphasis: key outlines doubled or tripled', default: 'on', options: ['on', 'off'],
+    optionLabels: { on: 'On (R9): the windows that carry the composition framed on the paper kept round them (two or three lines), the bust\'s and the kneeling figure\'s silhouettes and the ribbon\'s widest edges doubled', off: 'Off (R8): every outline single' }, group: 'Cuts' },
   { type: 'slider', id: 'rRibbonWidth', label: 'R: the re-formed ribbon\'s width, out of the portal (R8 was 1)', default: 2, min: 1, max: 3, step: 0.1, units: '×', group: 'Ground' },
   CUT_CONTROL,
   LCUT_CONTROL,
@@ -714,6 +717,133 @@ export function faceMarks(head: AgentHead): THREE.Vector3[][] {
       arc(front + (sd * 22 - 11) * deg, front + (sd * 22 + 11) * deg, u => 0.1 - 0.035 * Math.sin(Math.PI * u), 24),
     ]),
   ];
+}
+
+// ── Emphasis (R9) ───────────────────────────────────────────────────
+
+/**
+ * Emphasis: key outlines doubled or tripled with parallel lines `step` mm apart (centre to centre: the gel pen's line is
+ * about 0.5 mm, so 0.3 mm of paper shows between), a window's frame starting `first` mm out from its cut, on the paper
+ * kept round it; other marks give way out to `clear` mm past the outermost line.
+ */
+export const EMPHASIS = { step: 0.8, first: 1.4, clear: 0.6, endTrim: 0.7 };
+export const emphasisOn = (ctx: SketchContext): boolean => ctx.params.emphasis !== 'off';
+/** How far out from a window's cut a frame of `lines` lines reaches, its clear band included (mm). */
+export const frameReach = (lines: number): number => EMPHASIS.first + (lines - 1) * EMPHASIS.step + EMPHASIS.clear;
+
+/** A convex window's frame: `lines` closed rings parallel to it, outside it, the first `EMPHASIS.first` mm out (mitred corners). */
+export function frameRings(ring: Point[], lines: number): Point[][] {
+  const pts = ring.length > 2 && ring[0].x === ring[ring.length - 1].x && ring[0].y === ring[ring.length - 1].y ? ring.slice(0, -1) : ring;
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; area += a.x * b.y - b.x * a.y; }
+  const out = area > 0 ? 1 : -1;
+  return Array.from({ length: lines }, (_, k) => {
+    const d = EMPHASIS.first + k * EMPHASIS.step;
+    const edges = pts.map((a, i) => {
+      const b = pts[(i + 1) % pts.length], l = Math.hypot(b.x - a.x, b.y - a.y) || 1, nx = out * (b.y - a.y) / l, ny = -out * (b.x - a.x) / l;
+      return { p: { x: a.x + nx * d, y: a.y + ny * d }, dx: b.x - a.x, dy: b.y - a.y };
+    });
+    const corners = edges.map((e, i) => {
+      const f = edges[(i + pts.length - 1) % pts.length], den = f.dx * e.dy - f.dy * e.dx;
+      if (Math.abs(den) < 1e-9) return e.p;
+      const t = ((e.p.x - f.p.x) * e.dy - (e.p.y - f.p.y) * e.dx) / den;
+      return { x: f.p.x + f.dx * t, y: f.p.y + f.dy * t };
+    });
+    return [...corners, corners[0]];
+  });
+}
+
+/**
+ * The band a convex window's frame of `lines` lines takes on the paper round it, out to `EMPHASIS.clear` past its
+ * outermost line (mitred corners and all): where the sheet's other marks give way.
+ */
+export function frameBand(ring: Point[], lines: number, extra = 0): (p: Point) => boolean {
+  const outer = frameRings(ring, lines)[lines - 1], reach = EMPHASIS.clear + extra;
+  return p => !insideRing(ring, p) && (insideRing(outer, p) || distanceToRings(p, [outer]) <= reach);
+}
+
+/**
+ * Lines parallel to a page path at each of `offsets` mm (positive to its right as it runs on the sheet, y down; see
+ * `outwardSign`), each stopping cleanly:
+ * dropped where it would fold back or come nearer the path than its offset (a corner tighter than the offset), runs
+ * under 1.5 mm left out, and open ends trimmed back `EMPHASIS.endTrim` mm per line out, so they taper off at junctions.
+ * `keep(p, out)`, where given, keeps a line only beside the path's points `p` it passes (`out` the unit way to it).
+ */
+export function parallels(path: Point[], offsets: number[], keep?: (p: Point, out: Point) => boolean): Point[][] {
+  const pts: Point[] = [path[0]];
+  for (let i = 1; i < path.length; i++) {
+    const a = pts[pts.length - 1], b = path[i], l = Math.hypot(b.x - a.x, b.y - a.y);
+    if (l < 0.05) continue;
+    const n = Math.ceil(l / 0.25);
+    for (let k = 1; k <= n; k++) pts.push({ x: a.x + (b.x - a.x) * k / n, y: a.y + (b.y - a.y) * k / n });
+  }
+  if (pts.length < 5) return [];
+  const N = pts.length, tan = pts.map((_, i) => { const a = pts[Math.max(0, i - 3)], b = pts[Math.min(N - 1, i + 3)], l = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: (b.x - a.x) / l, y: (b.y - a.y) / l }; });
+  const out: Point[][] = [];
+  offsets.forEach((d, rank) => {
+    const q = pts.map((p, i) => ({ x: p.x - tan[i].y * d, y: p.y + tan[i].x * d }));
+    const ok = q.map((p, i) => {
+      if (i && (q[i].x - q[i - 1].x) * tan[i].x + (q[i].y - q[i - 1].y) * tan[i].y <= 0) return false;
+      if (keep && !keep(pts[i], { x: -tan[i].y * Math.sign(d), y: tan[i].x * Math.sign(d) })) return false;
+      for (let j = Math.max(0, i - 60); j < Math.min(N, i + 60); j++) if (Math.hypot(pts[j].x - p.x, pts[j].y - p.y) < Math.abs(d) - 0.05) return false;
+      return true;
+    });
+    let run: Point[] = [];
+    const flush = () => {
+      const s = [0];
+      for (let i = 1; i < run.length; i++) s.push(s[i - 1] + Math.hypot(run[i].x - run[i - 1].x, run[i].y - run[i - 1].y));
+      const trim = EMPHASIS.endTrim * (rank + 1), total = s[s.length - 1] ?? 0;
+      const kept = run.filter((_, i) => s[i] >= trim && s[i] <= total - trim);
+      if (kept.length > 1 && total - 2 * trim >= 1.5) out.push(kept);
+      run = [];
+    };
+    q.forEach((p, i) => { if (ok[i]) run.push(p); else flush(); });
+    flush();
+  });
+  return out;
+}
+
+/** Lines kept apart: the points of the lines added so far, to test another line's points against (`near`, within `r` mm). */
+export function spacer(): { add: (path: Point[]) => void; near: (p: Point, r: number) => boolean } {
+  const grid = new Map<string, Point[]>(), key = (x: number, y: number) => `${Math.floor(x)},${Math.floor(y)}`;
+  return {
+    add: path => {
+      for (let i = 1; i < path.length; i++) {
+        const a = path[i - 1], b = path[i], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.2));
+        for (let k = 0; k <= n; k++) { const q = { x: a.x + (b.x - a.x) * k / n, y: a.y + (b.y - a.y) * k / n }, kk = key(q.x, q.y); (grid.get(kk) ?? grid.set(kk, []).get(kk)!).push(q); }
+      }
+    },
+    near: (p, r) => {
+      for (let u = -1; u <= 1; u++) for (let v = -1; v <= 1; v++) for (const q of grid.get(key(p.x + u, p.y + v)) ?? []) if (Math.hypot(q.x - p.x, q.y - p.y) < r) return true;
+      return false;
+    },
+  };
+}
+
+/**
+ * A silhouette doubled: a line `EMPHASIS.step` outward of it wherever it bounds the figure (`inside`) on one side only,
+ * on whichever side is outside there.
+ */
+export function outwardDouble(path: Point[], inside: (p: Point) => boolean, probe = 1.6): Point[][] {
+  const at = (p: Point, u: Point, d: number) => ({ x: p.x + u.x * d, y: p.y + u.y * d });
+  return [1, -1].flatMap(sign => parallels(path, [sign * EMPHASIS.step], (p, u) => !inside(at(p, u, probe)) && inside(at(p, u, -probe))));
+}
+
+/**
+ * Which side of a path is outside (by `inside`, a test of the side it bounds): the sign for `parallels`' offsets, or 0
+ * where the path bounds nothing clearly (inside on both sides, or neither, as often as not).
+ */
+export function outwardSign(path: Point[], inside: (p: Point) => boolean, probe = 1.5): 1 | -1 | 0 {
+  let left = 0, right = 0, n = 0;
+  for (let i = 1; i < path.length; i += Math.max(1, Math.floor(path.length / 40))) {
+    const a = path[i - 1], b = path[i], l = Math.hypot(b.x - a.x, b.y - a.y) || 1, nx = -(b.y - a.y) / l, ny = (b.x - a.x) / l;
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    n++;
+    if (inside({ x: mx + nx * probe, y: my + ny * probe })) left++;
+    if (inside({ x: mx - nx * probe, y: my - ny * probe })) right++;
+  }
+  if (Math.abs(left - right) < 0.6 * n) return 0;
+  return left > right ? -1 : 1;
 }
 
 // ── The cosmos (R9) ─────────────────────────────────────────────────

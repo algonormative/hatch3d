@@ -21,7 +21,7 @@ import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { FILL_OVER, LENS, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, eyeCentre, faceMarks, faceOutline, fieldLines, fieldPull, gapOf, lensCamera, lensImage, lensShift, rEntries, seenBy, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LENS, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, eyeCentre, faceMarks, faceOutline, fieldLines, fieldPull, gapOf, lensCamera, lensImage, lensShift, rEntries, seenBy, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -48,13 +48,13 @@ const pens = pensOf(['silver', 'fluoro-pink', 'carbon', 'ultramarine']);
  * disc: the same marks in silver, the pink strand in pink, and the ground rings.
  */
 const ROUTES = {
-  black: { groups: ['under', 'rings', 'ribbonunder'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', acid: 'silver', vermilion: 'silver' } },
-  white: { groups: ['figure', 'contour', 'helix', 'hand', 'word', 'ribbon'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
+  black: { groups: ['under', 'rings', 'ribbonunder', 'emphunder'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', acid: 'silver', vermilion: 'silver' } },
+  white: { groups: ['figure', 'contour', 'helix', 'hand', 'word', 'ribbon', 'emph'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
 };
 /** The strands' pens: blue ones ultramarine on white and silver on black; the pink one (`vermilion`) pink on both. */
 const STRAND_PEN = { white: { ultramarine: 'ultramarine', vermilion: 'fluoro-pink' }, black: { ultramarine: 'silver', vermilion: 'fluoro-pink' } } as const;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings'] as const;
+const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings', 'emph', 'emphunder'] as const;
 
 /** The kneeling pose: the kit's kneel, the arms raised forward to gather at head height, the head bowed to its hands. */
 // Each upper arm forward and up, turned in so the bent forearms come across: the two hands meet before the chest.
@@ -137,9 +137,10 @@ const RAVEL = { portalAt: 16, length: 55, dash: 1.6, gap: 1.1, loose: 0.4 };
  * twisting ribbon (its edges, laminations and spine, the pink strand its +1 edge), which runs on along the middle
  * strand's course to the hands and down to the floor, `widen` times the thread's width (R9: twice, `rRibbonWidth`; its
  * laminations as many times over). Returns the strands cut short after the ravel (in place), the
- * dashes, the ribbon (flatRibbon's strokes: its first two the -1 and +1 edges) and its centreline.
+ * dashes, the lines' whole courses in to the portal (`entries`), the ribbon (flatRibbon's strokes: its first two the -1
+ * and +1 edges) and its centreline.
  */
-function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: number, widen = 1): { dashes: { path: Point[]; ink: Ink }[]; ribbon: { strokes: RibbonStroke[]; mask: Point[][] }; centre: Point[] } | undefined {
+function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: number, widen = 1): { dashes: { path: Point[]; ink: Ink }[]; entries: { path: Point[]; ink: Ink }[]; ribbon: { strokes: RibbonStroke[]; mask: Point[][] }; centre: Point[] } | undefined {
   const cut = strands.map(st => { const inside = st.path.map(q => insideRing(portal, q)); return { i0: inside.indexOf(true), i1: inside.lastIndexOf(true) }; });
   if (cut.some(c => c.i0 < 1 || c.i1 < c.i0 || c.i1 >= strands[0].path.length - 2)) return undefined;
   const mid = Math.floor(strands.length / 2);
@@ -162,10 +163,11 @@ function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: nu
   const swap = target.indexOf(1);
   if (swap >= 0 && swap !== pink) [target[swap], target[pink]] = [target[pink], 1];
   const iR = Math.max(1, cs.findIndex(v => v >= RAVEL.length));
-  const dashes: { path: Point[]; ink: Ink }[] = [];
+  const dashes: { path: Point[]; ink: Ink }[] = [], entries: { path: Point[]; ink: Ink }[] = [];
   strands.forEach((st, k) => {
     // In as dashes across the bare paper to the portal.
     const entry = st.path.slice(0, cut[k].i0 + 1), es = lengths(entry);
+    entries.push({ ink: st.ink, path: entry });
     for (let a = 0, n = 0; a < es.at(-1)!; a += RAVEL.dash + RAVEL.gap, n++) {
       const pts = entry.filter((_, i) => es[i] >= a && es[i] <= a + RAVEL.dash);
       if (pts.length < 2) continue;
@@ -181,7 +183,7 @@ function ravel(strands: { path: Point[]; ink: Ink }[], portal: Point[], pink: nu
     st.path = [...st.path.slice(cut[k].i0, cut[k].i1 + 1), ...ravelled];
   });
   const ribbon = flatRibbon(centre.slice(iR), { width: widen * THREAD.widthMm, pitch: THREAD.pitchMm, laminations: Math.round(6 * widen), phase0: 2 * Math.PI * cs[iR] / THREAD.pitchMm });
-  return { dashes, ribbon, centre };
+  return { dashes, entries, ribbon, centre };
 }
 
 /** Arc lengths along a page path. */
@@ -434,6 +436,16 @@ function draw(ctx: SketchContext): Part[] {
   const headWindow = windows.find(w => w.id === 'head')?.rings[0];
   const lensWindow = rMode === 'lens' ? headWindow : undefined;
   const inLens = lensWindow ? inGrown(lensWindow, grow) : () => false;
+  // Emphasis (R9): the head's window framed three times and the portal twice, on the white kept round them (the white's
+  // marks stop short of the frames), the figure's long outer contours and the ribbon's widest edges doubled outward.
+  const emph = emphasisOn(ctx);
+  const frames = emph ? [
+    ...(headWindow ? [{ ring: headWindow, lines: 3, pen: 'carbon' }] : []),
+    ...(portal ? [{ ring: portal, lines: 2, pen: 'ultramarine' }] : []),
+  ] : [];
+  const bands = frames.map(f => frameBand(f.ring, f.lines));
+  const framed = (p: Point) => bands.some(b => b(p));
+  const contours: Point[][] = [], figureMarks: Point[][] = [];
 
   const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...cut.flatMap(cutMeshes), ...[...hands, ...shoes].map(slabGeometry), ...headGeos];
   fitDepthRange(view, figureGeos, 0.1, { exact: true });
@@ -449,7 +461,12 @@ function draw(ctx: SketchContext): Part[] {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y).map(st.group === 'helix' ? pullHead : pullBody), ART)) {
           for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) {
-            buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, piece, false);
+            for (const white of keepAlong(piece, q => !framed(q), 0.15)) {
+              if (buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, white, false)) {
+                if (emph && st.group === 'contour') contours.push(white);
+                else if (emph) figureMarks.push(white);
+              }
+            }
             // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
             for (const part of keepAlong(piece, q => !inTie(q) && !inLens(q), 0.15)) buckets.add(`under-${st.ink}`, part, false);
           }
@@ -460,7 +477,11 @@ function draw(ctx: SketchContext): Part[] {
   for (const st of strands) for (const piece of clipToRect(st.path, ART)) {
     for (const part of keepAlong(piece, p => !clear(p), 0.15)) { buckets.add(`strand-${st.ink}`, part, true); buckets.add(`strandunder-${st.ink}`, part, true); }
   }
-  for (const st of reformed?.dashes ?? []) for (const piece of clipToRect(st.path, ART)) { buckets.add(`strand-${st.ink}`, piece, true); buckets.add(`strandunder-${st.ink}`, piece, true); }
+  // The dashes on the white; on the black, under the portal's edge, the lines come in whole (out to the portal grown by
+  // the bleed), so a portal cut a little off shows a line going on, never a dash cut short.
+  for (const st of reformed?.dashes ?? []) for (const piece of clipToRect(st.path, ART)) buckets.add(`strand-${st.ink}`, piece, true);
+  const nearPortal = portal ? inGrown(portal, grow) : () => false;
+  for (const st of reformed?.entries ?? []) for (const piece of clipToRect(st.path, ART)) for (const part of keepAlong(piece, nearPortal, 0.1)) buckets.add(`strandunder-${st.ink}`, part, true);
   // The ribbon: its +1 edge is the pink strand's, pink on both sheets; the rest in the ribbon's inks.
   reformed?.ribbon.strokes.forEach((st, i) => {
     for (const piece of clipToRect(st.points, ART)) for (const part of keepAlong(piece, p => !clear(p), 0.15)) {
@@ -524,6 +545,40 @@ function draw(ctx: SketchContext): Part[] {
   } else if (ctx.params.groundRings !== false) {
     for (const r of [0.22, 0.42, 0.64]) { const pr = ring(r * radius); for (const piece of clipToRect([...pr, pr[0]], ART)) buckets.add('rings-carbon', piece, true); }
   }
+  if (emph) {
+    // The figure's long outer contours doubled, a line outward (where they bound the figure on one side only).
+    const figure = glyphMask([...figureMarks, ...contours], 1.6, 4, PAGE), spaced = spacer(), ground = spacer();
+    for (const mark of [...figureMarks, ...contours]) { spaced.add(mark); ground.add(mark); }
+    for (const mark of [...fxSilver, ...fxPink]) ground.add(mark);
+    for (const piece of contours) {
+      let len = 0;
+      for (let i = 1; i < piece.length; i++) len += Math.hypot(piece[i].x - piece[i - 1].x, piece[i].y - piece[i - 1].y);
+      if (len >= 40) for (const par of outwardDouble(piece, figure, 2.2)) for (const part of keepAlong(par, q => !strandArea(q) && !clear(q) && !framed(q) && !spaced.near(q, 0.6), 0.15)) {
+        spaced.add(part);
+        buckets.add('emph-vermilion', part, true);
+        for (const under of keepAlong(part, q => !inTie(q) && !inLens(q) && !ground.near(q, 0.6), 0.15)) buckets.add('emphunder-vermilion', under, true);
+      }
+    }
+    // The ribbon's edges doubled where it is widest (seen flat, over 0.7 of its full width), a line outward of each.
+    const [e0, e1] = reformed?.ribbon.strokes ?? [];
+    if (e0 && e1 && e0.points.length === e1.points.length) {
+      const width = e0.points.map((q, i) => Math.hypot(e1.points[i].x - q.x, e1.points[i].y - q.y)), wide = 0.7 * Math.max(...width);
+      ([[e0, e1, false], [e1, e0, true]] as const).forEach(([edge, other, isPink]) => {
+        const runs: Point[][] = [];
+        let run: Point[] = [];
+        edge.points.forEach((q, i) => {
+          if (width[i] < wide) { if (run.length > 1) runs.push(run); run = []; return; }
+          const o = other.points[i];
+          run.push({ x: q.x + (q.x - o.x) / width[i] * EMPHASIS.step, y: q.y + (q.y - o.y) / width[i] * EMPHASIS.step });
+        });
+        if (run.length > 1) runs.push(run);
+        for (const r of runs) for (const piece of clipToRect(r, ART)) for (const part of keepAlong(piece, q => !clear(q) && !spaced.near(q, 0.6), 0.15)) {
+          buckets.add(isPink ? 'strand-vermilion' : 'emph-vermilion', part, true);
+          for (const under of keepAlong(part, q => !ground.near(q, 0.6), 0.15)) buckets.add(isPink ? 'strandunder-vermilion' : 'emphunder-vermilion', under, true);
+        }
+      });
+    }
+  }
   for (const geo of figureGeos) geo.dispose();
 
   // Route: the white keeps the figure and strands, the black the marks under the disc; the pink strand in pink on both.
@@ -567,6 +622,11 @@ function draw(ctx: SketchContext): Part[] {
     }
     art.black.push({ id: 'cosmos-silver', pen: 'silver', paths: stars });
     if (bright.length) art.black.push({ id: 'cosmos-pink', pen: 'fluoro-pink', paths: bright });
+  }
+  // The frames, on the white: the head's in carbon, the portal's in ultramarine, giving way where the strands cross it.
+  if (frames.length) {
+    const crossing = glyphMask([...strands.map(st => st.path), ...(reformed?.dashes ?? []).map(st => st.path)], 0.7, 6, PAGE);
+    for (const f of frames) art.white.push({ id: `emphasis-${f.pen}`, pen: f.pen, paths: frameRings(f.ring, f.lines).flatMap(r => clipToRect(r, ART)).flatMap(r => keepAlong(r, q => !crossing(q), 0.1)) });
   }
   return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
