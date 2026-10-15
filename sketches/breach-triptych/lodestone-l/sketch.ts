@@ -242,7 +242,7 @@ function draw(ctx: SketchContext): Part[] {
   // Emphasis (R9): the bar's window framed twice on the black kept round it (so the black's marks stop short of the
   // frame), the shirt's (or the tie's) windows twice, and the bust's silhouette doubled outward.
   const emph = emphasisOn(ctx);
-  const onBar = inQuad(bar.quad, emph ? frameReach(2) : 1.4);
+  const onBar = inQuad(bar.quad, emph && barWindows(ctx) ? frameReach(2) : 1.4);
   const front = suitFrontOutlines(body.trunk, view);
   const suitRings = emph && cutSchemeOf(ctx) === 'tie' ? (ctx.params.lCut !== 'tie' ? front.shirt : [front.tie]).map(r => clipToTrim(r)) : [];
   const suitBands = suitRings.map(r => { const near = inGrown(r, frameReach(2)); return (p: Point) => near(p) && !insideRing(r, p); });
