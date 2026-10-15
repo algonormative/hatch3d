@@ -19,7 +19,7 @@ import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketc
 
 const paper = (id: keyof typeof PAPERS) => ({ id: PAPERS[id].id, color: PAPERS[id].color });
 /**
- * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the two Signo broads and the Moonlight 10s, the
+ * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the two Signo 1.0mm pens and the Moonlight 10s, the
  * first six (the triptych's) swatched in window G1 and the rest below the black's font test; the last five are on trial.
  */
 const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];

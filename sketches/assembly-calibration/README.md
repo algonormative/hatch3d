@@ -36,7 +36,7 @@ One tabloid page (279.4 x 431.8 mm, margin 11 mm, so the finished trim is about 
 
 The `black`, `gold` and `white` plies are separate pieces of `stack.json` (`assembly: "calibration"`, the same seed). The stack allows trial inks (`defaults.trialInks`): the non-fluorescent Moonlights on the black, gold, ultramarine and violet on the gold-yellow, and silver, fluoro pink and fluoro orange on the white.
 
-Since R12 the sheets carry the pens Nick has (each ink's `pen` and `nominal` in `src/sketch/materials.ts`: Pigma Microns on white and gold-yellow, Signo broads and Gelly Roll Moonlight 10s on black), and every test is labelled in its own ink with the pen's name and nominal line width (`penLabel`), so a photo of a sheet says which pen drew each line. Each sheet's notes list its pens in plot order. The page is fixed (the layout is in page millimetres); `date` is the only control besides the ply.
+Since R12 the sheets carry the pens Nick has (each ink's `pen` and `nominal` in `src/sketch/materials.ts`: Pigma Microns on white and gold-yellow, Signo 1.0mm gel pens and Gelly Roll Moonlight 10s on black), and every test is labelled in its own ink with the pen's name and nominal line width (`penLabel`), so a photo of a sheet says which pen drew each line. Each sheet's notes list its pens in plot order. The page is fixed (the layout is in page millimetres); `date` is the only control besides the ply.
 
 ## Verniers
 

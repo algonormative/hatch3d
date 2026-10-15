@@ -85,7 +85,7 @@ describe('assembly calibration: swatches', () => {
   it('label every ink with its physical pen and nominal width (R12), so a photo says which pen drew what', () => {
     expect(penLabel('carbon', 'white')).toBe('Micron 01 black 0.25mm');
     expect(penLabel('ultramarine', 'gold-yellow')).toBe('Micron 05 blue 0.45mm (trial)');
-    expect(penLabel('silver', 'black')).toBe('Signo broad silver 0.6mm');
+    expect(penLabel('silver', 'black')).toBe('Signo 1.0mm silver'); // sold as 1.0 mm: no line width
     expect(penLabel('gel-teal', 'black')).toBe('Moonlight 10 teal 0.5mm (trial)');
     expect(penLabel('vermilion', 'white')).toBe('vermilion'); // no pen yet: the id
     // Every ink on the sheets names its pen; none falls back to its id.

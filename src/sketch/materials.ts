@@ -23,10 +23,10 @@ const PLACEHOLDER = 'width is a placeholder until the calibration plot';
 type GelOptions = { reads?: string[]; trial?: string[]; nominal?: number };
 const gel = (id: string, label: string, color: string, pen: string, { reads = ['black'], trial, nominal }: GelOptions = {}): Ink =>
   ({ id, label, color, width: 0.5, reads, ...(trial ? { trial } : {}), note: PLACEHOLDER, pen, ...(nominal ? { nominal } : {}) });
-/** Sakura Gelly Roll Moonlight 10: a 1.0 mm ball, a 0.5 mm line. Uni-ball Signo broad (UM-153): a 1.0 mm tip, about a 0.6 mm line. */
+/** Sakura Gelly Roll Moonlight 10: a 1.0 mm ball, a 0.5 mm line. Uni-ball Signo (UM-153): sold as 1.0 mm, its line narrower; the calibration measures it. */
 const moonlight = (id: string, label: string, color: string, colour: string, options: GelOptions = {}): Ink =>
   gel(id, label, color, `Moonlight 10 ${colour}`, { nominal: 0.5, ...options });
-const signo = (id: string, label: string, color: string, colour: string, trial: string[]): Ink => gel(id, label, color, `Signo broad ${colour}`, { trial, nominal: 0.6 });
+const signo = (id: string, label: string, color: string, colour: string, trial: string[]): Ink => gel(id, label, color, `Signo 1.0mm ${colour}`, { trial });
 
 export const INKS: Record<string, Ink> = {
   gold: signo('gold', 'Gold gel', '#c9a54a', 'gold', ['gold-yellow']),
