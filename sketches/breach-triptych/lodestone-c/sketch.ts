@@ -15,12 +15,15 @@ import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, fewerRings, lintelBar, lintelFootprint, pensOf } from '../world.ts';
-import { LODESTONE_CONTROLS, clipTrim, fieldLines, filings, magnet, slabHand, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, clipTrim, crossingY, fieldLines, filings, lineToNorth, magnet, ribbonPath, slabHand, wordAlong } from '../lodestone-world.ts';
+import { headCoil } from '../../kit/agent.ts';
 
 /**
  * Lodestone, panel C: the magnet. L's censor bar, cut from the bust's face, is glued here level on a full gold-yellow
  * sheet, at the height of the hole it left. It is a magnet: black field lines loop from pole to pole on the gold, iron
- * filings packed at the poles and thinning out; a hand in a pinstriped cuff, coming in from the top, has just let it go.
+ * filings packed at the poles and thinning out; a hand in a pinstriped cuff comes in from the top. With `handPull` it
+ * grips and draws a bundle of lines up into its fist, a small south pole superposed on the bar's field; in R1 it had
+ * just let the bar go. With `ribbonField` the field line that L's ribbon becomes runs on here into the north pole.
  * Two plies, bottom to top: the gold sheet, and the bar as an onlay.
  */
 
@@ -47,8 +50,10 @@ const WORDS: { word: string; loop: number; x: number }[] = [{ word: 'falls', loo
 type Tagged = Stroke & { slack: number };
 
 function draw(ctx: SketchContext): Part[] {
-  const bar = lintelBar(ctx, bustFrame(ctx));
-  const m = magnet(bar);
+  const frame = bustFrame(ctx);
+  const bar = lintelBar(ctx, frame);
+  const m = magnet(bar, ctx);
+  const pulling = m.poles.length > 0;
   const buckets = new PartBuckets(0.3);
 
   // The hand: a near-orthographic camera, page millimetres scaled MM_PER_UNIT to the world at z = 0.
@@ -60,16 +65,27 @@ function draw(ctx: SketchContext): Part[] {
   view.updateProjectionMatrix();
   const world = (p: Point, z = 0) => new THREE.Vector3((p.x - PAGE.width / 2) / MM_PER_UNIT, -(p.y - PAGE.height / 2) / MM_PER_UNIT, z);
   const eye = view.position.clone(), forward = new THREE.Vector3(0, 0, -1);
-  // The hand hangs over the bar, fingers down and a little toward us, open: it has just let go.
   const handX = m.rect.x0 + (m.rect.x1 - m.rect.x0) * n(ctx, 'handX', 0.68, 0, 1);
-  // Turned toward profile: the back of the hand to the upper right, its fingers relaxing open as they let go.
-  const along = new THREE.Vector3(-0.32, -1, 0.18).normalize(), across = new THREE.Vector3(0.5, -0.12, 1).normalize();
-  const size = 4.4;
-  const build = (wrist: THREE.Vector3) => slabHand({ wrist, along, across, size, curl: 0.34, spread: 0.1 });
-  let wrist = world({ x: handX, y: 48 });
-  for (let it = 0; it < 4; it++) {
-    const low = Math.max(...build(wrist).flatMap(sl => corners(sl)).map(p => pageOf(view, p, PAGE).y));
-    wrist = wrist.clone().add(new THREE.Vector3(0, -(m.rect.y0 - 5 - low) / MM_PER_UNIT, 0));
+  // R1 (no pull): the hand hangs over the bar, fingers down and a little toward us, relaxing open as it lets go, turned
+  // toward profile, the back of the hand to the upper right. Pulling: it hangs straighter and closes into a fist round
+  // the lines it has gathered, the fist's lowest point just under the pole the lines run into.
+  const along = pulling ? new THREE.Vector3(-0.12, -1, 0.22).normalize() : new THREE.Vector3(-0.32, -1, 0.18).normalize();
+  const across = new THREE.Vector3(0.5, -0.12, 1).normalize();
+  const size = pulling ? 5.4 : 4.4;
+  const build = (wrist: THREE.Vector3) => slabHand({ wrist, along, across, size, curl: pulling ? 1.2 : 0.34, spread: pulling ? 0.02 : 0.1 });
+  const grip = m.poles[0];
+  let wrist = world({ x: pulling ? grip.x : handX, y: 48 });
+  for (let it = 0; it < 6; it++) {
+    const slabs = build(wrist);
+    if (pulling) {
+      // The fist's inside (the middle of its curled fingers, slabs 1 to 12) on the pole: the lines end within the fist.
+      const fingers = slabs.slice(1, 13).map(sl => pageOf(view, new THREE.Vector3(sl.x, sl.y, sl.z), PAGE));
+      const c = { x: fingers.reduce((t, p) => t + p.x, 0) / fingers.length, y: fingers.reduce((t, p) => t + p.y, 0) / fingers.length };
+      wrist = wrist.clone().add(new THREE.Vector3((grip.x - c.x) / MM_PER_UNIT, -(grip.y - c.y) / MM_PER_UNIT, 0));
+    } else {
+      const low = Math.max(...slabs.flatMap(sl => corners(sl)).map(p => pageOf(view, p, PAGE).y));
+      wrist = wrist.clone().add(new THREE.Vector3(0, -(m.rect.y0 - 5 - low) / MM_PER_UNIT, 0));
+    }
   }
   const hand = build(wrist);
   // The sleeve and the shirt cuff, out of the top of the sheet.
@@ -113,6 +129,11 @@ function draw(ctx: SketchContext): Part[] {
   const clear = glyphMask(words, 0.8, 6, PAGE);
   for (const line of clipTrim(lines)) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
   for (const dash of filings(ctx, m, Math.round(1000 * n(ctx, 'filings', 9, 0, 30)), p => handArea(p) || clear(p))) buckets.add('filing-carbon', dash, true);
+  // L's ribbon, pulled along the field, leaves L's right edge on a field line: here that line goes on into the north pole.
+  if (ctx.params.ribbonField !== false) {
+    const y = crossingY(ribbonPath(pageOf(frame.view, headCoil(frame.fig.head).at(-1)!, PAGE), m), TRIM.x1);
+    if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0, y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
+  }
 
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   return renderPly(spec, ctx, pens, { cuts: { bar: [lintelFootprint(bar)] }, art });

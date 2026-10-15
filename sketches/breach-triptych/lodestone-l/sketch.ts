@@ -20,7 +20,7 @@ import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tu
 import {
   ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { LODESTONE_CONTROLS } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, magnet, ribbonPath, ribbonPitch } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -186,8 +186,12 @@ function draw(ctx: SketchContext): Part[] {
   // front of everything; all else gives way to it.
   let threadArea: (p: Point) => boolean = () => false;
   {
-    const { l } = threadPaths(frame, bar);
-    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0 });
+    // With `ribbonField` the magnet in C pulls the strand along its field toward the north pole, and its twist
+    // tightens where the field is strong; else R1's path to the right edge.
+    const m = magnet(bar, ctx);
+    const pulled = ctx.params.ribbonField !== false;
+    const l = pulled ? { path: ribbonPath(pageOf(view, headCoil(head).at(-1)!, PAGE), m), phase0: 0 } : threadPaths(frame, bar).l;
+    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: ribbonPitch(m, bar) } : {}) });
     // Never on the bar: the bar is cut out and glued on R, and must carry only its own hatch.
     for (const st of ribbon.strokes) for (const inside of clipToRect(st.points, ART)) for (const piece of keepAlong(inside, p => !onBar(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
     threadArea = glyphMask(ribbon.mask, 0.8, 6, PAGE);

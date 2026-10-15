@@ -16,17 +16,19 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import type { JointAngles, JointName, Proportions } from '../../kit/mannequin/skeleton.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
-import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
+import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, lintelBar, pensOf, smoothPath } from '../world.ts';
-import { LODESTONE_CONTROLS, fieldLines, magnet, orientedSlab, rightExits, slabHand, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, fieldLines, fieldPull, magnet, orientedSlab, rightExits, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
  * three-quarters turned toward the centre panel. The magnet's field lines come in at R's left edge at the heights they
  * left C's right edge; the figure gathers them in its hands and leads them down into a black disc on the floor, a
  * curved cut in the white sheet over a black one, so the alignment doesn't lock everything. One strand is fluorescent
- * pink: the triptych's one shock. Two plies, bottom to top: black, white.
+ * pink: the triptych's one shock. Two plies, bottom to top: black, white. With `figureField` the field reaches R too and
+ * pulls at the figure toward C: the head leans and unwinds, the torso with it, the strands bow toward C as they fall,
+ * while the knees hold their ground. `figure` = `clean` draws a straighter figure with a stacked-ring head instead.
  */
 
 const plies = [
@@ -63,6 +65,26 @@ const KNEEL: Partial<Record<JointName, JointAngles>> = {
 const BROAD: Proportions = { shoulderX: 1.22, hipX: 1.1 };
 /** World units per canon unit: the suit's stripes land about 1.7 mm apart on the sheet. */
 const K = 4;
+/** How far the field pulls the crown of the figure toward C (mm; the head half again), and how far it bows the falling strands. */
+const PULL_MM = 20, BOW_MM = 16;
+
+/**
+ * The clean figure's head: a stack of five flat ring bands round the head's axis, an egg in profile, each a short smooth
+ * tube tipped a little off the last, like a coiled spring of flat band.
+ */
+function ringHead(h: AgentHead): Tube[] {
+  const bands: Tube[] = [];
+  const N = 5, bh = 0.24 * h.r, gap = 0.1 * h.r;
+  for (let i = 0; i < N; i++) {
+    const along = (-0.72 + i * (bh + gap) / h.r) * h.r + bh / 2;
+    const egg = Math.sqrt(Math.max(0.12, 1 - (along / (1.15 * h.r)) ** 2)) * (along > 0 ? 1 : 0.9 + 0.1 * (1 + along / h.r));
+    const R = 0.92 * egg * h.r;
+    const a = h.axis.clone().applyAxisAngle(h.side, (i % 2 ? 1 : -1) * 0.07).normalize();
+    const c = h.centre.clone().addScaledVector(h.axis, along);
+    bands.push(new Tube(`ring${i}`, [c.clone().addScaledVector(a, -bh / 2), c.clone().addScaledVector(a, bh / 2)], [[0, R, R], [1, R, R]], h.face, 1, [0, 0]));
+  }
+  return bands;
+}
 
 type Tagged = Stroke & { slack: number };
 
@@ -101,11 +123,17 @@ function clipPolygon(poly: Point[], r: { x0: number; x1: number; y0: number; y1:
 
 function draw(ctx: SketchContext): Part[] {
   const bar = lintelBar(ctx, bustFrame(ctx));
-  const exits = rightExits(fieldLines(magnet(bar), Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
+  // One field across the triptych: C's magnet (with the gripping hand's pole when it pulls), whose lines leave C's right
+  // edge at the heights R's strands come in, and whose field reaches R and pulls at the figure.
+  const m = magnet(bar, ctx);
+  const exits = rightExits(fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
+  const clean = ctx.params.figure === 'clean';
+  const pulled = ctx.params.figureField !== false;
 
   // The figure, kneeling at the origin, turned toward the viewer's left (the centre panel).
   const yaw = -THREE.MathUtils.degToRad(n(ctx, 'kneelTurn', 50, 0, 80));
-  const fig = agentFigure({ height: 24 * K, anchor: new THREE.Vector3(), yaw, base: 'kneel', pose: KNEEL, proportions: BROAD, build: 1.25, facets: 6, bow: 0.015, hem: HEM, lift: 0.5 * K });
+  // `clean`: straight faceted limbs (no bow) built like the bust, and a stacked-ring head; else R1's flowing figure.
+  const fig = agentFigure({ height: 24 * K, anchor: new THREE.Vector3(), yaw, base: 'kneel', pose: KNEEL, proportions: BROAD, build: clean ? 1.3 : 1.25, facets: 6, bow: clean ? 0 : 0.015, hem: HEM, lift: 0.5 * K });
   const { body, head, stops, skeleton: s } = fig;
   const arms = body.limbs.filter(t => t.id.startsWith('arm')), legs = body.limbs.filter(t => t.id.startsWith('leg'));
   // The kit stops a trouser at a level hem above the ankle, which a kneeling leg's shin, lying along the floor, never
@@ -165,7 +193,10 @@ function draw(ctx: SketchContext): Part[] {
 
   // The tone: the light is in the gathered strands at the hands.
   const aura = toneField(ctx, gather.clone().divideScalar(K), { noiseKey: 'kneel-aura', reach: 5 });
-  const env: ToneEnv = { density: n(ctx, 'density', 0.45, 0, 1), dark: (p, nrm) => 0.05 + 0.5 * aura(p.clone().divideScalar(K), nrm), screen: p => pageOf(view, p, PAGE) };
+  // Clean: one even tone (between the second and third stripe tiers), so the stripes run whole, never in patches.
+  const env: ToneEnv = clean
+    ? { density: 0.8 * n(ctx, 'density', 0.45, 0, 1), dark: () => 0.5, screen: p => pageOf(view, p, PAGE) }
+    : { density: n(ctx, 'density', 0.45, 0, 1), dark: (p, nrm) => 0.05 + 0.5 * aura(p.clone().divideScalar(K), nrm), screen: p => pageOf(view, p, PAGE) };
   const strokes: Tagged[] = [];
   const slack = 0.15 * K;
   const cloth = (list: ClothStroke[]) => { for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack }); };
@@ -179,9 +210,20 @@ function draw(ctx: SketchContext): Part[] {
   // Hands hatched in the raking light; shoes as outlines (the planted one stands on the disc, where a hatched block
   // would read as a slab of silver).
   for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)))) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
-  const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
-    { radius: 0.12 * K, width: 0.6 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.4, interruption: 0.1 });
-  for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });
+  // The head: R1's helix wound along the coil, or (clean) a stack of flat ring bands like a coiled spring.
+  const headGeos: THREE.BufferGeometry[] = [];
+  if (clean) {
+    for (const band of ringHead(head)) {
+      cloth(pinstripeTube(band, env, { seams: [], hems: [0.05, 0.95] }, LOOK).map(st => ({ ...st, group: 'helix' })));
+      cloth(silhouettes(band, { forward, eye }, { ink: 'carbon', group: 'helix' }));
+      headGeos.push(band.mesh(6, 72));
+    }
+  } else {
+    const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
+      { radius: 0.12 * K, width: 0.6 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.4, interruption: 0.1 });
+    for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });
+    headGeos.push(...helix.meshes, skull(head));
+  }
 
   // The floor disc: a circle on the ground the figure kneels on, reaching forward under its hands, as a curved cut in
   // the white.
@@ -193,13 +235,23 @@ function draw(ctx: SketchContext): Part[] {
   const disc = clipPolygon(ring(radius), TRIM);
   const discCentre = pageOf(view, centre, PAGE);
 
-  // The strands: in at the left edge at the heights the field left C, gathered at the hands, led down into the disc.
-  const g = pageOf(view, gather, PAGE);
+  // The field's pull on the figure (`figureField`): every mark moved along the field toward C, nothing at the ground and
+  // most at the crown of the head, so the head leans and the torso with it while the knees hold. The head's own marks
+  // are pulled half again as far, so it unwinds toward C.
+  const groundY = discCentre.y, crownY = Math.min(...headCoil(head).map(p => pageOf(view, p, PAGE).y));
+  const lift = (p: Point) => Math.max(0, Math.min(1, (groundY - p.y) / (groundY - crownY))) ** 1.7;
+  const pullBody = pulled ? fieldPull(m, PULL_MM, lift) : (p: Point) => p;
+  const pullHead = pulled ? fieldPull(m, 1.5 * PULL_MM, lift) : (p: Point) => p;
+
+  // The strands: in at the left edge at the heights the field left C, gathered at the hands (where the pull has moved
+  // them), led down into the disc, and with the pull, bowed toward C as they fall.
+  const g = pullBody(pageOf(view, gather, PAGE));
+  const bow = pulled ? -BOW_MM : 0;
   const pink = Math.floor(exits.length / 2);
   const strands = exits.map((y, k) => {
     const t = exits.length > 1 ? k / (exits.length - 1) - 0.5 : 0;
     const path = smoothPath([{ x: TRIM.x0 - 6, y }, { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
-      { x: g.x - 10 + 14 * t, y: (g.y + discCentre.y) / 2 }, { x: discCentre.x + 22 * t, y: discCentre.y + 3 * Math.abs(t) }]);
+      { x: g.x - 10 + 14 * t + bow, y: (g.y + discCentre.y) / 2 }, { x: discCentre.x + 22 * t, y: discCentre.y + 3 * Math.abs(t) }]);
     return { path, ink: (k === pink ? 'vermilion' : 'ultramarine') as Ink };
   });
   const strandArea = glyphMask(strands.map(st => st.path), 0.9, 6, PAGE);
@@ -208,7 +260,7 @@ function draw(ctx: SketchContext): Part[] {
   const word = wordAlong('line', pinkPath, 0.74 * 0.4 * pinkPath.length, 2.4, 2.4);
   const clear = glyphMask(word, 0.8, 6, PAGE);
 
-  const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...cut.flatMap(cutMeshes), ...[...hands, ...shoes].map(slabGeometry), ...helix.meshes, skull(head)];
+  const figureGeos = [body.trunk.mesh(192, body.trunk.facets * 4), ...cut.flatMap(cutMeshes), ...[...hands, ...shoes].map(slabGeometry), ...headGeos];
   fitDepthRange(view, figureGeos, 0.1, { exact: true });
   const depth = renderDepthBufferCPU(figureGeos, view, W, H);
   const buckets = new PartBuckets(0.4);
@@ -220,7 +272,7 @@ function draw(ctx: SketchContext): Part[] {
     if (!chunk.length) continue;
     projectStrokes(chunk, { view, depth, width: W, height: H, bias: hiddenBias(view, slack, dist(chunk[chunk.length >> 1])) }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
-        for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
+        for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y).map(st.group === 'helix' ? pullHead : pullBody), ART)) {
           for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) {
             buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, piece, false);
             // Where the figure stands on the disc, the black shows: the same mark there in silver.

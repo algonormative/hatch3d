@@ -4,6 +4,7 @@ import { strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
 import { CONTROLS, TRIM, lintelRect, type LintelBar } from './world.ts';
+import { n } from '../kit/params.ts';
 
 /**
  * The Breach triptych "Lodestone": the world its three panels share, on top of Lintel's (`world.ts`: the bust, its
@@ -22,6 +23,12 @@ export const LODESTONE_CONTROLS: Control[] = [
   { type: 'slider', id: 'fieldLines', label: 'Field lines leaving each pole', default: 26, min: 8, max: 48, step: 1, group: 'Magnet' },
   { type: 'slider', id: 'filings', label: 'Filings (candidates, thousands)', default: 9, min: 0, max: 30, step: 0.5, group: 'Magnet' },
   { type: 'slider', id: 'handX', label: 'Hand: where it hangs over the bar (0 its left end, 1 its right)', default: 0.68, min: 0, max: 1, step: 0.01, group: 'Magnet' },
+  { type: 'toggle', id: 'handPull', label: 'The hand grips and pulls the field lines (a small opposite pole); else it has let go (R1)', default: true, group: 'Magnet' },
+  { type: 'slider', id: 'pullStrength', label: 'The hand\'s pole, against the bar\'s', default: 0.3, min: 0.05, max: 0.8, step: 0.01, group: 'Magnet' },
+  { type: 'toggle', id: 'ribbonField', label: 'L\'s ribbon follows the field toward the near pole (else R1\'s path)', default: true, group: 'Magnet' },
+  { type: 'toggle', id: 'figureField', label: 'R\'s figure pulled by the field toward the centre (else R1)', default: true, group: 'Ground' },
+  { type: 'select', id: 'figure', label: 'R\'s figure', default: 'r1', options: ['r1', 'clean'],
+    optionLabels: { r1: 'R1: the kit agent, flowing limbs, helix-coil head', clean: 'Clean: straight faceted limbs, stacked-ring head' }, group: 'Ground' },
   { type: 'slider', id: 'kneelTurn', label: 'Kneeling figure: turn toward the centre', default: 50, min: 0, max: 80, step: 1, units: '°', group: 'Ground' },
   { type: 'toggle', id: 'groundRings', label: 'Ground rings in silver on the black disc (else bare)', default: true, group: 'Ground' },
 ];
@@ -31,10 +38,17 @@ export const LODESTONE_CONTROLS: Control[] = [
 /** The bar as C carries it: level, centred across the sheet, at the eye height (Lintel's lintel placement). */
 export const magnetRect = (bar: LintelBar) => lintelRect(bar);
 
-export interface Magnet { rect: { x0: number; x1: number; y0: number; y1: number }; charges: { x: number; y: number; q: number }[] }
+/**
+ * A magnet in C's page frame: its bar, its charges, and `poles`, small poles off the bar (the gripping hand), each a
+ * charge `q` at a point that field lines end in within `r` mm.
+ */
+export interface Magnet { rect: { x0: number; x1: number; y0: number; y1: number }; charges: { x: number; y: number; q: number }[]; poles: { x: number; y: number; q: number; r: number }[] }
 
-/** The bar magnetised along its length: a sheet of charge on each end face, north (+) on the left. */
-export function magnet(bar: LintelBar): Magnet {
+/**
+ * The bar magnetised along its length: a sheet of charge on each end face, north (+) on the left. With `ctx` and the
+ * `handPull` control on, the gripping hand is a small south pole (`pullStrength` of the bar's) at `gripPoint`.
+ */
+export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
   const rect = magnetRect(bar);
   const charges: Magnet['charges'] = [];
   const K = 9, inset = 0.04 * (rect.x1 - rect.x0);
@@ -42,7 +56,89 @@ export function magnet(bar: LintelBar): Magnet {
     const y = rect.y0 + (rect.y1 - rect.y0) * (i + 0.5) / K;
     charges.push({ x: rect.x0 + inset, y, q: 1 / K }, { x: rect.x1 - inset, y, q: -1 / K });
   }
-  return { rect, charges };
+  const poles: Magnet['poles'] = [];
+  if (ctx && ctx.params.handPull !== false) {
+    // The hand is a small magnet of its own: its south pole in the fist, its north up the arm, off the top of the sheet,
+    // so it pulls lines into the grip without turning the whole far field (a lone pole would draw lines in from all round).
+    const g = gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
+    poles.push({ ...g, q: -q, r: GRIP_R }, { x: g.x + ARM.x, y: g.y + ARM.y, q, r: GRIP_R });
+    for (const pole of poles) charges.push({ x: pole.x, y: pole.y, q: pole.q });
+  }
+  return { rect, charges, poles };
+}
+
+/** How far above the bar the gripping hand's pole sits (mm), and the radius field lines end in round it. */
+const GRIP_RISE = 30, GRIP_R = 3;
+/** From the fist's pole to the hand's other pole, up the arm off the top of the sheet (mm). */
+const ARM = { x: 12, y: -115 };
+/** Where the gripping hand closes: over the bar at `handX` of its length, GRIP_RISE above it. */
+export function gripPoint(ctx: SketchContext, rect: Magnet['rect']): Point {
+  return { x: rect.x0 + (rect.x1 - rect.x0) * n(ctx, 'handX', 0.68, 0, 1), y: rect.y0 - GRIP_RISE };
+}
+
+// ── One field across the triptych ────────────────────────────────────
+
+/**
+ * The three panels side by side in one frame: C's page frame, L's shifted one trimmed panel to the left and R's one to
+ * the right, the trims meeting (no hanging gap, as Lintel's thread heights: what leaves one panel's edge enters the
+ * next at the same height). `toC` takes a panel's page point into C's frame, where the magnet is.
+ */
+export const HANG_GAP = 0;
+const PANEL_W = TRIM.x1 - TRIM.x0;
+export type Panel = 'l' | 'c' | 'r';
+export const toC = (panel: Panel, p: Point): Point => ({ x: p.x + (panel === 'l' ? -1 : panel === 'r' ? 1 : 0) * (PANEL_W + HANG_GAP), y: p.y });
+/** The field at a page point of a panel. */
+export const fieldIn = (m: Magnet, panel: Panel, p: Point): Point => fieldAt(m, toC(panel, p));
+
+/**
+ * L's ribbon pulled by the magnet: from the crown of the bust's coil it sets out up and to the right (R1's way), and the
+ * field takes it over within about `pull` mm, turning it along the field line toward the north pole, the bar's near end
+ * in C, until it leaves L's right edge. Its twist tightens where the field is strong (`ribbonPitch`).
+ */
+export function ribbonPath(crown: Point, m: Magnet, pull = 90): Point[] {
+  const d0 = { x: 22 / Math.hypot(22, 14), y: -14 / Math.hypot(22, 14) };
+  const pts: Point[] = [crown];
+  let p = crown;
+  for (let s = 0; s < 900 && p.x < TRIM.x1 + 6 && p.y > TRIM.y0 - 20 && p.y < TRIM.y1 + 20; s += 0.5) {
+    const B = fieldIn(m, 'l', p), l = Math.hypot(B.x, B.y) || 1;
+    const w = 1 - Math.exp(-s / pull);
+    const dx = d0.x * (1 - w) - (B.x / l) * w, dy = d0.y * (1 - w) - (B.y / l) * w, dl = Math.hypot(dx, dy) || 1;
+    p = { x: p.x + 0.5 * dx / dl, y: p.y + 0.5 * dy / dl };
+    pts.push(p);
+  }
+  return pts;
+}
+
+/** The twist's pitch along L's ribbon, as a multiple of the base: shorter where the field is strong (against its strength at L's right edge, at the bar's height). */
+export function ribbonPitch(m: Magnet, bar: LintelBar): (p: Point) => number {
+  const ref = Math.hypot(...Object.values(fieldIn(m, 'l', { x: TRIM.x1, y: (m.rect.y0 + m.rect.y1) / 2 })) as [number, number]);
+  void bar;
+  return p => Math.max(0.45, Math.min(1.6, (Math.hypot(...Object.values(fieldIn(m, 'l', p)) as [number, number]) / ref) ** -0.4));
+}
+
+/** Where a page path crosses x = `x` (its first crossing), or undefined. */
+export function crossingY(path: Point[], x: number): number | undefined {
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    if ((a.x - x) * (b.x - x) <= 0 && a.x !== b.x) return a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+  }
+  return undefined;
+}
+
+/** The field line through a point of C, traced against the field into the north pole (the line L's ribbon becomes in C). */
+export const lineToNorth = (m: Magnet, p: Point): Point[] => follow(m, p, -1).points;
+
+/**
+ * A pull on R's figure toward C: a page point moved along the field there (into the bar's south end, toward the
+ * centre panel) by up to `amount` mm, scaled by `weight` (0 at the ground, 1 at the crown of the head).
+ */
+export function fieldPull(m: Magnet, amount: number, weight: (p: Point) => number): (p: Point) => Point {
+  return p => {
+    const w = weight(p);
+    if (w <= 0) return p;
+    const B = fieldIn(m, 'r', p), l = Math.hypot(B.x, B.y) || 1;
+    return { x: p.x + amount * w * B.x / l, y: p.y + amount * w * B.y / l };
+  };
 }
 
 /** The field at a page point (a 1/r² law, as of a three-dimensional bar seen in its plane). */
@@ -62,7 +158,7 @@ const ROAM = 90;
 const UNDER = 2;
 
 /** One field line from `start`, followed along the field (`dir` 1) or against it (-1) until it reaches a pole, enters the bar or leaves the roam. */
-function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Point[]; ended: 'pole' | 'away' } {
+function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Point[]; ended: 'pole' | 'hand' | 'away' } {
   const at = (p: Point) => { const f = fieldAt(m, p), l = Math.hypot(f.x, f.y) || 1; return { x: dir * f.x / l, y: dir * f.y / l }; };
   const pts: Point[] = [start];
   let p = start;
@@ -72,6 +168,7 @@ function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Poi
     pts.push(p);
     // Into the bar by the assembly's bleed, so a bar glued a little off never shows a gap at the pole.
     if (inRect(m.rect, p, -UNDER)) return { points: pts, ended: 'pole' };
+    if (m.poles.some(q => Math.hypot(p.x - q.x, p.y - q.y) < q.r)) return { points: pts, ended: 'hand' };
     if (p.x < TRIM.x0 - ROAM || p.x > TRIM.x1 + ROAM || p.y < TRIM.y0 - ROAM || p.y > TRIM.y1 + ROAM) return { points: pts, ended: 'away' };
   }
   return { points: pts, ended: 'away' };
@@ -85,30 +182,60 @@ function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Poi
  */
 export function fieldLines(m: Magnet, count: number): Point[][] {
   const { rect } = m, L = rect.x1 - rect.x0, mid = (rect.x0 + rect.x1) / 2, g = 1.5;
-  // The contour: along the top from a third of the way in to the end, down the end face, back along the bottom.
-  const corners: Point[] = [{ x: rect.x0 + 0.34 * L, y: rect.y0 - g }, { x: rect.x0 - g, y: rect.y0 - g }, { x: rect.x0 - g, y: rect.y1 + g }, { x: rect.x0 + 0.34 * L, y: rect.y1 + g }];
-  const samples: { p: Point; flux: number }[] = [];
-  for (let i = 0; i < 3; i++) {
-    const a = corners[i], b = corners[i + 1], len = Math.hypot(b.x - a.x, b.y - a.y), N = Math.ceil(len / 0.25);
-    const nx = (b.y - a.y) / len, ny = -(b.x - a.x) / len; // outward: the contour runs counter-clockwise round the end on the page
-    for (let k = 0; k < N; k++) {
-      const p = { x: a.x + (b.x - a.x) * (k + 0.5) / N, y: a.y + (b.y - a.y) * (k + 0.5) / N };
-      const f = fieldAt(m, p);
-      samples.push({ p, flux: Math.max(0, -(f.x * nx + f.y * ny)) * len / N });
+  // The contour round one end (`side` -1 the north end on the left, 1 the south on the right): along the top from a
+  // third of the way in to the end, down the end face, back along the bottom.
+  const contour = (side: -1 | 1): Point[] => {
+    const end = side < 0 ? rect.x0 - g : rect.x1 + g, inner = side < 0 ? rect.x0 + 0.34 * L : rect.x1 - 0.34 * L;
+    return [{ x: inner, y: rect.y0 - g }, { x: end, y: rect.y0 - g }, { x: end, y: rect.y1 + g }, { x: inner, y: rect.y1 + g }];
+  };
+  /** Points along a polyline, each with the flux crossing its share of it against its normal (`sign` -1) or along it (1). */
+  const fluxAlong = (corners: Point[], sign: 1 | -1, closed = false): { p: Point; flux: number }[] => {
+    const out: { p: Point; flux: number }[] = [];
+    const segs = closed ? corners.length : corners.length - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = corners[i], b = corners[(i + 1) % corners.length], len = Math.hypot(b.x - a.x, b.y - a.y), N = Math.ceil(len / 0.25);
+      const nx = (b.y - a.y) / len, ny = -(b.x - a.x) / len;
+      for (let k = 0; k < N; k++) {
+        const p = { x: a.x + (b.x - a.x) * (k + 0.5) / N, y: a.y + (b.y - a.y) * (k + 0.5) / N };
+        const f = fieldAt(m, p);
+        out.push({ p, flux: Math.max(0, sign * (f.x * nx + f.y * ny)) * len / N });
+      }
     }
-  }
-  const total = samples.reduce((t, q) => t + q.flux, 0);
+    return out;
+  };
+  /** Seeds at equal steps of flux along the samples, each the middle of its step: the k-th where the flux passes `at(k)`. */
+  const seeds = (samples: { p: Point; flux: number }[], at: (k: number) => number): Point[] => {
+    const out: Point[] = [];
+    let acc = 0, k = 0;
+    for (const q of samples) { acc += q.flux; while (acc >= at(k)) { out.push(q.p); k++; } }
+    return out;
+  };
+  const north = fluxAlong(contour(-1), -1);
+  const total = north.reduce((t, q) => t + q.flux, 0), perLine = total / count;
+  const step = (k: number) => k < count ? (k + 0.5) / count * total : Infinity;
   const out: Point[][] = [];
-  let acc = 0, next = 0;
-  for (const q of samples) {
-    acc += q.flux;
-    while (acc >= (next + 0.5) / count * total && next < count) {
-      next++;
-      const line = follow(m, q.p, 1);
-      const back = follow(m, q.p, -1);
-      out.push([...back.points.reverse(), ...line.points.slice(1)]);
-      if (line.ended === 'away') out.push(line.points.map(p => ({ x: 2 * mid - p.x, y: p.y })));
+  const both = (p: Point) => { const fwd = follow(m, p, 1), back = follow(m, p, -1); return { line: [...back.points.reverse(), ...fwd.points.slice(1)], fwd, back }; };
+  if (m.poles.length === 0) {
+    // R1: one seed per flux step round the north end; a line that leaves the sheet gets its mirror twin from the south.
+    for (const p of seeds(north, step)) {
+      const { line, fwd } = both(p);
+      out.push(line);
+      if (fwd.ended === 'away') out.push(fwd.points.map(q => ({ x: 2 * mid - q.x, y: q.y })));
     }
+    return out;
+  }
+  // With poles off the bar the picture is no longer symmetric: every line from the north end is traced, then the lines
+  // that come into the south end and into the fist from elsewhere (far away, or the hand's own north up the arm),
+  // seeded at the same flux per line and traced back.
+  for (const p of seeds(north, step)) out.push(both(p).line);
+  // A line arriving at the south end or the fist is drawn unless it came from the bar's north end (drawn already).
+  const arrivals = (samples: { p: Point; flux: number }[]) => {
+    for (const p of seeds(samples, k => (k + 0.5) * perLine)) { const r = both(p); if (r.back.ended !== 'pole') out.push(r.line); }
+  };
+  arrivals(fluxAlong(contour(1), -1));
+  for (const pole of m.poles.filter(q => q.q < 0)) {
+    const ring = Array.from({ length: 48 }, (_, i) => ({ x: pole.x + (pole.r + 1.5) * Math.cos(2 * Math.PI * i / 48), y: pole.y + (pole.r + 1.5) * Math.sin(2 * Math.PI * i / 48) }));
+    arrivals(fluxAlong(ring, -1, true));
   }
   return out;
 }

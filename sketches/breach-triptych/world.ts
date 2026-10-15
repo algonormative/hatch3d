@@ -345,11 +345,11 @@ export interface RibbonStroke { ink: Ink; points: Point[] }
 /**
  * The helix as a flat twisted ribbon along a page path: two edges that cross where the ribbon turns edge-on, laminations
  * along it (fewer on its back face), a spine down the middle and ribs across. `phase0` is its twist at the path's start;
- * it turns once every `pitch` mm. `skip(s)` drops everything at arc length `s` (where the thread passes under
+ * it turns once every `pitch` mm (times `pitchAt` of the point, where given). `skip(s)` drops everything at arc length `s` (where the thread passes under
  * something). Returns its strokes in the kit's helix inks and `mask`, lines that fill it, for a page mask of where it
  * lies (`glyphMask`).
  */
-export function flatRibbon(path: Point[], o: { width: number; pitch: number; phase0?: number; laminations?: number; ribMm?: number; skip?: (s: number) => boolean }): { strokes: RibbonStroke[]; mask: Point[][] } {
+export function flatRibbon(path: Point[], o: { width: number; pitch: number; phase0?: number; laminations?: number; ribMm?: number; skip?: (s: number) => boolean; pitchAt?: (p: Point) => number }): { strokes: RibbonStroke[]; mask: Point[][] } {
   const half = o.width / 2, L = o.laminations ?? 6, ribMm = o.ribMm ?? 2.4;
   const s: number[] = [0];
   for (let i = 1; i < path.length; i++) s.push(s[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
@@ -357,7 +357,11 @@ export function flatRibbon(path: Point[], o: { width: number; pitch: number; pha
     const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
     return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d };
   });
-  const twist = s.map(v => Math.cos((o.phase0 ?? 0) + 2 * Math.PI * v / o.pitch));
+  // With `pitchAt` the twist's pitch varies along the path (a multiple of `pitch` at each point): its phase is integrated.
+  let phase = o.phase0 ?? 0;
+  const twist = o.pitchAt
+    ? s.map((v, i) => { if (i) phase += 2 * Math.PI * (v - s[i - 1]) / (o.pitch * o.pitchAt!(path[i])); return Math.cos(phase); })
+    : s.map(v => Math.cos((o.phase0 ?? 0) + 2 * Math.PI * v / o.pitch));
   const at = (i: number, v: number): Point => ({ x: path[i].x + normal[i].x * v * half * twist[i], y: path[i].y + normal[i].y * v * half * twist[i] });
   const hidden = (i: number) => o.skip?.(s[i]) ?? false;
   const strokes: RibbonStroke[] = [];
