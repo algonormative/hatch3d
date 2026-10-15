@@ -11,7 +11,7 @@ import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, onGround, pageOf } from '../../kit/perspective.ts';
 import { insideRing } from '../../kit/page.ts';
-import { rCuts } from '../lodestone-cuts.ts';
+import { floorKind, rCuts } from '../lodestone-cuts.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -234,7 +234,9 @@ function draw(ctx: SketchContext): Part[] {
   const centre = new THREE.Vector3(under.x, 0, under.z);
   const radius = 6.4 * K;
   const ring = (r: number) => Array.from({ length: 96 }, (_, i) => pageOf(view, centre.clone().add(new THREE.Vector3(r * Math.cos(2 * Math.PI * i / 96), 0, r * Math.sin(2 * Math.PI * i / 96))), PAGE));
-  const disc = clipPolygon(ring(radius), TRIM);
+  // The floor's outline: R1 to R4's disc, or (the angular cut set) a square on the ground seen corner-on, angular.
+  const square = [0, 1, 2, 3].map(k => pageOf(view, centre.clone().add(new THREE.Vector3(radius * Math.cos(k * Math.PI / 2), 0, radius * Math.sin(k * Math.PI / 2))), PAGE));
+  const disc = clipPolygon(floorKind(ctx) === 'square' ? square : ring(radius), TRIM);
   const discCentre = pageOf(view, centre, PAGE);
 
   // The field's pull on the figure (`figureField`): every mark moved along the field toward C, nothing at the ground and
@@ -341,8 +343,8 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
   // strands drawn on it in silver (the `under` marks).
   const headPage = pullHead(pageOf(view, head.centre, PAGE));
-  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits });
-  return renderPly(spec, ctx, pens, { cuts: { white: [{ id: 'disc', label: 'DISC', rings: [disc] }, ...windows] }, art });
+  const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc });
+  return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
 
 const sketch: Sketch = {

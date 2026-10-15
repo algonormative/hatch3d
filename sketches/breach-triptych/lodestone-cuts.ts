@@ -1,20 +1,21 @@
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
-import { TRIM } from './world.ts';
+import { TRIM, convexHull } from './world.ts';
 
 /**
  * Lodestone's cut sets, as data: each scheme lists, per panel, simple shapes cut from one sheet to show the sheet
  * beneath (black under C's gold and R's white, gold under L's black), each placed from the panel's own anchors (the
- * poles, the grip, the head, where the strands come in). The bar cut from L and R's floor disc are not here: every
- * scheme keeps them. `cutScheme` picks the set; the mockups `k1` to `k4` (vault active/breach-triptych/lodestone-cuts)
+ * poles, the grip, the sleeve, the head, where the strands come in, R's floor). The bar cut from L is not here: every
+ * scheme keeps it. The angular set (the default) has no arcs or circles. `cutScheme` picks the set; the mockups `k1` to `k4` (vault active/breach-triptych/lodestone-cuts)
  * are approximated in the shapes this tooling cuts, so a pick can be swapped in.
  */
 
-export type CutSchemeId = 'field' | 'r3' | 'k1' | 'k2' | 'k3' | 'k4';
-const SCHEMES: CutSchemeId[] = ['field', 'r3', 'k1', 'k2', 'k3', 'k4'];
+export type CutSchemeId = 'angular' | 'field' | 'r3' | 'k1' | 'k2' | 'k3' | 'k4';
+const SCHEMES: CutSchemeId[] = ['angular', 'field', 'r3', 'k1', 'k2', 'k3', 'k4'];
 
 export const CUT_CONTROL: Control = {
-  type: 'select', id: 'cutScheme', label: 'Cut set (shapes showing the sheet beneath)', default: 'field', options: SCHEMES,
+  type: 'select', id: 'cutScheme', label: 'Cut set (shapes showing the sheet beneath)', default: 'angular', options: SCHEMES,
   optionLabels: {
+    angular: 'Angular (R5): no arcs or circles; a suit plane and a corner in L; black behind C\'s sleeve; a tilted square behind R\'s head, a band where the strands come in, a floor in perspective',
     field: 'Field: a suit plane and a corner in L; a pole disc, an arc at the other pole and the pull\'s wedge in C; a head disc and an arc where the strands come in in R',
     r3: 'R3: only the bar and the floor disc',
     k1: 'k1: an open ring round C\'s south pole, a crescent behind R\'s head',
@@ -24,7 +25,9 @@ export const CUT_CONTROL: Control = {
   },
   group: 'Cuts',
 };
-export const cutSchemeOf = (ctx: SketchContext): CutSchemeId => (SCHEMES.includes(ctx.params.cutScheme as CutSchemeId) ? ctx.params.cutScheme as CutSchemeId : 'field');
+export const cutSchemeOf = (ctx: SketchContext): CutSchemeId => (SCHEMES.includes(ctx.params.cutScheme as CutSchemeId) ? ctx.params.cutScheme as CutSchemeId : 'angular');
+/** R's floor: the disc (R1 to R4's schemes) or, in the angular set, a square on the ground seen corner-on. */
+export const floorKind = (ctx: SketchContext): 'disc' | 'square' => (cutSchemeOf(ctx) === 'angular' ? 'square' : 'disc');
 
 // ── Shapes (page millimetres; angles in radians, y down) ────────────
 
@@ -82,10 +85,13 @@ export function clipToTrim(poly: Point[], r = TRIM): Point[] {
 
 /** L: the suit plane picked for a cut (its page outline), on the black sheet over the gold. */
 export interface LAnchors { facet: Point[] }
-/** C: the bar (level) and its poles, and where the gripping hand closes, on the gold sheet over the black. */
-export interface CAnchors { rect: { x0: number; x1: number; y0: number; y1: number }; grip: Point }
-/** R: the head (its page centre and radius, after the field's pull), the gather point at the hands, and the heights the strands come in at. */
-export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[] }
+/** C: the bar (level) and its poles, where the gripping hand closes, and the sleeve's page points, on the gold sheet over the black. */
+export interface CAnchors { rect: { x0: number; x1: number; y0: number; y1: number }; grip: Point; sleeve: Point[] }
+/**
+ * R: the head (its page centre and radius, after the field's pull), the gather point at the hands, the heights the
+ * strands come in at, and the floor's outline (`floorKind`), cut in every scheme.
+ */
+export interface RAnchors { head: Point; headR: number; gather: Point; entries: number[]; floor: Point[] }
 
 const deg = (d: number) => d * Math.PI / 180;
 const poles = (a: CAnchors) => { const cy = (a.rect.y0 + a.rect.y1) / 2; return { north: { x: a.rect.x0, y: cy }, south: { x: a.rect.x1, y: cy }, cy }; };
@@ -94,6 +100,7 @@ const poles = (a: CAnchors) => { const cy = (a.rect.y0 + a.rect.y1) / 2; return 
 const corner = (): Point[] => [{ x: TRIM.x0, y: TRIM.y1 - 74 }, { x: TRIM.x0, y: TRIM.y1 }, { x: TRIM.x0 + 52, y: TRIM.y1 }];
 
 const L: Record<CutSchemeId, (a: LAnchors) => Cut[]> = {
+  angular: a => [{ id: 'suit', label: 'SUIT', rings: [clipToTrim(a.facet)] }, { id: 'corner', label: 'CORNER', rings: [corner()] }],
   field: a => [{ id: 'suit', label: 'SUIT', rings: [clipToTrim(a.facet)] }, { id: 'corner', label: 'CORNER', rings: [corner()] }],
   r3: () => [],
   k1: () => [],
@@ -105,7 +112,17 @@ const L: Record<CutSchemeId, (a: LAnchors) => Cut[]> = {
 /** C's pull: a wedge from just over the fist up to under the bar, where the gripped lines converge. */
 const pullWedge = (a: CAnchors, width = 44): Point[] => [{ x: a.grip.x - width / 2, y: a.rect.y1 + 9 }, { x: a.grip.x + width / 2, y: a.rect.y1 + 9 }, { x: a.grip.x, y: a.grip.y - 16 }];
 
+/**
+ * Black behind C's sleeve: the sleeve's outline grown by `margin` (its points pushed out eight ways, then their convex
+ * hull, so the corners are cut square-ish, never round), cut to the trim.
+ */
+function sleeveBand(sleeve: Point[], margin = 9): Point[] {
+  const grown = sleeve.flatMap(p => Array.from({ length: 8 }, (_, k) => at(p, margin, TAU * (k + 0.5) / 8)));
+  return clipToTrim(convexHull(grown));
+}
+
 const C: Record<CutSchemeId, (a: CAnchors) => Cut[]> = {
+  angular: a => [{ id: 'sleeve', label: 'SLEEVE', rings: [sleeveBand(a.sleeve)] }],
   field: a => {
     const { north, south } = poles(a);
     return [
@@ -140,16 +157,26 @@ function entryArc(a: RAnchors): Point[] {
   return arcBand(a.gather, r0, r0 + 9, a0, a1);
 }
 
+/** The angular set's shape behind R's head: a square tilted 15 degrees, its half diagonal 1.3 times the head's radius. */
+const headSquare = (a: RAnchors): Point[] => [0, 1, 2, 3].map(k => at(a.head, 1.3 * a.headR, deg(15 + 90 * k)));
+/** The angular set's band where the strands come in: the corners of `entryArc`'s sector, joined straight. */
+function entryBand(a: RAnchors): Point[] {
+  const arc = entryArc(a), n = arc.length / 2;
+  return [arc[0], arc[n - 1], arc[n], arc[2 * n - 1]];
+}
+const floorCut = (a: RAnchors): Cut => ({ id: 'disc', label: 'DISC', rings: [a.floor] });
+
 const R: Record<CutSchemeId, (a: RAnchors) => Cut[]> = {
-  field: a => [{ id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }, { id: 'entry', label: 'IN', rings: [entryArc(a)] }],
-  r3: () => [],
-  k1: a => [{ id: 'head', label: 'HEAD', rings: [clipToTrim(lune({ x: a.head.x + 0.5 * a.headR, y: a.head.y - 0.2 * a.headR }, 1.5 * a.headR, { x: a.head.x + 0.05 * a.headR, y: a.head.y }, 1.4 * a.headR))] }],
-  k2: a => [{ id: 'slot', label: 'SLOT', rings: [rect(a.head.x - 14, Math.max(TRIM.y0 + 14, a.head.y - 1.8 * a.headR), a.head.x + 14, a.head.y + 3.2 * a.headR)] }],
-  k3: a => [{ id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }],
-  k4: a => [{ id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }],
+  angular: a => [{ id: 'floor', label: 'FLOOR', rings: [a.floor] }, { id: 'head', label: 'HEAD', rings: [headSquare(a)] }, { id: 'entry', label: 'IN', rings: [entryBand(a)] }],
+  field: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }, { id: 'entry', label: 'IN', rings: [entryArc(a)] }],
+  r3: a => [floorCut(a)],
+  k1: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [clipToTrim(lune({ x: a.head.x + 0.5 * a.headR, y: a.head.y - 0.2 * a.headR }, 1.5 * a.headR, { x: a.head.x + 0.05 * a.headR, y: a.head.y }, 1.4 * a.headR))] }],
+  k2: a => [floorCut(a), { id: 'slot', label: 'SLOT', rings: [rect(a.head.x - 14, Math.max(TRIM.y0 + 14, a.head.y - 1.8 * a.headR), a.head.x + 14, a.head.y + 3.2 * a.headR)] }],
+  k3: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }],
+  k4: a => [floorCut(a), { id: 'head', label: 'HEAD', rings: [disc(a.head, 1.2 * a.headR)] }],
 };
 
-/** The scheme's cuts for a panel (the bar and R's floor disc are the panels' own, in every scheme). */
+/** The scheme's cuts for a panel (L's bar is the panel's own, in every scheme; R's floor is in every R set). */
 export const lCuts = (ctx: SketchContext, a: LAnchors): Cut[] => L[cutSchemeOf(ctx)](a);
 export const cCuts = (ctx: SketchContext, a: CAnchors): Cut[] => C[cutSchemeOf(ctx)](a);
 export const rCuts = (ctx: SketchContext, a: RAnchors): Cut[] => R[cutSchemeOf(ctx)](a);

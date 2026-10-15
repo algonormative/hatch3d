@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import type { Control, Point, SketchContext } from '../../src/sketch/types.ts';
+import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
 import { clipToRect } from '../kit/page.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
-import { CONTROLS, TRIM, lintelRect, type LintelBar } from './world.ts';
+import { CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
+import { footprintOf } from '../kit/assembly.ts';
 import type { Ink } from '../kit/types.ts';
 import { CUT_CONTROL } from './lodestone-cuts.ts';
 import { n } from '../kit/params.ts';
@@ -22,6 +23,8 @@ const BUST_IDS = ['scale', 'density', 'slack', 'elbow', 'gaze', 'fov', 'fitMargi
 /** Every Lodestone panel declares these, so one params object draws all three. */
 export const LODESTONE_CONTROLS: Control[] = [
   ...CONTROLS.filter(c => BUST_IDS.includes(c.id)),
+  { type: 'select', id: 'barPose', label: 'Where C\'s bar lies', default: 'slipping', options: ['slipping', 'r4'],
+    optionLabels: { slipping: 'Slipping: near the middle, tilted steeply, just out of the reaching hand\'s grasp', r4: 'R4: level at the eye height of L\'s hole' }, group: 'Magnet' },
   { type: 'slider', id: 'fieldLines', label: 'Field lines leaving each pole', default: 26, min: 8, max: 48, step: 1, group: 'Magnet' },
   { type: 'slider', id: 'filings', label: 'Filings (candidates, thousands)', default: 9, min: 0, max: 30, step: 0.5, group: 'Magnet' },
   { type: 'slider', id: 'handX', label: 'Hand: where it hangs over the bar (0 its left end, 1 its right)', default: 0.68, min: 0, max: 1, step: 0.01, group: 'Magnet' },
@@ -54,31 +57,78 @@ export const magnetRect = (bar: LintelBar) => lintelRect(bar);
  * A magnet in C's page frame: its bar, its charges, and `poles`, small poles off the bar (the gripping hand), each a
  * charge `q` at a point that field lines end in within `r` mm.
  */
-export interface Magnet { rect: { x0: number; x1: number; y0: number; y1: number }; charges: { x: number; y: number; q: number }[]; poles: { x: number; y: number; q: number; r: number }[] }
+export interface Magnet {
+  /** The bar's rectangle, level, about its centre; `pose` turns it there. */
+  rect: { x0: number; x1: number; y0: number; y1: number };
+  /** The bar's turn about the centre of `rect` (radians, +x toward +y, clockwise on the page); none when level. */
+  pose?: { cx: number; cy: number; angle: number };
+  charges: { x: number; y: number; q: number }[];
+  poles: { x: number; y: number; q: number; r: number }[];
+}
+
+/** A point of the bar's own (level) frame on the page, and back. The identity for a level bar. */
+export function barToPage(m: Pick<Magnet, 'pose'>, p: Point): Point {
+  if (!m.pose || m.pose.angle === 0) return p;
+  const { cx, cy, angle } = m.pose, c = Math.cos(angle), s = Math.sin(angle);
+  return { x: cx + c * (p.x - cx) - s * (p.y - cy), y: cy + s * (p.x - cx) + c * (p.y - cy) };
+}
+export function pageToBar(m: Pick<Magnet, 'pose'>, p: Point): Point {
+  if (!m.pose || m.pose.angle === 0) return p;
+  const { cx, cy, angle } = m.pose, c = Math.cos(angle), s = Math.sin(angle);
+  return { x: cx + c * (p.x - cx) + s * (p.y - cy), y: cy - s * (p.x - cx) + c * (p.y - cy) };
+}
+
+/**
+ * Where C's bar lies (`barPose`): R4's, level at the eye height of L's hole; or slipping (the default), its centre near
+ * the middle of the sheet and turned SLIP.deg (the same way as on L, more steeply), its right end just out of the
+ * reaching hand's grasp. The eye-height alignment with L's hole is given up for it.
+ */
+export const SLIP = { dx: -10, y: 0.47, deg: -28 };
+export const barSlipping = (ctx?: SketchContext): boolean => !!ctx && ctx.params.barPose !== 'r4';
+export function barPose(bar: LintelBar, ctx?: SketchContext): { rect: Magnet['rect']; pose?: Magnet['pose'] } {
+  const level = magnetRect(bar);
+  if (!barSlipping(ctx)) return { rect: level };
+  const cx = PAGE.width / 2 + SLIP.dx, cy = SLIP.y * PAGE.height, hl = (level.x1 - level.x0) / 2, hh = (level.y1 - level.y0) / 2;
+  return { rect: { x0: cx - hl, x1: cx + hl, y0: cy - hh, y1: cy + hh }, pose: { cx, cy, angle: SLIP.deg * Math.PI / 180 } };
+}
+/** C's onlay footprint: L's bar placed by `barPose` (footprintOf the part cut: congruent by construction). */
+export function barFootprint(bar: LintelBar, ctx?: SketchContext): Cut {
+  const { rect, pose } = barPose(bar, ctx);
+  if (!pose) return lintelFootprint(bar);
+  return footprintOf(bar.cut, { dx: (rect.x0 + rect.x1) / 2 - bar.centre.x, dy: (rect.y0 + rect.y1) / 2 - bar.centre.y, rotate: SLIP.deg - THREE.MathUtils.radToDeg(bar.tilt) });
+}
 
 /**
  * The bar magnetised along its length: a sheet of charge on each end face, north (+) on the left. With `ctx` and the
- * `handPull` control on, the gripping hand is a small south pole (`pullStrength` of the bar's) at `gripPoint`.
+ * `handPull` control on, the gripping hand is a small south pole (`pullStrength` of the bar's) at `gripPoint`; with
+ * the bar slipping, the fist reaches toward the bar's right end and closes just short of it, and being a south pole
+ * like that end, it pushes it away.
  */
 export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
-  const rect = magnetRect(bar);
+  const { rect, pose } = barPose(bar, ctx);
+  const frame = { pose };
   const charges: Magnet['charges'] = [];
   const K = 9, inset = 0.04 * (rect.x1 - rect.x0);
   for (let i = 0; i < K; i++) {
     const y = rect.y0 + (rect.y1 - rect.y0) * (i + 0.5) / K;
-    charges.push({ x: rect.x0 + inset, y, q: 1 / K }, { x: rect.x1 - inset, y, q: -1 / K });
+    charges.push({ ...barToPage(frame, { x: rect.x0 + inset, y }), q: 1 / K }, { ...barToPage(frame, { x: rect.x1 - inset, y }), q: -1 / K });
   }
   const poles: Magnet['poles'] = [];
   if (ctx && ctx.params.handPull !== false) {
     // The hand is a small magnet of its own: its south pole in the fist, its north up the arm, off the top of the sheet,
     // so it pulls lines into the grip without turning the whole far field (a lone pole would draw lines in from all round).
-    const g = gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
+    const g = pose ? reachPoint({ rect, pose }) : gripPoint(ctx, rect), q = n(ctx, 'pullStrength', 0.3, 0.05, 0.8);
     const arm = handFromBottom(ctx) ? { x: g.x + ARM.x, y: TRIM.y1 + ARM_OFF } : { x: g.x + ARM.x, y: g.y + ARM.y };
     poles.push({ ...g, q: -q, r: GRIP_R }, { ...arm, q, r: GRIP_R });
     for (const pole of poles) charges.push({ x: pole.x, y: pole.y, q: pole.q });
   }
-  return { rect, charges, poles };
+  return pose ? { rect, pose, charges, poles } : { rect, charges, poles };
 }
+
+/** The slipping bar's right end (the middle of its end face) on the page, and where the reaching fist closes, just short of it. */
+export const barEnd = (m: Pick<Magnet, 'rect' | 'pose'>): Point => barToPage(m, { x: m.rect.x1, y: (m.rect.y0 + m.rect.y1) / 2 });
+const REACH = { x: 14, y: 34 };
+export const reachPoint = (m: Pick<Magnet, 'rect' | 'pose'>): Point => { const e = barEnd(m); return { x: e.x + REACH.x, y: e.y + REACH.y }; };
 
 /** How far above the bar the gripping hand's pole sits (mm), and the radius field lines end in round it. */
 const GRIP_RISE = 30, GRIP_R = 3;
@@ -321,7 +371,7 @@ function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Poi
     p = { x: p.x + step * (k1.x + 2 * k2.x + 2 * k3.x + k4.x) / 6, y: p.y + step * (k1.y + 2 * k2.y + 2 * k3.y + k4.y) / 6 };
     pts.push(p);
     // Into the bar by the assembly's bleed, so a bar glued a little off never shows a gap at the pole.
-    if (inRect(m.rect, p, -UNDER)) return { points: pts, ended: 'pole' };
+    if (inRect(m.rect, pageToBar(m, p), -UNDER)) return { points: pts, ended: 'pole' };
     if (m.poles.some(q => Math.hypot(p.x - q.x, p.y - q.y) < q.r)) return { points: pts, ended: 'hand' };
     if (p.x < TRIM.x0 - ROAM || p.x > TRIM.x1 + ROAM || p.y < TRIM.y0 - ROAM || p.y > TRIM.y1 + ROAM) return { points: pts, ended: 'away' };
   }
@@ -340,7 +390,7 @@ export function fieldLines(m: Magnet, count: number): Point[][] {
   // third of the way in to the end, down the end face, back along the bottom.
   const contour = (side: -1 | 1): Point[] => {
     const end = side < 0 ? rect.x0 - g : rect.x1 + g, inner = side < 0 ? rect.x0 + 0.34 * L : rect.x1 - 0.34 * L;
-    return [{ x: inner, y: rect.y0 - g }, { x: end, y: rect.y0 - g }, { x: end, y: rect.y1 + g }, { x: inner, y: rect.y1 + g }];
+    return [{ x: inner, y: rect.y0 - g }, { x: end, y: rect.y0 - g }, { x: end, y: rect.y1 + g }, { x: inner, y: rect.y1 + g }].map(q => barToPage(m, q));
   };
   /** Points along a polyline, each with the flux crossing its share of it against its normal (`sign` -1) or along it (1). */
   const fluxAlong = (corners: Point[], sign: 1 | -1, closed = false): { p: Point; flux: number }[] => {
@@ -374,7 +424,7 @@ export function fieldLines(m: Magnet, count: number): Point[][] {
     for (const p of seeds(north, step)) {
       const { line, fwd } = both(p);
       out.push(line);
-      if (fwd.ended === 'away') out.push(fwd.points.map(q => ({ x: 2 * mid - q.x, y: q.y })));
+      if (fwd.ended === 'away') out.push(fwd.points.map(q => { const b = pageToBar(m, q); return barToPage(m, { x: 2 * mid - b.x, y: b.y }); }));
     }
     return out;
   }
@@ -401,14 +451,14 @@ export function fieldLines(m: Magnet, count: number): Point[][] {
  */
 export function filings(ctx: SketchContext, m: Magnet, candidates: number, keepOut: (p: Point) => boolean): Point[][] {
   const rng = ctx.random('lodestone-filings');
-  const ref = Math.hypot(...Object.values(fieldAt(m, { x: m.rect.x0 - 6, y: (m.rect.y0 + m.rect.y1) / 2 })) as [number, number]);
+  const ref = Math.hypot(...Object.values(fieldAt(m, barToPage(m, { x: m.rect.x0 - 6, y: (m.rect.y0 + m.rect.y1) / 2 }))) as [number, number]);
   const cells = new Map<string, Point[]>();
   const GAP = 0.85, key = (x: number, y: number) => `${Math.floor(x / GAP)},${Math.floor(y / GAP)}`;
   const near = (p: Point) => { for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of cells.get(`${Math.floor(p.x / GAP) + i},${Math.floor(p.y / GAP) + j}`) ?? []) if (Math.hypot(q.x - p.x, q.y - p.y) < GAP) return true; return false; };
   const out: Point[][] = [];
   for (let i = 0; i < candidates; i++) {
     const p = { x: TRIM.x0 + (TRIM.x1 - TRIM.x0) * rng(), y: TRIM.y0 + (TRIM.y1 - TRIM.y0) * rng() };
-    if (inRect(m.rect, p, 0.9) || keepOut(p)) { rng(); continue; }
+    if (inRect(m.rect, pageToBar(m, p), 0.9) || keepOut(p)) { rng(); continue; }
     const f = fieldAt(m, p), s = Math.hypot(f.x, f.y);
     if (rng() > Math.min(1, 2.4 * (s / ref) ** 0.85)) continue;
     if (near(p)) continue;
