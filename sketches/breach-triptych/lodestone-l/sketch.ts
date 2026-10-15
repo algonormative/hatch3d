@@ -21,7 +21,7 @@ import { clipToTrim, cutSchemeOf, inGrown, lCuts, stripeFill } from '../lodeston
 import {
   ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, holeBarRules, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, LENS, eyeCentre, faceMarks, faceOutline, lensCamera, lensImage, lensShift, seenBy, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, lensFace, lensShift, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -338,18 +338,10 @@ function draw(ctx: SketchContext): Part[] {
     const grow = spec.bleed + FILL_OVER;
     if (ctx.params.barFill === 'hatch') for (const path of holeBarPaths(bar, grow)) buckets.add('hole-carbon', path, true);
     else {
-      // The face is hidden only by the skull (the coil crosses its front at the eyes): the coil gives way round it.
-      const cam = lensCamera(view, head), lensSkull = skull(head), d = eye.distanceTo(head.centre);
-      const faceSeen = seenBy(cam, [...faceMarks(head), faceOutline(head, cam)].map(points => ({ ink: 'carbon' as Ink, group: 'face', family: 'text' as const, points })), [lensSkull], slack, d);
-      const coilSeen = seenBy(cam, strokes.filter(t => t.group === 'helix'), [...helix.meshes, lensSkull], slack, d);
-      lensSkull.dispose();
-      const rules = holeBarRules(bar);
-      const shift = lensShift(bar.tilt), from = pageOf(cam, eyeCentre(head), PAGE), to = { x: bar.centre.x + shift.x, y: bar.centre.y + shift.y };
-      const face = lensImage(faceSeen, from, to, LENS.mag), coil = lensImage(coilSeen, from, to, LENS.mag);
-      const onFace = glyphMask(face, 1.2, 6, PAGE);
+      const rules = holeBarRules(bar), shift = lensShift(bar.tilt), lensSkull = skull(head);
       for (const ring of rules.rings) buckets.add('hole-carbon', ring, true);
-      for (const path of face) for (const piece of keepAlong(path, p => rules.inside(p, grow) && !rules.between(p), 0.1)) buckets.add('hole-carbon', piece, true);
-      for (const path of coil) for (const piece of keepAlong(path, p => rules.inside(p, grow) && !rules.between(p) && !onFace(p), 0.1)) buckets.add('hole-carbon', piece, true);
+      for (const piece of lensFace({ view, head, coil: strokes.filter(t => t.group === 'helix'), coilGeos: helix.meshes, skull: lensSkull, slack, to: { x: bar.centre.x + shift.x, y: bar.centre.y + shift.y }, keep: p => rules.inside(p, grow) && !rules.between(p), rings: ctx.params.lensFill !== 'r9' })) buckets.add('hole-carbon', piece, true);
+      lensSkull.dispose();
     }
   }
   for (const g of geometries) g.dispose();

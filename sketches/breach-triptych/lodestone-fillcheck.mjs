@@ -54,12 +54,12 @@ for (const [panel, [upper, lower]] of Object.entries(panels)) {
     const xs = w.ring.map(p => p.x), ys = w.ring.map(p => p.y);
     // The pattern's own spacing (farthest from ink inside the window, a millimetre in from its edge) against the band
     // round its edge out to the bleed. Points beyond the trim are left out: they are cut away.
-    let inner = 0, band = 0, at = null;
+    let inner = 0, band = 0, at = null, innerAt = null;
     for (let x = Math.max(TRIM.x0, Math.min(...xs) - bleed); x <= Math.min(TRIM.x1, Math.max(...xs) + bleed); x += 0.25) for (let y = Math.max(TRIM.y0, Math.min(...ys) - bleed); y <= Math.min(TRIM.y1, Math.max(...ys) + bleed); y += 0.25) {
       const p = { x, y }, ins = inside(w.ring, p), e = ringD(w.ring, p);
       if (!ins && e > bleed) continue;
       const d = nearest(p);
-      if (ins && e > 1) inner = Math.max(inner, d); else if (d > band) { band = d; at = p; }
+      if (ins && e > 1) { if (d > inner) { inner = d; innerAt = p; } } else if (d > band) { band = d; at = p; }
     }
     const fmt = v => (Number.isFinite(v) ? v.toFixed(2) : 'over 16');
     if (inner <= 2.5) {
@@ -91,7 +91,7 @@ for (const [panel, [upper, lower]] of Object.entries(panels)) {
     const cropped = count >= 8 && count >= 0.4 * stops.length;
     if (cropped) failed++;
     const empty = inner > 10 ? '  (reads empty)' : '';
-    console.log(`${panel} ${upper} window ${w.id} (sparse): largest empty disc inside, radius ${fmt(inner)} mm${empty}; ${entering} lines enter, ${stops.length} stop short in the band${stops.length ? ` (most at ${(crop * 0.25).toFixed(2)} to ${(crop * 0.25 + 0.25).toFixed(2)} mm out: ${count})` : ''}  ${cropped ? 'FAIL: cropped short of the bleed' : 'PASS'}`);
+    console.log(`${panel} ${upper} window ${w.id} (sparse): largest empty disc inside, radius ${fmt(inner)} mm${innerAt ? ` at (${innerAt.x.toFixed(1)}, ${innerAt.y.toFixed(1)})` : ''}${empty}; ${entering} lines enter, ${stops.length} stop short in the band${stops.length ? ` (most at ${(crop * 0.25).toFixed(2)} to ${(crop * 0.25 + 0.25).toFixed(2)} mm out: ${count})` : ''}  ${cropped ? 'FAIL: cropped short of the bleed' : 'PASS'}`);
   }
 }
 // The emphasis on every sheet.

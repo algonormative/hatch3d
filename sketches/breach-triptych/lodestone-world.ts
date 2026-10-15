@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-text.ts';
-import { clipToRect, insideRing } from '../kit/page.ts';
+import { clipToRect, insideRing, keepAlong } from '../kit/page.ts';
+import { glyphMask } from '../kit/lettering.ts';
 import { distanceToRings } from '../../packages/plot-core/src/region.ts';
 import { fitDepthRange, pageOf } from '../kit/perspective.ts';
 import { hiddenBias, projectStrokes, scalePoints } from '../kit/strokes.ts';
@@ -62,6 +63,8 @@ export const LODESTONE_CONTROLS: Control[] = [
     optionLabels: { interference: 'Interference: two ring families, from where the strands land and from the disc\'s centre, crossing into moiré', pulse: 'Pulse: rings spreading from where the strands land, filings pointing into the ground between them', rings: 'Rings (R1 to R3): three silver rings' }, group: 'Ground' },
   { type: 'select', id: 'barFill', label: 'L: what the gold shows inside the bar\'s window', default: 'lens', options: ['lens', 'hatch'],
     optionLabels: { lens: 'Lens (R9): the head behind the bar, larger and shifted, as through a glass block, in a double rule', hatch: 'Hatch (R1 to R8): the bar\'s crossing hatch in a double rule' }, group: 'Magnet' },
+  { type: 'select', id: 'lensFill', label: 'The lens faces (L\'s bar, R\'s head): how much of the skull shows', default: 'rings', options: ['rings', 'r9'],
+    optionLabels: { rings: 'Rings (R10): the skull\'s planes as rings between the coil\'s turns, brows over the eyes', r9: 'R9: the features and the coil only' }, group: 'Magnet' },
   { type: 'select', id: 'cBarFill', label: 'C: what the black shows inside the bar\'s window', default: 'cosmos', options: ['cosmos', 'hatch'],
     optionLabels: { cosmos: 'Cosmos (R9): galaxies and stars in silver, one gold star', hatch: 'Hatch (R7, R8): the bar\'s crossing hatch in silver' }, group: 'Magnet' },
   { type: 'select', id: 'rCuts', label: 'R: what the black shows in the white\'s windows', default: 'lens', options: ['lens', 'squares', 'cosmos'],
@@ -670,6 +673,51 @@ export function seenBy(cam: THREE.PerspectiveCamera, strokes: Stroke[], geometri
   return seen;
 }
 
+/**
+ * The coil's shell behind the face (R10): rings round the egg the coil winds on (`headCoil`'s), `step` of the head's
+ * radius apart up its axis, only their far halves as `cam` sees them, so through a lens the coil's turns seem to pass
+ * on behind the face and round it, filling the glass about the face without crossing it.
+ */
+export function coilShell(head: AgentHead, cam: THREE.Camera, step = 0.12): THREE.Vector3[][] {
+  const toCam = cam.position.clone().sub(head.centre).normalize(), runs: THREE.Vector3[][] = [];
+  for (let along = -0.8 * head.r; along <= 1.15 * head.r; along += step * head.r) {
+    const egg = Math.sqrt(Math.max(0.04, 1 - (along / (1.12 * head.r)) ** 2)) * (along > 0 ? 1 : 0.88 + 0.12 * (1 + along / head.r));
+    let run: THREE.Vector3[] = [];
+    for (let i = 0; i <= 96; i++) {
+      const th = 2 * Math.PI * i / 96, dir = head.side.clone().multiplyScalar(Math.cos(th)).addScaledVector(head.face, Math.sin(th));
+      if (dir.dot(toCam) < 0) run.push(head.centre.clone().addScaledVector(head.axis, along).addScaledVector(dir, egg * head.r));
+      else { if (run.length > 1) runs.push(run); run = []; }
+    }
+    if (run.length > 1) runs.push(run);
+  }
+  return runs;
+}
+
+/**
+ * What a lens window shows (R9, R10): the head through the lens camera, `LENS.mag` times as large, its eye-line landing
+ * at `to`. The face's features (eye-line, eyes, brows, outline) hidden by the skull alone; the coil, and the skull's
+ * rings between its turns (`faceContours`, R10, so the face does not read empty), hidden by the coil and skull. The coil
+ * gives way round the features, the rings (and the coil's shell behind, `coilShell`) wider round them, so the eyes stay
+ * the clearest marks. `keep` clips it (the
+ * window grown by the bleed). Page paths.
+ */
+export function lensFace(o: { view: THREE.PerspectiveCamera; head: AgentHead; coil: Stroke[]; coilGeos: THREE.BufferGeometry[]; skull: THREE.BufferGeometry; slack: number; to: Point; keep: (p: Point) => boolean; rings?: boolean }): Point[][] {
+  const cam = lensCamera(o.view, o.head), d = o.view.position.distanceTo(o.head.centre);
+  const asStrokes = (list: THREE.Vector3[][]): Stroke[] => list.map(points => ({ ink: 'carbon', group: 'face', family: 'text', points }));
+  const from = pageOf(cam, eyeCentre(o.head), PAGE), image = (seen: Point[][]) => lensImage(seen, from, o.to, LENS.mag);
+  const features = image(seenBy(cam, asStrokes([...faceMarks(o.head, o.rings !== false), faceOutline(o.head, cam)]), [o.skull], o.slack, d));
+  const coil = image(seenBy(cam, o.coil, [...o.coilGeos, o.skull], o.slack, d));
+  // The skull's rings and the coil's shell behind show through the coil's membrane (glass, not paint), hidden by the
+  // skull alone and giving way to the coil's lines.
+  const rings = o.rings === false ? [] : image(seenBy(cam, asStrokes([...faceContours(o.head, 0.13), ...coilShell(o.head, cam)]), [o.skull], o.slack, d));
+  const near = glyphMask(features, 1.2, 6, PAGE), nearer = glyphMask(features, 2, 6, PAGE), onCoil = glyphMask(coil, 0.9, 6, PAGE);
+  return [
+    ...features.flatMap(path => keepAlong(path, o.keep, 0.1)),
+    ...coil.flatMap(path => keepAlong(path, q => o.keep(q) && !near(q), 0.1)),
+    ...rings.flatMap(path => keepAlong(path, q => o.keep(q) && !nearer(q) && !onCoil(q), 0.1)),
+  ];
+}
+
 /** Page marks seen through a lens: `mag` times as large about `from`, which lands at `to`. */
 export function lensImage(paths: Point[][], from: Point, to: Point, mag: number): Point[][] {
   return paths.map(path => path.map(p => ({ x: to.x + mag * (p.x - from.x), y: to.y + mag * (p.y - from.y) })));
@@ -679,9 +727,9 @@ export function lensImage(paths: Point[][], from: Point, to: Point, mag: number)
 export const lensShift = (angle: number): Point => ({ x: LENS.along * Math.cos(angle) - LENS.across * Math.sin(angle), y: LENS.along * Math.sin(angle) + LENS.across * Math.cos(angle) });
 
 /**
- * What says "face" behind a lens, abstractly: an eye-line round the front of the skull and an almond for each eye (an
- * upper and a lower lid), on an egg a little outside the skull's (`skull` in L: 0.52, 0.66 and 0.52 of the head's
- * radius), so the coil hides them where it passes in front. World points, for the hidden-line pass.
+ * What says "face" behind a lens, abstractly: an eye-line round the front of the skull, an almond for each eye (an
+ * upper and a lower lid) and a brow over it, on an egg a little outside the skull's (`skull` in L: 0.52, 0.66 and 0.52 of
+ * the head's radius). World points, for the hidden-line pass (against the skull alone: the face shows through the coil).
  */
 const onFace = (head: AgentHead, phi: number, lat: number): THREE.Vector3 => head.centre.clone()
   .addScaledVector(head.side, 0.55 * head.r * Math.cos(phi) * Math.cos(lat))
@@ -706,7 +754,7 @@ export function faceOutline(head: AgentHead, view: THREE.Camera): THREE.Vector3[
   return [...hull, hull[0]];
 }
 
-export function faceMarks(head: AgentHead): THREE.Vector3[][] {
+export function faceMarks(head: AgentHead, brows = true): THREE.Vector3[][] {
   const deg = Math.PI / 180, front = Math.PI / 2;
   const on = (phi: number, lat: number) => onFace(head, phi, lat);
   const arc = (phi0: number, phi1: number, lat: (u: number) => number, n = 48) => Array.from({ length: n + 1 }, (_, i) => on(phi0 + (phi1 - phi0) * i / n, lat(i / n)));
@@ -715,8 +763,21 @@ export function faceMarks(head: AgentHead): THREE.Vector3[][] {
     ...[-1, 1].flatMap(sd => [
       arc(front + (sd * 22 - 11) * deg, front + (sd * 22 + 11) * deg, u => 0.1 + 0.07 * Math.sin(Math.PI * u), 24),
       arc(front + (sd * 22 - 11) * deg, front + (sd * 22 + 11) * deg, u => 0.1 - 0.035 * Math.sin(Math.PI * u), 24),
+      // (R10) A brow over each eye, a little wider than it.
+      ...(brows ? [arc(front + (sd * 22 - 15) * deg, front + (sd * 22 + 13) * deg, u => 0.27 + 0.05 * Math.sin(Math.PI * u), 24)] : []),
     ]),
   ];
+}
+
+/**
+ * The skull's planes behind a lens (R10), so the face does not read empty: rings round the egg (`faceMarks`') at even
+ * steps of latitude, `step` radians apart, as a globe's; the hidden-line pass keeps the near halves, between the coil's
+ * turns. The face's features stay the clearest marks: the rings give way round them.
+ */
+export function faceContours(head: AgentHead, step = 0.15): THREE.Vector3[][] {
+  const rings: THREE.Vector3[][] = [];
+  for (let lat = -1.35; lat <= 1.35 + 1e-9; lat += step) rings.push(Array.from({ length: 97 }, (_, i) => onFace(head, 2 * Math.PI * i / 96, lat)));
+  return rings;
 }
 
 // ── Emphasis (R9) ───────────────────────────────────────────────────

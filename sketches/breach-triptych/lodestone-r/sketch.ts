@@ -21,7 +21,7 @@ import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { FILL_OVER, LENS, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, eyeCentre, faceMarks, faceOutline, fieldLines, fieldPull, gapOf, lensCamera, lensImage, lensShift, rEntries, seenBy, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, fieldLines, fieldPull, gapOf, lensFace, lensShift, rEntries, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -595,17 +595,10 @@ function draw(ctx: SketchContext): Part[] {
   if (fxPink.length) art.black.push({ id: 'fx-pink', pen: 'fluoro-pink', paths: fxPink });
   // The lens (`rCuts` lens): the head through the head's window, as L's bar shows it, in silver on the black.
   if (lensWindow) {
-    const cam = lensCamera(view, head), sk = skull(head), d = eye.distanceTo(head.centre);
-    const faceSeen = seenBy(cam, [...faceMarks(head), faceOutline(head, cam)].map(points => ({ ink: 'carbon' as Ink, group: 'face', family: 'text' as const, points })), [sk], slack, d);
-    const coilSeen = seenBy(cam, strokes.filter(t => t.group === 'helix'), [...headGeos, sk], slack, d);
-    sk.dispose();
+    const sk = skull(head), shift = lensShift(-Math.PI / 6);
     const mid = { x: lensWindow.reduce((t, q) => t + q.x, 0) / lensWindow.length, y: lensWindow.reduce((t, q) => t + q.y, 0) / lensWindow.length };
-    const shift = lensShift(-Math.PI / 6), from = pageOf(cam, eyeCentre(head), PAGE), to = { x: mid.x + shift.x, y: mid.y + shift.y };
-    const face = lensImage(faceSeen, from, to, LENS.mag), coil = lensImage(coilSeen, from, to, LENS.mag), onFace = glyphMask(face, 1.2, 6, PAGE);
-    art.black.push({ id: 'lens-silver', pen: 'silver', paths: [
-      ...face.flatMap(path => keepAlong(path, inLens, 0.1)),
-      ...coil.flatMap(path => keepAlong(path, q => inLens(q) && !onFace(q), 0.1)),
-    ] });
+    art.black.push({ id: 'lens-silver', pen: 'silver', paths: lensFace({ view, head, coil: strokes.filter(t => t.group === 'helix'), coilGeos: headGeos, skull: sk, slack, to: { x: mid.x + shift.x, y: mid.y + shift.y }, keep: inLens, rings: ctx.params.lensFill !== 'r9' }) });
+    sk.dispose();
   }
   // The cosmos (`rCuts` cosmos): stars behind what each window shows (and in the tie, in place of its stripes), the
   // head's window a small galaxy too, kept clear of the black's own marks; one star pink.
