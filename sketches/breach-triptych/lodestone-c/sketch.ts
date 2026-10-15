@@ -5,7 +5,7 @@ import type { ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
 import { glyphMask } from '../../kit/lettering.ts';
-import { clipToRect, keepAlong, meshCoverage } from '../../kit/page.ts';
+import { clipToRect, insideRing, keepAlong, meshCoverage } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
@@ -14,9 +14,9 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
-import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, pensOf } from '../world.ts';
+import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, holeBarPaths, lintelBar, pensOf } from '../world.ts';
 import { cCuts } from '../lodestone-cuts.ts';
-import { LODESTONE_CONTROLS, barFootprint, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barFootprint, reachTarget, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -25,16 +25,20 @@ import { headCoil } from '../../kit/agent.ts';
  * filings packed at the poles and thinning out; a hand in a pinstriped cuff comes in from the top. With `handPull` it
  * grips and draws a bundle of lines up into its fist, a small south pole superposed on the bar's field; in R1 it had
  * just let the bar go. With `ribbonField` the field line that L's ribbon becomes runs on here into the north pole.
- * Three plies, bottom to top: a black sheet, the gold sheet, and the bar as an onlay. The gold is cut by the cut set
- * (`cutScheme`) so the black shows, the field drawn on in silver there.
+ * Two sheets, bottom to top: black and gold (R7, `window`): the bar is a window cut in the gold where it lies, showing
+ * the black, the bar's hatch drawn on the black in silver; the gold is also cut by the cut set (`cutScheme`), the field
+ * drawn on in silver where the black shows. Or (R1 to R6, `onlay`, the sketch `lodestone-c-onlay`) a third: L's cut-out
+ * bar glued on top. An assembly's sheets are fixed per sketch, so the onlay is its own sketch.
  */
 
-const plies = [
+export type BarMode = 'window' | 'onlay';
+const pliesFor = (mode: BarMode) => [
   { id: 'black', paper: PAPER.black, pens: ['silver'], cutInk: 'silver' },
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
-  { id: 'bar', paper: PAPER.black, pens: [], cutInk: 'black', onlay: { from: `lodestone-l/black/${BAR_ID}` } },
+  ...(mode === 'onlay' ? [{ id: 'bar', paper: PAPER.black, pens: [], cutInk: 'black', onlay: { from: `lodestone-l/black/${BAR_ID}` } }] : []),
 ];
-export const spec: AssemblySpec = { ...ASSEMBLY, plies };
+/** R1 to R6's onlay keeps Lintel's 2 mm bleed; the window (R7) Lodestone's 4 mm. */
+const specFor = (mode: BarMode): AssemblySpec => ({ ...(mode === 'onlay' ? ASSEMBLY : LODESTONE_ASSEMBLY), plies: pliesFor(mode) });
 const pens = pensOf(['silver', 'black']);
 
 const ALL_BLACK = { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' };
@@ -52,7 +56,7 @@ const WORDS: { word: string; loop: number; x: number }[] = [{ word: 'falls', loo
 
 type Tagged = Stroke & { slack: number };
 
-function draw(ctx: SketchContext): Part[] {
+const drawFor = (mode: BarMode, spec: AssemblySpec) => function draw(ctx: SketchContext): Part[] {
   const frame = bustFrame(ctx);
   const bar = lintelBar(ctx, frame);
   const m = magnet(bar, ctx);
@@ -175,9 +179,22 @@ function draw(ctx: SketchContext): Part[] {
   for (let i = 0; i <= 24; i++) for (let j = 0; j < 12; j++) sleevePts.push(pageOf(view, sleeve.point(i / 24, j / 12), PAGE));
   const windows = cCuts(ctx, { rect: m.rect, grip: m.poles[0] ?? { x: handX, y: m.rect.y0 - 40 }, sleeve: sleevePts });
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
-  art.black = windows.length ? art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver' })) : [];
-  return renderPly(spec, ctx, pens, { cuts: { gold: windows, bar: [barFootprint(bar, ctx)] }, art });
-}
+  if (mode === 'onlay') {
+    art.black = windows.length ? art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver' })) : [];
+    return renderPly(spec, ctx, pens, { cuts: { gold: windows, bar: [barFootprint(bar, ctx)] }, art });
+  }
+  // The bar as a window in the gold where it lies (L's bar placed by `barPose`, a waste cut), the black beneath carrying
+  // the bar's hatch in silver (as L's gold carries it in black ink), out under the window's edge by the bleed; the gold's
+  // marks run on in silver on the black, but not into the bar, where the lines and filings stop at its edge.
+  const barRing = barFootprint(bar, ctx).rings[0], inBar = (p: Point) => insideRing(barRing, p);
+  const pose = m.pose ?? { cx: (m.rect.x0 + m.rect.x1) / 2, cy: (m.rect.y0 + m.rect.y1) / 2, angle: 0 };
+  const hatch = holeBarPaths({ ...bar, centre: { x: pose.cx, y: pose.cy }, tilt: pose.angle }, spec.bleed + FILL_OVER, n(ctx, 'barPitch', 2.6, 0.6, 5));
+  art.black = [
+    ...art.gold.map(part => ({ ...part, id: `under-${part.id}`, pen: 'silver', paths: part.paths.flatMap(path => keepAlong(path, q => !inBar(q), 0.2)) })).filter(part => part.paths.length),
+    { id: 'bar-silver', pen: 'silver', paths: hatch },
+  ];
+  return renderPly(spec, ctx, pens, { cuts: { gold: [{ id: BAR_ID, label: 'BAR', rings: [barRing] }, ...windows] }, art });
+};
 
 /** A slab's eight corners in the world. */
 function corners(sl: Slab): THREE.Vector3[] {
@@ -185,15 +202,19 @@ function corners(sl: Slab): THREE.Vector3[] {
   return [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => new THREE.Vector3(x * sl.w / 2, y * sl.h / 2, z * sl.d / 2).applyMatrix4(m))));
 }
 
-const sketch: Sketch = {
-  name: 'Breach triptych: Lodestone C (the magnet)',
-  page: { ...PAGE },
-  pageAware: true,
-  pens,
-  // The top ply is the onlay, which is never rendered: the control starts on the gold sheet.
-  controls: [{ type: 'select', id: spec.control, label: 'Ply', default: 'gold', options: spec.plies.map(p => p.id) }, ...LODESTONE_CONTROLS],
-  assembly: spec,
-  draw,
-};
+/** C as a sketch: the bar a window in the gold (`window`, R7), or L's bar glued on as an onlay (`onlay`, R1 to R6). */
+export function lodestoneC(mode: BarMode): Sketch {
+  const spec = specFor(mode);
+  return {
+    name: mode === 'onlay' ? 'Breach triptych: Lodestone C (the magnet, the bar glued on)' : 'Breach triptych: Lodestone C (the magnet)',
+    page: { ...PAGE },
+    pageAware: true,
+    pens,
+    // With the onlay the top ply is never rendered: the control starts on the gold sheet either way.
+    controls: [{ type: 'select', id: spec.control, label: 'Ply', default: 'gold', options: spec.plies.map(p => p.id) }, ...LODESTONE_CONTROLS],
+    assembly: spec,
+    draw: drawFor(mode, spec),
+  };
+}
 
-export default sketch;
+export default lodestoneC('window');

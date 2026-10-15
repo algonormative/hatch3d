@@ -4,7 +4,7 @@ import { measureStrokeText, strokeTextOnPath } from '../../src/sketch/stroke-tex
 import { clipToRect } from '../kit/page.ts';
 import { pageOf } from '../kit/perspective.ts';
 import { solid, type Slab } from '../kit/slabs.ts';
-import { CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
+import { ASSEMBLY, CONTROLS, PAGE, TRIM, lintelFootprint, lintelRect, type LintelBar } from './world.ts';
 import { footprintOf } from '../kit/assembly.ts';
 import type { Ink } from '../kit/types.ts';
 import { CUT_CONTROL, LCUT_CONTROL, PORTAL_CONTROL } from './lodestone-cuts.ts';
@@ -26,6 +26,8 @@ const BUST_IDS = ['scale', 'density', 'slack', 'elbow', 'gaze', 'fov', 'fitMargi
 /** Every Lodestone panel declares these, so one params object draws all three. */
 export const LODESTONE_CONTROLS: Control[] = [
   ...CONTROLS.filter(c => BUST_IDS.includes(c.id)),
+  { type: 'select', id: 'barMode', label: 'The bars', default: 'window', options: ['window', 'onlay'],
+    optionLabels: { window: 'Windows: each bar cut from the sheet over what shows through (R7; two sheets a panel)', onlay: 'Onlay: L\'s bar cut out and glued on C (R1 to R6; with the sketch lodestone-c-onlay)' }, group: 'Magnet' },
   { type: 'slider', id: 'hangGap', label: 'Gap between the hung panels (the field runs on across it; 0 is R5\'s panels edge to edge)', default: 76.2, min: 0, max: 101.6, step: 0.1, units: 'mm', group: 'Magnet' },
   { type: 'select', id: 'reachFor', label: 'What the fist reaches for (bar slipping)', default: 'middle', options: ['middle', 'end'],
     optionLabels: { middle: 'The bar\'s middle, from below near the sheet\'s middle, at a slight angle', end: 'Its raised right end (R5)' }, group: 'Magnet' },
@@ -57,6 +59,16 @@ export const LODESTONE_CONTROLS: Control[] = [
   LCUT_CONTROL,
   PORTAL_CONTROL,
 ];
+
+/**
+ * Lodestone's assembly settings: Lintel's, with a 4 mm bleed (provisional, until the calibration plot measures the real
+ * registration error): every fill under a window covers the window grown by it.
+ */
+export const LODESTONE_ASSEMBLY = { ...ASSEMBLY, bleed: 4 } as const;
+/** How far past the bleed a fill under a window runs (mm), so the edge of the grown window is covered too. */
+export const FILL_OVER = 0.5;
+/** Whether the bars are windows cut from the sheet beneath (`barMode`, R7) rather than L's bar cut out and glued on C (R1 to R6). */
+export const barWindows = (ctx: SketchContext): boolean => ctx.params.barMode !== 'onlay';
 
 // ── The magnet and its field ─────────────────────────────────────────
 

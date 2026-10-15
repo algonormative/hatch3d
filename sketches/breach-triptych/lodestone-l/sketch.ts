@@ -17,11 +17,11 @@ import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
-import { lCuts } from '../lodestone-cuts.ts';
+import { inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
-  ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
+  ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, faceWordAt, flatRibbon, hatchedUnder, holeBarPaths, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { LODESTONE_CONTROLS, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -41,7 +41,7 @@ const plies = [
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
   { id: 'black', paper: PAPER.black, pens: ['silver', 'gold'], cutInk: 'silver' },
 ];
-export const spec: AssemblySpec = { ...ASSEMBLY, plies };
+export const spec: AssemblySpec = { ...LODESTONE_ASSEMBLY, plies };
 const pens = pensOf(['silver', 'gold', 'black']);
 
 /**
@@ -300,7 +300,7 @@ function draw(ctx: SketchContext): Part[] {
   for (const path of bar.paths) buckets.add('bar-carbon', path, true);
 
   // The censor bar in black ink on the gold, seen through the hole (the gold runs `bleed` under the hole's edge).
-  if (ctx.params.holeBar !== false) for (const path of holeBarPaths(bar, spec.bleed)) buckets.add('hole-carbon', path, true);
+  if (ctx.params.holeBar !== false) for (const path of holeBarPaths(bar, spec.bleed + FILL_OVER)) buckets.add('hole-carbon', path, true);
   for (const g of geometries) g.dispose();
 
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
@@ -311,8 +311,20 @@ function draw(ctx: SketchContext): Part[] {
   // The shirt cut out (`lCut` shirt): its stripes, fine lines down it, drawn in black on the gold beneath.
   if (windows.some(c => c.id.startsWith('shirt'))) for (const path of shirtStripes(body.trunk, view)) for (const inside of clipToRect(path, ART)) buckets.add('shirt-carbon', inside, true);
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
-  if (windows.length) art.gold.push(...art.black.filter(part => !part.id.startsWith('bar-')).map(part => ({ ...part, id: `under-${part.id}`, pen: 'black' })));
-  return renderPly(spec, ctx, pens, { cuts: { black: [bar.cut, ...windows] }, art });
+  // The tie and the shirt are filled with stripes over each window grown by the bleed (so a cut or registration a little
+  // off never shows bare gold at the edge): the tie's across it, the shirt's along it. The black's other marks run on
+  // across the gold everywhere else, so the corner and the notch are filled by them.
+  const grow = spec.bleed + FILL_OVER;
+  const tieAxis = Math.atan2(front.tie[40].y - front.tie[0].y, front.tie[40].x - front.tie[0].x);
+  const stripes = windows.flatMap(w => (w.id === 'tie' ? stripeFill(w.rings[0], tieAxis + Math.PI / 2 - 0.35, 1.5, grow) : w.id.startsWith('shirt') ? stripeFill(w.rings[0], tieAxis, 1.3, grow) : []));
+  const filled = windows.filter(w => w.id === 'tie' || w.id.startsWith('shirt')).map(w => inGrown(w.rings[0], grow));
+  if (windows.length) {
+    art.gold.push(...art.black.filter(part => !part.id.startsWith('bar-')).map(part => ({ ...part, id: `under-${part.id}`, pen: 'black', paths: part.paths.flatMap(path => keepAlong(path, q => !filled.some(f => f(q)), 0.15)) })).filter(part => part.paths.length));
+    if (stripes.length) art.gold.push({ id: 'fill-black', pen: 'black', paths: stripes });
+  }
+  // The bar: a window in the black (`barMode` window, R7), or a part cut out and kept for C (onlay, R1 to R6).
+  const barCutHere = barWindows(ctx) ? { ...bar.cut, kind: 'waste' as const, label: 'BAR' } : bar.cut;
+  return renderPly(spec, ctx, pens, { cuts: { black: [barCutHere, ...windows] }, art });
 }
 
 const sketch: Sketch = {

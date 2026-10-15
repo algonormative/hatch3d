@@ -1,5 +1,7 @@
 import type { Control, Cut, Point, SketchContext } from '../../src/sketch/types.ts';
 import { TRIM, convexHull } from './world.ts';
+import { distanceToRings, inRegion } from '../../packages/plot-core/src/region.ts';
+import { keepAlong } from '../kit/page.ts';
 
 /**
  * Lodestone's cut sets, as data: each scheme lists, per panel, simple shapes cut from one sheet to show the sheet
@@ -209,3 +211,26 @@ const R: Record<CutSchemeId, (a: RAnchors) => Cut[]> = {
 export const lCuts = (ctx: SketchContext, a: LAnchors): Cut[] => L[cutSchemeOf(ctx)](a, ctx);
 export const cCuts = (ctx: SketchContext, a: CAnchors): Cut[] => C[cutSchemeOf(ctx)](a);
 export const rCuts = (ctx: SketchContext, a: RAnchors): Cut[] => R[cutSchemeOf(ctx)](a);
+
+// ── Fills under windows ──────────────────────────────────────────────
+
+/** Whether a page point is inside a window, or within `grow` mm of it: the window grown by the bleed. */
+export const inGrown = (ring: Point[], grow: number) => (p: Point): boolean => inRegion(p, { rings: [ring] }) || distanceToRings(p, [ring]) <= grow;
+
+/**
+ * A stripe fill for the sheet under a window: straight lines `pitch` apart at `angle` (radians) across the window
+ * grown by `grow` (the bleed and a little), so a cut or a registration a little off never leaves bare paper at the edge.
+ */
+export function stripeFill(ring: Point[], angle: number, pitch: number, grow: number): Point[][] {
+  const xs = ring.map(p => p.x), ys = ring.map(p => p.y), pad = grow + pitch;
+  const box = { x0: Math.min(...xs) - pad, x1: Math.max(...xs) + pad, y0: Math.min(...ys) - pad, y1: Math.max(...ys) + pad };
+  const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2, r = Math.hypot(box.x1 - box.x0, box.y1 - box.y0) / 2;
+  const d = { x: Math.cos(angle), y: Math.sin(angle) }, nrm = { x: -d.y, y: d.x }, keep = inGrown(ring, grow);
+  const out: Point[][] = [];
+  for (let o = -r; o <= r; o += pitch) {
+    const a = { x: cx + nrm.x * o - d.x * r, y: cy + nrm.y * o - d.y * r }, b = { x: cx + nrm.x * o + d.x * r, y: cy + nrm.y * o + d.y * r };
+    out.push(...keepAlong([a, b], keep, 0.2));
+  }
+  return out;
+}
+

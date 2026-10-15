@@ -11,7 +11,7 @@ import { clipToRect, keepAlong } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { fitDepthRange, onGround, pageOf } from '../../kit/perspective.ts';
 import { insideRing } from '../../kit/page.ts';
-import { floorKind, hasPortal, rCuts } from '../lodestone-cuts.ts';
+import { cutSchemeOf, floorKind, hasPortal, inGrown, rCuts, stripeFill } from '../lodestone-cuts.ts';
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
@@ -20,8 +20,8 @@ import type { JointAngles, JointName, Proportions } from '../../kit/mannequin/sk
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
-import { ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
+import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -39,7 +39,7 @@ const plies = [
 ];
 /** The signature: carbon, in a box at the foot of the sheet, right of the figure. */
 const SIGNATURE = { ply: 'white', pen: 'carbon', box: { x: 222, y: 394, width: 40, height: 12 } };
-export const spec: AssemblySpec = { ...ASSEMBLY, plies, signature: SIGNATURE };
+export const spec: AssemblySpec = { ...LODESTONE_ASSEMBLY, plies, signature: SIGNATURE };
 const pens = pensOf(['silver', 'fluoro-pink', 'carbon', 'ultramarine']);
 
 /**
@@ -384,6 +384,12 @@ function draw(ctx: SketchContext): Part[] {
   const lift = (p: Point) => Math.max(0, Math.min(1, (groundY - p.y) / (groundY - crownY))) ** 1.7;
   const pullBody = pulled ? fieldPull(m, PULL_MM, lift) : (p: Point) => p;
   const pullHead = pulled ? fieldPull(m, 1.5 * PULL_MM, lift) : (p: Point) => p;
+  // The figure's tie, as on L but inverted: cut from the white (in the tie cut set), it shows black, filled with silver
+  // stripes over the window grown by the bleed; traced on the trunk and moved with the field's pull, as its marks are.
+  const tie = suitFrontOutlines(body.trunk, view).tie.map(pullBody);
+  const grow = spec.bleed + FILL_OVER;
+  const tieCut = cutSchemeOf(ctx) === 'tie';
+  const inTie = tieCut ? inGrown(tie, grow) : () => false;
 
   // The strands: in at the left edge at the heights the field left C, gathered at the hands (where the pull has moved
   // them), led down into the disc, and with the pull, bowed toward C as they fall.
@@ -432,8 +438,8 @@ function draw(ctx: SketchContext): Part[] {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y).map(st.group === 'helix' ? pullHead : pullBody), ART)) {
           for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) {
             buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, piece, false);
-            // Where the figure stands on the disc, the black shows: the same mark there in silver.
-            buckets.add(`under-${st.ink}`, piece, false);
+            // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
+            for (const part of keepAlong(piece, q => !inTie(q), 0.15)) buckets.add(`under-${st.ink}`, part, false);
           }
         }
       },
@@ -455,7 +461,8 @@ function draw(ctx: SketchContext): Part[] {
   // the ground. A ring about a ground point, sampled on the floor plane and kept inside the floor disc.
   const fx = String(ctx.params.groundFx ?? 'pulse');
   const fxSilver: Point[][] = [], fxPink: Point[][] = [];
-  const onDisc = (q: Point) => insideRing(disc, q);
+  // Out over the floor grown by the bleed, so a cut a little off never shows bare black at the floor's edge.
+  const onDisc = inGrown(disc, grow);
   const ringAt = (c: THREE.Vector3, r: number, a0 = 0, a1 = 2 * Math.PI, n = 144): Point[] => Array.from({ length: n + 1 }, (_, i) => pageOf(view, c.clone().add(new THREE.Vector3(r * Math.cos(a0 + (a1 - a0) * i / n), 0, r * Math.sin(a0 + (a1 - a0) * i / n))), PAGE));
   const keepOnDisc = (path: Point[], into: Point[][]) => { for (const piece of keepAlong(path, onDisc, 0.2)) into.push(piece); };
   const landing = (st: { path: Point[] }) => onGround(view, st.path[st.path.length - 1], PAGE);
@@ -500,13 +507,14 @@ function draw(ctx: SketchContext): Part[] {
   for (const p of parts.filter(q => q.id.startsWith('strand-'))) art.white.push({ ...p, pen: STRAND_PEN.white[p.pen as 'ultramarine' | 'vermilion'] });
   for (const p of parts.filter(q => q.id.startsWith('strandunder-'))) art.black.push({ ...p, pen: STRAND_PEN.black[p.pen as 'ultramarine' | 'vermilion'] });
   if (fxSilver.length) art.black.push({ id: 'fx-silver', pen: 'silver', paths: fxSilver });
+  if (tieCut) {
+    const axis = Math.atan2(tie[40].y - tie[0].y, tie[40].x - tie[0].x);
+    art.black.push({ id: 'tie-silver', pen: 'silver', paths: stripeFill(tie, axis + Math.PI / 2 - 0.35, 1.5, grow) });
+  }
   if (fxPink.length) art.black.push({ id: 'fx-pink', pen: 'fluoro-pink', paths: fxPink });
   // The cut set's windows in the white (`cutScheme`), beside the floor disc: the black shows there, the figure and the
   // strands drawn on it in silver (the `under` marks).
   const headPage = pullHead(pageOf(view, head.centre, PAGE));
-  // The figure's tie, as on L but inverted: cut from the white, it shows black, its stripes in silver (the `under` marks);
-  // traced on the trunk and moved with the field's pull, as the figure's marks are.
-  const tie = suitFrontOutlines(body.trunk, view).tie.map(pullBody);
   const windows = rCuts(ctx, { head: headPage, headR: head.r * mmPerUnit(head.centre), gather: g, entries: exits, floor: disc, tie, ...(portal ? { portal } : {}) });
   return renderPly(spec, ctx, pens, { cuts: { white: windows }, art });
 }
