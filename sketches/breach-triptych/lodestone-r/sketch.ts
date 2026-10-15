@@ -149,7 +149,7 @@ function draw(ctx: SketchContext): Part[] {
     return c;
   };
   let target = s.at('chest').clone().setY(s.at('chest').y * 0.7), D = 60 * K;
-  const top = TRIM.y0 + 26, bottom = TRIM.y1 - 40, cx = 0.6 * PAGE.width, right = TRIM.x1 - 12, left = 0.3 * PAGE.width;
+  const top = TRIM.y0 + 20, bottom = TRIM.y1 - 30, cx = 0.58 * PAGE.width, right = TRIM.x1 - 6, left = 0.2 * PAGE.width;
   for (let it = 0; it < 40; it++) {
     const c = camera(target, D);
     const ps = pts.map(p => pageOf(c, p, PAGE));
@@ -176,7 +176,9 @@ function draw(ctx: SketchContext): Part[] {
   for (const t of legs) { const stop = stops.get(t.id)!; cloth(pinstripeTube(t, env, { seams: [0, 0.5], hems: [stop - 0.004], creases: [0.25], stop }, LOOK)); }
   for (const t of [body.trunk, ...cut]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }));
   const light = new THREE.Vector3(-0.6, 0.7, 0.4).normalize();
-  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, false, 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)))) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
+  // Hands hatched in the raking light; shoes as outlines (the planted one stands on the disc, where a hatched block
+  // would read as a slab of silver).
+  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)))) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
   const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
     { radius: 0.12 * K, width: 0.6 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.4, interruption: 0.1 });
   for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });

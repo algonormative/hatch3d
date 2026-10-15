@@ -64,19 +64,19 @@ function draw(ctx: SketchContext): Part[] {
   const handX = m.rect.x0 + (m.rect.x1 - m.rect.x0) * n(ctx, 'handX', 0.68, 0, 1);
   // Turned toward profile: the back of the hand to the upper right, its fingers relaxing open as they let go.
   const along = new THREE.Vector3(-0.32, -1, 0.18).normalize(), across = new THREE.Vector3(0.5, -0.12, 1).normalize();
-  const size = 3.4;
+  const size = 4.4;
   const build = (wrist: THREE.Vector3) => slabHand({ wrist, along, across, size, curl: 0.34, spread: 0.1 });
   let wrist = world({ x: handX, y: 48 });
   for (let it = 0; it < 4; it++) {
     const low = Math.max(...build(wrist).flatMap(sl => corners(sl)).map(p => pageOf(view, p, PAGE).y));
-    wrist = wrist.clone().add(new THREE.Vector3(0, -(m.rect.y0 - 9 - low) / MM_PER_UNIT, 0));
+    wrist = wrist.clone().add(new THREE.Vector3(0, -(m.rect.y0 - 5 - low) / MM_PER_UNIT, 0));
   }
   const hand = build(wrist);
   // The sleeve and the shirt cuff, out of the top of the sheet.
   const up = along.clone().negate();
-  const shirt = new Tube('shirt', [wrist.clone().addScaledVector(up, 1.5), wrist.clone().addScaledVector(up, -0.15)], [[0, 1.25, 1.1], [1, 1.2, 1.05]], across, 1, [0, 0], undefined, 6);
-  const sleeve = new Tube('sleeve', [wrist.clone().addScaledVector(up, 1.1), wrist.clone().addScaledVector(up, 6), wrist.clone().addScaledVector(up, 14)],
-    [[0, 1.7, 1.5], [1, 1.8, 1.6]], across, 1, [0, 0], undefined, 6);
+  const shirt = new Tube('shirt', [wrist.clone().addScaledVector(up, 1.9), wrist.clone().addScaledVector(up, -0.2)], [[0, 1.6, 1.4], [1, 1.55, 1.35]], across, 1, [0, 0], undefined, 6);
+  const sleeve = new Tube('sleeve', [wrist.clone().addScaledVector(up, 1.4), wrist.clone().addScaledVector(up, 8), wrist.clone().addScaledVector(up, 18)],
+    [[0, 2.2, 1.95], [1, 2.3, 2.05]], across, 1, [0, 0], undefined, 6);
   const env: ToneEnv = { density: 0.3, dark: () => 0.5, screen: p => pageOf(view, p, PAGE) };
   const strokes: Tagged[] = [];
   const cloth = (list: ClothStroke[]) => { for (const st of list) strokes.push({ ink: st.ink, group: 'hand', family: st.family ?? 'hatch', points: st.points, slack: 0.05 }); };

@@ -58,6 +58,8 @@ export function fieldAt(m: Magnet, p: Point): Point {
 const inRect = (r: Magnet['rect'], p: Point, grow = 0) => p.x > r.x0 - grow && p.x < r.x1 + grow && p.y > r.y0 - grow && p.y < r.y1 + grow;
 /** How far the field lines are followed off the sheet before they are let go (mm). */
 const ROAM = 90;
+/** How far a field line runs under the bar before it stops (mm): the assembly's bleed. */
+const UNDER = 2;
 
 /** One field line from `start`, followed along the field (`dir` 1) or against it (-1) until it reaches a pole, enters the bar or leaves the roam. */
 function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Point[]; ended: 'pole' | 'away' } {
@@ -68,7 +70,8 @@ function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Poi
     const k1 = at(p), k2 = at({ x: p.x + k1.x * step / 2, y: p.y + k1.y * step / 2 }), k3 = at({ x: p.x + k2.x * step / 2, y: p.y + k2.y * step / 2 }), k4 = at({ x: p.x + k3.x * step, y: p.y + k3.y * step });
     p = { x: p.x + step * (k1.x + 2 * k2.x + 2 * k3.x + k4.x) / 6, y: p.y + step * (k1.y + 2 * k2.y + 2 * k3.y + k4.y) / 6 };
     pts.push(p);
-    if (inRect(m.rect, p, 0.5)) return { points: pts, ended: 'pole' };
+    // Into the bar by the assembly's bleed, so a bar glued a little off never shows a gap at the pole.
+    if (inRect(m.rect, p, -UNDER)) return { points: pts, ended: 'pole' };
     if (p.x < TRIM.x0 - ROAM || p.x > TRIM.x1 + ROAM || p.y < TRIM.y0 - ROAM || p.y > TRIM.y1 + ROAM) return { points: pts, ended: 'away' };
   }
   return { points: pts, ended: 'away' };
@@ -124,7 +127,7 @@ export function filings(ctx: SketchContext, m: Magnet, candidates: number, keepO
   const out: Point[][] = [];
   for (let i = 0; i < candidates; i++) {
     const p = { x: TRIM.x0 + (TRIM.x1 - TRIM.x0) * rng(), y: TRIM.y0 + (TRIM.y1 - TRIM.y0) * rng() };
-    if (inRect(m.rect, p, 2.5) || keepOut(p)) { rng(); continue; }
+    if (inRect(m.rect, p, 0.9) || keepOut(p)) { rng(); continue; }
     const f = fieldAt(m, p), s = Math.hypot(f.x, f.y);
     if (rng() > Math.min(1, 2.4 * (s / ref) ** 0.85)) continue;
     if (near(p)) continue;
