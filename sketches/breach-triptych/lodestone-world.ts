@@ -23,6 +23,7 @@ const BUST_IDS = ['scale', 'density', 'slack', 'elbow', 'gaze', 'fov', 'fitMargi
 /** Every Lodestone panel declares these, so one params object draws all three. */
 export const LODESTONE_CONTROLS: Control[] = [
   ...CONTROLS.filter(c => BUST_IDS.includes(c.id)),
+  { type: 'slider', id: 'hangGap', label: 'Gap between the hung panels (the field runs on across it; 0 is R5\'s panels edge to edge)', default: 76.2, min: 0, max: 101.6, step: 0.1, units: 'mm', group: 'Magnet' },
   { type: 'select', id: 'barPose', label: 'Where C\'s bar lies', default: 'slipping', options: ['slipping', 'r4'],
     optionLabels: { slipping: 'Slipping: near the middle, tilted steeply, just out of the reaching hand\'s grasp', r4: 'R4: level at the eye height of L\'s hole' }, group: 'Magnet' },
   { type: 'slider', id: 'fieldLines', label: 'Field lines leaving each pole', default: 26, min: 8, max: 48, step: 1, group: 'Magnet' },
@@ -64,6 +65,8 @@ export interface Magnet {
   pose?: { cx: number; cy: number; angle: number };
   charges: { x: number; y: number; q: number }[];
   poles: { x: number; y: number; q: number; r: number }[];
+  /** The gap between the hung panels (mm): the field runs on across it, empty wall. 0 when absent. */
+  gap?: number;
 }
 
 /** A point of the bar's own (level) frame on the page, and back. The identity for a level bar. */
@@ -122,7 +125,10 @@ export function magnet(bar: LintelBar, ctx?: SketchContext): Magnet {
     poles.push({ ...g, q: -q, r: GRIP_R }, { ...arm, q, r: GRIP_R });
     for (const pole of poles) charges.push({ x: pole.x, y: pole.y, q: pole.q });
   }
-  return pose ? { rect, pose, charges, poles } : { rect, charges, poles };
+  const gap = ctx ? n(ctx, 'hangGap', 76.2, 0, 101.6) : 0;
+  const made: Magnet = pose ? { rect, pose, charges, poles } : { rect, charges, poles };
+  if (gap > 0) made.gap = gap;
+  return made;
 }
 
 /** The slipping bar's right end (the middle of its end face) on the page, and where the reaching fist closes, just short of it. */
@@ -158,11 +164,13 @@ export const FIST_MM = 56;
  * next at the same height). `toC` takes a panel's page point into C's frame, where the magnet is.
  */
 export const HANG_GAP = 0;
+/** The magnet's hanging gap (`hangGap`), 0 for R5's panels edge to edge. */
+export const gapOf = (m: Pick<Magnet, 'gap'>): number => m.gap ?? HANG_GAP;
 const PANEL_W = TRIM.x1 - TRIM.x0;
 export type Panel = 'l' | 'c' | 'r';
-export const toC = (panel: Panel, p: Point): Point => ({ x: p.x + (panel === 'l' ? -1 : panel === 'r' ? 1 : 0) * (PANEL_W + HANG_GAP), y: p.y });
-/** The field at a page point of a panel. */
-export const fieldIn = (m: Magnet, panel: Panel, p: Point): Point => fieldAt(m, toC(panel, p));
+export const toC = (panel: Panel, p: Point, gap = HANG_GAP): Point => ({ x: p.x + (panel === 'l' ? -1 : panel === 'r' ? 1 : 0) * (PANEL_W + gap), y: p.y });
+/** The field at a page point of a panel, the panels hung `m.gap` apart. */
+export const fieldIn = (m: Magnet, panel: Panel, p: Point): Point => fieldAt(m, toC(panel, p, gapOf(m)));
 
 /**
  * L's ribbon pulled by the magnet: from the crown of the bust's coil it sets out up and to the right (R1's way), and the
@@ -243,6 +251,8 @@ export function ribbonBleed(crown: Point, m: Magnet, bar: LintelBar, o: { width:
 const UNRAVEL: [number, Ink][] = [[-1, 'vermilion'], [-2 / 3, 'violet'], [-1 / 3, 'ultramarine'], [0, 'acid'], [1 / 3, 'ultramarine'], [2 / 3, 'violet'], [1, 'vermilion']];
 /** Along the ribbon (mm): where it starts to loosen, where it has come apart into separate lines, and how far they then spread (times its half width). */
 const LOOSEN = { from: 40, to: 190, spread: 3.2 };
+/** Steered (panels hung apart), how far before L's edge the ribbon reaches the level height and runs on level (mm). */
+const STEER_IN = 25;
 
 export interface Unravel extends Bleed {
   /** The twist's pitch multiple at each point of `ribbon` (by identity), for `flatRibbon`'s `pitchAt`. */
@@ -265,12 +275,22 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
   const half = o.width / 2, base = ribbonPitch(m, bar), step = 0.5;
   const dirTo = (a: number) => ({ x: Math.cos(a), y: Math.sin(a) });
   const toNorth = (p: Point) => { const B = fieldIn(m, 'l', p), l = Math.hypot(B.x, B.y) || 1; return { x: -B.x / l, y: -B.y / l }; };
+  // With the panels hung apart, the ribbon is steered, after its arc overhead, down to the height where the field
+  // crosses the gap level (`seamLevel`) and runs on level to L's edge, the field taking it over there: its lines then
+  // cross the gap near level, and drift least if the panels are hung a little nearer or farther.
+  const steer = gapOf(m) > 0 ? seamLevel(m) : undefined;
   // The centreline, stepped until it is fully the field's.
   const c: Point[] = [crown], ss: number[] = [0];
-  let p = crown;
-  for (let s = 0; s < LOOSEN.to + 40 && p.x < TRIM.x1 + 6; s += step) {
-    const design = dirTo(THREE.MathUtils.degToRad(-65 + 70 * smoothstep(0, 110, s)));
-    const w = smoothstep(60, LOOSEN.to - 10, s), f = toNorth(p);
+  let p = crown, levelled = false;
+  for (let s = 0; (steer === undefined ? s < LOOSEN.to + 40 : s < 900) && p.x < TRIM.x1 + 6; s += step) {
+    let design = dirTo(THREE.MathUtils.degToRad(-65 + 70 * smoothstep(0, 110, s)));
+    if (steer !== undefined) {
+      // After the arc, down toward the level height STEER_IN before the edge; once there, level on to the edge.
+      const tx = TRIM.x1 - STEER_IN - p.x, ty = steer - p.y, tl = Math.hypot(tx, ty) || 1, k = smoothstep(90, 150, s);
+      if (tl < 3 || p.x >= TRIM.x1 - STEER_IN) levelled = true;
+      design = levelled ? { x: 1, y: 0 } : { x: design.x * (1 - k) + k * tx / tl, y: design.y * (1 - k) + k * ty / tl };
+    }
+    const w = steer === undefined ? smoothstep(60, LOOSEN.to - 10, s) : smoothstep(STEER_IN, 0, TRIM.x1 - p.x), f = toNorth(p);
     const dx = design.x * (1 - w) + f.x * w;
     let dy = design.y * (1 - w) + f.y * w;
     // Kept under the top trim: near it the heading bends level.
@@ -279,7 +299,10 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
     p = { x: p.x + step * dx / l, y: p.y + step * dy / l };
     c.push(p); ss.push(s + step);
   }
-  const u = ss.map(s => smoothstep(LOOSEN.from, LOOSEN.to, s));
+  // Steered, it has come apart by 12 mm before L's edge; else by LOOSEN.to along it.
+  const iTo = steer === undefined ? c.length - 1 : Math.max(1, c.findIndex(q => q.x >= TRIM.x1 - 12));
+  const loosenTo = steer === undefined ? LOOSEN.to : ss[iTo];
+  const u = ss.map(s => smoothstep(LOOSEN.from, loosenTo, s));
   const mul = new Map<Point, number>();
   let phase = 0;
   const cosPhase = c.map((q, i) => {
@@ -291,7 +314,7 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
   const normal = c.map((_, i) => { const a = c[Math.max(0, i - 1)], b = c[Math.min(c.length - 1, i + 1)], d = Math.hypot(b.x - a.x, b.y - a.y) || 1; return { x: -(b.y - a.y) / d, y: (b.x - a.x) / d }; });
   const offset = (i: number, v: number) => v * half * ((1 - u[i]) * cosPhase[i] + u[i] * LOOSEN.spread);
   const at = (i: number, v: number): Point => ({ x: c[i].x + normal[i].x * offset(i, v), y: c[i].y + normal[i].y * offset(i, v) });
-  const iA = ss.findIndex(s => s >= LOOSEN.from), iB = c.length - 1;
+  const iA = ss.findIndex(s => s >= LOOSEN.from), iB = iTo;
   const strands = UNRAVEL.map(([v, ink]) => {
     const path: Point[] = [];
     for (let i = iA; i <= iB; i++) path.push(at(i, v));
@@ -310,6 +333,23 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
     ribs.push([at(i, -1), at(i, 1)]);
   }
   return { ribbon: c.slice(0, iA + 1), strands, ribs, pitchAt: q => mul.get(q) ?? base(q) };
+}
+
+/**
+ * The height (page y) where the field crosses the gap between L and C level: at the gap's middle, of the heights where
+ * the field points on toward the north pole (rightward), the one where it is most nearly level, the nearest the
+ * north pole's height among near-equals.
+ */
+export function seamLevel(m: Magnet): number {
+  const x = TRIM.x1 + gapOf(m) / 2, north = barToPage(m, { x: m.rect.x0, y: (m.rect.y0 + m.rect.y1) / 2 });
+  let best = north.y, score = Infinity;
+  for (let y = TRIM.y0 + 40; y <= TRIM.y1 - 40; y += 0.5) {
+    const B = fieldIn(m, 'l', { x, y });
+    if (B.x >= 0) continue;
+    const v = Math.abs(B.y / B.x) + 0.002 * Math.abs(y - north.y);
+    if (v < score) { score = v; best = y; }
+  }
+  return best;
 }
 
 /** The lines L's ribbon becomes, by `ribbonBleed` (with `ribbonField` on): the progressive unravel, R3's split, or R2's one line. */
@@ -356,7 +396,7 @@ export function fieldAt(m: Magnet, p: Point): Point {
 }
 
 const inRect = (r: Magnet['rect'], p: Point, grow = 0) => p.x > r.x0 - grow && p.x < r.x1 + grow && p.y > r.y0 - grow && p.y < r.y1 + grow;
-/** How far the field lines are followed off the sheet before they are let go (mm). */
+/** How far the field lines are followed off the sheet before they are let go (mm), beyond the hanging gap. */
 const ROAM = 90;
 /** How far a field line runs under the bar before it stops (mm): the assembly's bleed. */
 const UNDER = 2;
@@ -373,7 +413,8 @@ function follow(m: Magnet, start: Point, dir: 1 | -1, step = 0.6): { points: Poi
     // Into the bar by the assembly's bleed, so a bar glued a little off never shows a gap at the pole.
     if (inRect(m.rect, pageToBar(m, p), -UNDER)) return { points: pts, ended: 'pole' };
     if (m.poles.some(q => Math.hypot(p.x - q.x, p.y - q.y) < q.r)) return { points: pts, ended: 'hand' };
-    if (p.x < TRIM.x0 - ROAM || p.x > TRIM.x1 + ROAM || p.y < TRIM.y0 - ROAM || p.y > TRIM.y1 + ROAM) return { points: pts, ended: 'away' };
+    const roam = ROAM + gapOf(m);
+    if (p.x < TRIM.x0 - roam || p.x > TRIM.x1 + roam || p.y < TRIM.y0 - roam || p.y > TRIM.y1 + roam) return { points: pts, ended: 'away' };
   }
   return { points: pts, ended: 'away' };
 }
@@ -470,23 +511,63 @@ export function filings(ctx: SketchContext, m: Magnet, candidates: number, keepO
 }
 
 /**
- * Where the field lines cross C's right trim edge, top to bottom: R's strands come in at these heights. At most `most`
- * of them, spread over the crossings, none closer than `gap` mm to the last.
+ * Where the field lines reach R's left trim edge, top to bottom, with the slope there (dy/dx): R's strands come in at
+ * these heights. The panels hang `gap` apart (C's frame: R's left trim at C's right trim plus the gap), and the field
+ * runs on across it. With a gap, lines crossing near level are preferred (they drift least when the panels are hung
+ * a little nearer or farther): those steeper than MAX_SLOPE are left out while enough others remain. At most `most`,
+ * spread over the crossings, none closer than `spacing` mm to the last.
  */
-export function rightExits(lines: Point[][], most = 7, gap = 9): number[] {
-  const ys: number[] = [];
+const MAX_SLOPE = 0.45;
+export function rightExits(lines: Point[][], most = 7, spacing = 9, gap = 0): { y: number; slope: number }[] {
+  const x = TRIM.x1 + gap;
+  let found: { y: number; slope: number }[] = [];
   for (const line of lines) for (let i = 1; i < line.length; i++) {
     const a = line[i - 1], b = line[i];
-    if ((a.x - TRIM.x1) * (b.x - TRIM.x1) <= 0 && a.x !== b.x) {
-      const y = a.y + (b.y - a.y) * (TRIM.x1 - a.x) / (b.x - a.x);
-      if (y > TRIM.y0 + 25 && y < TRIM.y1 - 60) ys.push(y);
+    if ((a.x - x) * (b.x - x) <= 0 && a.x !== b.x) {
+      const y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+      if (y > TRIM.y0 + 25 && y < TRIM.y1 - 60) found.push({ y, slope: (b.y - a.y) / (b.x - a.x) });
     }
   }
-  ys.sort((a, b) => a - b);
-  const kept: number[] = [];
-  for (const y of ys) if (!kept.length || y - kept[kept.length - 1] >= gap) kept.push(y);
+  if (gap > 0) { const level = found.filter(e => Math.abs(e.slope) <= MAX_SLOPE); if (level.length >= 5) found = level; }
+  found.sort((a, b) => a.y - b.y);
+  const kept: { y: number; slope: number }[] = [];
+  for (const e of found) if (!kept.length || e.y - kept[kept.length - 1].y >= spacing) kept.push(e);
   if (kept.length <= most) return kept;
   return Array.from({ length: most }, (_, i) => kept[Math.round(i * (kept.length - 1) / (most - 1))]);
+}
+
+/**
+ * The lines that carry C's field into R across the gap: SEAM_LINES field lines through R's left edge (hung the gap
+ * away), SEAM_STEP mm apart about the height where the field crosses it level (the nearest the south pole's height), each followed
+ * both ways. They are drawn in C with the rest of the field (`withSeamLines`), and R's strands come in where they reach
+ * R's left edge: near level, they drift least if the panels are hung a little nearer or farther.
+ */
+const SEAM_LINES = 7, SEAM_STEP = 6;
+export function seamLines(m: Magnet): Point[][] {
+  const x = TRIM.x1 + gapOf(m), south = barToPage(m, { x: m.rect.x1, y: (m.rect.y0 + m.rect.y1) / 2 });
+  let level = south.y, score = Infinity;
+  for (let y = TRIM.y0 + 60; y <= TRIM.y1 - 100; y += 0.5) {
+    const B = fieldAt(m, { x, y }), v = Math.abs(B.y / (B.x || 1e-12)) + 0.002 * Math.abs(y - south.y);
+    if (v < score) { score = v; level = y; }
+  }
+  return Array.from({ length: SEAM_LINES }, (_, k) => {
+    const p = { x, y: level + (k - (SEAM_LINES - 1) / 2) * SEAM_STEP };
+    const fwd = follow(m, p, 1), back = follow(m, p, -1);
+    return [...back.points.reverse(), ...fwd.points.slice(1)];
+  });
+}
+
+/** C's field lines with the seam lines added, less any line that comes within 2.5 mm of a seam line at C's right edge. */
+export function withSeamLines(m: Magnet, lines: Point[][]): Point[][] {
+  if (!gapOf(m)) return lines;
+  const seams = seamLines(m), at = seams.map(l => crossingY(l, TRIM.x1)).filter((y): y is number => y !== undefined);
+  return [...lines.filter(l => { const y = crossingY(l, TRIM.x1); return y === undefined || at.every(a => Math.abs(a - y) > 2.5); }), ...seams];
+}
+
+/** Where R's strands come in, with the slope there: the seam lines' heights at R's left edge (panels hung apart), else `rightExits` (R5). */
+export function rEntries(m: Magnet, lines: Point[][]): { y: number; slope: number }[] {
+  if (!gapOf(m)) return rightExits(lines);
+  return rightExits(seamLines(m), SEAM_LINES, 0.1, gapOf(m));
 }
 
 /** A word along a page line (a field line or a strand), `offset` mm to its side, starting `from` mm along it. */

@@ -21,7 +21,7 @@ import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, ASSEMBLY, H, MM_X, MM_Y, PAGE, PAPER, TRIM, W, bustFrame, lintelBar, pensOf, smoothPath } from '../world.ts';
-import { LODESTONE_CONTROLS, fieldLines, fieldPull, magnet, orientedSlab, rightExits, slabHand, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, fieldLines, fieldPull, gapOf, rEntries, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -128,7 +128,8 @@ function draw(ctx: SketchContext): Part[] {
   // One field across the triptych: C's magnet (with the gripping hand's pole when it pulls), whose lines leave C's right
   // edge at the heights R's strands come in, and whose field reaches R and pulls at the figure.
   const m = magnet(bar, ctx);
-  const exits = rightExits(fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
+  const entering = rEntries(m, fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
+  const exits = entering.map(e => e.y);
   const clean = ctx.params.figure === 'clean';
   const pulled = ctx.params.figureField !== false;
 
@@ -255,7 +256,9 @@ function draw(ctx: SketchContext): Part[] {
   const strands = exits.map((y, k) => {
     const t = exits.length > 1 ? k / (exits.length - 1) - 0.5 : 0;
     // Level through the trim, so each strand meets its field line from C at exactly the height it left C's edge.
-    const path = smoothPath([{ x: TRIM.x0 - 6, y }, { x: TRIM.x0, y }, { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
+    // In along the field line's own slope at the edge (level with no gap, as R2 to R5), so it meets its line from C.
+    const slope = gapOf(m) > 0 ? entering[k].slope : 0;
+    const path = smoothPath([{ x: TRIM.x0 - 6, y: y - 6 * slope }, { x: TRIM.x0, y }, ...(slope ? [{ x: TRIM.x0 + 8, y: y + 8 * slope }] : []), { x: TRIM.x0 + 26, y: y + (g.y - y) * 0.12 }, { x: g.x - 34, y: g.y + (y - g.y) * 0.35 + 6 * t }, { x: g.x + 3 * t, y: g.y + 2 * t },
       { x: g.x - 10 + 14 * t + bow, y: (g.y + discCentre.y) / 2 }, { x: discCentre.x + 22 * t, y: discCentre.y + 3 * Math.abs(t) }]);
     return { path, ink: (k === pink ? 'vermilion' : 'ultramarine') as Ink };
   });

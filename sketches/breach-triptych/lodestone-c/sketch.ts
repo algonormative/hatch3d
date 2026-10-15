@@ -16,7 +16,7 @@ import { pinstripeTube } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { ART, ASSEMBLY, BAR_ID, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, fewerRings, lintelBar, pensOf } from '../world.ts';
 import { cCuts } from '../lodestone-cuts.ts';
-import { LODESTONE_CONTROLS, barEnd, barFootprint, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
+import { LODESTONE_CONTROLS, barEnd, barFootprint, gapOf, withSeamLines, clipTrim, crossingY, fieldLines, filings, handFromBottom, lineToNorth, magnet, ribbonLines, slabHand, squareFist, wordAlong } from '../lodestone-world.ts';
 import { headCoil } from '../../kit/agent.ts';
 
 /**
@@ -126,7 +126,8 @@ function draw(ctx: SketchContext): Part[] {
   for (const g of geos) g.dispose();
 
   // The field, and the words along two of its lines ("falls into"), which the filings give way to.
-  const lines = fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48)));
+  // With the panels hung apart, the lines that carry the field across the gap into R are among them (`withSeamLines`).
+  const lines = withSeamLines(m, fieldLines(m, Math.round(n(ctx, 'fieldLines', 26, 8, 48))));
   // The closed loops under the bar, innermost first.
   const loops = lines.filter(l => Math.max(...l.map(p => p.y)) > m.rect.y1 + 10 && l.every(p => p.y > TRIM.y0 && p.y < TRIM.y1 && p.x > TRIM.x0 && p.x < TRIM.x1))
     .sort((a, b) => Math.max(...a.map(p => p.y)) - Math.max(...b.map(p => p.y)));
@@ -163,7 +164,8 @@ function draw(ctx: SketchContext): Part[] {
     const paths = ribbonLines(ctx, crown, m, bar, { width: THREAD.widthMm, pitch: THREAD.pitchMm });
     for (const path of paths) {
       const y = crossingY(path, TRIM.x1);
-      if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0, y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
+      // L hangs the gap to the left: the line leaves L's edge there and runs on across the gap into C.
+      if (y !== undefined) for (const line of clipTrim([lineToNorth(m, { x: TRIM.x0 - gapOf(m), y })])) for (const piece of keepAlong(line, p => !handArea(p) && !clear(p), 0.2)) buckets.add('field-carbon', piece, true);
     }
   }
 
