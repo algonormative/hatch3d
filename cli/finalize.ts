@@ -22,6 +22,7 @@ import { targetPage } from '../src/sketch/render-target.ts';
 import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, signatureBox, tryParseFrom, worldCuts, worldSha256, type AssemblyReport, type PlyResult } from './assembly-world.ts';
 import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
+import { INKS } from '../src/sketch/materials.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -51,6 +52,8 @@ export interface Stack {
   edition?: number;
   /** Title drawn on each print when its sketch has title controls, e.g. "Breach Cathedral {version} {hash}". */
   printTitle?: string;
+  /** The physical pen to show for a layer id when plotter-server asks for it ("Load pen"), e.g. { "carbon": "Micron 01 black" }. */
+  penNames?: Record<string, string>;
 }
 
 export interface BuildVersion { version: string; hash: string; dirty: boolean }
@@ -535,7 +538,22 @@ export function toSketchGrammar(vpypeSvg: string, sourceSvg: string, plan: Map<n
  * plotter-server's sketch queue config (format hatch3d-sketch-v1), as the viewer's upload plugin writes it:
  * page and pens must match the prepared SVG's units and layers, which the server checks on import.
  */
-export function serverConfig(resultPath: string, sourceSvg: string, report: PieceReport): Record<string, unknown> {
+/**
+ * The pen plotter-server names when it asks for a layer ("Load pen", and the phone notice), as `name` on the layer:
+ * the stack's `penNames` first; then, for a ply of an assembly, the catalog's physical pen for its ink, the cut guides
+ * and crop marks being drawn with the ply's cut ink. Undefined leaves the server showing the layer id.
+ */
+export function penName(id: string, stack: Pick<Stack, 'penNames'>, assembly?: Pick<AssemblyReport, 'cutPen' | 'cutInk'>): string | undefined {
+  const own = stack.penNames && Object.prototype.hasOwnProperty.call(stack.penNames, id) ? stack.penNames[id] : undefined;
+  if (own) return own;
+  if (!assembly) return undefined;
+  const role = id === assembly.cutPen ? ' (cut guides)' : id === 'finishing-border' ? ' (crop marks)' : '';
+  const ink = role ? assembly.cutInk : id;
+  const pen = Object.prototype.hasOwnProperty.call(INKS, ink) ? INKS[ink].pen : undefined;
+  return pen ? `${pen}${role}` : undefined;
+}
+
+export function serverConfig(resultPath: string, sourceSvg: string, report: PieceReport, name: (id: string) => string | undefined = () => undefined): Record<string, unknown> {
   const result = JSON.parse(readFileSync(resultPath, 'utf8')) as { identity: string; metadata: { name: string; page: Page; pens: (Pen & { passes?: number })[] }; params: unknown; effectiveParams?: unknown; seed: number; finishing?: unknown };
   const partsByPen = new Map<string, string[]>();
   for (const layer of sourceSvg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1)) {
@@ -547,7 +565,7 @@ export function serverConfig(resultPath: string, sourceSvg: string, report: Piec
   return {
     format: 'hatch3d-sketch-v1', identity: result.identity, composition: 'sketch', presetName: `${report.title} · seed ${report.seed}`,
     page: result.metadata.page, pens,
-    layers: pens.map(pen => ({ id: pen.id, color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] })),
+    layers: pens.map(pen => { const label = name(pen.id); return { id: pen.id, ...(label ? { name: label } : {}), color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] }; }),
     params: result.params, ...(result.effectiveParams ? { effectiveParams: result.effectiveParams } : {}), seed: result.seed,
     ...(result.finishing ? { finishing: result.finishing } : {}),
     stats: { pathCount: report.layers.reduce((t, l) => t + l.paths, 0), lengthMm: Math.round(report.layers.reduce((t, l) => t + l.drawMm, 0)) },
@@ -649,7 +667,7 @@ async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: As
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
     ...(assembly ? { assembly } : {}),
   };
-  if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report), null, 2));
+  if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report, (id) => penName(id, stack, report.assembly)), null, 2));
   writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => (dir !== liveDir && a.startsWith(dir) ? liveDir + a.slice(dir.length) : a)).map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
   return report;
 }
@@ -719,6 +737,8 @@ export function loadStack(path: string): Stack {
   if (sheet !== undefined && (typeof sheet !== 'object' || sheet === null || !mm(sheet.width) || !mm(sheet.height) || (sheet.margin !== undefined && !(mm(sheet.margin) || sheet.margin === 0))
     || Object.keys(sheet).some(k => !['width', 'height', 'margin'].includes(k)))) fail('Stack page must be { width, height, margin? } in millimetres');
   if (stack.defaults?.trialInks !== undefined && typeof stack.defaults.trialInks !== 'boolean') fail('Stack defaults.trialInks must be true or false');
+  if (stack.penNames !== undefined && (typeof stack.penNames !== 'object' || stack.penNames === null || Array.isArray(stack.penNames) ||
+      Object.values(stack.penNames).some((v) => typeof v !== 'string' || !v.trim()))) fail('Stack penNames must map layer ids to pen names');
   const names = new Set<string>();
   for (const p of stack.pieces) {
     if (!p.name || !p.sketch || !Number.isSafeInteger(p.seed)) fail('Each piece needs name, sketch and an integer seed');

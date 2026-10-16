@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { checkInksRead, congruentFit, fitMatrix, fitRigid, parseFrom, plyCuts, readPlyResult, registrationProblem, worldCuts, worldSha256, type PlyResult } from '../../cli/assembly-world.ts';
 import { composeAssembly } from '../../cli/assembly.ts';
-import { loadStack, type Piece, type PieceReport, type Stack } from '../../cli/finalize.ts';
+import { loadStack, penName, type Piece, type PieceReport, type Stack } from '../../cli/finalize.ts';
 import { BAR, WINDOW, placed } from './fixtures/assembly-fixture.ts';
 import { FIXTURES, L, R, fresh, finalize, hashTree, lBlack, lSpec, lWhite, piece, rWhite, runFinalize, stackIn } from './helpers/assembly-stack.ts';
 import type { Point } from '../sketch/types.ts';
@@ -133,6 +133,20 @@ describe('assembly pieces are refused before anything is rendered', () => {
     expect(() => checkInksRead(ply('white', ['nope'], 'carbon'), { trialInks: true })).toThrow('nope on white: Unknown ink: nope');
   });
 
+  it('names each layer’s physical pen for plotter-server: the stack’s penNames, else the catalog pen of an assembly ply', () => {
+    const asm = { cutPen: 'cut', cutInk: 'black' };
+    expect(penName('carbon', {}, asm)).toBe('Micron 01 black');
+    expect(penName('cut', {}, asm)).toBe('Micron 08 black (cut guides)');
+    expect(penName('finishing-border', {}, asm)).toBe('Micron 08 black (crop marks)');
+    expect(penName('vermilion', {}, asm)).toBeUndefined(); // an ink with no pen yet: the server shows its id
+    expect(penName('carbon', {})).toBeUndefined(); // not an assembly: unchanged unless the stack names it
+    expect(penName('carbon', { penNames: { carbon: 'my liner' } })).toBe('my liner');
+    expect(penName('constructor', {}, asm)).toBeUndefined();
+    const write = (penNames: unknown) => { const path = join(fresh(), 'stack.json'); writeFileSync(path, JSON.stringify({ out: 'x', pieces: [lWhite], penNames })); return path; };
+    expect(loadStack(write({ carbon: 'Micron 01 black' })).penNames).toEqual({ carbon: 'Micron 01 black' });
+    for (const bad of [['x'], { carbon: 3 }, { carbon: ' ' }, 'x']) expect(() => loadStack(write(bad)), JSON.stringify(bad)).toThrow('Stack penNames must map layer ids to pen names');
+  });
+
   it('refuses a trialInks that is not a boolean when the stack is read', () => {
     const write = (defaults: unknown) => { const path = join(fresh(), 'stack.json'); writeFileSync(path, JSON.stringify({ out: 'x', pieces: [lWhite], defaults })); return path; };
     expect(loadStack(write({ trialInks: true })).defaults?.trialInks).toBe(true);
@@ -206,6 +220,10 @@ describe.skipIf(!hasVpype)('assembly end to end (local vpype)', () => {
     const colours = (name: string) => Object.fromEntries(reports[name].layers.map((l) => [l.label.replace(/^\d+-/, ''), l.color]));
     expect(colours('lintel-l-black')).toEqual({ gold: '#c9a54a', black: '#c9a54a', 'finishing-border': '#c9a54a' }); // gold gel cuts the black paper
     expect(colours('lintel-l-white')).toEqual({ carbon: '#22282c', 'finishing-border': '#1c1c1e' }); // the fineliner cuts the white
+    // The server's "Load pen" names the physical pen, the cut and border layers by the cut ink's.
+    const names = (name: string) => Object.fromEntries((JSON.parse(readFileSync(join(dir(name), 'config.json'), 'utf8')).layers as { id: string; name?: string }[]).map((l) => [l.id, l.name]));
+    expect(names('lintel-l-black')).toEqual({ gold: 'Signo 1.0mm gold', black: 'Signo 1.0mm gold (cut guides)', 'finishing-border': 'Signo 1.0mm gold (crop marks)' });
+    expect(names('lintel-l-white')).toEqual({ carbon: 'Micron 01 black', 'finishing-border': 'Micron 08 black (crop marks)' });
   });
 
   it('draws one world on every ply of a panel, and records it with the cuts, the onlays and the signature box', () => {
