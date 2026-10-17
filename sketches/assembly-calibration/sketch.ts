@@ -9,10 +9,11 @@ import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketc
  * per paper, how legible the cut guides are, how close art can sit to a knife cut (the margin), how far lower art must
  * run under an upper edge (the bleed), and how far apart the sheets register, read to 0.1 mm with verniers.
  *
- * Everything is placed in page millimetres on one tabloid sheet (279.4 x 431.8, margin 11). Assembled, the sheet shows
- * the gold paper through two big windows cut in the white one (W1, upper left; W2, upper right), the black paper
- * through a window cut in the gold inside W2 (G1), and white paper in the lower half. See `notes.json` for how Nick plots,
- * cuts and reads it, and `README.md` for the layout.
+ * Everything is placed in page millimetres on one tabloid sheet (279.4 x 431.8, margin 11). R13 turns the stack over:
+ * white at the back, gold-yellow in the middle, black in front. Assembled, the sheet shows the gold paper through two
+ * big windows cut in the black one (W1, upper left; W2, upper right), the white paper through a window cut in the gold
+ * inside W2 (G1), and black paper in the lower half. See `notes.json` for how Nick plots, cuts and reads it, and
+ * `README.md` for the layout.
  */
 
 // ── Materials and plies ──────────────────────────────────────────────
@@ -20,20 +21,23 @@ import type { AssemblySpec, Control, Cut, Cuts, Part, Pen, PlySpec, Point, Sketc
 const paper = (id: keyof typeof PAPERS) => ({ id: PAPERS[id].id, color: PAPERS[id].color });
 /**
  * Each sheet's inks, in plot order (R12: the pens Nick has). Black: the three Signo 1.0mm pens and the Moonlight 10s,
- * the first seven (the triptych's six and the white Signo) swatched in window G1 and the rest below the black's font
- * test; the white Signo and the five non-fluorescent Moonlights are on trial.
+ * all thirteen swatched in the front sheet's lower half; the white Signo and the five non-fluorescent Moonlights are on
+ * trial. White: the four Microns, swatched in window G1, and three inks on trial.
  */
 const BLACK_INKS = ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'gel-white', 'fluoro-vermilion', 'gel-red', 'gel-rose', 'gel-purple', 'gel-blue', 'gel-teal'];
-const G1_SWATCHES = 7;
 const GOLD_INKS = ['black', 'carbon', 'gold', 'ultramarine', 'violet']; // the Micron 08 and 01 blacks; the last three on trial
 const WHITE_INKS = ['carbon', 'black', 'ultramarine', 'violet', 'silver', 'fluoro-pink', 'fluoro-orange']; // the four Microns; the last three on trial
-/** The inks the triptych draws in on white (Lodestone R's white sheet): the white's spacing, marks and crossing tests, for want of room for all eight. */
-const TRIPTYCH_WHITE_INKS = ['carbon', 'ultramarine', 'fluoro-pink'];
+/**
+ * The inks the triptych draws in on black (Lodestone's black sheets): the front sheet's font, spacing, marks and crossing
+ * tests, for want of room for all thirteen (the front sheet has no paper over it to hide tests under).
+ */
+const TRIPTYCH_BLACK_INKS = ['gold', 'silver', 'fluoro-pink'];
 
+/** Bottom to top (R13): white at the back, gold-yellow in the middle, black in front. */
 const plies: PlySpec[] = [
-  { id: 'black', paper: paper('black'), pens: BLACK_INKS, cutInk: 'silver' },
-  { id: 'gold', paper: paper('gold-yellow'), pens: GOLD_INKS, cutInk: 'black' },
   { id: 'white', paper: paper('white'), pens: WHITE_INKS, cutInk: 'carbon' },
+  { id: 'gold', paper: paper('gold-yellow'), pens: GOLD_INKS, cutInk: 'black' },
+  { id: 'black', paper: paper('black'), pens: BLACK_INKS, cutInk: 'silver' },
 ];
 
 /** `margin` is small so the margin ladder is drawn as designed, and `bleed` large so the bleed ladder is not clipped. */
@@ -44,7 +48,7 @@ const penIds = [...new Set([...WHITE_INKS, ...GOLD_INKS, ...BLACK_INKS])];
 export const pens: Pen[] = [...penIds.map(inkPen), CUT_PEN];
 
 export const PAGE = { width: 279.4, height: 431.8, margin: 11 };
-export const DEFAULT_DATE = '2026-10-15';
+export const DEFAULT_DATE = '2026-10-17';
 
 // ── Geometry helpers ─────────────────────────────────────────────────
 
@@ -83,11 +87,11 @@ function arrow(a: Point, b: Point, head = 1.3): Point[][] {
 
 // ── The page ─────────────────────────────────────────────────────────
 
-/** Big windows cut in the white ply, and the window cut in the gold ply inside W2 (all page millimetres). */
+/** Big windows cut in the front (black) ply, and the window cut in the gold ply inside W2 (all page millimetres). */
 export const W1 = box(20, 20, 115, 180);
 export const W2 = box(155, 20, 105, 180);
 export const G1 = box(167, 32, 81, 156);
-/** The four guide variants, 44 x 24 mm each, and the window the margin ladder is drawn beside, all in the white ply's lower half. */
+/** The four guide variants, 44 x 24 mm each, and the window the margin ladder is drawn beside, all in the black ply's lower half. */
 const VARIANT = { w: 44, h: 24, y: 218 };
 export const VARIANTS = [
   { id: 'va', caption: 'A  pitch 12  size 4', label: 'CUT A', guide: { pitch: 12, size: 4 } },
@@ -96,14 +100,16 @@ export const VARIANTS = [
   { id: 'vd', caption: 'D  no label', label: undefined, guide: { label: false } },
 ].map((v, i) => ({ ...v, area: box(20 + i * 50, VARIANT.y, VARIANT.w, VARIANT.h) }));
 export const LADDER_WINDOW = box(220, VARIANT.y, 38, VARIANT.h);
-/** The hatched boxes sealed under paper, and where the white captions sit. */
-export const GHOST_SILVER = box(20, 262, 40, 25);
-export const GHOST_BLACK = box(100, 262, 40, 25);
+/**
+ * The hatched box sealed under paper, its caption above it (R13): carbon on the white, under the gold inside W1. (Nothing
+ * ghosts through the black paper in front, so R12's two boxes under the white went.)
+ */
+export const GHOST = box(88, 160, 40, 14);
 
 export function cuts(): Cuts {
   return {
     gold: [{ id: 'g1', label: 'G1', rings: [ring(G1)] }, ...cutLadder()],
-    white: [
+    black: [
       { id: 'w1', label: 'W1', rings: [ring(W1)] },
       { id: 'w2', label: 'W2', rings: [ring(W2)] },
       ...VARIANTS.map((v) => ({ id: v.id, ...(v.label ? { label: v.label } : {}), guide: v.guide, rings: [ring(v.area)] })),
@@ -155,7 +161,7 @@ const title = (ply: PlySpec, date: string, seed: number, pen: string, x: number,
     ...text(`${date} | seed ${seed}`, x, y + 9, 2.5),
   ],
 });
-/** The title on one line, for the black sheet (R12), whose window G1 has room for its swatches only. */
+/** The title on one line, along the top edge (R12; R13 for the black in front and the white at the back). */
 const titleLine = (ply: PlySpec, date: string, seed: number, pen: string, x: number, y: number): Part => ({
   id: `title-${ply.id}`, pen, paths: text(`assembly calibration | ply ${ply.id} | ${ply.paper.id} paper | ${date} | seed ${seed}`, x, y, 2),
 });
@@ -188,9 +194,9 @@ function fontTest(inks: string[], paperId: string, pen: string, x: number, y: nu
   const top = y + 3.5 * lines.length + 2;
   return [header, ...inks.map((ink, i) => fontCell(ink, paperId, x + (i % 2) * (FONT_CELL.w + 6), top + Math.floor(i / 2) * FONT_CELL.h))];
 }
-/** Where each sheet's font test sits: the gold's in W1 below its swatches, the white's in the lower half's right side,
- * the black's below G1 (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
-export const FONT_AT = { black: P(158, 195), gold: P(28, 106), white: P(158, 296) };
+/** Where each sheet's font test sits (R13): the gold's in W1 below its swatches, the black's in the lower half's right
+ * side, the white's below G1 (sealed: hidden once assembled, as G1 has no room, so it is read before gluing). */
+export const FONT_AT = { black: P(145, 338), gold: P(28, 106), white: P(158, 195) };
 
 // ── Test blocks (R11): spacing, marks, crossings, cuts, the paper edge ──
 
@@ -294,7 +300,7 @@ export function crossings(inks: string[], paperId: string, pen: string, x: numbe
 }
 
 /**
- * The cut ladder (gold sheet, in what the white hides): waste windows with guides that probe the knife: wedges whose
+ * The cut ladder (gold sheet, in what the black hides): waste windows with guides that probe the knife: wedges whose
  * tips close to `WEDGES` degrees (8 mm bases), slots `SLOTS` mm wide and 30 long, three windows round a kept island held
  * by one bridge `BRIDGES` mm wide (as the shirt cut holds L's tie at its knot and tip), and a notch open to the bottom
  * trim. Each is at least 3 mm wide somewhere, as `validateCuts` asks, so the tooling cuts all of them as they are.
@@ -445,40 +451,36 @@ export function vernier(axis: 'x' | 'y', edge: number, at: number): Vernier {
 export interface World { cuts: Cuts; art: Record<string, Part[]>; sealed: Record<string, Part[]> }
 
 /**
- * The swatch positions: gold sheet's inside W1 (two columns, filled row by row), black's first `G1_SWATCHES` inside G1
- * (one column) and the rest below its font test (sealed, two columns), white's in the lower half (two columns).
+ * The swatch positions (R13): the white's seven inside G1 (one column), the black's thirteen in the front sheet's lower
+ * half (four columns, filled row by row), the gold's inside W1 (two columns, filled row by row).
  */
 const GOLD_SWATCH_AT = [P(28, 50), P(82, 50)];
-const BLACK_SWATCH_AT = P(173, 41);
-const BLACK_TRIAL_SWATCH_AT = [P(158, 363), P(213, 363)];
-/** The black's one-line title, along the top edge (sealed: under the gold once glued). */
-const BLACK_TITLE_AT = P(20, 13);
-const WHITE_SWATCH_AT = [P(20, 310), P(92, 310)];
-const WHITE_TITLE_AT = P(20, 398);
+const WHITE_SWATCH_AT = P(173, 41);
+const BLACK_SWATCH_AT = { x: [20, 80, 140, 200], y: 264 };
+/** Each sheet's one-line title, along the top edge: the black's in view above the windows, the white's sealed. */
+const TITLE_AT = P(20, 13);
 
-/** The vernier pairs: white over gold at W1, gold over black at G1, each on a bottom edge (x) and a right edge (y). */
+/** The vernier pairs: black over gold at W1, gold over white at G1, each on a bottom edge (x) and a right edge (y). */
 const W_X = vernier('x', W1.y1, 112), W_Y = vernier('y', W1.x1, 110);
 const G_X = vernier('x', G1.y1, 234), G_Y = vernier('y', G1.x1, 110);
 
 /** The whole artwork of the sheet: every ply's art and sealed art, and the cuts. The same on every render. */
 export function buildWorld(date: string, seed: number): World {
-  const [black, gold, white] = plies;
+  const [white, gold, black] = plies;
   const stack = (ply: PlySpec, inks: string[], at: Point[]) => inks.map((ink, i) => swatch(ink, ply.paper.id, at[i].x, at[i].y));
-  const g1Inks = BLACK_INKS.slice(0, G1_SWATCHES), trialInks = BLACK_INKS.slice(G1_SWATCHES);
-  const blackSwatches = stack(black, g1Inks, g1Inks.map((_, i) => P(BLACK_SWATCH_AT.x, BLACK_SWATCH_AT.y + i * SWATCH.rowPitch)));
-  const blackTrialSwatches = stack(black, trialInks, trialInks.map((_, i) => P(BLACK_TRIAL_SWATCH_AT[i % 2].x, BLACK_TRIAL_SWATCH_AT[0].y + Math.floor(i / 2) * SWATCH.rowPitch)));
+  const whiteSwatches = stack(white, WHITE_INKS, WHITE_INKS.map((_, i) => P(WHITE_SWATCH_AT.x, WHITE_SWATCH_AT.y + i * SWATCH.rowPitch)));
   const goldSwatches = stack(gold, GOLD_INKS, GOLD_INKS.map((_, i) => P(GOLD_SWATCH_AT[i % 2].x, GOLD_SWATCH_AT[0].y + Math.floor(i / 2) * SWATCH.rowPitch)));
-  const whiteSwatches = stack(white, WHITE_INKS, WHITE_INKS.map((_, i) => P(WHITE_SWATCH_AT[Math.floor(i / 4)].x, WHITE_SWATCH_AT[0].y + (i % 4) * 22)));
-  const ghostCaption = (id: string, area: Rect): Part => ({ id, pen: 'carbon', paths: centered('is there a ghost here?', (area.x0 + area.x1) / 2, (area.y0 + area.y1) / 2 - 1.1, 2.2) });
+  const cols = BLACK_SWATCH_AT.x.length;
+  const blackSwatches = stack(black, BLACK_INKS, BLACK_INKS.map((_, i) => P(BLACK_SWATCH_AT.x[i % cols], BLACK_SWATCH_AT.y + Math.floor(i / cols) * SWATCH.rowPitch)));
   const part = (id: string, pen: string, ...paths: Point[][][]): Part => ({ id, pen, paths: paths.flat() });
   return {
     cuts: cuts(),
     art: {
-      black: [
-        ...blackSwatches,
-        bleedLadder('silver', 172, G1.y1, 7, 'bleed-black'),
-        part('vernier-g-x-main-labels', 'silver', G_X.mainLabels),
-        part('vernier-g-y-main-labels', 'silver', G_Y.mainLabels),
+      white: [
+        ...whiteSwatches,
+        bleedLadder('carbon', 172, G1.y1, 7, 'bleed-white'),
+        part('vernier-g-x-main-labels', 'carbon', G_X.mainLabels),
+        part('vernier-g-y-main-labels', 'carbon', G_Y.mainLabels),
       ],
       gold: [
         title(gold, date, seed, 'black', 28, 26),
@@ -486,49 +488,45 @@ export function buildWorld(date: string, seed: number): World {
         bleedLadder('black', 28, W1.y1, 9, 'bleed-gold'),
         ...fontTest(GOLD_INKS, gold.paper.id, 'black', FONT_AT.gold.x, FONT_AT.gold.y),
         marginLadder('black', 172, G1.y0, -1, 'margin-gold'),
+        part('ghost-caption', 'black', centered('is there a ghost here?', (GHOST.x0 + GHOST.x1) / 2, (GHOST.y0 + GHOST.y1) / 2 - 1.1, 2.2)),
         part('vernier-w-x-main-labels', 'black', W_X.mainLabels),
         part('vernier-w-y-main-labels', 'black', W_Y.mainLabels),
         part('vernier-g-x-scale', 'black', G_X.scale, G_X.scaleLabels),
         part('vernier-g-y-scale', 'black', G_Y.scale, G_Y.scaleLabels),
       ],
-      white: [
-        title(white, date, seed, 'carbon', WHITE_TITLE_AT.x, WHITE_TITLE_AT.y),
-        ...whiteSwatches,
-        ...fontTest(WHITE_INKS, white.paper.id, 'carbon', FONT_AT.white.x, FONT_AT.white.y),
-        ...spacingLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 256.5),
-        ...marksLadder(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 147, 389.5),
-        ...crossings(TRIPTYCH_WHITE_INKS, white.paper.id, 'carbon', 80, 394),
-        edgeRulers('carbon', 'edge-white'),
-        ...VARIANTS.map((v) => part(`caption-${v.id}`, 'carbon', text(v.caption, v.area.x0, VARIANT.y + VARIANT.h + 4.5, 2.5))),
-        marginLadder('carbon', LADDER_WINDOW.x0 + 2, LADDER_WINDOW.y1, 1, 'margin-white'),
-        part('caption-ladder', 'carbon', text('E  margin ladder', LADDER_WINDOW.x0, LADDER_WINDOW.y1 + 12, 2.5)),
-        ghostCaption('ghost-caption-silver', GHOST_SILVER),
-        ghostCaption('ghost-caption-black', GHOST_BLACK),
-        part('vernier-w-x-scale', 'carbon', W_X.scale, W_X.scaleLabels),
-        part('vernier-w-y-scale', 'carbon', W_Y.scale, W_Y.scaleLabels),
+      black: [
+        titleLine(black, date, seed, 'silver', TITLE_AT.x, TITLE_AT.y),
+        ...blackSwatches,
+        ...fontTest(TRIPTYCH_BLACK_INKS, black.paper.id, 'silver', FONT_AT.black.x, FONT_AT.black.y),
+        ...spacingLadder(TRIPTYCH_BLACK_INKS, black.paper.id, 'silver', 20, 338),
+        ...marksLadder(TRIPTYCH_BLACK_INKS, black.paper.id, 'silver', 20, 380),
+        ...crossings(TRIPTYCH_BLACK_INKS, black.paper.id, 'silver', 145, 394, 6),
+        edgeRulers('silver', 'edge-black'),
+        ...VARIANTS.map((v) => part(`caption-${v.id}`, 'silver', text(v.caption, v.area.x0, VARIANT.y + VARIANT.h + 4.5, 2.5))),
+        marginLadder('silver', LADDER_WINDOW.x0 + 2, LADDER_WINDOW.y1, 1, 'margin-black'),
+        part('caption-ladder', 'silver', text('E  margin ladder', LADDER_WINDOW.x0, LADDER_WINDOW.y1 + 12, 2.5)),
+        part('vernier-w-x-scale', 'silver', W_X.scale, W_X.scaleLabels),
+        part('vernier-w-y-scale', 'silver', W_Y.scale, W_Y.scaleLabels),
       ],
     },
     sealed: {
-      black: [
-        part('vernier-g-x-main', 'silver', G_X.main),
-        part('vernier-g-y-main', 'silver', G_Y.main),
-        part('ghost-silver', 'silver', hatch(GHOST_SILVER.x0, GHOST_SILVER.y0, GHOST_SILVER.x1 - GHOST_SILVER.x0, GHOST_SILVER.y1 - GHOST_SILVER.y0, 0.4)),
-        // (R11) The test blocks, under the gold and white papers: read on the loose sheet before gluing. (R12) With
-        // thirteen inks: the crossings (6 mm cells) above the ghost box, the marks below it, the trial swatches below the
-        // font test, and the title along the top edge.
-        ...fontTest(BLACK_INKS, black.paper.id, 'silver', FONT_AT.black.x, FONT_AT.black.y, 'hidden once glued: read it before gluing'),
-        ...spacingLadder(BLACK_INKS, black.paper.id, 'silver', 20, 20),
-        ...crossings(BLACK_INKS, black.paper.id, 'silver', 20, 172.5, 6),
-        ...marksLadder(BLACK_INKS, black.paper.id, 'silver', 20, 289.5), // its last row's 4 mm circle clear of the bottom ruler
-        ...blackTrialSwatches,
-        titleLine(black, date, seed, 'silver', BLACK_TITLE_AT.x, BLACK_TITLE_AT.y),
-        edgeRulers('silver', 'edge-black'),
+      white: [
+        part('vernier-g-x-main', 'carbon', G_X.main),
+        part('vernier-g-y-main', 'carbon', G_Y.main),
+        part('ghost-carbon', 'carbon', hatch(GHOST.x0, GHOST.y0, GHOST.x1 - GHOST.x0, GHOST.y1 - GHOST.y0, 0.4)),
+        // (R13) The white's test blocks, under the gold and black papers: read on the loose sheet before gluing. All
+        // seven inks, as the back sheet has the room the front one lacks.
+        ...fontTest(WHITE_INKS, white.paper.id, 'carbon', FONT_AT.white.x, FONT_AT.white.y, 'hidden once glued: read it before gluing'),
+        ...spacingLadder(WHITE_INKS, white.paper.id, 'carbon', 20, 20),
+        ...crossings(WHITE_INKS, white.paper.id, 'carbon', 20, 180),
+        ...marksLadder(WHITE_INKS, white.paper.id, 'carbon', 20, 289.5),
+        titleLine(white, date, seed, 'carbon', TITLE_AT.x, TITLE_AT.y),
+        edgeRulers('carbon', 'edge-white'),
       ],
       gold: [
         part('vernier-w-x-main', 'black', W_X.main),
         part('vernier-w-y-main', 'black', W_Y.main),
-        part('ghost-black', 'black', hatch(GHOST_BLACK.x0, GHOST_BLACK.y0, GHOST_BLACK.x1 - GHOST_BLACK.x0, GHOST_BLACK.y1 - GHOST_BLACK.y0, 0.4)),
-        // (R11) The test blocks, under the white paper, and the cut ladder's labels: read on the loose sheet.
+        // (R11) The test blocks, under the black paper, and the cut ladder's labels: read on the loose sheet.
         ...spacingLadder(GOLD_INKS, gold.paper.id, 'black', 145, 250),
         ...marksLadder(GOLD_INKS, gold.paper.id, 'black', 145, 314),
         cutLadderLabels('black'),

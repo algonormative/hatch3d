@@ -1,13 +1,13 @@
 {
-  "title": "Assembly calibration (black, gold-yellow and white sheets)",
+  "title": "Assembly calibration (white, gold-yellow and black sheets, back to front)",
   "out": ".sketch-output/finalize/assembly-calibration",
   "edition": 1,
   "page": { "width": 279.4, "height": 431.8, "margin": 11 },
   "border": { "style": "cropmarks", "pen": "cut" },
   "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true },
   "pieces": [
-    { "name": "black-sheet", "title": "Assembly calibration: black sheet", "sketch": "sketches/assembly-calibration/sketch.ts", "seed": 1, "assembly": "calibration", "params": { "ply": "black" } },
+    { "name": "white-sheet", "title": "Assembly calibration: white sheet", "sketch": "sketches/assembly-calibration/sketch.ts", "seed": 1, "assembly": "calibration", "params": { "ply": "white" } },
     { "name": "gold-sheet", "title": "Assembly calibration: gold-yellow sheet", "sketch": "sketches/assembly-calibration/sketch.ts", "seed": 1, "assembly": "calibration", "params": { "ply": "gold" } },
-    { "name": "white-sheet", "title": "Assembly calibration: white sheet", "sketch": "sketches/assembly-calibration/sketch.ts", "seed": 1, "assembly": "calibration", "params": { "ply": "white" } }
+    { "name": "black-sheet", "title": "Assembly calibration: black sheet", "sketch": "sketches/assembly-calibration/sketch.ts", "seed": 1, "assembly": "calibration", "params": { "ply": "black" } }
   ]
 }
