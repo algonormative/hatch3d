@@ -89,6 +89,12 @@ export const LODESTONE_CONTROLS: Control[] = [
  * (the calibration's hand cuts landed within about 0.5 mm of the guide, and nicked art 0.5 mm from it but not 1.0 mm).
  */
 export const LODESTONE_ASSEMBLY = { ...ASSEMBLY, margin: 1.2, bleed: 4 } as const;
+/**
+ * The closest two parallel lines of one pen may sit on the sheet (mm, centre to centre), from the pens measured on the
+ * calibration sheets (R13): the gel pens on black, and the Micron 08 on gold-yellow, fuse lines 0.55 mm apart or
+ * nearer and are clean from 0.8 mm; the Micron 01 (`carbon`) on white fuses them at 0.4 mm and is clean from 0.5 mm.
+ */
+export const LINE_PITCH = { gel: 0.8, micron01: 0.5 } as const;
 /** How far past the bleed a fill under a window runs (mm), so the edge of the grown window is covered too. */
 export const FILL_OVER = 0.5;
 /** Whether the bars are windows cut from the sheet beneath (`barMode`, R7) rather than L's bar cut out and glued on C (R1 to R6). */

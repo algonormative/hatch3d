@@ -358,10 +358,10 @@ export interface RibbonStroke { ink: Ink; points: Point[] }
  * The helix as a flat twisted ribbon along a page path: two edges that cross where the ribbon turns edge-on, laminations
  * along it (fewer on its back face), a spine down the middle and ribs across. `phase0` is its twist at the path's start;
  * it turns once every `pitch` mm (times `pitchAt` of the point, where given). `skip(s)` drops everything at arc length `s` (where the thread passes under
- * something). Returns its strokes in the kit's helix inks and `mask`, lines that fill it, for a page mask of where it
- * lies (`glyphMask`).
+ * something). The laminations show only where they lie `minMm` apart or more (0.6 mm by default). Returns its strokes
+ * in the kit's helix inks and `mask`, lines that fill it, for a page mask of where it lies (`glyphMask`).
  */
-export function flatRibbon(path: Point[], o: { width: number; pitch: number; phase0?: number; laminations?: number; ribMm?: number; skip?: (s: number) => boolean; pitchAt?: (p: Point) => number }): { strokes: RibbonStroke[]; mask: Point[][] } {
+export function flatRibbon(path: Point[], o: { width: number; pitch: number; phase0?: number; laminations?: number; ribMm?: number; skip?: (s: number) => boolean; pitchAt?: (p: Point) => number; minMm?: number }): { strokes: RibbonStroke[]; mask: Point[][] } {
   const half = o.width / 2, L = o.laminations ?? 6, ribMm = o.ribMm ?? 2.4;
   const s: number[] = [0];
   for (let i = 1; i < path.length; i++) s.push(s[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
@@ -391,7 +391,7 @@ export function flatRibbon(path: Point[], o: { width: number; pitch: number; pha
   for (let k = 1; k < L; k++) {
     const v = -1 + 2 * k / L;
     if (Math.abs(v) < 1e-9) continue;
-    line(i => (twist[i] > 0 ? (k % 3 === 0 ? 'violet' : 'ultramarine') : k % 2 === 0 ? 'violet' : null), v, i => Math.abs(twist[i]) * o.width >= 0.6 * L);
+    line(i => (twist[i] > 0 ? (k % 3 === 0 ? 'violet' : 'ultramarine') : k % 2 === 0 ? 'violet' : null), v, i => Math.abs(twist[i]) * o.width >= (o.minMm ?? 0.6) * L);
   }
   let next = 0, n = 0;
   for (let i = 0; i < path.length; i++) {

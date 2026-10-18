@@ -116,7 +116,8 @@ const BARS = 16;
 /** Closest two lamination lines may sit on the sheet, in millimetres. */
 const MIN_SPACING_MM = 0.55;
 
-export function strandStrokes(s: Strand, density: number, interruption: number, ctx: SketchContext, view: THREE.Camera): HelixStroke[] {
+/** `minSpacing`: the closest two laminations may sit on the sheet (mm), `MIN_SPACING_MM` by default. */
+export function strandStrokes(s: Strand, density: number, interruption: number, ctx: SketchContext, view: THREE.Camera, minSpacing = MIN_SPACING_MM): HelixStroke[] {
   const out: HelixStroke[] = [];
   const group: HelixStroke['group'] = s.id === 'a' ? 'strand-a' : 'strand-b';
   const rng = ctx.random(`lamellar-${s.id}`);
@@ -142,7 +143,7 @@ export function strandStrokes(s: Strand, density: number, interruption: number, 
       spacing = Math.min(spacing, perp * (1.95 / contours) / 2);
     }
     let k = 1;
-    while (spacing * k < MIN_SPACING_MM && k < 64) k *= 2;
+    while (spacing * k < minSpacing && k < 64) k *= 2;
     return k;
   };
   for (let bar = 0; bar < BARS; bar++) {
@@ -232,6 +233,8 @@ export interface AlongOptions {
   flare?: number;
   /** 1 keeps every turn's proportions; lower lets the open end keep more turns. */
   pitchGrowth?: number;
+  /** The closest two laminations may sit on the sheet, in millimetres (`strandStrokes`' default when absent). */
+  minSpacing?: number;
 }
 
 /**
@@ -275,7 +278,7 @@ export function helixAlong(ctx: SketchContext, view: THREE.Camera, curve: THREE.
     return curve.getPointAt(u).addScaledVector(frames.normals[k], p.x - start.x).addScaledVector(frames.binormals[k], p.z - start.z - 0.25);
   };
   const strokes: HelixStroke[] = [];
-  for (const st of strands) for (const h of strandStrokes(st, o.density ?? 0.35, o.interruption ?? 0.3, ctx, view)) strokes.push({ ...h, points: h.points.map(bend) });
+  for (const st of strands) for (const h of strandStrokes(st, o.density ?? 0.35, o.interruption ?? 0.3, ctx, view, o.minSpacing)) strokes.push({ ...h, points: h.points.map(bend) });
   const meshes = strands.map(st => buildSurfaceMesh((u, v) => bend(strandPoint(st, u, 2 * v - 1)), {}, 320, 8));
   return { strokes, meshes };
 }

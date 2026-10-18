@@ -21,7 +21,7 @@ import { clipToTrim, cutSchemeOf, inGrown, lCuts, stripeFill } from '../lodeston
 import {
   ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, holeBarRules, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, lensFace, lensShift, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
+import { FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, lensFace, lensShift, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -190,7 +190,8 @@ function draw(ctx: SketchContext): Part[] {
   // cloth is densest round the head and goes bare far from it; `away` keeps the kit's value (bare at the head).
   const aura = toneField(ctx, head.centre.clone().divideScalar(K), { noiseKey: 'bust-aura', reach: n(ctx, 'reach', 2, 0.5, 8) });
   const dark = (p: THREE.Vector3, nrm: THREE.Vector3) => { const d = aura(p.clone().divideScalar(K), nrm); return toward ? 1 - d : d; };
-  const env: ToneEnv = { density: n(ctx, 'density', 0.45, 0, 1), dark, screen: p => pageOf(view, p, PAGE) };
+  // The black's lines are silver gel (the gold below carries them again in Micron 08): none nearer than the gel's pitch.
+  const env: ToneEnv = { density: n(ctx, 'density', 0.45, 0, 1), dark, screen: p => pageOf(view, p, PAGE), min: LINE_PITCH.gel };
 
   const strokes: Tagged[] = [];
   const slack = n(ctx, 'slack', 0.15, 0.01, 2) * K;
@@ -207,7 +208,7 @@ function draw(ctx: SketchContext): Part[] {
   for (const t of [body.trunk, ...sleeves]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }));
 
   const helix = helixAlong(ctx, view, new THREE.CatmullRomCurve3(headCoil(head), false, 'centripetal'),
-    { radius: 0.12 * K, width: 0.5 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.45, interruption: 0.1 });
+    { radius: 0.12 * K, width: 0.5 * K, pitch: 9 * K, spread: 0.1 * K, narrow: 0.08 * K, density: 0.45, interruption: 0.1, minSpacing: LINE_PITCH.gel });
   for (const h of helix.strokes) strokes.push({ ink: h.ink, group: 'helix', family: 'membrane', points: h.points, slack });
 
   // The background: two large slabs, hatched at a pitch in page millimetres. Their light is the head's, turned over
@@ -228,7 +229,7 @@ function draw(ctx: SketchContext): Part[] {
     const at = new THREE.Vector3(sl.x, sl.y, sl.z), toHead = head.centre.clone().sub(at).normalize();
     sl.tone = 2.4 * env.dark(at, toHead) - 1.1;
     const slabSlack = Math.max(0.12, Math.min(0.5 * Math.max(1, K / 4), 0.25 * Math.min(sl.w, sl.h, sl.d)));
-    for (const st of facetStrokes(sl, lightOf(sl), eye, false, n(ctx, 'slabMm', 7, 3, 20) / mmPerUnit(at))) {
+    for (const st of facetStrokes(sl, lightOf(sl), eye, false, n(ctx, 'slabMm', 7, 3, 20) / mmPerUnit(at), undefined, { view, mm: LINE_PITCH.gel, page: PAGE })) {
       strokes.push({ ink: st.ink, group: 'slab', family: st.family, points: st.points, slack: slabSlack, owner: slabs.indexOf(sl) });
     }
   }
@@ -275,7 +276,7 @@ function draw(ctx: SketchContext): Part[] {
     const unravel = pulled && mode === 'progressive' ? ribbonUnravel(crown, m, bar, dims) : undefined;
     const bleed = unravel ?? (pulled && mode === 'split' ? ribbonBleed(crown, m, bar, dims) : undefined);
     const l = bleed ? { path: bleed.ribbon, phase0: 0 } : pulled ? { path: ribbonPath(crown, m), phase0: 0 } : threadPaths(frame, bar).l;
-    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, ...(pulled ? { pitchAt: unravel?.pitchAt ?? ribbonPitch(m, bar) } : {}) });
+    const ribbon = flatRibbon(l.path, { width: THREAD.widthMm, pitch: THREAD.pitchMm, phase0: l.phase0, minMm: LINE_PITCH.gel, ...(pulled ? { pitchAt: unravel?.pitchAt ?? ribbonPitch(m, bar) } : {}) });
     exiting = (bleed?.strands ?? []).map(st => st.path);
     notch = exitNotch(exiting, gapOf(m) > 0 ? seamLevel(m) : undefined);
     // The word first, clear of the trim, the bar, the figure and the notch, so the lines round its letters can give way.

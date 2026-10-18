@@ -331,6 +331,15 @@ export function swapRuledFaces(made: FacetStroke[], ruled: FacetStroke[]): Facet
 export interface SlabTrim { view: THREE.Camera; hidden?: boolean; shade?: boolean }
 
 /**
+ * A floor on the sheet for `facetStrokes`' hatch: its contour rings and field lines never nearer than `mm` on the page
+ * (`page`) as `view` sees it. The pitch floor alone is set square on to a face; a face seen at a
+ * slant brings its lines closer on the sheet, and a dark face's rings sit closer than some pens hold apart. Where a
+ * face's lines would come nearer, its ring step (or that field's step) is opened until they do not: fewer lines over
+ * the same band, the face a little lighter, its marks unchanged in kind.
+ */
+export interface SheetFloor { view: THREE.Camera; mm: number; page: { width: number; height: number } }
+
+/**
  * A slab drawn in the raking-light hatch: twelve outline edges; then on each face that sees the
  * eye, contour rings that follow its outline inward, as many as the face is dark; and inside them a
  * field of diagonal hatch, crossed by a second family on the darkest faces, for body. `pitch` scales
@@ -339,7 +348,7 @@ export interface SlabTrim { view: THREE.Camera; hidden?: boolean; shade?: boolea
  * Tower's spacing on any page; a caller that derives `pitch` from on-sheet millimetres already has it.
  * Off tabloid, `trim` draws the outline for a small card (see `SlabTrim`).
  */
-export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch = PITCH_SCALE, trim?: SlabTrim): FacetStroke[] {
+export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, outlineOnly: boolean, pitch = PITCH_SCALE, trim?: SlabTrim, floor?: SheetFloor): FacetStroke[] {
   const out: FacetStroke[] = [];
   const m = slabMatrix(s);
   const rot = new THREE.Matrix4().extractRotation(m);
@@ -365,20 +374,28 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     const U = U0.clone().normalize().applyMatrix4(rot), V = V0.clone().normalize().applyMatrix4(rot);
     const at = (u: number, v: number) => centre.clone().addScaledVector(U, u).addScaledVector(V, v);
     const d = faceDarkness(normal, light, s.tone);
-    // Contour rings: the outline repeated inward, spaced tighter the darker the face.
-    const ring = Math.max(FACET_MIN_PITCH, 0.075 + 0.11 * (1 - d)) * pitch;
+    // With a floor on the sheet: how far apart on the page lines along (du, dv) lie per world unit between them, at their
+    // nearest where such lines run on the face (the sides a ring's long or short edges follow, or anywhere), so a step
+    // that would land under `floor.mm` is opened to it.
+    const across = floor ? sheetSpacing(floor, at, a, b) : undefined;
+    const opened = (step: number, du: number, dv: number, where?: 'u' | 'v') => (across ? Math.max(step, floor!.mm / across(du, dv, where)) : step);
+    // Contour rings: the outline repeated inward, spaced tighter the darker the face. Under a floor the rings' insets
+    // across U (their sides along V) and across V may open apart; the band holds as many as the wider step allows.
+    const pitched = Math.max(FACET_MIN_PITCH, 0.075 + 0.11 * (1 - d)) * pitch;
+    const ringU = opened(pitched, 0, 1, 'u'), ringV = opened(pitched, 1, 0, 'v');
     const band = Math.min(a, b) * (0.12 + 0.6 * d);
-    let t = ring;
-    for (; t <= band && a - t > 0.03 && b - t > 0.03; t += ring) {
-      hatch('carbon', at(-(a - t), -(b - t)), at(a - t, -(b - t)), at(a - t, b - t), at(-(a - t), b - t), at(-(a - t), -(b - t)));
+    let tu = ringU, tv = ringV;
+    for (; Math.max(tu, tv) <= band && a - tu > 0.03 && b - tv > 0.03; tu += ringU, tv += ringV) {
+      hatch('carbon', at(-(a - tu), -(b - tv)), at(a - tu, -(b - tv)), at(a - tu, b - tv), at(-(a - tu), b - tv), at(-(a - tu), -(b - tv)));
     }
     // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
-    const ia = a - t, ib = b - t;
+    const ia = a - tu, ib = b - tv;
     if (ia < 0.05 || ib < 0.05 || d < 0.32) continue;
     const families: [number, number, Ink][] = [[0.6, Math.max(FACET_MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5) * pitch, 'ultramarine']];
     if (d > 0.62) families.push([-0.95, Math.max(FACET_MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)) * pitch, 'violet']);
-    for (const [angle, step, ink] of families) {
+    for (const [angle, pitched, ink] of families) {
       const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx;
+      const step = opened(pitched, dx, dy);
       const reach = Math.hypot(ia, ib);
       for (let k = -reach + step / 2; k < reach; k += step) {
         const span = clipRect(nx * k, ny * k, dx, dy, ia, ib);
@@ -389,4 +406,26 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
   }
   if (trimmed && trim.shade) out.push(...sliverShade(s, trim.view, light));
   return out;
+}
+
+/**
+ * For `facetStrokes`' floor: on a face of half extents `a` and `b` (`at(u, v)` its world point), how far apart on the page
+ * two lines running along the face's direction (du, dv) lie for each world unit between them, at its nearest over a
+ * nine by nine grid of places on the face that land on the page: those near its two sides across U (`where` 'u', where
+ * a ring's sides along V run), near its two sides across V ('v'), or all of them. Infinity where none lands on the page.
+ */
+function sheetSpacing(floor: SheetFloor, at: (u: number, v: number) => THREE.Vector3, a: number, b: number): (du: number, dv: number, where?: 'u' | 'v') => number {
+  const size = floor.page, page = (p: THREE.Vector3) => pageOf(floor.view, p, size);
+  const h = 0.05 * Math.min(a, b), F = Array.from({ length: 9 }, (_, i) => -0.95 + 1.9 * i / 8);
+  const places = F.flatMap(fu => F.map(fv => {
+    const u = fu * a, v = fv * b, c = page(at(u, v));
+    if (c.x < 0 || c.x > size.width || c.y < 0 || c.y > size.height) return undefined;
+    const pu0 = page(at(u - h, v)), pu1 = page(at(u + h, v)), pv0 = page(at(u, v - h)), pv1 = page(at(u, v + h));
+    return { fu, fv, U: { x: (pu1.x - pu0.x) / (2 * h), y: (pu1.y - pu0.y) / (2 * h) }, V: { x: (pv1.x - pv0.x) / (2 * h), y: (pv1.y - pv0.y) / (2 * h) } };
+  })).filter(q => q !== undefined);
+  return (du, dv, where) => Math.min(Infinity, ...places.filter(q => (where === 'u' ? Math.abs(q.fu) > 0.5 : where === 'v' ? Math.abs(q.fv) > 0.5 : true)).map(({ U, V }) => {
+    // A line along w = (du, dv); the next one a unit step along its normal n = (-dv, du). On the page: J w and J n.
+    const wx = U.x * du + V.x * dv, wy = U.y * du + V.y * dv, nx = -U.x * dv + V.x * du, ny = -U.y * dv + V.y * du;
+    return Math.abs(nx * wy - ny * wx) / (Math.hypot(wx, wy) || 1e-12);
+  }));
 }

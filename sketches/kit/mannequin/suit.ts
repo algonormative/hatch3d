@@ -32,6 +32,17 @@ export function pinstripeTube(t: Tube, env: ToneEnv, opts: Tailoring, look: Look
   const cloth = (u: number, v: number) => !t.mask || t.mask(u, ((v % 1) + 1) % 1);
   const visible = (u: number, v: number) => u >= lo && u <= hi && cloth(u, v);
   const offset = t.facets >= 3 ? 0.5 / N : 0;
+  // With `env.min`, the stripes keep that far on the sheet from the lines ruled among them, the plane edges of a faceted
+  // tube and the seams: the stripe beside a plane edge runs half a stripe pitch off it, and a seam on a stripe.
+  const ruled = env.min === undefined ? [] : [...(t.facets >= 3 ? Array.from({ length: t.facets }, (_, k) => k / t.facets) : []), ...opts.seams.map(v => v + offset)]
+    .map(v => ((v % 1) + 1) % 1).sort((a, b) => a - b);
+  /** Whether a stripe's point `p` (at `u`, `v`; running on to `next`) is clear of the ruled lines either side of it. */
+  const clear = (u: number, v: number, p: THREE.Vector3, next: THREE.Vector3) => {
+    if (!ruled.length) return true;
+    const w = ((v % 1) + 1) % 1, k = ruled.findIndex(r => r >= w);
+    const either = [k <= 0 ? ruled[ruled.length - 1] : ruled[k - 1], k < 0 ? ruled[0] : ruled[k]];
+    return either.every(r => perpendicular(env, p, next, t.point(u, r)) >= env.min!);
+  };
   for (let j = 0; j < N; j++) {
     const v = j / N + offset;
     const tier = tierOf(j);
@@ -41,8 +52,9 @@ export function pinstripeTube(t: Tube, env: ToneEnv, opts: Tailoring, look: Look
       const p = t.point(u, v);
       pts.push(p);
       if (!visible(u, v)) { keep.push(false); continue; }
-      const s = stride(perpendicular(env, p, t.point(u + 1 / samples, v), t.point(u, v + 1 / N)));
-      keep.push(j % s === 0 && env.dark(p, t.normal(u, v)) > TIER[tier]);
+      const next = t.point(u + 1 / samples, v);
+      const s = stride(perpendicular(env, p, next, t.point(u, v + 1 / N)), env.min);
+      keep.push(j % s === 0 && env.dark(p, t.normal(u, v)) > TIER[tier] && clear(u, v, p, next));
     }
     runs(pts, keep, j % 16 === 0 ? look.accent : look.cloth, look.figure, out, look.family);
   }
@@ -61,7 +73,7 @@ export function pinstripeTube(t: Tube, env: ToneEnv, opts: Tailoring, look: Look
       const p = t.point(u, v);
       pts.push(p);
       if (!cloth(u, v)) { keep.push(false); continue; }
-      const s = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + 1 / R, v)));
+      const s = stride(perpendicular(env, p, t.point(u, v + 1 / around), t.point(u + 1 / R, v)), env.min);
       keep.push(i % s === 0 && env.dark(p, t.normal(u, v)) > threshold);
     }
     runs(pts, keep, i % 8 === 0 ? look.accent : look.cloth, look.figure, out, look.family);

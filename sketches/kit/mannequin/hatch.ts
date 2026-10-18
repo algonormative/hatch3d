@@ -15,6 +15,12 @@ export interface ToneEnv {
   dark: (p: THREE.Vector3, normal: THREE.Vector3) => number;
   /** Overall line density, 0..1. */
   density: number;
+  /**
+   * The closest neighbouring lines may sit on the sheet, in millimetres: `MIN_MM` when absent. Given, `pinstripeTube`'s
+   * stripes also keep this far from the plane edges and seams drawn among them (which otherwise run half a stripe
+   * pitch off a stripe, or on one), for pens that fuse lines a little further apart than the kit's default.
+   */
+  min?: number;
 }
 
 /** Which pen and group each kind of cloth line goes to. Group names are the sketch's own. */
@@ -160,7 +166,7 @@ export function ribbonTube(t: Tube, env: ToneEnv, opts: { band: number; gap: num
       const dark = env.dark(p, t.normal(u, v));
       if (edge) { keep.push(dark > 0.05); continue; }
       const du = (1 - gap) / N * Wb / L;
-      const s = stride(perpendicular(env, p, t.point(u + Wb / L / perTurn, v - t.hand / perTurn), t.point(u + du, v)));
+      const s = stride(perpendicular(env, p, t.point(u + Wb / L / perTurn, v - t.hand / perTurn), t.point(u + du, v)), env.min);
       const tier = opts.rests(k) ? Math.max(tierOf(j), 1) : tierOf(j);
       keep.push(j % s === 0 && dark > TIER[tier] + (tier === 0 && opts.rests(k) ? 0.2 : 0));
     }
@@ -180,7 +186,7 @@ export function ribbonTube(t: Tube, env: ToneEnv, opts: { band: number; gap: num
       const p = t.point(mid, v);
       if (!visible(mid, v)) continue;
       const dark = env.dark(p, t.normal(mid, v));
-      const s = stride(perpendicular(env, p, t.point(mid + 0.01, v), t.point(mid, v + 1 / R)));
+      const s = stride(perpendicular(env, p, t.point(mid + 0.01, v), t.point(mid, v + 1 / R)), env.min);
       const tier = i % 2 === 0 ? (i % 4 === 0 ? 0 : 1) : 2;
       if (i % s !== 0 || dark < TIER[tier] + 0.08 || (opts.rests(k) && tier > 0)) continue;
       const pts: THREE.Vector3[] = [], keep: boolean[] = [];
