@@ -4,7 +4,7 @@
   "edition": 1,
   "page": { "width": 279.4, "height": 431.8, "margin": 11 },
   "border": { "style": "cropmarks", "pen": "cut" },
-  "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true },
+  "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true, "gelSpeed": true, "prime": true },
   "params": {},
   "pieces": [
     { "name": "lodestone-l-gold", "title": "Lodestone L (the open eyes): gold-yellow ply", "sketch": "sketches/breach-triptych/lodestone-l/sketch.ts", "seed": 3, "assembly": "lodestone-l", "params": { "ply": "gold" } },
