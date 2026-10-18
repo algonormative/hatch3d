@@ -22,7 +22,7 @@ import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, fieldLines, fieldPull, gapOf, lensFace, lensShift, rEntries, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, inwardRim, fieldLines, fieldPull, gapOf, lensFace, lensShift, rEntries, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -50,12 +50,12 @@ const pens = pensOf(['silver', 'fluoro-pink', 'carbon', 'ultramarine']);
  */
 const ROUTES = {
   black: { groups: ['under', 'rings', 'ribbonunder', 'emphunder'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', acid: 'silver', vermilion: 'silver' } },
-  white: { groups: ['figure', 'contour', 'helix', 'hand', 'word', 'ribbon', 'emph'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
+  white: { groups: ['figure', 'contour', 'rim', 'helix', 'hand', 'word', 'ribbon', 'emph'], inks: { carbon: 'carbon', ultramarine: 'ultramarine', violet: 'carbon', acid: 'ultramarine', vermilion: 'carbon' } },
 };
 /** The strands' pens: blue ones ultramarine on white and silver on black; the pink one (`vermilion`) pink on both. */
 const STRAND_PEN = { white: { ultramarine: 'ultramarine', vermilion: 'fluoro-pink' }, black: { ultramarine: 'silver', vermilion: 'fluoro-pink' } } as const;
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['figure', 'contour', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings', 'emph', 'emphunder'] as const;
+const GROUPS = ['figure', 'contour', 'rim', 'helix', 'hand', 'strand', 'word', 'ribbon', 'under', 'strandunder', 'ribbonunder', 'rings', 'emph', 'emphunder'] as const;
 
 /** R's full coil head (`rHead`, R10): its coil's size against the head's, its turns, and its twin ribbons' radius and width (of K). */
 const HEAD = { scale: 1.35, turns: 2.8, radius: 0.2, width: 1.1 };
@@ -92,7 +92,16 @@ function ringHead(h: AgentHead): Tube[] {
   return bands;
 }
 
-type Tagged = Stroke & { slack: number; role?: string };
+type Tagged = Stroke & { slack: number; role?: string; tube?: string };
+/** The tubes whose silhouettes carry the rim (`RIM`): the trunk and the legs, where R11's dark rim was. */
+const rimmed = (tube?: string) => tube === 'trunk' || !!tube?.startsWith('leg');
+/**
+ * The hands' hatch floor on the sheet (mm): the Micron 01's pitch and a little over, so the rings it opens stay clear of
+ * the 0.5 mm the figure's lines are thinned to (`thinRanked`) where the slant varies over a face.
+ */
+const HAND_FLOOR = 0.55;
+/** The shortest silhouette piece that carries a rim (mm). */
+const RIM_MIN = 15;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -348,17 +357,19 @@ function draw(ctx: SketchContext): Part[] {
     : { density: n(ctx, 'density', 0.45, 0, 1), dark: (p, nrm) => 0.05 + 0.5 * aura(p.clone().divideScalar(K), nrm), screen: p => pageOf(view, p, PAGE), min: MIN_MM };
   const strokes: Tagged[] = [];
   const slack = 0.15 * K;
-  const cloth = (list: ClothStroke[]) => { for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack, ...(st.role ? { role: st.role } : {}) }); };
-  cloth(pinstripeTube(body.trunk, env, HEMS.trunk, LOOK));
-  cloth(suitFront(body.trunk, env, LOOK));
+  const cloth = (list: ClothStroke[], tube?: string) => { for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack, ...(st.role ? { role: st.role } : {}), ...(tube ? { tube } : {}) }); };
+  cloth(pinstripeTube(body.trunk, env, HEMS.trunk, LOOK), body.trunk.id);
+  cloth(suitFront(body.trunk, env, LOOK), body.trunk.id);
   const cut = body.limbs.map(t => cutTube(t, stops.get(t.id)!));
-  for (const t of arms) { const stop = stops.get(t.id)!; cloth(pinstripeTube(t, env, { seams: [0.5], hems: [], stop: stop - 0.012, cuffs: [stop - 0.035] }, LOOK)); }
-  for (const t of legs) { const stop = stops.get(t.id)!; cloth(pinstripeTube(t, env, { seams: [0, 0.5], hems: [stop - 0.004], creases: [0.25], stop }, LOOK)); }
-  for (const t of [body.trunk, ...cut]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }));
+  for (const t of arms) { const stop = stops.get(t.id)!; cloth(pinstripeTube(t, env, { seams: [0.5], hems: [], stop: stop - 0.012, cuffs: [stop - 0.035] }, LOOK), t.id); }
+  for (const t of legs) { const stop = stops.get(t.id)!; cloth(pinstripeTube(t, env, { seams: [0, 0.5], hems: [stop - 0.004], creases: [0.25], stop }, LOOK), t.id); }
+  for (const t of [body.trunk, ...cut]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }), t.id);
   const light = new THREE.Vector3(-0.6, 0.7, 0.4).normalize();
   // Hands hatched in the raking light; shoes as outlines (the planted one stands on the disc, where a hatched block
-  // would read as a slab of silver). (R12) The hatch no nearer than the Micron 01's pitch on the sheet.
-  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)), undefined, { view, mm: LINE_PITCH.micron01, page: PAGE })) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
+  // would read as a slab of silver). (R12) The hatch no nearer than the Micron 01's pitch on the sheet (a little over);
+  // each face keeps its rings, their band widening, and its diagonal field runs on across them, so the hands stay dark
+  // blocks by crossing their lines rather than fusing them.
+  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)), undefined, { view, mm: HAND_FLOOR, page: PAGE, keepRings: true, fieldAcross: true })) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
   // The head: R1's helix wound along the coil, or (clean) a stack of flat ring bands like a coiled spring.
   const headGeos: THREE.BufferGeometry[] = [];
   if (clean) {
@@ -508,8 +519,21 @@ function draw(ctx: SketchContext): Part[] {
     // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
     for (const under of keepAlong(part, q => !inTie(q) && !inLens(q), 0.15)) buckets.add(`under-${st.ink}`, under, false);
   };
-  const ranked = seen.filter(q => q.st.group !== 'helix').map(q => ({ ...q, rank: q.st.group !== 'contour' ? 2 : q.st.role === 'outline' ? 0 : 1 }));
-  for (const { item, runs } of thinRanked(ranked, LINE_PITCH.micron01, { angle: ALONGSIDE_DEG })) for (const part of runs) add(item.st, part);
+  const outlines: { st: Tagged; part: Point[] }[] = [];
+  const contourItems = seen.filter(q => q.st.group === 'contour').map(q => ({ ...q, rank: q.st.role === 'outline' ? 0 : 1 }));
+  for (const { item, runs } of thinRanked(contourItems, LINE_PITCH.micron01, { angle: ALONGSIDE_DEG })) for (const part of runs) outlines.push({ st: item.st, part });
+  // The rim (R12): the trunk's and the legs' silhouettes drawn heavy on purpose, `RIM.lines` lines `RIM.step` mm apart
+  // inward of each (on the side its own tube's cloth lies, whatever shows past it), where R11's stripes bunched on the
+  // planes turned edge-on and read as a dark rim. It prints nearly solid (the Micron 01 does not pool); the stripes keep
+  // off it as off the silhouette. White only: on the black, under a window, the gel would pool.
+  const ownCloth = new Map<string, (p: Point) => boolean>();
+  const clothOf = (tube: string) => ownCloth.get(tube) ?? ownCloth.set(tube, glyphMask(seen.filter(q => q.st.tube === tube && q.st.group !== 'contour').map(q => q.piece), 1.6, 4, PAGE)).get(tube)!;
+  const rim = outlines.filter(q => q.st.role === 'outline' && rimmed(q.st.tube) && lengths(q.part).at(-1)! >= RIM_MIN)
+    .flatMap(q => inwardRim(q.part, clothOf(q.st.tube!))).flatMap(r => keepAlong(r, p => !strandArea(p) && !clear(p) && !framed(p), 0.15));
+  for (const r of rim) buckets.add('rim-carbon', r, true);
+  for (const q of outlines) add(q.st, q.part);
+  const marks = seen.filter(q => q.st.group !== 'contour' && q.st.group !== 'helix').map(q => ({ ...q, rank: 0 }));
+  for (const { item, runs } of thinRanked(marks, LINE_PITCH.micron01, { angle: ALONGSIDE_DEG, seed: [...outlines.map(q => q.part), ...rim] })) for (const part of runs) add(item.st, part);
   for (const q of seen) if (q.st.group === 'helix') add(q.st, q.piece);
   for (const st of strands) for (const piece of clipToRect(st.path, ART)) {
     for (const part of keepAlong(piece, p => !clear(p), 0.15)) { buckets.add(`strand-${st.ink}`, part, true); buckets.add(`strandunder-${st.ink}`, part, true); }

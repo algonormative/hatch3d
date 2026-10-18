@@ -914,6 +914,18 @@ export function outwardDouble(path: Point[], inside: (p: Point) => boolean, prob
 }
 
 /**
+ * A rim (R12): the inside of a silhouette drawn dense on purpose, a heavy outline. Lines `RIM.step` mm apart inward of it
+ * (out to `RIM.lines` of them) wherever it bounds the figure (`inside`) on one side only, each tapering off at its ends as
+ * `parallels` trims them. With the Micron 01's 0.3 mm line the band prints nearly solid.
+ */
+export const RIM = { step: 0.3, lines: 4 };
+export function inwardRim(path: Point[], inside: (p: Point) => boolean, probe = 2.2): Point[][] {
+  const at = (p: Point, u: Point, d: number) => ({ x: p.x + u.x * d, y: p.y + u.y * d });
+  const offsets = Array.from({ length: RIM.lines }, (_, k) => (k + 1) * RIM.step);
+  return [1, -1].flatMap(sign => parallels(path, offsets.map(d => sign * d), (p, u) => inside(at(p, u, probe)) && !inside(at(p, u, -probe))));
+}
+
+/**
  * Which side of a path is outside (by `inside`, a test of the side it bounds): the sign for `parallels`' offsets, or 0
  * where the path bounds nothing clearly (inside on both sides, or neither, as often as not).
  */

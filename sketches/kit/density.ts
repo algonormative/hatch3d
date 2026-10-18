@@ -228,9 +228,12 @@ function probePart(part: Part, limit: number, floor: number, sinMax: number, min
  * where another ends, or crosses it, keeps its line. Order the paths by what should survive: an outline
  * before the planes inside it, and those before the cloth.
  *
+ * `seed`: lines kept already, which the paths give way to but which are never thinned themselves (a band drawn dense on
+ * purpose).
+ *
  * Returns each path's kept runs, in its own order.
  */
-export function thinParallel(paths: Point[][], limit: number, options: { angle?: number; step?: number } = {}): Point[][][] {
+export function thinParallel(paths: Point[][], limit: number, options: { angle?: number; step?: number; seed?: Point[][] } = {}): Point[][][] {
   const cos = Math.cos((options.angle ?? 12) * Math.PI / 180);
   const step = options.step ?? 0.2;
   type Seg = { ax: number; ay: number; bx: number; by: number; ux: number; uy: number; len: number };
@@ -256,6 +259,12 @@ export function thinParallel(paths: Point[][], limit: number, options: { angle?:
     }
     return false;
   };
+  for (const path of options.seed ?? []) for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i], len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!(len > 0)) continue;
+    const n = Math.max(1, Math.ceil(len / step));
+    for (let k = 0; k < n; k++) insert({ ax: a.x + (b.x - a.x) * k / n, ay: a.y + (b.y - a.y) * k / n, bx: a.x + (b.x - a.x) * (k + 1) / n, by: a.y + (b.y - a.y) * (k + 1) / n, ux: (b.x - a.x) / len, uy: (b.y - a.y) / len, len: len / n });
+  }
   return paths.map(path => {
     const runs: Point[][] = [];
     const kept: Seg[] = [];
@@ -292,8 +301,9 @@ export interface RankedPiece { piece: Point[]; rank: number }
  * rank order, lowest first, ties in the order given; each comes back with its kept runs, in the order given, or with
  * `order: 'rank'` in the order they were thinned (for a card whose parts take their paths in that order). `limit` is the
  * format's `MIN_SPACING`. Ranks name what should survive: an outline before the planes inside it, and those before the cloth.
+ * `seed` is `thinParallel`'s: lines every piece gives way to, never thinned themselves.
  */
-export function thinRanked<T extends RankedPiece>(items: readonly T[], limit: number, options: { angle?: number; step?: number; order?: 'input' | 'rank' } = {}): { item: T; runs: Point[][] }[] {
+export function thinRanked<T extends RankedPiece>(items: readonly T[], limit: number, options: { angle?: number; step?: number; seed?: Point[][]; order?: 'input' | 'rank' } = {}): { item: T; runs: Point[][] }[] {
   const { order: emit = 'input', ...thinning } = options;
   const byRank = items.map((_, i) => i).sort((a, b) => items[a].rank - items[b].rank || a - b);
   const thinned = thinParallel(byRank.map(i => items[i].piece), limit, thinning);

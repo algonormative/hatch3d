@@ -88,6 +88,17 @@ describe('sketch kit: slabs', () => {
     expect(floored.length).toBeLessThan(plain.length);
     // A floor already met changes nothing.
     expect(facetStrokes(s, light, view.position, false, undefined, undefined, { view, mm: 1e-3, page })).toEqual(plain);
+    // `keepRings`: a face keeps as many rings as it can hold of those it had, its band widening, still the floor apart;
+    // `fieldAcross`: its field runs on over the rings, out to its edges, and darkens it by crossing them.
+    const rings = (strokes: ReturnType<typeof facetStrokes>) => strokes.filter(st => st.family === 'hatch' && st.points.length === 5).length;
+    const kept = facetStrokes(s, light, view.position, false, undefined, undefined, { view, mm, page, keepRings: true });
+    expect(rings(kept)).toBeGreaterThan(rings(floored));
+    expect(rings(kept)).toBeLessThanOrEqual(rings(plain));
+    expect(nearest(kept)).toBeGreaterThan(0.95 * mm);
+    const fieldLength = (strokes: ReturnType<typeof facetStrokes>) => strokes.filter(st => st.family === 'hatch' && st.points.length === 2).reduce((t, st) => t + st.points[0].distanceTo(st.points[1]), 0);
+    const across = facetStrokes(s, light, view.position, false, undefined, undefined, { view, mm, page, keepRings: true, fieldAcross: true });
+    expect(rings(across)).toBe(rings(kept));
+    expect(fieldLength(across)).toBeGreaterThan(fieldLength(kept));
   });
 
   it('leaves a slab untrimmed at tabloid, whatever trim a card asks for small cards, and measures it on the page', () => {
@@ -410,6 +421,9 @@ describe('sketch kit: shared card helpers', () => {
     // A path that carries on from where another ends keeps its line; one the limit apart does too.
     expect(thinParallel([line(0, 10, 0), line(10.5, 20, 0.1)], 0.5)[1]).toHaveLength(1);
     expect(thinParallel([line(0, 10, 0), line(0, 10, 0.5)], 0.5)[1]).toHaveLength(1);
+    // Seed lines are kept already: the paths give way to them, and they are never thinned (nor returned) themselves.
+    const seeded = thinParallel([line(0, 10, 0.3), line(0, 10, 1.4)], 0.5, { seed: [line(0, 10, 0), line(0, 10, 0.2)] });
+    expect(seeded.map(runs => runs.length)).toEqual([0, 1]);
   });
 
   it('keeps paper clear round the marks drawn so far: a point within the gap of any registered mark is near', () => {

@@ -4,7 +4,7 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { buildSurfaceMesh, type ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
-import { thinRanked } from '../../kit/density.ts';
+import { thinParallel, thinRanked } from '../../kit/density.ts';
 import { cutTube, headCoil, type AgentHead } from '../../kit/agent.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -16,7 +16,7 @@ import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
-import { HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
+import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { clipToTrim, cutSchemeOf, inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
@@ -52,11 +52,11 @@ const pens = pensOf(['silver', 'gold', 'black']);
  * shows. The bar on the gold ply is black.
  */
 const ROUTES = {
-  gold: { groups: ['hole'], inks: { carbon: 'black' } },
+  gold: { groups: ['hole', 'shirt'], inks: { carbon: 'black' } },
   black: { groups: ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'emph'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'emph'] as const;
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'shirt', 'emph'] as const;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -103,6 +103,19 @@ function exitNotch(lines: Point[][], level: number | undefined): Point[] | undef
   return [{ x: x0, y: y0 }, { x: TRIM.x1, y: y0 + 6 }, { x: TRIM.x1, y: y1 }, { x: x0 + 12, y: y1 }, { x: x0, y: y1 - 12 }];
 }
 
+/** Shirt stripes: lines down the shirt's front about the tie, about 2.3 mm apart on the sheet (closer toward the collar). */
+function shirtStripes(trunk: Tube, view: THREE.Camera): Point[][] {
+  const out: Point[][] = [];
+  for (let v = 0.25 - 0.09; v <= 0.25 + 0.09; v += 0.0045) {
+    if (Math.abs(v - 0.25) < 0.008) continue;
+    const path: Point[] = [];
+    for (let i = 0; i <= 60; i++) { const u = BUTTON + (COLLAR + 0.02 - BUTTON) * i / 60; path.push(pageOf(view, trunk.point(u, v, 0.02), PAGE)); }
+    out.push(path);
+  }
+  return out;
+}
+/** How far from the shirt's stripes the band fill under the window's edge stays (mm): about half their pitch. */
+const SHIRT_CLEAR = 1.0;
 function suitFacet(trunk: Tube, view: THREE.Camera, eye: THREE.Vector3): Point[] {
   let best: Point[] = [], area = 0;
   for (let k = 0; k < trunk.facets; k++) {
@@ -372,15 +385,23 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
   // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
   const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front, ...(notch ? { notch } : {}) });
-  // The tie and the shirt are filled with stripes over each window grown by the bleed (so a cut or registration a little
-  // off never shows bare gold at the edge): the tie's across it, the shirt's along it. The black's other marks run on
-  // across the gold everywhere else, so the corner and the notch are filled by them.
+  // The shirt cut out (`lCut` shirt): its stripes, lines down it, drawn in black on the gold beneath. (R12) Where the
+  // trunk turns toward the collar they draw together into a fan; each keeps the Micron 08's pitch from those before it.
+  const shirtLines: Point[][] = [];
+  if (windows.some(c => c.id.startsWith('shirt'))) {
+    for (const runs of thinParallel(shirtStripes(body.trunk, view).flatMap(path => clipToRect(path, ART)), LINE_PITCH.gel, { angle: ALONGSIDE_DEG })) for (const part of runs) if (buckets.add('shirt-carbon', part, true)) shirtLines.push(part);
+  }
+  // The tie and the shirt are filled out over each window grown by the bleed (so a cut or registration a little off never
+  // shows bare gold at the edge): the tie with stripes across it, its window and the band round it. (R12) The shirt shows
+  // its own stripes alone: its straight fill (1.3 mm, along the tie, R7 to R11) ran alongside them, near-duplicates that
+  // fused wherever the two families met; now it is drawn only in the band round the window, under the black, where the
+  // stripes do not reach (past the collar, and the lapels' corners). The black's other marks run on across the gold
+  // everywhere else, so the corner and the notch are filled by them.
   const grow = spec.bleed + FILL_OVER;
   const tieAxis = Math.atan2(front.tie[40].y - front.tie[0].y, front.tie[40].x - front.tie[0].x);
-  const stripes = windows.flatMap(w => (w.id === 'tie' ? stripeFill(w.rings[0], tieAxis + Math.PI / 2 - 0.35, 1.5, grow) : w.id.startsWith('shirt') ? stripeFill(w.rings[0], tieAxis, 1.3, grow) : []));
-  // (R12) The shirt cut out (`lCut` shirt) shows its fill alone. From R6 to R11 its own stripes were drawn under the
-  // fill as well, lines down the trunk about 2.3 mm apart: they ran alongside the fill's lines, near-duplicates of them,
-  // and fused with them wherever the two families met.
+  const byShirt = glyphMask(shirtLines, SHIRT_CLEAR, 6, PAGE);
+  const stripes = windows.flatMap(w => (w.id === 'tie' ? stripeFill(w.rings[0], tieAxis + Math.PI / 2 - 0.35, 1.5, grow)
+    : w.id.startsWith('shirt') ? stripeFill(w.rings[0], tieAxis, 1.3, grow).flatMap(path => keepAlong(path, q => !insideRing(w.rings[0], q) && !byShirt(q), 0.15)) : []));
   const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   const filled = windows.filter(w => w.id === 'tie' || w.id.startsWith('shirt')).map(w => inGrown(w.rings[0], grow));
   if (windows.length) {

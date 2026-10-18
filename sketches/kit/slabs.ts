@@ -337,7 +337,17 @@ export interface SlabTrim { view: THREE.Camera; hidden?: boolean; shade?: boolea
  * face's lines would come nearer, its ring step (or that field's step) is opened until they do not: fewer lines over
  * the same band, the face a little lighter, its marks unchanged in kind.
  */
-export interface SheetFloor { view: THREE.Camera; mm: number; page: { width: number; height: number } }
+export interface SheetFloor {
+  view: THREE.Camera; mm: number; page: { width: number; height: number };
+  /**
+   * Keep as many contour rings as the face takes without the floor, the band widening inward to hold them (as far as
+   * the face allows), so a dark face stays dark with its rings further apart; else the band keeps its width and holds
+   * fewer.
+   */
+  keepRings?: boolean;
+  /** The face's diagonal field runs over the whole face, across its rings, rather than only inside them: lines kept apart darken a face by crossing. */
+  fieldAcross?: boolean;
+}
 
 /**
  * A slab drawn in the raking-light hatch: twelve outline edges; then on each face that sees the
@@ -380,16 +390,21 @@ export function facetStrokes(s: Slab, light: THREE.Vector3, eye: THREE.Vector3, 
     const across = floor ? sheetSpacing(floor, at, a, b) : undefined;
     const opened = (step: number, du: number, dv: number, where?: 'u' | 'v') => (across ? Math.max(step, floor!.mm / across(du, dv, where)) : step);
     // Contour rings: the outline repeated inward, spaced tighter the darker the face. Under a floor the rings' insets
-    // across U (their sides along V) and across V may open apart; the band holds as many as the wider step allows.
+    // across U (their sides along V) and across V may open apart; the band holds as many as the wider step allows, or
+    // (`keepRings`) widens to hold as many as it would without the floor.
     const pitched = Math.max(FACET_MIN_PITCH, 0.075 + 0.11 * (1 - d)) * pitch;
     const ringU = opened(pitched, 0, 1, 'u'), ringV = opened(pitched, 1, 0, 'v');
     const band = Math.min(a, b) * (0.12 + 0.6 * d);
+    let rings = Infinity;
+    if (floor?.keepRings) { rings = 0; for (let t = pitched; t <= band && a - t > 0.03 && b - t > 0.03; t += pitched) rings++; }
+    // (Under a floor a ring's own opposite sides keep the floor apart too: the innermost may not close up to a sliver.)
+    const room = (tu: number, tv: number) => a - tu > 0.03 && b - tv > 0.03 && (!floor || (a - tu >= ringU / 2 && b - tv >= ringV / 2));
     let tu = ringU, tv = ringV;
-    for (; Math.max(tu, tv) <= band && a - tu > 0.03 && b - tv > 0.03; tu += ringU, tv += ringV) {
+    for (let k = 0; (floor?.keepRings ? k < rings : Math.max(tu, tv) <= band) && room(tu, tv); tu += ringU, tv += ringV, k++) {
       hatch('carbon', at(-(a - tu), -(b - tv)), at(a - tu, -(b - tv)), at(a - tu, b - tv), at(-(a - tu), b - tv), at(-(a - tu), -(b - tv)));
     }
     // The middle: diagonal hatch on mid faces, crossed on the darkest, for body.
-    const ia = a - tu, ib = b - tv;
+    const ia = floor?.fieldAcross ? a : a - tu, ib = floor?.fieldAcross ? b : b - tv;
     if (ia < 0.05 || ib < 0.05 || d < 0.32) continue;
     const families: [number, number, Ink][] = [[0.6, Math.max(FACET_MIN_PITCH, 0.07 + 0.3 * (1 - d) ** 1.5) * pitch, 'ultramarine']];
     if (d > 0.62) families.push([-0.95, Math.max(FACET_MIN_PITCH * 1.3, 0.1 + 0.35 * (1 - d)) * pitch, 'violet']);
