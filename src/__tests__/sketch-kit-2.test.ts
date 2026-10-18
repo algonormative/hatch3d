@@ -56,6 +56,40 @@ describe('sketch kit: slabs', () => {
     expect(facetStrokes(s, new THREE.Vector3(0, 0, -1), eye, false).filter(st => st.family === 'hatch').every(st => st.points.every(p => p.z > 0))).toBe(true);
   });
 
+  it('opens a face\'s rings and field to a floor on the sheet, and only there', () => {
+    // A dark slab seen at a slant: on the page its rings and field lines come nearer than the floor.
+    const s = solid(0, 0, 0, 3, 1.4, 1, 0, 'stack');
+    s.ry = 1.1;
+    const view = new THREE.PerspectiveCamera(30, page.width / page.height, 0.1, 1000);
+    view.position.set(0, 6, 100);
+    view.lookAt(0, 0, 0);
+    view.updateMatrixWorld();
+    view.updateProjectionMatrix();
+    const light = new THREE.Vector3(0, 0, -1), mm = 0.6, on = (p: THREE.Vector3) => pageOf(view, p, page);
+    /** The least page distance between neighbouring lines of one face and family: rings side to side, field lines. */
+    const nearest = (strokes: ReturnType<typeof facetStrokes>) => {
+      let least = Infinity;
+      const faces = new Map<string, THREE.Vector3[][]>();
+      for (const st of strokes) if (st.family === 'hatch') { const k = `${st.face}:${st.points.length === 5 ? 'ring' : st.ink}`; faces.set(k, [...(faces.get(k) ?? []), st.points]); }
+      for (const [k, lines] of faces) for (let i = 1; i < lines.length; i++) {
+        // Rings: each side of one against the same side of the next; field lines: each against the next.
+        const sides = k.endsWith('ring') ? [0, 1, 2, 3] : [0];
+        for (const j of sides) {
+          const a0 = on(lines[i - 1][j]), a1 = on(lines[i - 1][j + 1]), b0 = on(lines[i][j]), b1 = on(lines[i][j + 1]);
+          const m = { x: (b0.x + b1.x) / 2, y: (b0.y + b1.y) / 2 }, l = Math.hypot(a1.x - a0.x, a1.y - a0.y);
+          if (l > 1e-6) least = Math.min(least, Math.abs((m.x - a0.x) * (a1.y - a0.y) - (m.y - a0.y) * (a1.x - a0.x)) / l);
+        }
+      }
+      return least;
+    };
+    const plain = facetStrokes(s, light, view.position, false), floored = facetStrokes(s, light, view.position, false, undefined, undefined, { view, mm, page });
+    expect(nearest(plain)).toBeLessThan(mm);
+    expect(nearest(floored)).toBeGreaterThan(0.95 * mm);
+    expect(floored.length).toBeLessThan(plain.length);
+    // A floor already met changes nothing.
+    expect(facetStrokes(s, light, view.position, false, undefined, undefined, { view, mm: 1e-3, page })).toEqual(plain);
+  });
+
   it('leaves a slab untrimmed at tabloid, whatever trim a card asks for small cards, and measures it on the page', () => {
     const view = horizonCamera({ fov: 54, eye: [0, 2.4, 0], target: [0, 2.4, -100], far: 600, page, depth: { width: 559, height: 864 }, horizonY: 300 });
     const thin = solid(3, 4, -40, 6, 0.02, 4, 0, 'stack');

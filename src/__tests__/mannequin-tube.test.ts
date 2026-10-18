@@ -60,4 +60,31 @@ describe('mannequin tube', () => {
     expect(half.length).toBeGreaterThan(0);
     for (const s of half) for (const p of s.points) expect(p.z).toBeLessThan(1e-6);
   });
+
+  it('holds the stripes the env\'s minimum apart, and as far off the plane edges and seams ruled among them', () => {
+    // Seen down -z at 10 mm a unit: a stripe at angle a round the six-faceted cylinder lies at x = cos(a) on the sheet.
+    const t = cylinder(6), min = 1.2;
+    const turn = (x: number, z: number) => ((Math.atan2(z, x) / (2 * Math.PI)) % 1 + 1) % 1;
+    const sheetX = (v: number) => 10 * t.point(0.5, v).x;
+    /** The stripes' places round the tube (constant v, along the spine), on the front half (z > 0). */
+    const stripes = (e: ToneEnv) => pinstripeTube(t, e, { seams: [0.15], hems: [] })
+      .filter(s => (s.ink === 'ultramarine' || s.ink === 'violet') && s.group === 'figure' && Math.abs(s.points[0].y - s.points.at(-1)!.y) > 0.5)
+      .map(s => turn(s.points[0].x, s.points[0].z)).filter(v => v > 0.02 && v < 0.48);
+    const seam = turn(...(() => { const s = pinstripeTube(t, env, { seams: [0.15], hems: [] }).find(q => q.group === 'contour' && q.ink === 'vermilion')!; return [s.points[0].x, s.points[0].z] as const; })());
+    const ruled = [0, 1, 2, 3].map(k => k / 6).concat(seam).sort((a, b) => a - b);
+    /** Least sheet distance from a stripe to the ruled lines either side of it. */
+    const offRuled = (v: number) => {
+      const k = ruled.findIndex(r => r >= v);
+      return Math.min(...[ruled[k - 1], ruled[k]].map(r => Math.abs(sheetX(v) - sheetX(r))));
+    };
+    const plain = stripes(env), held = stripes({ ...env, min });
+    expect(held.length).toBeGreaterThan(4);
+    expect(Math.min(...plain.map(offRuled))).toBeLessThan(min);
+    for (const v of held) expect(offRuled(v)).toBeGreaterThanOrEqual(min - 1e-6);
+    // Neighbours on one plane, as far apart on the sheet.
+    const sorted = [...held].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      if (Math.floor(sorted[i] * 6) === Math.floor(sorted[i - 1] * 6)) expect(Math.abs(sheetX(sorted[i]) - sheetX(sorted[i - 1]))).toBeGreaterThanOrEqual(min - 0.05);
+    }
+  });
 });
