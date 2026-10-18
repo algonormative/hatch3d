@@ -95,6 +95,8 @@ export const LODESTONE_ASSEMBLY = { ...ASSEMBLY, margin: 1.2, bleed: 4 } as cons
  * nearer and are clean from 0.8 mm; the Micron 01 (`carbon`) on white fuses them at 0.4 mm and is clean from 0.5 mm.
  */
 export const LINE_PITCH = { gel: 0.8, micron01: 0.5 } as const;
+/** How near parallel two lines must run (degrees) to fuse when closer than the pitch: the spacing scan's measure. */
+export const ALONGSIDE_DEG = 20;
 /** How far past the bleed a fill under a window runs (mm), so the edge of the grown window is covered too. */
 export const FILL_OVER = 0.5;
 /** Whether the bars are windows cut from the sheet beneath (`barMode`, R7) rather than L's bar cut out and glued on C (R1 to R6). */
@@ -322,6 +324,12 @@ export interface Unravel extends Bleed {
   pitchAt: (p: Point) => number;
   /** Ribs across the loosening ribbon, thinning out as it comes apart. */
   ribs: Point[][];
+  /**
+   * How far apart (mm) neighbouring lines of the loosening ribbon lie at each of the strands' first points, by index
+   * (past its end each strand runs on as a field line of its own): where the ribbon twists edge-on they all meet, and a
+   * lamination may be left out there, as `flatRibbon` leaves its own out (`minMm`), the edges and the spine going on.
+   */
+  spacing: number[];
 }
 
 const smoothstep = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -386,6 +394,8 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
     for (let n = 0; n < 1600 && q.x < TRIM.x1 + 6 && q.y > TRIM.y0 - 30 && q.y < TRIM.y1 + 30; n++) { const f = toNorth(q); q = { x: q.x + step * f.x, y: q.y + step * f.y }; path.push(q); }
     return { ink, path };
   });
+  // How far apart neighbouring lines lie along the loosening stretch (the strands' first points, by index), then apart.
+  const spacing = Array.from({ length: iB - iA + 1 }, (_, k) => Math.abs(offset(iA + k, 1 / 3)));
   // Ribs across the loosening ribbon, edge to edge, ever further apart, gone by the time it is half undone.
   const ribs: Point[][] = [];
   let next = ss[iA];
@@ -395,7 +405,7 @@ export function ribbonUnravel(crown: Point, m: Magnet, bar: LintelBar, o: { widt
     if (Math.abs(offset(i, 1)) * 2 < 1.2) continue;
     ribs.push([at(i, -1), at(i, 1)]);
   }
-  return { ribbon: c.slice(0, iA + 1), strands, ribs, pitchAt: q => mul.get(q) ?? base(q) };
+  return { ribbon: c.slice(0, iA + 1), strands, ribs, pitchAt: q => mul.get(q) ?? base(q), spacing };
 }
 
 /**

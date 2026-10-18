@@ -4,6 +4,7 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { buildSurfaceMesh, type ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
+import { thinRanked } from '../../kit/density.ts';
 import { cutTube, headCoil, type AgentHead } from '../../kit/agent.ts';
 import { MIN_FEATURE } from '../../kit/format.ts';
 import { helixAlong } from '../../kit/helix.ts';
@@ -15,13 +16,13 @@ import { facetStrokes, slabGeometry, solid, type Slab } from '../../kit/slabs.ts
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
 import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
-import { BUTTON, COLLAR, HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
+import { HEMS, front, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { silhouettes, type ClothStroke, type Tube } from '../../kit/mannequin/tube.ts';
 import { clipToTrim, cutSchemeOf, inGrown, lCuts, stripeFill } from '../lodestone-cuts.ts';
 import {
   ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, holeBarPaths, holeBarRules, lintelBar, pensOf, threadPaths,
 } from '../world.ts';
-import { FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, lensFace, lensShift, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
+import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, barWindows, crossingY, gapOf, magnet, suitFrontOutlines, ribbonBleed, ribbonPath, ribbonPitch, ribbonUnravel, seamLevel, wordAlong, lensFace, lensShift, EMPHASIS, emphasisOn, frameReach, frameRings, outwardDouble, outwardSign, parallels, spacer } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel L: Lintel's L (approved in Lintel R2: gaze down, the bar drawn in black on the gold inside the
@@ -51,11 +52,11 @@ const pens = pensOf(['silver', 'gold', 'black']);
  * shows. The bar on the gold ply is black.
  */
 const ROUTES = {
-  gold: { groups: ['hole', 'shirt'], inks: { carbon: 'black' } },
+  gold: { groups: ['hole'], inks: { carbon: 'black' } },
   black: { groups: ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'emph'], inks: { carbon: 'silver', ultramarine: 'silver', violet: 'silver', vermilion: 'gold', acid: 'gold' } },
 };
 const INKS: Ink[] = ['carbon', 'ultramarine', 'vermilion', 'acid', 'violet'];
-const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'shirt', 'emph'] as const;
+const GROUPS = ['slab', 'figure', 'contour', 'helix', 'thread', 'bar', 'word', 'hole', 'emph'] as const;
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -102,17 +103,6 @@ function exitNotch(lines: Point[][], level: number | undefined): Point[] | undef
   return [{ x: x0, y: y0 }, { x: TRIM.x1, y: y0 + 6 }, { x: TRIM.x1, y: y1 }, { x: x0 + 12, y: y1 }, { x: x0, y: y1 - 12 }];
 }
 
-/** Shirt stripes: lines down the shirt's front about the tie, a little over a millimetre apart on the sheet. */
-function shirtStripes(trunk: Tube, view: THREE.Camera): Point[][] {
-  const out: Point[][] = [];
-  for (let v = 0.25 - 0.09; v <= 0.25 + 0.09; v += 0.0045) {
-    if (Math.abs(v - 0.25) < 0.008) continue;
-    const path: Point[] = [];
-    for (let i = 0; i <= 60; i++) { const u = BUTTON + (COLLAR + 0.02 - BUTTON) * i / 60; path.push(pageOf(view, trunk.point(u, v, 0.02), PAGE)); }
-    out.push(path);
-  }
-  return out;
-}
 function suitFacet(trunk: Tube, view: THREE.Camera, eye: THREE.Vector3): Point[] {
   let best: Point[] = [], area = 0;
   for (let k = 0; k < trunk.facets; k++) {
@@ -129,8 +119,12 @@ function suitFacet(trunk: Tube, view: THREE.Camera, eye: THREE.Vector3): Point[]
   return best;
 }
 
-/** A stroke with the slack its hidden-line test allows. */
-type Tagged = Stroke & { slack: number };
+/** A stroke with the slack its hidden-line test allows, and what it draws (`role`: the kit's `outline` for a silhouette). */
+type Tagged = Stroke & { slack: number; role?: string };
+/** The kit's inks the black ply draws in silver (`ROUTES`); the rest are gold. */
+const SILVER = new Set<string>(['carbon', 'ultramarine', 'violet']);
+/** The unravelled ribbon's lines that are laminations (not its edges or spine), by their kit ink. */
+const LAMINATION = new Set<string>(['ultramarine', 'violet']);
 
 /**
  * "everything", the phrase's first word (R8): set along a line, as C's "falls" and "into" ride its field loops and R's
@@ -168,6 +162,18 @@ function wordOnLines(strands: { ink: Ink; path: Point[] }[], ok: (p: Point) => b
   return undefined;
 }
 
+/** For a line: the index of its point nearest arclength `s` along it (its last point past its end). */
+function indexAlong(line: Point[]): (s: number) => number {
+  const at = [0];
+  for (let i = 1; i < line.length; i++) at.push(at[i - 1] + Math.hypot(line[i].x - line[i - 1].x, line[i].y - line[i - 1].y));
+  return s => {
+    let lo = 0, hi = at.length - 1;
+    if (s >= at[hi]) return hi;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (at[mid] <= s) lo = mid; else hi = mid; }
+    return s - at[lo] < at[hi] - s ? lo : hi;
+  };
+}
+
 /** The point at arclength `s` along a line. */
 function pointAt(line: Point[], s: number): Point {
   for (let i = 1, t = 0; i < line.length; i++) {
@@ -196,7 +202,7 @@ function draw(ctx: SketchContext): Part[] {
   const strokes: Tagged[] = [];
   const slack = n(ctx, 'slack', 0.15, 0.01, 2) * K;
   const cloth = (list: ClothStroke[]) => {
-    for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack });
+    for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack, ...(st.role ? { role: st.role } : {}) });
   };
   cloth(pinstripeTube(body.trunk, env, HEMS.trunk, LOOK));
   cloth(suitFront(body.trunk, env, LOOK));
@@ -286,7 +292,11 @@ function draw(ctx: SketchContext): Part[] {
     clear = glyphMask(wordPaths, 0.9, 6, PAGE);
     for (const rib of unravel?.ribs ?? []) for (const inside of clipToRect(rib, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add('thread-ultramarine', piece, true);
     for (const st of bleed?.strands ?? []) {
-      for (const inside of clipToRect(st.path, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
+      // (R12) A lamination of the loosening ribbon is left out where the lines lie closer than the gel's pitch, as the
+      // ribbon's own are: where it twists edge-on, before the lines have drawn apart.
+      const index = indexAlong(st.path);
+      const open = unravel && LAMINATION.has(st.ink) ? keepAlong(st.path, (_, at) => (unravel.spacing[index(at)] ?? Infinity) >= LINE_PITCH.gel, 0.1) : [st.path];
+      for (const path of open) for (const inside of clipToRect(path, ART)) for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p), 0.1)) buckets.add(`thread-${st.ink}`, piece, true);
       ribbon.mask.push(st.path);
     }
     // Never on the bar: the bar is cut out and glued on R, and must carry only its own hatch.
@@ -307,20 +317,32 @@ function draw(ctx: SketchContext): Part[] {
       groups.set(key, g);
     }
   }
+  const seen: { st: Tagged; piece: Point[] }[] = [];
   for (const g of groups.values()) {
     projectStrokes(g.strokes, { view, depth, width: W, height: H, bias: g.bias }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) {
           const keep = st.owner === undefined ? () => true : (p: Point) => !halo(p);
           for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y), ART)) {
-            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && !threadArea(p) && !bySuit(p) && keep(p), 0.15)) {
-              if (buckets.add(`${st.group}-${st.ink}`, piece, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined)) { if (st.group === 'contour') contours.push(piece); else marks.push(piece); }
-            }
+            for (const piece of keepAlong(inside, p => !onBar(p) && !clear(p) && !threadArea(p) && !bySuit(p) && keep(p), 0.15)) seen.push({ st, piece });
           }
         }
       },
     });
   }
+  // (R12) Lines kept apart (`thinRanked`): two of the black's lines running alongside nearer than the gel's pitch read
+  // as one heavy line, or fuse. The figure's outlines are kept first, its silhouettes before the seams and edges among
+  // them; then, nearer first (the hidden-line bands' order), the figure's and the coil's silver marks: so a stripe seen
+  // past a silhouette, a plane edge on a silhouette, or one of two seams on one edge gives way. The slabs' hatch holds
+  // the pitch where it is made, and the gold marks (the coil's ribbon edges) are left as drawn.
+  const add = (st: Tagged, part: Point[]) => {
+    if (!buckets.add(`${st.group}-${st.ink}`, part, false, st.family === 'hatch' && MIN_FEATURE ? MIN_FEATURE : undefined)) return;
+    if (st.group === 'contour') contours.push(part); else marks.push(part);
+  };
+  const thinned = (st: Tagged) => st.group === 'contour' || (SILVER.has(st.ink) && (st.group === 'figure' || st.group === 'helix'));
+  const ranked = seen.filter(q => thinned(q.st)).map(q => ({ ...q, rank: q.st.group !== 'contour' ? 2 : q.st.role === 'outline' ? 0 : 1 }));
+  for (const { item, runs } of thinRanked(ranked, LINE_PITCH.gel, { angle: ALONGSIDE_DEG })) for (const part of runs) add(item.st, part);
+  for (const q of seen) if (!thinned(q.st)) add(q.st, q.piece);
   for (const path of bar.paths) buckets.add('bar-carbon', path, true);
   // The bust's silhouette doubled, a line outward of each long outer edge (where it bounds the figure on one side only).
   const spaced = spacer();
@@ -350,15 +372,16 @@ function draw(ctx: SketchContext): Part[] {
   // The cut set's windows in the black (`cutScheme`): a plane of the suit and a corner. The gold beneath carries every mark
   // of the black too, in black ink, so the pinstripes run on across the cut; each sheet keeps what it shows.
   const windows = lCuts(ctx, { facet: suitFacet(body.trunk, view, eye), ...front, ...(notch ? { notch } : {}) });
-  // The shirt cut out (`lCut` shirt): its stripes, fine lines down it, drawn in black on the gold beneath.
-  if (windows.some(c => c.id.startsWith('shirt'))) for (const path of shirtStripes(body.trunk, view)) for (const inside of clipToRect(path, ART)) buckets.add('shirt-carbon', inside, true);
-  const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   // The tie and the shirt are filled with stripes over each window grown by the bleed (so a cut or registration a little
   // off never shows bare gold at the edge): the tie's across it, the shirt's along it. The black's other marks run on
   // across the gold everywhere else, so the corner and the notch are filled by them.
   const grow = spec.bleed + FILL_OVER;
   const tieAxis = Math.atan2(front.tie[40].y - front.tie[0].y, front.tie[40].x - front.tie[0].x);
   const stripes = windows.flatMap(w => (w.id === 'tie' ? stripeFill(w.rings[0], tieAxis + Math.PI / 2 - 0.35, 1.5, grow) : w.id.startsWith('shirt') ? stripeFill(w.rings[0], tieAxis, 1.3, grow) : []));
+  // (R12) The shirt cut out (`lCut` shirt) shows its fill alone. From R6 to R11 its own stripes were drawn under the
+  // fill as well, lines down the trunk about 2.3 mm apart: they ran alongside the fill's lines, near-duplicates of them,
+  // and fused with them wherever the two families met.
+  const art = routeParts(buckets.toParts(GROUPS, INKS), ROUTES);
   const filled = windows.filter(w => w.id === 'tie' || w.id.startsWith('shirt')).map(w => inGrown(w.rings[0], grow));
   if (windows.length) {
     art.gold.push(...art.black.filter(part => !part.id.startsWith('bar-')).map(part => ({ ...part, id: `under-${part.id}`, pen: 'black', paths: part.paths.flatMap(path => keepAlong(path, q => !filled.some(f => f(q)), 0.15)) })).filter(part => part.paths.length));

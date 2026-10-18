@@ -4,6 +4,7 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import type { ProjectedPoint } from '../../../src/projection.ts';
 import { renderDepthBufferCPU } from '../../../src/sketch/depth-buffer.ts';
 import { routeParts } from '../../kit/assembly.ts';
+import { thinRanked } from '../../kit/density.ts';
 import { HEM, agentFigure, cutTube, headCoil, uNear, type AgentHead } from '../../kit/agent.ts';
 import { helixAlong } from '../../kit/helix.ts';
 import { glyphMask } from '../../kit/lettering.ts';
@@ -15,13 +16,13 @@ import { cutSchemeOf, floorKind, hasPortal, inGrown, rCuts, stripeFill } from '.
 import { facetStrokes, slabGeometry, type Slab } from '../../kit/slabs.ts';
 import { PartBuckets, hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import type { Ink, Stroke } from '../../kit/types.ts';
-import { LOOK, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
+import { LOOK, MIN_MM, toneField, type ToneEnv } from '../../kit/mannequin/hatch.ts';
 import type { JointAngles, JointName, Proportions } from '../../kit/mannequin/skeleton.ts';
 import { HEMS, pinstripeTube, suitFront } from '../../kit/mannequin/suit.ts';
 import { Tube, silhouettes, type ClothStroke } from '../../kit/mannequin/tube.ts';
 import { buildSurfaceMesh } from '../../../src/projection.ts';
 import { ART, H, MM_X, MM_Y, PAGE, PAPER, THREAD, TRIM, W, bustFrame, flatRibbon, lintelBar, pensOf, smoothPath, type RibbonStroke } from '../world.ts';
-import { FILL_OVER, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, fieldLines, fieldPull, gapOf, lensFace, lensShift, rEntries, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
+import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY, LODESTONE_CONTROLS, cosmos, fieldLines, fieldPull, gapOf, lensFace, lensShift, rEntries, EMPHASIS, emphasisOn, frameBand, frameRings, outwardDouble, spacer, suitFrontOutlines, magnet, orientedSlab, slabHand, wordAlong } from '../lodestone-world.ts';
 
 /**
  * Lodestone, panel R: the ground. A suited figure with the helix coiled where its head would be kneels on white,
@@ -91,7 +92,7 @@ function ringHead(h: AgentHead): Tube[] {
   return bands;
 }
 
-type Tagged = Stroke & { slack: number };
+type Tagged = Stroke & { slack: number; role?: string };
 
 /** An egg inside the head's coil, never drawn: it hides the coil's far side. */
 function skull(h: AgentHead): THREE.BufferGeometry {
@@ -340,12 +341,14 @@ function draw(ctx: SketchContext): Part[] {
   // The tone: the light is in the gathered strands at the hands.
   const aura = toneField(ctx, gather.clone().divideScalar(K), { noiseKey: 'kneel-aura', reach: 5 });
   // Clean: one even tone (between the second and third stripe tiers), so the stripes run whole, never in patches.
+  // (R12) The stripes keep the kit's spacing, and now as far from the plane edges and seams among them (the carbon
+  // ones fused there with the Micron 01, which is clean only from 0.5 mm).
   const env: ToneEnv = clean
-    ? { density: 0.8 * n(ctx, 'density', 0.45, 0, 1), dark: () => 0.5, screen: p => pageOf(view, p, PAGE) }
-    : { density: n(ctx, 'density', 0.45, 0, 1), dark: (p, nrm) => 0.05 + 0.5 * aura(p.clone().divideScalar(K), nrm), screen: p => pageOf(view, p, PAGE) };
+    ? { density: 0.8 * n(ctx, 'density', 0.45, 0, 1), dark: () => 0.5, screen: p => pageOf(view, p, PAGE), min: MIN_MM }
+    : { density: n(ctx, 'density', 0.45, 0, 1), dark: (p, nrm) => 0.05 + 0.5 * aura(p.clone().divideScalar(K), nrm), screen: p => pageOf(view, p, PAGE), min: MIN_MM };
   const strokes: Tagged[] = [];
   const slack = 0.15 * K;
-  const cloth = (list: ClothStroke[]) => { for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack }); };
+  const cloth = (list: ClothStroke[]) => { for (const st of list) strokes.push({ ink: st.ink, group: st.group, family: st.family ?? 'hatch', points: st.points, slack, ...(st.role ? { role: st.role } : {}) }); };
   cloth(pinstripeTube(body.trunk, env, HEMS.trunk, LOOK));
   cloth(suitFront(body.trunk, env, LOOK));
   const cut = body.limbs.map(t => cutTube(t, stops.get(t.id)!));
@@ -354,8 +357,8 @@ function draw(ctx: SketchContext): Part[] {
   for (const t of [body.trunk, ...cut]) cloth(silhouettes(t, { forward, eye }, { ink: LOOK.edge, group: LOOK.contour }));
   const light = new THREE.Vector3(-0.6, 0.7, 0.4).normalize();
   // Hands hatched in the raking light; shoes as outlines (the planted one stands on the disc, where a hatched block
-  // would read as a slab of silver).
-  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)))) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
+  // would read as a slab of silver). (R12) The hatch no nearer than the Micron 01's pitch on the sheet.
+  for (const sl of [...hands, ...shoes]) for (const st of facetStrokes(sl, light, eye, shoes.includes(sl), 4 / mmPerUnit(new THREE.Vector3(sl.x, sl.y, sl.z)), undefined, { view, mm: LINE_PITCH.micron01, page: PAGE })) strokes.push({ ink: st.ink === 'violet' ? 'carbon' : st.ink, group: 'hand', family: st.family, points: st.points, slack: 0.05 * K });
   // The head: R1's helix wound along the coil, or (clean) a stack of flat ring bands like a coiled spring.
   const headGeos: THREE.BufferGeometry[] = [];
   if (clean) {
@@ -479,26 +482,35 @@ function draw(ctx: SketchContext): Part[] {
   const BANDS = 10;
   const dist = (t: Tagged) => eye.distanceTo(t.points[t.points.length >> 1]);
   const order = [...strokes].sort((a, b) => dist(a) - dist(b));
+  const seen: { st: Tagged; piece: Point[] }[] = [];
   for (let b = 0; b < BANDS; b++) {
     const chunk = order.slice(Math.floor(b * order.length / BANDS), Math.floor((b + 1) * order.length / BANDS));
     if (!chunk.length) continue;
     projectStrokes(chunk, { view, depth, width: W, height: H, bias: hiddenBias(view, slack, dist(chunk[chunk.length >> 1])) }, {
       begin: (st: Tagged) => (runs: ProjectedPoint[][]) => {
         for (const run of runs) for (const inside of clipToRect(scalePoints(run, MM_X, MM_Y).map(st.group === 'helix' ? pullHead : pullBody), ART)) {
-          for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) {
-            for (const white of keepAlong(piece, q => !framed(q), 0.15)) {
-              if (buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, white, false)) {
-                if (emph && st.group === 'contour') contours.push(white);
-                else if (emph) figureMarks.push(white);
-              }
-            }
-            // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
-            for (const part of keepAlong(piece, q => !inTie(q) && !inLens(q), 0.15)) buckets.add(`under-${st.ink}`, part, false);
-          }
+          for (const piece of keepAlong(inside, p => !strandArea(p) && !clear(p), 0.15)) seen.push({ st, piece });
         }
       },
     });
   }
+  // (R12) Lines kept apart, as in L (`thinRanked`, at the Micron 01's pitch): the figure's outlines first, its
+  // silhouettes before the seams and edges among them; then, nearer first, the figure's and the hands' marks (a stripe
+  // seen past a silhouette, a plane edge on a silhouette, two seams on one edge give way). The coil head keeps its
+  // density, as drawn.
+  const add = (st: Tagged, part: Point[]) => {
+    for (const white of keepAlong(part, q => !framed(q), 0.15)) {
+      if (buckets.add(`${st.group === 'contour' || st.group === 'figure' || st.group === 'helix' || st.group === 'hand' ? st.group : 'figure'}-${st.ink}`, white, false)) {
+        if (emph && st.group === 'contour') contours.push(white);
+        else if (emph) figureMarks.push(white);
+      }
+    }
+    // Where the figure stands on the disc, the black shows: the same mark there in silver (but for the tie, filled).
+    for (const under of keepAlong(part, q => !inTie(q) && !inLens(q), 0.15)) buckets.add(`under-${st.ink}`, under, false);
+  };
+  const ranked = seen.filter(q => q.st.group !== 'helix').map(q => ({ ...q, rank: q.st.group !== 'contour' ? 2 : q.st.role === 'outline' ? 0 : 1 }));
+  for (const { item, runs } of thinRanked(ranked, LINE_PITCH.micron01, { angle: ALONGSIDE_DEG })) for (const part of runs) add(item.st, part);
+  for (const q of seen) if (q.st.group === 'helix') add(q.st, q.piece);
   for (const st of strands) for (const piece of clipToRect(st.path, ART)) {
     for (const part of keepAlong(piece, p => !clear(p), 0.15)) { buckets.add(`strand-${st.ink}`, part, true); buckets.add(`strandunder-${st.ink}`, part, true); }
   }
