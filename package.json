@@ -19,6 +19,7 @@
     "sketch:typecheck": "tsc --project tsconfig.sketch.json",
     "finalize": "tsx cli/finalize.ts",
     "plotter-check": "tsx cli/plotter-check.ts",
+    "ink-check": "tsx cli/ink-check.ts",
     "assembly": "tsx cli/assembly.ts",
     "print-queue": "tsx cli/print-queue.ts",
     "art-match": "tsx cli/art-match.ts",

@@ -24,6 +24,7 @@
     "cli/sketch.ts",
     "cli/finalize.ts",
     "cli/plotter-check.ts",
+    "cli/ink-check.ts",
     "cli/print-queue.ts",
     "cli/art-match.ts",
     "cli/baselines.ts",

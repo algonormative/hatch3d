@@ -22,7 +22,8 @@ import { targetPage } from '../src/sketch/render-target.ts';
 import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, signatureBox, tryParseFrom, worldCuts, worldSha256, type AssemblyReport, type PlyResult } from './assembly-world.ts';
 import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
-import { INKS } from '../src/sketch/materials.ts';
+import { INKS, type Ink } from '../src/sketch/materials.ts';
+import { checkPrepared, paperIdOfColor, type InkCheckSummary } from './ink-check.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,8 +43,14 @@ export interface FinalizeOptions {
 }
 export interface Stack {
   title?: string; out: string; border?: Record<string, unknown>; pieces: Piece[];
-  /** `trialInks`: for a ply of an assembly, also accept inks the catalog lists as on trial on its paper (the report names them). */
-  defaults?: Partial<FinalizeOptions> & { palette?: string; trialInks?: boolean };
+  /**
+   * `trialInks`: for a ply of an assembly, also accept inks the catalog lists as on trial on its paper (the report names them).
+   * `gelSpeed`: plot gel pens more slowly: config.json gives each layer drawn with an ink that has a `speedPendown` that speed
+   * as `speed_pendown` (the cut and border layers take their cut ink's), and the time estimate follows it. Off, nothing changes.
+   * `prime`: start each gel layer with a short zigzag in the left page margin, outside the crop line, to get the ink flowing
+   * (see `primingBoxes`); the zigzag is trimmed away with the margin. Off, nothing changes.
+   */
+  defaults?: Partial<FinalizeOptions> & { palette?: string; trialInks?: boolean; gelSpeed?: boolean; prime?: boolean };
   /** The sheet every piece prints on (mm). A page-aware sketch draws on it; any other is fitted onto it. Default: each sketch's own page. */
   page?: { width: number; height: number; margin?: number };
   /** Params every piece shares (e.g. slogan and scratch settings); a piece's own params win. */
@@ -98,6 +105,8 @@ export const DEFAULT_OPTIONS: Omit<FinalizeOptions, 'palette'> = {
 
 const MM_PER_PX = 25.4 / 96;
 const DRAW_MM_S = 60, TRAVEL_MM_S = 200, SWAP_S = 60;
+/** The AxiDraw's default pen-down speed in percent (axicli `--speed_pendown`), which `DRAW_MM_S` is the drawing speed at: a layer plotted at another speed draws in proportion. */
+const DEFAULT_SPEED_PENDOWN = 25;
 const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
@@ -463,6 +472,8 @@ export function dropEmptyPenLayers(svg: string): string {
   return changed ? kept.join('') : svg;
 }
 
+/** The id finishing gives the border's layer. */
+const BORDER_LAYER = 'finishing-border';
 const isBorder = (l: Layer) => /finishing-border$/.test(l.label);
 function union(bs: (Bounds | null)[]): Bounds | null {
   return bs.reduce<Bounds | null>((a, b) => !b ? a : !a ? { ...b } : { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }, null);
@@ -488,9 +499,13 @@ function vpype(args: string[]): string {
   return run.stdout;
 }
 
-export interface LayerStats { layer: number; label: string; color: string; passes: number; paths: number; drawMm: number; travelMm: number; minutes: number }
-export function parseStat(text: string): Omit<LayerStats, 'label' | 'color' | 'passes' | 'minutes'>[] {
-  const out: Omit<LayerStats, 'label' | 'color' | 'passes' | 'minutes'>[] = [];
+export interface LayerStats {
+  layer: number; label: string; color: string; passes: number; paths: number; drawMm: number; travelMm: number; minutes: number;
+  /** Only for a layer plotted at its own pen-down speed (`defaults.gelSpeed`): the percent config.json asks for, which the minutes follow. */
+  speedPendown?: number;
+}
+export function parseStat(text: string): Omit<LayerStats, 'label' | 'color' | 'passes' | 'minutes' | 'speedPendown'>[] {
+  const out: Omit<LayerStats, 'label' | 'color' | 'passes' | 'minutes' | 'speedPendown'>[] = [];
   for (const block of text.split(/\n(?=Layer \d+)/).slice(1)) {
     const num = (name: string) => Number(new RegExp(`${name}:\\s*([\\d.]+)`).exec(block)?.[1] ?? 0);
     out.push({ layer: Number(/^Layer (\d+)/.exec(block)![1]), paths: num('Path count'), drawMm: num('Length') * MM_PER_PX, travelMm: num('Pen-up length') * MM_PER_PX });
@@ -502,8 +517,10 @@ export function parseStat(text: string): Omit<LayerStats, 'label' | 'color' | 'p
  * Re-emit vpype's geometry in the sketch SVG grammar that plotter-server accepts: the canonical root tag,
  * one canonical layer tag per layer (label, pen id, passes, stroke, width), and plain <path d> in millimetres.
  * vpype writes px units, <line>/<polyline>/<polygon>, metadata and style attributes, which the server rejects.
+ * `priming` maps a source layer's number to the path data of its priming stroke, which is written as the layer's first path:
+ * it is added here, after vpype, so that vpype's sorting and merging cannot move or join it.
  */
-export function toSketchGrammar(vpypeSvg: string, sourceSvg: string, plan: Map<number, { label: string; penId?: string; passes: number }>): string {
+export function toSketchGrammar(vpypeSvg: string, sourceSvg: string, plan: Map<number, { label: string; penId?: string; passes: number }>, priming: ReadonlyMap<number, string> = new Map()): string {
   const root = /<svg\b[^>]*>/.exec(sourceSvg)?.[0] ?? fail('Source SVG has no root');
   const sourceTags = new Map<number, string>();
   for (const m of sourceSvg.matchAll(/<g\b[^>]*inkscape:groupmode="layer"[^>]*>/g)) {
@@ -519,7 +536,7 @@ export function toSketchGrammar(vpypeSvg: string, sourceSvg: string, plan: Map<n
     const tag = sourceTags.get(n);
     if (!meta || !tag) fail(`Prepared layer ${n} has no source layer`);
     const body = part.slice(0, part.indexOf('</g>'));
-    const paths: string[] = [];
+    const paths: string[] = priming.has(n) ? [`<path d="${priming.get(n)}"/>`] : [];
     for (const el of body.matchAll(/<(polyline|polygon|line|path)\b([^>]*)\/?>/g)) {
       const attr = (name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(el[2])?.[1] ?? '';
       let pts: string[];
@@ -547,13 +564,97 @@ export function penName(id: string, stack: Pick<Stack, 'penNames'>, assembly?: P
   const own = stack.penNames && Object.prototype.hasOwnProperty.call(stack.penNames, id) ? stack.penNames[id] : undefined;
   if (own) return own;
   if (!assembly) return undefined;
-  const role = id === assembly.cutPen ? ' (cut guides)' : id === 'finishing-border' ? ' (crop marks)' : '';
+  const role = id === assembly.cutPen ? ' (cut guides)' : id === BORDER_LAYER ? ' (crop marks)' : '';
   const ink = role ? assembly.cutInk : id;
   const pen = Object.prototype.hasOwnProperty.call(INKS, ink) ? INKS[ink].pen : undefined;
   return pen ? `${pen}${role}` : undefined;
 }
 
-export function serverConfig(resultPath: string, sourceSvg: string, report: PieceReport, name: (id: string) => string | undefined = () => undefined): Record<string, unknown> {
+/**
+ * The catalog ink a layer is drawn with, and whether the layer is the sketch's art rather than its cut guides or border.
+ * The cut and border layers of an assembly ply are drawn with the ply's cut ink; the border of any other piece, with the
+ * stack border's pen. Undefined for a layer whose pen is not in the catalog.
+ */
+export function layerInk(id: string, stack: Pick<Stack, 'border'>, assembly?: Pick<AssemblyReport, 'cutPen' | 'cutInk'>): { ink: Ink; art: boolean } | undefined {
+  let name = id, art = true;
+  if (id === BORDER_LAYER || (assembly && id === assembly.cutPen)) {
+    art = false;
+    const borderPen = (stack.border as { pen?: unknown } | undefined)?.pen;
+    name = assembly ? assembly.cutInk : typeof borderPen === 'string' ? borderPen : id;
+  }
+  return Object.prototype.hasOwnProperty.call(INKS, name) ? { ink: INKS[name], art } : undefined;
+}
+
+/**
+ * The pen-down speed (percent) config.json asks plotter-server for on a layer: its ink's `speedPendown`, and only when the
+ * stack sets `defaults.gelSpeed`. Undefined leaves the layer at the job's speed.
+ */
+export function penDownSpeed(id: string, stack: Pick<Stack, 'border' | 'defaults'>, assembly?: Pick<AssemblyReport, 'cutPen' | 'cutInk'>): number | undefined {
+  return stack.defaults?.gelSpeed === true ? layerInk(id, stack, assembly)?.ink.speedPendown : undefined;
+}
+
+/**
+ * The priming zigzag of a gel layer (`defaults.prime`), in page millimetres: it runs `length` along the left edge, back and
+ * forth `legs` times between x = `x - height / 2` and `x + height / 2`. Zigzags are `gap` apart, and keep `clear` from the
+ * crop marks at the corners (which stand on the crop line, reaching 10 mm out along both edges) and `middle` either side of
+ * the middle of the edge, where a sketch may put marks of its own.
+ */
+const PRIMING = { length: 20, legs: 6, height: 2, x: 5, gap: 4, clear: 3, middle: 12 };
+const round3 = (v: number) => Math.round(v * 1000) / 1000;
+
+/**
+ * Where `count` priming zigzags go in the left margin of a page whose crop line (or border) is at `line` mm: boxes of
+ * `PRIMING.length` mm from the top down, each in its own place so that no ink is laid twice on one spot. Throws when the
+ * margin is too narrow to hold one clear of the crop line, or the edge too short for `count`.
+ */
+export function primingBoxes(count: number, page: Pick<Page, 'height'>, line: number): Bounds[] {
+  if (!count) return [];
+  const x0 = PRIMING.x - PRIMING.height / 2, x1 = PRIMING.x + PRIMING.height / 2;
+  if (line - x1 < PRIMING.clear) fail(`defaults.prime needs a left margin of at least ${x1 + PRIMING.clear} mm to draw the priming strokes outside the crop line, and this page's is ${line} mm`);
+  const mid = page.height / 2;
+  const keepOut = [[0, line + PRIMING.clear], [mid - PRIMING.middle, mid + PRIMING.middle], [page.height - line - PRIMING.clear, page.height]];
+  const boxes: Bounds[] = [];
+  let y = 0;
+  while (boxes.length < count) {
+    // Move down past any keep-out the stroke would touch, until it touches none.
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const [a, b] of keepOut) if (y < b && y + PRIMING.length > a) { y = b; moved = true; }
+    }
+    if (y + PRIMING.length > page.height) fail(`defaults.prime has no room in the left margin for ${count} priming strokes on a page ${page.height} mm tall (it holds ${boxes.length})`);
+    boxes.push({ x0, y0: round3(y), x1, y1: round3(y + PRIMING.length) });
+    y += PRIMING.length + PRIMING.gap;
+  }
+  return boxes;
+}
+
+/** The path data of the zigzag in a box from `primingBoxes`: it starts at the top left corner and ends at the bottom. */
+export function primingPath(box: Bounds): string {
+  const points = Array.from({ length: PRIMING.legs + 1 }, (_, i) => `${i % 2 ? box.x1 : box.x0},${round3(box.y0 + i * (box.y1 - box.y0) / PRIMING.legs)}`);
+  return `M${points.join('L')}`;
+}
+
+/** A gel layer that got a priming stroke: the layer's label and pen, and where the stroke lies on the page (mm). */
+export interface PrimingRecord { layer: string; pen: string; box: Bounds }
+
+/**
+ * The priming strokes of a piece: one for each layer of the plan drawn with a gel ink as art (not the cut guides or the
+ * border), in layer order down the left margin. `paths` is what `toSketchGrammar` takes, by source layer number.
+ */
+export function planPriming(plan: Map<number, { label: string; penId?: string }>, stack: Pick<Stack, 'border'>, page: Pick<Page, 'height' | 'margin'>, assembly?: Pick<AssemblyReport, 'cutPen' | 'cutInk'>): { paths: Map<number, string>; record: PrimingRecord[] } {
+  const gels = [...plan].sort(([a], [b]) => a - b).filter(([, meta]) => {
+    const found = meta.penId === undefined ? undefined : layerInk(meta.penId, stack, assembly);
+    return found?.art && found.ink.gel === true;
+  });
+  const line = (stack.border as { inset?: number } | undefined)?.inset ?? page.margin ?? 18;
+  const boxes = primingBoxes(gels.length, page, line);
+  return {
+    paths: new Map(gels.map(([layer], i) => [layer, primingPath(boxes[i])])),
+    record: gels.map(([, meta], i) => ({ layer: meta.label, pen: meta.penId!, box: boxes[i] })),
+  };
+}
+
+export function serverConfig(resultPath: string, sourceSvg: string, report: PieceReport, name: (id: string) => string | undefined = () => undefined, speed: (id: string) => number | undefined = () => undefined): Record<string, unknown> {
   const result = JSON.parse(readFileSync(resultPath, 'utf8')) as { identity: string; metadata: { name: string; page: Page; pens: (Pen & { passes?: number })[] }; params: unknown; effectiveParams?: unknown; seed: number; finishing?: unknown };
   const partsByPen = new Map<string, string[]>();
   for (const layer of sourceSvg.split(/(?=<g\b[^>]*inkscape:groupmode="layer")/).slice(1)) {
@@ -565,7 +666,10 @@ export function serverConfig(resultPath: string, sourceSvg: string, report: Piec
   return {
     format: 'hatch3d-sketch-v1', identity: result.identity, composition: 'sketch', presetName: `${report.title} · seed ${report.seed}`,
     page: result.metadata.page, pens,
-    layers: pens.map(pen => { const label = name(pen.id); return { id: pen.id, ...(label ? { name: label } : {}), color: pen.color, width: pen.width, passes: pen.passes ?? 1, parts: partsByPen.get(pen.id) ?? [] }; }),
+    layers: pens.map(pen => {
+      const label = name(pen.id), pendown = speed(pen.id);
+      return { id: pen.id, ...(label ? { name: label } : {}), color: pen.color, width: pen.width, passes: pen.passes ?? 1, ...(pendown === undefined ? {} : { speed_pendown: pendown }), parts: partsByPen.get(pen.id) ?? [] };
+    }),
     params: result.params, ...(result.effectiveParams ? { effectiveParams: result.effectiveParams } : {}), seed: result.seed,
     ...(result.finishing ? { finishing: result.finishing } : {}),
     stats: { pathCount: report.layers.reduce((t, l) => t + l.paths, 0), lengthMm: Math.round(report.layers.reduce((t, l) => t + l.drawMm, 0)) },
@@ -582,6 +686,14 @@ export interface PieceReport {
   files: { source: string; sourcePng: string; prepared: string; preparedPng: string }; sourceSha256: string; preparedSha256: string;
   /** Only for a ply of an assembly: which ply of which panel, its cuts, and the fingerprint of the world it drew. */
   assembly?: AssemblyReport;
+  /**
+   * What `cli/ink-check.ts` found in the prepared SVG: parallel lines closer than the pen holds apart, and ink near the
+   * cut outlines, with its warnings (the same report is in `ink-check.json` beside an overlay, `ink-check.png`).
+   * Never fails a finalize. Absent when the piece's paper is not one the materials catalog has measurements for.
+   */
+  inkCheck?: InkCheckSummary;
+  /** Only when the stack sets `defaults.prime`: the gel layers that start with a priming stroke in the margin, and where it lies (none when no layer is a gel). */
+  priming?: PrimingRecord[];
 }
 
 /**
@@ -646,17 +758,22 @@ async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: As
     'filter', '--min-length', `${v.minLength}mm`,
     'write', '--page-size', `${page.width}mmx${page.height}mm`, preparedPath];
   vpype(args);
-  const prepared = toSketchGrammar(readFileSync(preparedPath, 'utf8'), source, plan);
+  // The priming strokes go in after vpype, as the first path of their layers, and in the margin that finishing clips art out of.
+  const priming = stack.defaults?.prime === true ? planPriming(plan, stack, page, assembly) : undefined;
+  const prepared = toSketchGrammar(readFileSync(preparedPath, 'utf8'), source, plan, priming?.paths);
   writeFileSync(preparedPath, prepared);
   const stats = parseStat(vpype(['read', preparedPath, 'stat']));
   const layerStats: LayerStats[] = stats.map(s => {
     const meta = plan.get(s.layer);
     const color = layers.find(l => l.index === s.layer)?.color ?? '#000000';
     const passes = meta?.passes ?? 1;
-    return { ...s, label: meta?.label ?? `${s.layer}`, color, passes, minutes: passes * 1.1 * (s.drawMm / DRAW_MM_S + s.travelMm / TRAVEL_MM_S) / 60 };
+    const speed = meta?.penId === undefined ? undefined : penDownSpeed(meta.penId, stack, assembly);
+    const drawMmS = speed === undefined ? DRAW_MM_S : DRAW_MM_S * speed / DEFAULT_SPEED_PENDOWN;
+    return { ...s, label: meta?.label ?? `${s.layer}`, color, passes, ...(speed === undefined ? {} : { speedPendown: speed }), minutes: passes * 1.1 * (s.drawMm / drawMmS + s.travelMm / TRAVEL_MM_S) / 60 };
   });
   const minutes = layerStats.reduce((t, l) => t + l.minutes, 0) + Math.max(0, layerStats.length - 1) * SWAP_S / 60;
   writeFileSync(join(dir, 'plot-ready.png'), renderSvgPng(prepared, finalPage, 'paper', 3));
+  const inkCheck = checkPrepared(prepared, dir, { paper: asm ? asm.ply.paper.id : paperIdOfColor(options.palette.paper), paperColor: options.palette.paper, ...(asm ? { cutPen: asm.spec.cutPen } : {}) });
   const after = art ? { y0: art.y0 + dy, y1: art.y1 + dy } : null;
   const report: PieceReport = {
     name: piece.name, title: piece.title ?? piece.name, seed: piece.seed, palette: options.palette.id, paper: options.palette.paper,
@@ -666,8 +783,10 @@ async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: As
     files: { source: relative(ROOT, join(liveDir, 'source', 'render.svg')), sourcePng: relative(ROOT, join(liveDir, 'source', 'render.png')), prepared: relative(ROOT, join(liveDir, 'plot-ready.svg')), preparedPng: relative(ROOT, join(liveDir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
     ...(assembly ? { assembly } : {}),
+    ...(inkCheck ? { inkCheck } : {}),
+    ...(priming ? { priming: priming.record } : {}),
   };
-  if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report, (id) => penName(id, stack, report.assembly)), null, 2));
+  if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report, (id) => penName(id, stack, report.assembly), (id) => penDownSpeed(id, stack, report.assembly)), null, 2));
   writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => (dir !== liveDir && a.startsWith(dir) ? liveDir + a.slice(dir.length) : a)).map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
   return report;
 }
@@ -736,7 +855,9 @@ export function loadStack(path: string): Stack {
   const mm = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
   if (sheet !== undefined && (typeof sheet !== 'object' || sheet === null || !mm(sheet.width) || !mm(sheet.height) || (sheet.margin !== undefined && !(mm(sheet.margin) || sheet.margin === 0))
     || Object.keys(sheet).some(k => !['width', 'height', 'margin'].includes(k)))) fail('Stack page must be { width, height, margin? } in millimetres');
-  if (stack.defaults?.trialInks !== undefined && typeof stack.defaults.trialInks !== 'boolean') fail('Stack defaults.trialInks must be true or false');
+  for (const key of ['trialInks', 'gelSpeed', 'prime'] as const) {
+    if (stack.defaults?.[key] !== undefined && typeof stack.defaults[key] !== 'boolean') fail(`Stack defaults.${key} must be true or false`);
+  }
   if (stack.penNames !== undefined && (typeof stack.penNames !== 'object' || stack.penNames === null || Array.isArray(stack.penNames) ||
       Object.values(stack.penNames).some((v) => typeof v !== 'string' || !v.trim()))) fail('Stack penNames must map layer ids to pen names');
   const names = new Set<string>();
@@ -842,7 +963,8 @@ async function main(argv: string[]) {
   const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}), ...(rest.includes('--merge') ? { mergeSameColor: true } : {}) });
   const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
   await finalizeRun(stack, stack.pieces.filter(p => !only || only.includes(slug(p.name))), options, overrides, r =>
-    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared })));
+    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared,
+      ...(r.inkCheck && ('error' in r.inkCheck ? { inkCheck: r.inkCheck.error } : r.inkCheck.warnings.length ? { inkCheck: r.inkCheck.warnings } : {})) })));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
