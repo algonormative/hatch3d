@@ -36,6 +36,14 @@ export interface Measured {
 export interface Ink {
   id: string; label: string; color: string; width: number; reads: string[]; trial?: string[]; note?: string; pen?: string; nominal?: number;
   measured?: Partial<Record<PaperId, Measured>>;
+  /** A gel pen. Gels starve after a dense fill and skip until they recover, which a stack's `defaults.prime` answers with a priming stroke. */
+  gel?: boolean;
+  /**
+   * The pen-down speed in percent (1 to 100, as axicli's `--speed_pendown`) that finalize asks plotter-server for on this
+   * ink's layers when the stack sets `defaults.gelSpeed`; without it the job's speed applies (the AxiDraw default, 25).
+   * Provisional: chosen, not measured.
+   */
+  speedPendown?: number;
 }
 
 export const PAPERS: Record<string, Paper> = {
@@ -95,11 +103,16 @@ const MICRON_05_PURPLE: MeasuredTable = {
 // ── Inks ─────────────────────────────────────────────────────────────
 
 const PLACEHOLDER = 'width is a placeholder until the calibration plot';
+/** Provisional pen-down speed for every gel ink (percent): below the AxiDraw default of 25, chosen rather than measured. */
+const GEL_SPEED_PENDOWN = 15;
 type GelOptions = { reads?: string[]; trial?: string[]; nominal?: number; measured?: MeasuredTable };
-/** A gel pen: drawn at its measured width on black where there is one, else at a placeholder width (and noted as such). */
+/**
+ * A gel pen: drawn at its measured width on black where there is one, else at a placeholder width (and noted as such);
+ * marked `gel`, with the provisional `speedPendown` a stack that opts in plots it at.
+ */
 const gel = (id: string, label: string, color: string, pen: string, { reads = ['black'], trial, nominal, measured }: GelOptions = {}): Ink => {
   const width = measured?.black?.width;
-  return { id, label, color, width: width ?? 0.5, reads, ...(trial ? { trial } : {}), ...(width === undefined ? { note: PLACEHOLDER } : {}), pen, ...(nominal ? { nominal } : {}), ...(measured ? { measured } : {}) };
+  return { id, label, color, width: width ?? 0.5, reads, ...(trial ? { trial } : {}), ...(width === undefined ? { note: PLACEHOLDER } : {}), pen, ...(nominal ? { nominal } : {}), ...(measured ? { measured } : {}), gel: true, speedPendown: GEL_SPEED_PENDOWN };
 };
 /** Sakura Gelly Roll Moonlight 10: a 1.0 mm ball, a 0.5 mm line. Uni-ball Signo (UM-153): sold as 1.0 mm, its line narrower; the calibration measures it. */
 const moonlight = (id: string, label: string, color: string, colour: string, options: GelOptions = {}): Ink =>
