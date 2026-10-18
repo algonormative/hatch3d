@@ -37,8 +37,8 @@ const pliesFor = (mode: BarMode) => [
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
   ...(mode === 'onlay' ? [{ id: 'bar', paper: PAPER.black, pens: [], cutInk: 'black', onlay: { from: `lodestone-l/black/${BAR_ID}` } }] : []),
 ];
-/** R1 to R6's onlay keeps Lintel's 2 mm bleed; the window (R7) Lodestone's 4 mm. */
-const specFor = (mode: BarMode): AssemblySpec => ({ ...(mode === 'onlay' ? ASSEMBLY : LODESTONE_ASSEMBLY), plies: pliesFor(mode) });
+/** R1 to R6's onlay keeps Lintel's 2 mm bleed; the window (R7) Lodestone's 4 mm. Both keep art Lodestone's margin from the cuts. */
+const specFor = (mode: BarMode): AssemblySpec => ({ ...(mode === 'onlay' ? { ...ASSEMBLY, margin: LODESTONE_ASSEMBLY.margin } : LODESTONE_ASSEMBLY), plies: pliesFor(mode) });
 const pens = pensOf(['silver', 'gold', 'black']);
 
 const ALL_BLACK = { carbon: 'black', ultramarine: 'black', violet: 'black', vermilion: 'black', acid: 'black' };

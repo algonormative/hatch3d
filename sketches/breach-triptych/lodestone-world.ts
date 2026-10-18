@@ -85,9 +85,10 @@ export const LODESTONE_CONTROLS: Control[] = [
 
 /**
  * Lodestone's assembly settings: Lintel's, with a 4 mm bleed (provisional, until the calibration plot measures the real
- * registration error): every fill under a window covers the window grown by it.
+ * registration error): every fill under a window covers the window grown by it. Art keeps 1.2 mm from every knife cut
+ * (the calibration's hand cuts landed within about 0.5 mm of the guide, and nicked art 0.5 mm from it but not 1.0 mm).
  */
-export const LODESTONE_ASSEMBLY = { ...ASSEMBLY, bleed: 4 } as const;
+export const LODESTONE_ASSEMBLY = { ...ASSEMBLY, margin: 1.2, bleed: 4 } as const;
 /** How far past the bleed a fill under a window runs (mm), so the edge of the grown window is covered too. */
 export const FILL_OVER = 0.5;
 /** Whether the bars are windows cut from the sheet beneath (`barMode`, R7) rather than L's bar cut out and glued on C (R1 to R6). */
