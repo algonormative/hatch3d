@@ -23,6 +23,7 @@ import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, signatureBox, tryParseFrom, worldCuts, worldSha256, type AssemblyReport, type PlyResult } from './assembly-world.ts';
 import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
 import { INKS } from '../src/sketch/materials.ts';
+import { checkPrepared, paperIdOfColor, type InkCheckSummary } from './ink-check.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -582,6 +583,12 @@ export interface PieceReport {
   files: { source: string; sourcePng: string; prepared: string; preparedPng: string }; sourceSha256: string; preparedSha256: string;
   /** Only for a ply of an assembly: which ply of which panel, its cuts, and the fingerprint of the world it drew. */
   assembly?: AssemblyReport;
+  /**
+   * What `cli/ink-check.ts` found in the prepared SVG: parallel lines closer than the pen holds apart, and ink near the
+   * cut outlines, with its warnings (the same report is in `ink-check.json` beside an overlay, `ink-check.png`).
+   * Never fails a finalize. Absent when the piece's paper is not one the materials catalog has measurements for.
+   */
+  inkCheck?: InkCheckSummary;
 }
 
 /**
@@ -657,6 +664,7 @@ async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: As
   });
   const minutes = layerStats.reduce((t, l) => t + l.minutes, 0) + Math.max(0, layerStats.length - 1) * SWAP_S / 60;
   writeFileSync(join(dir, 'plot-ready.png'), renderSvgPng(prepared, finalPage, 'paper', 3));
+  const inkCheck = checkPrepared(prepared, dir, { paper: asm ? asm.ply.paper.id : paperIdOfColor(options.palette.paper), paperColor: options.palette.paper, ...(asm ? { cutPen: asm.spec.cutPen } : {}) });
   const after = art ? { y0: art.y0 + dy, y1: art.y1 + dy } : null;
   const report: PieceReport = {
     name: piece.name, title: piece.title ?? piece.name, seed: piece.seed, palette: options.palette.id, paper: options.palette.paper,
@@ -666,6 +674,7 @@ async function produce(stack: Stack, piece: Piece, loaded: LoadedSketch, asm: As
     files: { source: relative(ROOT, join(liveDir, 'source', 'render.svg')), sourcePng: relative(ROOT, join(liveDir, 'source', 'render.png')), prepared: relative(ROOT, join(liveDir, 'plot-ready.svg')), preparedPng: relative(ROOT, join(liveDir, 'plot-ready.png')) },
     sourceSha256: sha256(source), preparedSha256: sha256(prepared),
     ...(assembly ? { assembly } : {}),
+    ...(inkCheck ? { inkCheck } : {}),
   };
   if (report.serverCompatible) writeFileSync(join(dir, 'config.json'), JSON.stringify(serverConfig(join(dir, 'source', 'result.json'), source, report, (id) => penName(id, stack, report.assembly)), null, 2));
   writeFileSync(join(dir, 'report.json'), JSON.stringify({ ...report, options, overrides, vpypeArgs: args.map(a => (dir !== liveDir && a.startsWith(dir) ? liveDir + a.slice(dir.length) : a)).map(a => a.startsWith(ROOT) ? relative(ROOT, a) : a) }, null, 2));
@@ -842,7 +851,8 @@ async function main(argv: string[]) {
   const options = resolveOptions(stack, { ...(flag('palette') ? { palette: flag('palette') } : {}), ...(rest.includes('--merge') ? { mergeSameColor: true } : {}) });
   const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
   await finalizeRun(stack, stack.pieces.filter(p => !only || only.includes(slug(p.name))), options, overrides, r =>
-    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared })));
+    console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared,
+      ...(r.inkCheck && ('error' in r.inkCheck ? { inkCheck: r.inkCheck.error } : r.inkCheck.warnings.length ? { inkCheck: r.inkCheck.warnings } : {})) })));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
