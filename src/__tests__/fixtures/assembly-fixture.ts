@@ -28,7 +28,8 @@ const windowShift = { type: 'slider' as const, id: 'windowShift', label: 'Window
 /**
  * Panel L. `whiteGold`: the white ply carries the gold pen, which does not read on white. `whiteTrial`: it carries
  * silver, which the catalog has on trial for white. `leaky`: the window moves with the ply. `equalInk`: both plies are
- * cut with a 0.5 mm ink (silver, on trial for white, and gold), so a border's spacing fits the page alike on both.
+ * cut with an ink of one measured width, 0.39 mm (fluoro orange, on trial for white, and gold), so a border's spacing fits
+ * the page alike on both.
  * `noCarbon`: the white ply, which signs in carbon, draws nothing in it. The `windowShift` control moves the window.
  */
 export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; leaky?: boolean; equalInk?: boolean; noCarbon?: boolean } = {}): Sketch {
@@ -36,12 +37,12 @@ export function lintelL(options: { whiteGold?: boolean; whiteTrial?: boolean; le
   const spec: AssemblySpec = {
     control: 'ply', cutPen: 'black', margin: 1.5, bleed: 1,
     plies: [
-      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [whitePen], cutInk: options.equalInk ? 'silver' : 'black' },
+      { id: 'white', paper: { id: 'white', color: PAPERS.white.color }, pens: [whitePen], cutInk: options.equalInk ? 'fluoro-orange' : 'black' },
       { id: 'black', paper: { id: 'black', color: PAPERS.black.color }, pens: ['gold'], cutInk: 'gold', lift: 0.4 },
     ],
     signature: { ply: 'white', pen: whitePen, box: { x: 50, y: 112, width: 30, height: 8 } },
   };
-  const sketchPens = options.whiteTrial || options.equalInk ? [...pens, inkPen('silver')] : pens;
+  const sketchPens = [...pens, ...(options.whiteTrial ? [inkPen('silver')] : []), ...(options.equalInk ? [inkPen('fluoro-orange')] : [])];
   return {
     name: 'Assembly fixture, panel L', page, pens: sketchPens, controls: [plyControl(spec), spacing, windowShift], assembly: spec,
     draw(ctx) {
