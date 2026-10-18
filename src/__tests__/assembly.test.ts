@@ -351,13 +351,13 @@ describe('cutGuides', () => {
   });
 
   it('sizes the guide by the ply’s cutInk but emits it on the cutPen layer', () => {
-    // cutInk gold is 0.5 mm wide and cutPen black is 0.35 mm: the layer is black's, the outline is offset by gold's 0.25.
+    // cutInk gold is wider (0.39 mm measured) than cutPen black (0.35 mm): the layer is black's, the outline is offset by gold's half width.
     const goldInk = structuredClone(spec);
     goldInk.plies[2].cutInk = 'gold';
     const guide = renderPly(goldInk, { params: { ply: 'top' } }, pens, { cuts: { top: [{ id: 'w', rings: [WINDOW_T] }] }, art: {} }).find((p) => p.id === 'cut-w')!;
     expect(guide.pen).toBe(goldInk.cutPen);
-    expect(Math.min(...guide.paths[0].map((p) => p.x))).toBeCloseTo(60 + 0.25, 9);
-    expect(Math.max(...guide.paths[0].map((p) => p.y))).toBeCloseTo(160 - 0.25, 9);
+    expect(Math.min(...guide.paths[0].map((p) => p.x))).toBeCloseTo(60 + INKS.gold.width / 2, 9);
+    expect(Math.max(...guide.paths[0].map((p) => p.y))).toBeCloseTo(160 - INKS.gold.width / 2, 9);
     const blackInk = renderPly(spec, { params: { ply: 'top' } }, pens, { cuts: { top: [{ id: 'w', rings: [WINDOW_T] }] }, art: {} }).find((p) => p.id === 'cut-w')!;
     expect(blackInk.pen).toBe(goldInk.cutPen);
     expect(Math.min(...blackInk.paths[0].map((p) => p.x))).toBeCloseTo(60 + 0.175, 9);
@@ -636,13 +636,13 @@ describe('renderPly', () => {
     const middle = render('middle').filter((p) => p.id.startsWith('cut-'));
     expect(middle.map((p) => [p.id, p.pen])).toEqual([['cut-m1', 'black']]);
     expect(render('top').filter((p) => p.id.startsWith('cut-')).map((p) => p.id)).toEqual(['cut-t1']);
-    // The guide is sized by the ply's cutInk: gold (0.5) on a black ply is not the fineliner (0.35).
+    // The guide is sized by the ply's cutInk: gold (0.39 measured) on a black ply is not the fineliner (0.35).
     const goldSpec = structuredClone(spec);
     goldSpec.plies[1].cutInk = 'gold';
     const fine = renderPly(spec, { params: { ply: 'middle' } }, pens, world).find((p) => p.id === 'cut-m1')!;
     const gel = renderPly(goldSpec, { params: { ply: 'middle' } }, pens, world).find((p) => p.id === 'cut-m1')!;
     expect(fine.paths[0][0].x).toBeCloseTo(40 + 0.175, 9);
-    expect(gel.paths[0][0].x).toBeCloseTo(40 + 0.25, 9);
+    expect(gel.paths[0][0].x).toBeCloseTo(40 + INKS.gold.width / 2, 9);
     // Partial guide options override the defaults.
     expect(renderPly(spec, { params: { ply: 'middle' } }, pens, world, { label: false }).find((p) => p.id === 'cut-m1')!.paths.length)
       .toBeLessThan(fine.paths.length);
@@ -818,10 +818,9 @@ describe('materials', () => {
       'fluoro-green': ['#7dff5a', ['black'], []], 'fluoro-yellow': ['#f2ff3a', ['black'], []], black: ['#1c1c1e', ['gold-yellow', 'white'], []],
     });
     expect(INKS.black.width).toBe(0.35);
-    for (const id of ['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow']) {
-      expect(INKS[id].width).toBe(0.5);
-      expect(INKS[id].note).toMatch(/placeholder until the calibration plot/);
-    }
+    // The gels are drawn at the width the R13 calibration measured on black (it replaced the 0.5 mm placeholder).
+    expect(Object.fromEntries(['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow'].map((id) => [id, [INKS[id].width, INKS[id].note]])))
+      .toEqual({ gold: [0.39, undefined], silver: [0.42, undefined], 'fluoro-pink': [0.45, undefined], 'fluoro-orange': [0.39, undefined], 'fluoro-green': [0.39, undefined], 'fluoro-yellow': [0.39, undefined] });
   });
 
   it('carries the Breach inks with the colours the cards declare', () => {
@@ -832,7 +831,7 @@ describe('materials', () => {
   });
 
   it('inkPen gives a declarable pen, and inkReads answers by paper', () => {
-    expect(inkPen('gold')).toEqual({ id: 'gold', color: '#c9a54a', width: 0.5 });
+    expect(inkPen('gold')).toEqual({ id: 'gold', color: '#c9a54a', width: 0.39 });
     expect(inkPen('black')).toEqual({ id: 'black', color: '#1c1c1e', width: 0.35 });
     expect(() => inkPen('nope')).toThrow(/Unknown ink/);
     expect(inkReads('gold', 'black')).toBe(true);
