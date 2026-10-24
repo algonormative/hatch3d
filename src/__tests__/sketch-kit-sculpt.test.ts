@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { area, traceMask } from '../../sketches/kit/outline.ts';
-import { contourLines, isoLines, meshSdf, perVertex, sphere } from '../../sketches/kit/sculpt.ts';
+import { contourLines, isoLines, meshSdf, perVertex, platesOn, scatterOn, sphere } from '../../sketches/kit/sculpt.ts';
 
 const unit = () => meshSdf(sphere([0, 0, 0], 1), [-1.2, -1.2, -1.2], [1.2, 1.2, 1.2], 0.05);
 
@@ -57,6 +57,26 @@ describe('sketch kit: sculpted solids', () => {
     const lines = isoLines(m, Float64Array.from([0, 1, 1, 1, 1, 1, 1]), 1, 0);
     expect(lines).toHaveLength(1);
     expect(lines[0].points.length).toBe(sides + 1);
+  });
+
+  it('scatters plate seeds apart and cuts the surface into plates round them', () => {
+    const m = unit();
+    let s = 1;
+    const rng = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    const seeds = scatterOn(m, 0.4, rng, p => p[2] > -0.5, [[0, 0, 1]]);
+    expect(seeds[0]).toEqual([0, 0, 1]);
+    expect(seeds.length).toBeGreaterThan(10);
+    for (const a of seeds) for (const b of seeds) if (a !== b) expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeGreaterThanOrEqual(0.4);
+    for (const q of seeds) expect(q[2]).toBeGreaterThan(-0.5);
+    const plates = platesOn(m, seeds);
+    for (let v = 0; v < plates.plate.length; v += 37) {
+      const p = [m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]];
+      const d = seeds.map(q => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]));
+      const order = d.map((x, i) => [x, i]).sort((x, y) => x[0] - y[0]);
+      expect(plates.plate[v]).toBe(order[0][1]);
+      expect(plates.second[v]).toBe(order[1][1]);
+      expect(plates.gap[v]).toBeCloseTo(order[1][0] - order[0][0], 9);
+    }
   });
 
   it('finds the silhouette seen from an eye: the circle where the view grazes the sphere', () => {

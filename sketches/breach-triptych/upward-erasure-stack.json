@@ -1,13 +1,42 @@
 {
-  "title": "Breach / Lodestone: Upward Erasure (white, black, and the gold-yellow pieces glued on top)",
+  "title": "Breach / Lodestone: Upward Erasure (the gold-yellow behind, the black in front)",
   "out": ".sketch-output/finalize/upward-erasure",
   "edition": 1,
-  "page": { "width": 279.4, "height": 431.8, "margin": 11 },
-  "border": { "style": "cropmarks", "pen": "cut" },
-  "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true, "gelSpeed": true },
+  "page": {
+    "width": 279.4,
+    "height": 431.8,
+    "margin": 11
+  },
+  "border": {
+    "style": "cropmarks",
+    "pen": "cut"
+  },
+  "defaults": {
+    "center": "none",
+    "mergeSameColor": false,
+    "trialInks": true,
+    "gelSpeed": true
+  },
   "pieces": [
-    { "name": "upward-erasure-white", "title": "Upward Erasure: white sheet", "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts", "seed": 1, "assembly": "upward-erasure", "params": { "ply": "white" } },
-    { "name": "upward-erasure-black", "title": "Upward Erasure: black sheet", "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts", "seed": 1, "assembly": "upward-erasure", "params": { "ply": "black" } },
-    { "name": "upward-erasure-gold", "title": "Upward Erasure: gold-yellow pieces", "sketch": "sketches/breach-triptych/upward-erasure-gold/sketch.ts", "seed": 1, "assembly": "upward-erasure-gold", "params": { "ply": "gold" } }
+    {
+      "name": "upward-erasure-gold",
+      "title": "Upward Erasure: gold-yellow sheet",
+      "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts",
+      "seed": 1,
+      "assembly": "upward-erasure",
+      "params": {
+        "ply": "gold"
+      }
+    },
+    {
+      "name": "upward-erasure-black",
+      "title": "Upward Erasure: black sheet",
+      "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts",
+      "seed": 1,
+      "assembly": "upward-erasure",
+      "params": {
+        "ply": "black"
+      }
+    }
   ]
 }

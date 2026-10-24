@@ -267,3 +267,47 @@ export function contourLines(m: SculptMesh, eye: V3): IsoLine[] {
 export function toWorld(m: SculptMesh, pts: SurfacePoint[]): THREE.Vector3[] {
   return pts.map(q => new THREE.Vector3(...q.p).applyMatrix4(m.transform));
 }
+
+// ── Plates ───────────────────────────────────────────────────────────
+
+/**
+ * Seeds scattered over the mesh, no two nearer than `minDist` (model units, measured in `frame`): the `fixed` first,
+ * then vertices in a seeded order wherever `keep` allows and the spacing does. For plates (`platesOn`).
+ */
+export function scatterOn(m: SculptMesh, minDist: number, rng: () => number, keep: (p: V3) => boolean, fixed: V3[] = [], frame: (p: V3) => V3 = p => p): V3[] {
+  const out = fixed.map(frame);
+  const count = m.pos.length / 3, order = Array.from({ length: count }, (_, i) => i);
+  for (let i = count - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  for (const v of order) {
+    const p: V3 = [m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]];
+    if (!keep(p)) continue;
+    const q = frame(p);
+    if (out.every(s => Math.hypot(s[0] - q[0], s[1] - q[1], s[2] - q[2]) >= minDist)) out.push(q);
+  }
+  return out;
+}
+
+/**
+ * The surface cut into plates round `seeds` (in `frame`, as `scatterOn` gives them): which seed a point is nearest, and
+ * its `gap`, how much nearer that seed is than the next. A seam runs where the gap is 0, so the level set of the gap
+ * at a small value draws each seam as a groove of two lines, and lines kept where the gap is larger stop short of it.
+ * Per vertex (`plate`, `second`, `gap`) for `isoLines`, and `at` for any point.
+ */
+export function platesOn(m: SculptMesh, seeds: V3[], frame: (p: V3) => V3 = p => p): { plate: Int32Array; second: Int32Array; gap: Float64Array; at: (p: V3) => { plate: number; gap: number } } {
+  const at = (p: V3) => {
+    const q = frame(p);
+    let a = -1, b = -1, da = Infinity, db = Infinity;
+    seeds.forEach((s, i) => {
+      const d = Math.hypot(s[0] - q[0], s[1] - q[1], s[2] - q[2]);
+      if (d < da) { db = da; b = a; da = d; a = i; } else if (d < db) { db = d; b = i; }
+    });
+    return { plate: a, second: b, gap: db - da };
+  };
+  const count = m.pos.length / 3;
+  const plate = new Int32Array(count), second = new Int32Array(count), gap = new Float64Array(count);
+  for (let v = 0; v < count; v++) {
+    const r = at([m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]]);
+    plate[v] = r.plate; second[v] = r.second; gap[v] = r.gap;
+  }
+  return { plate, second, gap, at };
+}
