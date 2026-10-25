@@ -47,7 +47,7 @@ input[type="text"], input[type="number"] { font: 13px var(--font-num); backgroun
 details { border-top: 1px solid var(--rule); padding-top: 8px; }
 summary { cursor: pointer; font-weight: 600; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; list-style: none; display: flex; justify-content: space-between; }
 summary::after { content: '+'; color: var(--muted); }
-details[open] summary::after { content: '–'; }
+details[open] summary::after { content: '\2013'; }
 .ctl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; margin-top: 10px; }
 .ctl label { font-size: 12.5px; min-width: 0; }
 .ctl .slow { color: var(--accent); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin-left: 6px; }
@@ -79,7 +79,7 @@ details[open] summary::after { content: '–'; }
       <button id="drift" aria-pressed="false" title="Step the chosen slider after every redraw">Drift</button>
       <button id="reset">Reset</button>
       <label for="seed" class="note">Seed</label>
-      <input id="seed" type="number" value="0" min="0" step="1" style="width: 5.5em">
+      <input id="seed" type="number" value="{{SEED}}" min="0" step="1" style="width: 5.5em">
     </div>
 
     <div>
@@ -109,7 +109,7 @@ details[open] summary::after { content: '–'; }
   const setStatus = (text, kind) => { statusEl.textContent = text; statusEl.className = 'status' + (kind ? ' ' + kind : ''); };
   const toast = text => { $('toast').textContent = text; clearTimeout(toast.t); toast.t = setTimeout(() => { $('toast').textContent = ''; }, 4000); };
 
-  let meta = null, params = {}, seed = 0, view = 'assembled', last = null;
+  let meta = null, params = {}, seed = {{SEED}}, view = 'assembled', last = null;
   const DRAFT = 'sketch-lab:' + document.title;
   try { const d = JSON.parse(localStorage.getItem(DRAFT) || 'null'); if (d) { params = d.params || {}; seed = d.seed ?? 0; view = d.view || view; } } catch {}
   const saveDraft = () => { try { localStorage.setItem(DRAFT, JSON.stringify({ params, seed, view })); } catch {} };
@@ -264,7 +264,7 @@ details[open] summary::after { content: '–'; }
   // ── Saved sets (the artifact's database) and downloads ────────────
   let db = null, downloads = null;
   const capabilities = (async () => {
-    if (!window.claude?.use) { $('save-form').hidden = true; $('presets').innerHTML = '<p class="empty">Saving sets works when this page is opened in Claude.</p>'; return; }
+    if (!window.claude?.use) { $('save-form').hidden = true; $('exports').hidden = true; $('presets').innerHTML = '<p class="empty">Saving sets and exports work when this page is opened in Claude.</p>'; return; }
     [db, downloads] = await Promise.all([window.claude.use('db'), window.claude.use('downloads')]);
     if (!downloads) $('exports').hidden = true;
     if (!db) { $('save-form').hidden = true; $('presets').innerHTML = '<p class="empty">Saving sets needs you signed in to Claude; the controls still work.</p>'; return; }

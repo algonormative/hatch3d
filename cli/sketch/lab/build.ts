@@ -10,9 +10,9 @@ const escapeHtml = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<'
 
 /**
  * Build a sketch's lab into `out`: `worker.js` (the sketch and `runtime.ts`, bundled for the browser) and `index.html`
- * (the tuning page, titled with the sketch's name). Publish `index.html` with `worker.js` beside it.
+ * (the tuning page, titled with the sketch's name, starting at `seed`). Publish `index.html` with `worker.js` beside it.
  */
-export async function buildLab(options: { entry: string; out: string; title?: string }): Promise<{ page: string; worker: string; bytes: number }> {
+export async function buildLab(options: { entry: string; out: string; title?: string; seed?: number }): Promise<{ page: string; worker: string; bytes: number }> {
   const entry = resolve(options.entry);
   const out = resolve(options.out);
   await mkdir(out, { recursive: true });
@@ -24,7 +24,7 @@ export async function buildLab(options: { entry: string; out: string; title?: st
   });
   const bytes = Object.values(result.metafile.outputs).reduce((t, o) => t + o.bytes, 0);
   const { default: sketch } = await import(pathToFileURL(entry).href) as { default: { name: string } };
-  const page = (await readFile(join(here, 'page.html'), 'utf8')).replaceAll('{{TITLE}}', escapeHtml(options.title ?? sketch.name));
+  const page = (await readFile(join(here, 'page.html'), 'utf8')).replaceAll('{{TITLE}}', escapeHtml(options.title ?? sketch.name)).replaceAll('{{SEED}}', String(options.seed ?? 0));
   const pagePath = join(out, 'index.html');
   await writeFile(pagePath, page);
   return { page: pagePath, worker, bytes };
