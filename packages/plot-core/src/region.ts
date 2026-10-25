@@ -199,7 +199,51 @@ export function ringsSimple(rings: Point[][]): boolean {
 // ── Exact clipping ───────────────────────────────────────────────────
 
 interface Edge { ax: number; ay: number; bx: number; by: number; x0: number; x1: number; y0: number; y1: number }
-interface Leaf { near: boolean; distance: number; edges: Edge[]; x0: number; x1: number; y0: number; y1: number }
+interface Leaf { near: boolean; distance: number; edges: Edge[]; x0: number; x1: number; y0: number; y1: number; grid?: EdgeGrid }
+
+/**
+ * A uniform grid over a leaf's edges (each in every cell its box overlaps), so a query visits only the edges whose
+ * boxes can meet a given box. Every caller applies the same per-edge test it would to all of them, so the answers are
+ * exactly the unindexed ones: the grid only skips edges that cannot pass.
+ */
+class EdgeGrid {
+  private cells: number[][];
+  private nx: number;
+  private ny: number;
+  private size: number;
+  private stamp: Uint32Array;
+  private query = 0;
+  private edges: Edge[];
+  private x0: number;
+  private y0: number;
+  constructor(edges: Edge[], x0: number, y0: number, x1: number, y1: number) {
+    this.edges = edges; this.x0 = x0; this.y0 = y0;
+    this.size = Math.max((x1 - x0) / 96, (y1 - y0) / 96, 1e-6);
+    this.nx = Math.max(1, Math.ceil((x1 - x0) / this.size) + 1);
+    this.ny = Math.max(1, Math.ceil((y1 - y0) / this.size) + 1);
+    this.cells = Array.from({ length: this.nx * this.ny }, () => []);
+    this.stamp = new Uint32Array(edges.length);
+    edges.forEach((e, i) => this.visitCells(e.x0, e.y0, e.x1, e.y1, c => this.cells[c].push(i)));
+  }
+  private visitCells(x0: number, y0: number, x1: number, y1: number, f: (cell: number) => void) {
+    const clampX = (v: number) => Math.min(this.nx - 1, Math.max(0, Math.floor((v - this.x0) / this.size)));
+    const clampY = (v: number) => Math.min(this.ny - 1, Math.max(0, Math.floor((v - this.y0) / this.size)));
+    const i0 = clampX(x0), i1 = clampX(x1), j0 = clampY(y0), j1 = clampY(y1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) f(j * this.nx + i);
+  }
+  /** Each edge whose cells overlap the box, once. */
+  forEach(x0: number, y0: number, x1: number, y1: number, f: (e: Edge) => void) {
+    if (++this.query === 0xffffffff) { this.stamp.fill(0); this.query = 1; }
+    const q = this.query;
+    this.visitCells(x0, y0, x1, y1, c => { for (const i of this.cells[c]) if (this.stamp[i] !== q) { this.stamp[i] = q; f(this.edges[i]); } });
+  }
+}
+
+/** Index a leaf once it has enough edges to repay it. */
+function indexed(leaf: Leaf): Leaf {
+  if (leaf.edges.length >= 32) leaf.grid = new EdgeGrid(leaf.edges, leaf.x0, leaf.y0, leaf.x1, leaf.y1);
+  return leaf;
+}
 
 /**
  * The edges of the rings that are at least `minPoints` long, each grown by `grow`. A one-point ring has one degenerate
@@ -291,8 +335,8 @@ function breakpoints(a: Point, b: Point, leaves: Leaf[]): number[] {
   const add = (t: number) => { if (t > 0 && t < 1) ts.push(t); };
   for (const leaf of leaves) {
     if (leaf.x0 > sx1 || leaf.x1 < sx0 || leaf.y0 > sy1 || leaf.y1 < sy0) continue;
-    for (const e of leaf.edges) {
-      if (e.x0 > sx1 || e.x1 < sx0 || e.y0 > sy1 || e.y1 < sy0) continue;
+    const visit = (e: Edge) => {
+      if (e.x0 > sx1 || e.x1 < sx0 || e.y0 > sy1 || e.y1 < sy0) return;
       if (leaf.near) {
         const iv = capsuleInterval(a.x, a.y, dx, dy, e, leaf.distance);
         if (iv) { add(iv[0]); add(iv[1]); }
@@ -300,7 +344,9 @@ function breakpoints(a: Point, b: Point, leaves: Leaf[]): number[] {
         const t = crossing(a.x, a.y, dx, dy, e);
         if (t !== undefined) add(t);
       }
-    }
+    };
+    if (leaf.grid) leaf.grid.forEach(sx0, sy0, sx1, sy1, visit);
+    else for (const e of leaf.edges) visit(e);
   }
   ts.sort((p, q) => p - q);
   const out: number[] = [];
@@ -311,6 +357,44 @@ function breakpoints(a: Point, b: Point, leaves: Leaf[]): number[] {
 const samePoint = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS;
 
 /**
+ * `inRegion` for one region, compiled once for many points: each `rings` and `near` leaf with enough edges answers
+ * from its edge grid (the even-odd count from the edges whose boxes reach the point's height across to its right, the
+ * band from the edges whose grown boxes hold the point), with the same predicates as `insideRings` and `nearAny`, so
+ * it agrees with `inRegion` everywhere.
+ */
+function compileRegion(region: Region): (p: Point) => boolean {
+  if ('all' in region) return () => true;
+  if ('rings' in region) {
+    const leaf = indexed({ near: false, distance: 0, ...edgesOf(region.rings.filter(r => r.length >= 3), 0, 3) });
+    if (!leaf.grid) return p => insideRings(p, region.rings);
+    const grid = leaf.grid;
+    return p => {
+      let inside = false;
+      grid.forEach(p.x, p.y, leaf.x1, p.y, e => {
+        if ((e.by > p.y) !== (e.ay > p.y) && p.x < ((e.ax - e.bx) * (p.y - e.by)) / (e.ay - e.by) + e.bx) inside = !inside;
+      });
+      return inside;
+    };
+  }
+  if ('near' in region) {
+    const distance = region.distance;
+    if (!(distance > 0)) return () => false;
+    const leaf = indexed({ near: true, distance, ...edgesOf(region.near, distance, 1) });
+    if (!leaf.grid) return p => nearAny(p, region.near, distance);
+    const grid = leaf.grid, limit = distance * distance;
+    return p => {
+      let hit = false;
+      grid.forEach(p.x, p.y, p.x, p.y, e => { if (!hit && p.x >= e.x0 && p.x <= e.x1 && p.y >= e.y0 && p.y <= e.y1 && segDist2(p, e.ax, e.ay, e.bx, e.by) < limit) hit = true; });
+      return hit;
+    };
+  }
+  if ('not' in region) { const f = compileRegion(region.not); return p => !f(p); }
+  if ('and' in region) { const fs = region.and.map(compileRegion); return p => fs.every(f => f(p)); }
+  const fs = region.or.map(compileRegion);
+  return p => fs.some(f => f(p));
+}
+
+/**
  * Clip polylines to a region, exactly. Each segment is cut at every breakpoint where any leaf of the region could
  * change its answer (ring crossings; the two ends of the segment's passage through each `near` capsule), the
  * breakpoints are sorted and deduplicated, and the midpoint of each span decides it. Between breakpoints every
@@ -318,7 +402,8 @@ const samePoint = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < EPS && 
  * polyline; a gap starts a new one; outputs with fewer than two points are dropped. No densifying, no bisection.
  */
 export function clipToRegion(paths: Point[][], region: Region): Point[][] {
-  const leaves = leavesOf(region);
+  const leaves = leavesOf(region).map(indexed);
+  const contains = compileRegion(region);
   const out: Point[][] = [];
   for (const path of paths) {
     if (path.length < 2) continue;
@@ -340,7 +425,7 @@ export function clipToRegion(paths: Point[][], region: Region): Point[][] {
       for (let k = 0; k < bounds.length - 1; k++) {
         const t0 = bounds[k], t1 = bounds[k + 1];
         if (t1 - t0 < T_EPS) continue;
-        const keep = inRegion({ x: a.x + (b.x - a.x) * ((t0 + t1) / 2), y: a.y + (b.y - a.y) * ((t0 + t1) / 2) }, region);
+        const keep = contains({ x: a.x + (b.x - a.x) * ((t0 + t1) / 2), y: a.y + (b.y - a.y) * ((t0 + t1) / 2) });
         if (keep) { if (start < 0) start = t0; }
         else if (start >= 0) { emit(start, t0); start = -1; }
       }

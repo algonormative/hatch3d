@@ -297,3 +297,24 @@ describe('ring geometry', () => {
     expect(ringsSimple([[P(0, 0), P(10, 0), P(10, 10), P(5, 0)]])).toBe(false);
   });
 });
+
+describe('clipToRegion: regions with many edges (indexed)', () => {
+  it('keeps exactly the spans inRegion keeps, for a boolean tree of many-edged rings and bands', () => {
+    const rng = mulberry32(5);
+    const blob = (cx: number, cy: number, r: number, n: number): Point[] => Array.from({ length: n }, (_, i) => P(cx + r * (0.6 + 0.4 * rng()) * Math.cos(2 * Math.PI * i / n), cy + r * (0.6 + 0.4 * rng()) * Math.sin(2 * Math.PI * i / n)));
+    for (let k = 0; k < 12; k++) {
+      const rings = [blob(40, 40, 30, 120), blob(70, 60, 20, 80), blob(20, 80, 12, 60)];
+      const region: Region = { and: [{ not: { rings } }, { or: [{ near: rings, distance: 0.5 + 3 * rng() }, { rings: [blob(50, 50, 45, 200)] }] }] };
+      const paths = Array.from({ length: 40 }, () => Array.from({ length: 2 + Math.floor(rng() * 20) }, () => P(100 * rng(), 100 * rng())));
+      const kept = clipToRegion(paths, region);
+      // Every kept span is in the region at its middle, and the kept length matches dense sampling of inRegion.
+      for (const path of kept) for (let i = 1; i < path.length; i++) expect(inRegion(P((path[i].x + path[i - 1].x) / 2, (path[i].y + path[i - 1].y) / 2), region)).toBe(true);
+      let sampled = 0;
+      for (const path of paths) for (let i = 1; i < path.length; i++) {
+        const a = path[i - 1], b = path[i], steps = 400, d = Math.hypot(b.x - a.x, b.y - a.y) / steps;
+        for (let s = 0; s < steps; s++) if (inRegion(P(a.x + (b.x - a.x) * (s + 0.5) / steps, a.y + (b.y - a.y) * (s + 0.5) / steps), region)) sampled += d;
+      }
+      expect(Math.abs(length(kept) - sampled) / Math.max(1, sampled)).toBeLessThan(0.01);
+    }
+  });
+});

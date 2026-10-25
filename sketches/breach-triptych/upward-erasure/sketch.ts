@@ -80,9 +80,16 @@ export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
   };
 }
 
+/**
+ * The world for the last parameters drawn, whichever ply: a host that keeps the module loaded (the sketch lab draws
+ * every ply in turn) builds it once.
+ */
+let lastWorld: { key: string; e: Erasure; art: ReturnType<typeof sheets> } | undefined;
 function draw(ctx: SketchContext): Part[] {
-  const e = erasure(ctx);
-  return renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art: sheets(e) });
+  const key = JSON.stringify([ctx.seed, Object.entries(ctx.params).filter(([k]) => k !== spec.control).sort(([a], [b]) => (a < b ? -1 : 1))]);
+  if (lastWorld?.key !== key) { const e = erasure(ctx); lastWorld = { key, e, art: sheets(e) }; }
+  const { e, art } = lastWorld;
+  return renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art });
 }
 
 const sketch: Sketch = {

@@ -8,6 +8,8 @@ Existing hatch3d 2D and 3D compositions can be used through the [Sketch adapters
 
 For slider groups, composition navigators, and sketch macros, see [Sketch controls and composition navigation](sketch-controls.md).
 
+To tune a sketch in the browser (a page with its controls, saved parameter sets and SVG export, publishable as a Claude artifact), see [Sketch lab](sketch-lab.md).
+
 ```ts
 import type { Sketch } from '../../src/sketch/types.ts';
 

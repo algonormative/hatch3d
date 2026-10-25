@@ -12,13 +12,13 @@ import type { ExperimentMatrix } from '../packages/plot-host/src/experiment-type
 import type { FinishingOptions, FormatOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
-  return 'Usage: npm run sketch -- <inspect|render|open|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
+  return 'Usage: npm run sketch -- <inspect|render|open|lab|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. lab --out DIR builds a browser tuning page (index.html, worker.js). open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'], lab: ['out', 'title'],
   checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'], experiment: ['out', 'timeout'],
 };
 
@@ -174,6 +174,12 @@ export async function main(args: string[]): Promise<void> {
     const manifest = await runExperimentBatch({ matrix, baseDir: dirname(matrixPath), outputDir, timeoutMs });
     console.log(JSON.stringify({ manifest: join(outputDir, 'manifest.json'), contactSheet: join(outputDir, 'contact-sheet.html'), status: manifest.status,
       successes: manifest.candidates.filter(candidate => candidate.status === 'success').length, failures: manifest.candidates.filter(candidate => candidate.status === 'failed').length }));
+    return;
+  }
+  if (command === 'lab') {
+    const { buildLab } = await import('./sketch/lab/build.ts');
+    const built = await buildLab({ entry, out: flags.out ?? `.sketch-output/${basename(dirname(resolve(entry)))}-lab`, ...(flags.title ? { title: flags.title } : {}) });
+    console.log(JSON.stringify(built));
     return;
   }
   const timeoutMs = integer(flags.timeout, 'timeout');
