@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { montagePng } from '../sheet.ts';
 import { PNG_SCALES, exportSketchPng, renderSvgPng } from './export-png.ts';
 import { renderSketch } from './runner.ts';
-import { renderSheets, type Flat } from './lab/runtime.ts';
+import { renderSheets, type Flat, type LabSheets } from './lab/runtime.ts';
 import type { Page, Sketch } from '../../src/sketch/types.ts';
 
 export type SweepValue = number | string | boolean;
@@ -25,6 +25,8 @@ export interface SweepOptions {
   cellPx?: number;
   /** Plain sketches only: renders in flight at once (default 3). */
   concurrency?: number;
+  /** An assembly renders through `draw` (the plot path) even when the sketch has a lab preview. */
+  exact?: boolean;
 }
 export interface SweepResult { sheet: string; cells: { params: Record<string, unknown>; png: string }[] }
 
@@ -57,9 +59,9 @@ const pathsOf = (f: Flat): string[] => {
 const ring = (pts: string) => `M${pts.replace(/ /g, 'L')}Z`;
 
 /** The assembled look of one parameter set: the stack of plies, bottom to top, as one SVG in page millimetres. */
-async function assembledSvg(sketch: Sketch, params: Record<string, unknown>, seed: number): Promise<string> {
+async function assembledSvg(sketch: Sketch, params: Record<string, unknown>, seed: number, preview?: LabSheets): Promise<string> {
   const { width: W, height: H } = sketch.page;
-  const sheets = await renderSheets(sketch, params as never, seed);
+  const sheets = await renderSheets(sketch, params as never, seed, preview);
   const body = sheets.map((s, i) => {
     const rings = pathsOf(s.cuts).map(ring).join('');
     if (s.onlay) return rings ? `<path d="${rings}" fill="${s.paper}"/>` : '';
@@ -88,14 +90,17 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   const flat = grid.flat();
 
   const file = resolve(entry);
-  const sketch = (await import(pathToFileURL(file).href)).default as Sketch;
+  const mod = await import(pathToFileURL(file).href) as { default: Sketch; labSheets?: LabSheets };
+  const sketch = mod.default;
+  // An assembly previews from its lab preview when it has one (as the sketch lab does), unless `exact` asks for `draw`.
+  const preview = options.exact ? undefined : mod.labSheets;
   if (!sketch?.page || !Array.isArray(sketch.pens)) throw new Error(`${entry} does not export a sketch with page and pens`);
   const scale = scaleFor(sketch.page, cellPx);
   const pngs: Buffer[] = new Array(flat.length);
 
   if (sketch.assembly) {
     // In-process and in order: a sketch's module-level caches carry across cells.
-    for (let i = 0; i < flat.length; i++) pngs[i] = renderSvgPng(await assembledSvg(sketch, flat[i], seed), sketch.page, 'paper', scale);
+    for (let i = 0; i < flat.length; i++) pngs[i] = renderSvgPng(await assembledSvg(sketch, flat[i], seed, preview), sketch.page, 'paper', scale);
   } else {
     let next = 0;
     const worker = async () => {

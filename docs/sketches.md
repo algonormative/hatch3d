@@ -72,12 +72,12 @@ The checkpoint limits and programmatic APIs are in [sketch-checkpoints.md](sketc
 When a request is ambiguous ("angle it to its right", "tone the nose down"), answer with a labelled grid of variants instead of one full round. `sweep` renders one in-repository sketch over up to two parameter axes and writes one contact-sheet PNG:
 
 ```bash
-npm run sketch -- sweep <entry> --vary id=v1,v2,v3 [--vary id2=v1,v2,...] [--params json|@file] [--seed n] [--out dir]
+npm run sketch -- sweep <entry> --vary id=v1,v2,v3 [--vary id2=v1,v2,...] [--params json|@file] [--seed n] [--out dir] [--exact]
 ```
 
 The first `--vary` is the rows and the second the columns (one `--vary` is a single row); the grid is capped at 25 cells. `--params` sets the base parameters every cell shares; values are typed (numbers, `true`/`false`, else strings). Each cell is captioned with its varied values, for example `tilt 18 · roll 8`. The output directory (default `sketch-output/<entry-name>-sweep/`) gets `sweep.png`, `sweep.json` (each cell's full parameters), and `cells/NN.png`.
 
-A plain sketch is rendered cell by cell through the runner. An assembly sketch is rendered in-process as the assembled look: each cut ply's paper with its own cuts removed and its ink on top, onlays as their footprints, bottom to top. For example, to compare Upward Erasure poses at draft settings:
+A plain sketch is rendered cell by cell through the runner. An assembly sketch is rendered in-process as the assembled look: each cut ply's paper with its own cuts removed and its ink on top, onlays as their footprints, bottom to top. When the sketch exports a `labSheets` preview (as for the [sketch lab](sketch-lab.md)), the sweep renders through it, which is faster and close to the plot; `--exact` renders through `draw` instead. For example, to compare Upward Erasure poses at draft settings:
 
 ```bash
 npm run sketch -- sweep sketches/breach-triptych/upward-erasure/sketch.ts \
