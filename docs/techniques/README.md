@@ -37,6 +37,7 @@ Each technique file covers: what it is, the core algorithm, how it maps to plott
 - [parametric-surfaces.md](parametric-surfaces.md) — UV hatching, warped grids, ruled surfaces
 - [contour-mapping.md](contour-mapping.md) — Marching squares, topographic isolines
 - [wireframe-projection.md](wireframe-projection.md) — 3D wireframe with hidden-line removal
+- [sculpted-heads.md](sculpted-heads.md) — SDF-sculpted figures: surface-line families, plates, cuttable windows
 
 ### Image-to-Vector
 - [halftone.md](halftone.md) — Sine-wave amplitude, circle-size, line-density halftoning

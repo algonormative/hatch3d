@@ -21,6 +21,7 @@ import { renderSvgPng } from './sketch/export-png.ts';
 import { targetPage } from '../src/sketch/render-target.ts';
 import { DOUBLE_BORDER_INSET } from '../src/utils/page-finishing.ts';
 import { checkInksRead, congruentFit, parseFrom, plyCuts, readPlyResult, registrationProblem, signatureBox, tryParseFrom, worldCuts, worldSha256, type AssemblyReport, type PlyResult } from './assembly-world.ts';
+import { cutEffort, describeCutEffort } from './cut-effort.ts';
 import type { AssemblySpec, Control, Page, Pen, PlySpec } from '../src/sketch/types.ts';
 import { INKS, type Ink } from '../src/sketch/materials.ts';
 import { checkPrepared, paperIdOfColor, type InkCheckSummary } from './ink-check.ts';
@@ -386,6 +387,7 @@ function assemblyReportOf(plan: AssemblyPlan, result: PlyResult): AssemblyReport
     name, ply: ply.id, index: plan.index + 1, plies: spec.plies.length, paper: { ...ply.paper }, cutPen: spec.cutPen, cutInk: ply.cutInk, trialPens: plan.trialPens,
     ...(ply.lift === undefined ? {} : { lift: ply.lift }),
     cuts: plyCuts(result.parts, spec, ply.id),
+    cutEffort: cutEffort(worldCuts(result.parts, spec).filter(c => c.ply === ply.id && !ply.onlay).flatMap(c => c.rings)),
     onlays: spec.plies.filter(p => p.onlay).map(p => ({ ply: p.id, from: p.onlay!.from })),
     ...(signature ? { signature } : {}),
     worldSha256: worldSha256(result.parts),
@@ -964,6 +966,7 @@ async function main(argv: string[]) {
   const overrides = flag('params') ? JSON.parse(flag('params')!) as Record<string, unknown> : {};
   await finalizeRun(stack, stack.pieces.filter(p => !only || only.includes(slug(p.name))), options, overrides, r =>
     console.log(JSON.stringify({ name: r.name, title: r.printedTitle, palette: r.palette, offset: r.offset, margins: r.margins, pens: r.pens, minutes: r.minutes, serverCompatible: r.serverCompatible, prepared: r.files.prepared,
+      ...(r.assembly?.cutEffort?.pieces ? { cutting: describeCutEffort(r.assembly.cutEffort) } : {}),
       ...(r.inkCheck && ('error' in r.inkCheck ? { inkCheck: r.inkCheck.error } : r.inkCheck.warnings.length ? { inkCheck: r.inkCheck.warnings } : {})) })));
 }
 

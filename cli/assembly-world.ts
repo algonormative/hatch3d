@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inkOnTrial, inkReads } from '../src/sketch/materials.ts';
 import type { AssemblySpec, Box, FinishingOptions, Page, Part, PlySpec, Point } from '../src/sketch/types.ts';
+import type { CutEffort } from './cut-effort.ts';
 
 export type CutKind = 'waste' | 'part' | 'footprint';
 
@@ -28,6 +29,8 @@ export interface AssemblyReport {
   trialPens: string[];
   lift?: number;
   cuts: { id: string; kind: CutKind; label?: string }[];
+  /** How much hand cutting this ply's windows and parts ask for (`cli/cut-effort.ts`). */
+  cutEffort?: CutEffort;
   onlays: { ply: string; from: string }[];
   /** The pen and the box (finished millimetres) that the signature goes into, when this ply carries it. */
   signature?: { pen: string; box: Box };

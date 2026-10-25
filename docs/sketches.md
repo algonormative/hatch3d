@@ -66,3 +66,22 @@ npm run sketch -- compare sketch-output/civic-a/result.json --after sketch-outpu
 `checkpoint --result` accepts either a direct render `result.json` or a pin's `result.json` wrapper. In-repository studies retain checkpoint version 1: capture the sketch directory, Git revision, lockfile, and finishing request, then replay in an isolated checkout. Installed external families use version 2: capture the family source and declared assets, exact request, package and lock bytes, and installed toolkit/dependency tarballs. An offline isolated install must reproduce the SVG and identity before publication; replay no longer needs the original family project, but requires the recorded Node/npm versions and platform architecture. Both formats fail on source, dependency, or environment mismatch. `compare` asserts final paths, page, and pen settings including effective pass counts for `--parts`; `--boundaries` separately asserts saved region polygons. It prints `{ "ok": false, "changes": [...] }` and exits `2` on a conflict. These commands never prompt for confirmation.
 
 The checkpoint limits and programmatic APIs are in [sketch-checkpoints.md](sketch-checkpoints.md). In a copied, installed family project, run `./node_modules/.bin/plot-sketch experiment experiments/matched-regimes.json --out output/matched-regimes`. The [experiment contract](sketch-experiments.md) covers limits, fingerprints, resume, and the labeled contact sheet. The first study and its decisions are in [the Civic weather brief](../sketches/civic-weather/brief.md).
+
+## Variant sweeps
+
+When a request is ambiguous ("angle it to its right", "tone the nose down"), answer with a labelled grid of variants instead of one full round. `sweep` renders one in-repository sketch over up to two parameter axes and writes one contact-sheet PNG:
+
+```bash
+npm run sketch -- sweep <entry> --vary id=v1,v2,v3 [--vary id2=v1,v2,...] [--params json|@file] [--seed n] [--out dir]
+```
+
+The first `--vary` is the rows and the second the columns (one `--vary` is a single row); the grid is capped at 25 cells. `--params` sets the base parameters every cell shares; values are typed (numbers, `true`/`false`, else strings). Each cell is captioned with its varied values, for example `tilt 18 · roll 8`. The output directory (default `sketch-output/<entry-name>-sweep/`) gets `sweep.png`, `sweep.json` (each cell's full parameters), and `cells/NN.png`.
+
+A plain sketch is rendered cell by cell through the runner. An assembly sketch is rendered in-process as the assembled look: each cut ply's paper with its own cuts removed and its ink on top, onlays as their footprints, bottom to top. For example, to compare Upward Erasure poses at draft settings:
+
+```bash
+npm run sketch -- sweep sketches/breach-triptych/upward-erasure/sketch.ts \
+  --vary tilt=12,18,26 --vary roll=0,8,16 --params '{"step":0.014}' --seed 1 --out /tmp/ue-sweep
+```
+
+The API is `runSweep` in `cli/sketch/sweep.ts`. Unlike [`experiment`](sketch-experiments.md), which fingerprints and reproduces trusted batches from a matrix file, `sweep` is a throwaway look-and-choose view and records nothing to resume.

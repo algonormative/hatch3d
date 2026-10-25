@@ -54,6 +54,8 @@ export function hull(points: V3[]): Sdf {
     if (side.every(x => x <= 1e-9)) planes.push([nx, ny, nz, d]);
     else if (side.every(x => x >= -1e-9)) { nx = -nx; ny = -ny; nz = -nz; d = -d; planes.push([nx, ny, nz, d]); }
   }
+  // Points that span no volume (fewer than four, or all on a line) bound nothing: everywhere is outside.
+  if (!planes.length) return () => 1e9;
   return (x, y, z) => { let m = -Infinity; for (const [a, b, c, d] of planes) m = Math.max(m, a * x + b * y + c * z - d); return m; };
 }
 

@@ -89,7 +89,19 @@ function draw(ctx: SketchContext): Part[] {
   const key = JSON.stringify([ctx.seed, Object.entries(ctx.params).filter(([k]) => k !== spec.control).sort(([a], [b]) => (a < b ? -1 : 1))]);
   if (lastWorld?.key !== key) { const e = erasure(ctx); lastWorld = { key, e, art: sheets(e) }; }
   const { e, art } = lastWorld;
-  return renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art });
+  const parts = renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art });
+  return [...parts, ...landmarks(e)];
+}
+
+/**
+ * Named page points for the readability crops (`cli/sketch/crops.ts`): diagnostic, so the SVG never carries them. Paths
+ * need two points, so each is the point and a hair beside it; readers take the first.
+ */
+function landmarks(e: Erasure): Part[] {
+  const { noseTip, chin, eyes } = e.page;
+  const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const at: Record<string, Point> = { nose: noseTip, eyes: mid(eyes[0], eyes[1]), mouth: mid(noseTip, chin), chin };
+  return Object.entries(at).map(([name, p]) => ({ id: `landmark-${name}`, pen: 'cut', paths: [[{ x: p.x, y: p.y }, { x: p.x + 0.01, y: p.y }]], diagnostic: true }));
 }
 
 const sketch: Sketch = {

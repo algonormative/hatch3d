@@ -13,3 +13,17 @@ The page builds its controls from `sketch.controls` (sliders, toggles, selects a
 The worker draws with the CLI's random streams (SHA-256 of `seed\0id`, then mulberry32; `src/__tests__/sketch-lab.test.ts` checks them against `cli/sketch/child.ts`'s), so a set saved from the page renders the same through `npm run sketch -- render --params` and the finalize stack. The worker keeps the sketch module loaded between requests: a sketch that caches a costly stage at module level, keyed by the parameters that shape it, redraws the rest quickly (Upward Erasure keeps its head, and its world across plies).
 
 The page reads no files and sends nothing anywhere but the artifact's own database and downloads.
+
+## Readability crops
+
+The same visual check each design round: a thumbnail of the whole sheet at viewing-distance scale, plus close crops around named page points ("is the nose still a nose at a glance?"). `readabilityCrops` in `cli/sketch/crops.ts` takes a PNG of the sheet, the page (`width`, `height`, `margin`, mm) and `at`, a map of names to page points in mm, and writes `thumb.png` (the whole image scaled to `thumbPx` high, default 240) and `crop-<name>.png` (a square `sizeMm` around the point, default 40, scaled to 600 px wide; beyond the image edge is white). With `trimmed: true` the PNG covers only the page inset by its margin, as `cli/assembly.ts preview` writes `assembled.png`. It returns `{ thumb, crops }` with the file paths.
+
+`landmarksOf(parts)` reads the points from diagnostic parts named `landmark-<name>` (the first point of the first path), so a sketch names its own features: Upward Erasure returns `landmark-nose`, `landmark-eyes`, `landmark-mouth` and `landmark-chin`, which the SVG never carries.
+
+Intended command line (the flags map straight onto the options):
+
+```bash
+npm run sketch -- crops <image.png> --page WxH[,margin] [--trimmed] [--result result.json] [--at name=x,y ...] [--size mm] [--out dir]
+```
+
+`--result` takes the landmarks from a render's `result.json` (via `landmarksOf`); each `--at` adds or overrides a point.

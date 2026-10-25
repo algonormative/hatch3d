@@ -12,13 +12,13 @@ import type { ExperimentMatrix } from '../packages/plot-host/src/experiment-type
 import type { FinishingOptions, FormatOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
-  return 'Usage: npm run sketch -- <inspect|render|open|lab|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. lab [--out DIR] [--seed N] builds a browser tuning page (index.html, worker.js). open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
+  return 'Usage: npm run sketch -- <inspect|render|open|lab|crops|sweep|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. lab [--out DIR] [--seed N] builds a browser tuning page (index.html, worker.js). open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'], lab: ['out', 'title', 'seed'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'], lab: ['out', 'title', 'seed'], crops: ['page', 'trimmed', 'result', 'at', 'size', 'thumb', 'out'], sweep: ['vary', 'params', 'seed', 'out', 'cell'],
   checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'], experiment: ['out', 'timeout'],
 };
 
@@ -30,8 +30,9 @@ function options(command: string, args: string[]): { entry: string; flags: Recor
     const flag = rest[i];
     if (!flag?.startsWith('--')) throw new SketchRunnerError('usage', usage());
     const key = flag.slice(2);
-    if (!flagsByCommand[command].includes(key) || key in flags) throw new SketchRunnerError('usage', `Unknown or repeated option ${flag} for ${command}. ${usage()}`);
-    if (key === 'plotter-upload') { flags[key] = 'enabled'; continue; }
+    if (!flagsByCommand[command].includes(key) || (key in flags && key !== 'at' && key !== 'vary')) throw new SketchRunnerError('usage', `Unknown or repeated option ${flag} for ${command}. ${usage()}`);
+    if (key === 'plotter-upload' || key === 'trimmed') { flags[key] = 'enabled'; continue; }
+    if (key === 'at' || key === 'vary') { const value = rest[++i]; if (value === undefined || value.startsWith('--')) throw new SketchRunnerError('usage', usage()); flags[key] = flags[key] ? `${flags[key]};${value}` : value; continue; }
     const value = rest[++i];
     if (value === undefined || value.startsWith('--')) throw new SketchRunnerError('usage', usage());
     flags[key] = value;
@@ -174,6 +175,30 @@ export async function main(args: string[]): Promise<void> {
     const manifest = await runExperimentBatch({ matrix, baseDir: dirname(matrixPath), outputDir, timeoutMs });
     console.log(JSON.stringify({ manifest: join(outputDir, 'manifest.json'), contactSheet: join(outputDir, 'contact-sheet.html'), status: manifest.status,
       successes: manifest.candidates.filter(candidate => candidate.status === 'success').length, failures: manifest.candidates.filter(candidate => candidate.status === 'failed').length }));
+    return;
+  }
+  if (command === 'crops') {
+    const { readabilityCrops, landmarksOf } = await import('./sketch/crops.ts');
+    const page = /^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:,(\d+(?:\.\d+)?))?$/.exec(required(flags, 'page'));
+    if (!page) throw new SketchRunnerError('invalid_page', '--page must be WIDTHxHEIGHT[,MARGIN] in millimetres');
+    const at: Record<string, { x: number; y: number }> = flags.result ? landmarksOf((await loadResult(flags.result)).parts) : {};
+    for (const item of (flags.at ?? '').split(';').filter(Boolean)) {
+      const m = /^([A-Za-z0-9_-]+)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(item);
+      if (!m) throw new SketchRunnerError('invalid_option', `--at must be name=x,y in page millimetres: ${item}`);
+      at[m[1]] = { x: Number(m[2]), y: Number(m[3]) };
+    }
+    const done = await readabilityCrops({ image: resolve(entry), page: { width: Number(page[1]), height: Number(page[2]), ...(page[3] ? { margin: Number(page[3]) } : {}) }, at,
+      ...(flags.size ? { sizeMm: Number(flags.size) } : {}), ...(flags.thumb ? { thumbPx: integer(flags.thumb, 'thumb') } : {}),
+      trimmed: flags.trimmed === 'enabled', out: resolve(flags.out ?? join(dirname(resolve(entry)), 'crops')) });
+    console.log(JSON.stringify(done));
+    return;
+  }
+  if (command === 'sweep') {
+    const { runSweep, parseVary } = await import('./sketch/sweep.ts');
+    const done = await runSweep({ entry, vary: required(flags, 'vary').split(';').map(parseVary), ...(flags.params ? { params: await params(flags.params) } : {}),
+      ...(flags.seed ? { seed: integer(flags.seed, 'seed') } : {}), ...(flags.cell ? { cellPx: integer(flags.cell, 'cell') } : {}),
+      out: resolve(flags.out ?? `sketch-output/${basename(entry).replace(/\.[^.]+$/, '')}-sweep`) });
+    console.log(JSON.stringify({ sheet: done.sheet, cells: done.cells.length }));
     return;
   }
   if (command === 'lab') {

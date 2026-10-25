@@ -158,6 +158,14 @@ export const CONTROLS: Control[] = [
 
 // ── The head ─────────────────────────────────────────────────────────
 
+/**
+ * Paper kept between cut pieces of the glitch (mm): lifted pieces and fragments stand `INSET` in from their column's
+ * sides, so neighbouring columns' pieces keep `2 * INSET` between them even corner to corner, and pieces in one column
+ * keep `BRIDGE` between them. (The window's knife radius cannot close a pinch between two corners.)
+ */
+const INSET = 1.5, BRIDGE = 3;
+/** The most pieces a glitch column lifts. */
+const MAX_PIECES = 12;
 /** Where the crown begins: the head's own height (units above the ears) above which the erasure takes it. */
 const CROWN = 0.2;
 /** The jaw: below this height of the head (under the lips) a surface turned down is the jaw's underside. */
@@ -428,13 +436,17 @@ export function erasure(ctx: SketchContext): Erasure {
       const near = h0 < h1 ? Math.max(0, 1 - Math.max(0, h0 - mid, mid - h1) / 90) : 0;
       const rise = headRise(a, b);
       const over = Number.isFinite(rise) && rise > 3;
-      const roll = crng(), height = crng(), keep = crng(), keepAt = crng();
+      // Every seeded choice of the column is drawn up front, a fixed number of draws per stream, so no noise-driven
+      // branch (a column too short to stand, a piece that no longer fits) changes which draw a later choice gets.
+      const [roll, height, keep, keepAt, dvRoll, liftRoll, count, fragRoll, fragH, fragV, dripRoll, dripH] = Array.from({ length: 12 }, crng);
+      const lrng = ctx.random(`erasure-glitch-${index}-lift`), lifted = Array.from({ length: MAX_PIECES }, () => [lrng(), lrng(), lrng(), lrng()]);
+      const rrng = ctx.random(`erasure-glitch-${index}-ribbon`), srng = ctx.random(`erasure-glitch-${index}-streak`);
       let top = 0;
       if (roll < 0.35 + 0.15 * near) {
         // A gold column out of the visor's top edge: smeared upward.
         top = snap(reach * (0.08 + 0.92 * mix(height ** 1.6, mid, 0)) * (0.4 + 0.6 * near));
         while (top > 3 && !fits(a, b, 0, top)) top -= 1.5;
-        if (top > 3) cells.push({ u0: a, u1: b, v0: -2, v1: top, dv: snap(2 + 6 * crng()), kind: 'rise' });
+        if (top > 3) cells.push({ u0: a, u1: b, v0: -2, v1: top, dv: snap(2 + 6 * dvRoll), kind: 'rise' });
         else top = 0;
       } else if (over && keep > erosion * 0.5) {
         // The head kept, from the visor up to a height of its rise.
@@ -442,33 +454,32 @@ export function erasure(ctx: SketchContext): Erasure {
         cells.push({ u0: a, u1: b, v0: -2, v1: top, dv: 0, kind: 'base' });
       }
       // Lifted pieces above: taken from the head (the crown, or the brow under the visor), on the black or the gold.
-      const liftRoll = crng(), count = crng(), fragRoll = crng();
       if (over && liftRoll < erosion) {
         let ceiling = top;
-        const pieces = Math.round((2 + 4 * count * (0.5 + near)) * lifts);
+        const pieces = Math.min(MAX_PIECES, Math.round((2 + 4 * count * (0.5 + near)) * lifts));
         for (let k = 0; k < pieces; k++) {
-          const h = 3 + 10 * crng(), from = crng(), gap = crng(), gold = crng();
+          const [hRoll, from, gap, gold] = lifted[k], h = 3 + 10 * hRoll;
           const v0 = -barH + 3 + (rise - h + barH - 3) * from;
-          const dest = ceiling + (4 + 28 * mix(gap, mid, 2 + k) * (k + 1) ** 0.6) * gapScale;
-          if (!fits(a, b, dest, dest + h)) break;
-          cells.push({ u0: a, u1: b, v0: snap(v0), v1: snap(v0) + snap(h), dv: snap(dest - v0), kind: gold < 0.45 ? 'gold' : 'black' });
+          const dest = ceiling + Math.max(BRIDGE, (4 + 28 * mix(gap, mid, 2 + k) * (k + 1) ** 0.6) * gapScale);
+          if (b - a - 2 * INSET < 2 || !fits(a + INSET, b - INSET, dest, dest + h)) break;
+          cells.push({ u0: a + INSET, u1: b - INSET, v0: snap(v0), v1: snap(v0) + snap(h), dv: snap(dest - v0), kind: gold < 0.45 ? 'gold' : 'black' });
           ceiling = dest + h;
         }
         top = ceiling;
       } else if (fragRoll < fragChance * (1 + near)) {
-        const h = 3 + 9 * crng(), v0 = top + 5 + 40 * mix(crng(), mid, 7) * (0.5 + near);
-        if (fits(a + 0.6, b - 0.6, v0, v0 + h)) { fragments.push(quad(a + 0.6, b - 0.6, snap(v0), snap(v0 + h))); top = v0 + h; }
+        const h = 3 + 9 * fragH, v0 = top + 5 + 40 * mix(fragV, mid, 7) * (0.5 + near);
+        if (b - a - 2 * INSET >= 2 && fits(a + INSET, b - INSET, v0, v0 + h)) { fragments.push(quad(a + INSET, b - INSET, snap(v0), snap(v0 + h))); top = v0 + h; }
       }
       // A drip below the visor now and then.
-      if (crng() < dripChance * (1 + near)) {
-        const h = 2 + 7 * mix(crng(), mid, 8);
+      if (dripRoll < dripChance * (1 + near)) {
+        const h = 2 + 7 * mix(dripH, mid, 8);
         const drip = quad(a, b, -barH - h, -barH + 2);
         if (drip.every(inTrim)) drips.push(drip);
       }
       // Ribbons: from the top edge down along the visor's upward direction, stopping above the column.
       const lanes = Math.floor(w / 3) + 1;
       for (let k = 0; k < lanes; k++) {
-        const skip = crng(), penRoll = crng(), endRoll = crng(), kind = crng(), cap = crng();
+        const skip = rrng(), penRoll = rrng(), endRoll = rrng(), kind = rrng(), cap = rrng();
         if (skip > ribbonShare) continue;
         const pen: Pen = penRoll < 0.2 ? 'gold' : 'silver';
         const ur = a + 1.2 + (w - 2.4) * (lanes === 1 ? 0.5 : k / Math.max(1, lanes - 1));
@@ -484,9 +495,11 @@ export function erasure(ctx: SketchContext): Erasure {
       }
       // The gold column smeared: streaks up it, from inside the visor to a height.
       for (const c of cells) if (c.kind === 'rise' && c.u0 === a) {
-        for (let us = c.u0 + 0.9, j = 0; us < c.u1 - 0.6; us += 1.0 + 1.4 * crng(), j++) {
-          if (crng() > streakShare) continue;
-          streaks.push([toPage(us, -barH + 2), toPage(us, Math.min(c.v1 - 1, (c.v1 + 2) * (0.3 + 0.75 * mix(crng(), us, 10 + j)))) ]);
+        for (let us = c.u0 + 0.9, j = 0; us < c.u1 - 0.6; j++) {
+          const [step, skip, len] = [srng(), srng(), srng()];
+          us += 1.0 + 1.4 * step;
+          if (skip > streakShare) continue;
+          streaks.push([toPage(us, -barH + 2), toPage(us, Math.min(c.v1 - 1, (c.v1 + 2) * (0.3 + 0.75 * mix(len, us, 10 + j))))]);
         }
       }
     }
@@ -516,7 +529,7 @@ export function erasure(ctx: SketchContext): Erasure {
   const shirtRings = suit.shirt;
   const windowAt = (p: Point) => ((assembled && insideRing(bar, p)) || inCell(p, ['rise', 'gold']) || fragments.some(f => insideRing(f, p)) || drips.some(d => insideRing(d, p))) && !onNose(p)
     || (shirtRings.some(r => insideRing(r, p)) && !suit.tie.some(r => insideRing(r, p))) || (insideRing(suit.back, p) && !onHead(p));
-  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 0.5, minArea: 6 });
+  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 1.2, minArea: 6 });
 
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,

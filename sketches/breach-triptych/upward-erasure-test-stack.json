@@ -1,0 +1,12 @@
+{
+  "title": "Breach / Lodestone: Upward Erasure test sheet (A4, gold-yellow behind, black in front)",
+  "out": ".sketch-output/finalize/upward-erasure-test",
+  "edition": 1,
+  "page": { "width": 210, "height": 297, "margin": 11 },
+  "border": { "style": "cropmarks", "pen": "cut" },
+  "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true, "gelSpeed": true },
+  "pieces": [
+    { "name": "upward-erasure-test-gold", "title": "Upward Erasure test: gold-yellow sheet", "sketch": "sketches/breach-triptych/upward-erasure-test/sketch.ts", "seed": 1, "assembly": "upward-erasure-test", "params": { "ply": "gold" } },
+    { "name": "upward-erasure-test-black", "title": "Upward Erasure test: black sheet", "sketch": "sketches/breach-triptych/upward-erasure-test/sketch.ts", "seed": 1, "assembly": "upward-erasure-test", "params": { "ply": "black" } }
+  ]
+}
