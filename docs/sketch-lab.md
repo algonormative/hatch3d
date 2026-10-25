@@ -31,3 +31,9 @@ npm run sketch -- crops <image.png> --page WxH[,margin] [--trimmed] [--result re
 ## A fast preview for assemblies
 
 An assembly's sheets are each drawn through `renderPly`, whose exact clipping is what the plotter needs but the page does not (it clips on the canvas). A sketch module may also export `labSheets(ctx)`, returning each ply's art unclipped and the rings cut from it (`LabSheets` in `cli/sketch/lab/runtime.ts`); the lab then previews from it, and still exports SVGs through `draw`. Upward Erasure's preview redraws its visor and glitch in about 0.8 s this way (against about 4.5 s through `draw`), and the two share one cached world.
+
+## The GPU preview
+
+Where the browser has WebGPU (`navigator.gpu` in the worker), Upward Erasure's preview meshes its head on the GPU (`sketches/kit/sculpt-gpu.ts`): the head's field, recorded as a node tree by the sculpt primitives, is written as a WGSL compute shader (`sculpt-wgsl.ts`) that evaluates the grid and snaps the vertices; surface nets stay on the CPU. The preview then reads its lines' head-or-neck and plate tests from the vertices rather than the field. It is a close likeness in 32-bit floats; exports and saved sets still render through `draw` on the CPU, exactly. Without WebGPU the same preview path meshes on the CPU.
+
+A slow (`expensive`) control draws a draft first (a coarser mesh, no line thinning) and then the full frame. Measured on an Apple M-series GPU: a head change drafts in about 0.8 s and finishes in about 2 s; a visor or glitch change redraws in about 0.6 s.

@@ -116,7 +116,7 @@ details[open] summary::after { content: '\2013'; }
 
   // ── The worker ───────────────────────────────────────────────────
   const worker = new Worker('worker.js');
-  let nextId = 1, busy = false, queued = false, drifting = false;
+  let nextId = 1, busy = false, drifting = false;
   const pending = new Map();
   const ask = msg => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); worker.postMessage({ ...msg, id }); });
   worker.onmessage = e => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); e.data.type === 'error' ? p.reject(new Error(e.data.message)) : p.resolve(e.data); };
@@ -124,18 +124,25 @@ details[open] summary::after { content: '\2013'; }
 
   const controls = () => meta.controls.filter(c => !meta.assembly || c.id !== meta.assembly.control);
   const valueOf = c => (c.id in params ? params[c.id] : c.default);
-  async function render() {
-    if (busy) { queued = true; return; }
+  // What to draw next: one full frame, or (after a slow control moves) a draft first and then the full frame. Newer
+  // input replaces whatever is still to come.
+  let plan = null;
+  function render(progressive) { plan = progressive ? ['draft', 'full'] : ['full']; if (!busy) pump(); }
+  async function pump() {
     busy = true;
-    setStatus('Drawing…', 'busy');
-    const sent = { ...params };
-    try {
-      const r = await ask({ type: 'render', params: sent, seed });
-      last = r; draw();
-      setStatus(`Drawn in ${(r.ms / 1000).toFixed(1)} s`);
-    } catch (err) { setStatus('Could not draw: ' + err.message, 'error'); }
+    while (plan) {
+      const qualities = plan; plan = null;
+      for (const quality of qualities) {
+        setStatus(quality === 'draft' ? 'Drafting…' : 'Drawing…', 'busy');
+        try {
+          const r = await ask({ type: 'render', params: { ...params }, seed, quality });
+          last = r; draw();
+          setStatus(`${quality === 'draft' ? 'Draft' : 'Drawn'} in ${(r.ms / 1000).toFixed(2)} s${meta.gpu ? ' · GPU preview, exports exact' : ''}`);
+        } catch (err) { setStatus('Could not draw: ' + err.message, 'error'); }
+        if (plan) break;
+      }
+    }
     busy = false;
-    if (queued) { queued = false; render(); return; }
     if (drifting) step();
   }
   function step() {
@@ -210,7 +217,7 @@ details[open] summary::after { content: '\2013'; }
           input = document.createElement('input'); input.type = 'range'; input.min = c.min; input.max = c.max; input.step = c.step;
           set = v => { input.value = v; out.value = fmt(c, v); };
           input.addEventListener('input', () => { out.value = fmt(c, +input.value); });
-          input.addEventListener('change', () => { setParam(c.id, +input.value); render(); });
+          input.addEventListener('change', () => { setParam(c.id, +input.value); render(!!c.expensive); });
           const opt = document.createElement('option'); opt.value = c.id; opt.textContent = c.label; $('drift-what').append(opt);
         } else if (c.type === 'toggle') {
           input = document.createElement('input'); input.type = 'checkbox';

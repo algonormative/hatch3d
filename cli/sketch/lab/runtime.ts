@@ -6,7 +6,7 @@
  *
  * Requests (each with an `id`, answered with the same `id`):
  * - `{ type: 'meta' }`: the sketch's name, page, pens, controls, and its assembly (plies bottom to top) if any.
- * - `{ type: 'render', params, seed }`: every sheet (each ply of an assembly, else the one sheet) as flat point buffers
+ * - `{ type: 'render', params, seed, quality? }`: every sheet (each ply of an assembly, else the one sheet) as flat point buffers
  *   by pen, with its paper and the rings of its own cuts; an onlay ply comes back as its footprint and paper alone.
  * - `{ type: 'svg', params, seed, ply? }`: one sheet's SVG, as the CLI writes it (no finishing).
  *
@@ -107,9 +107,9 @@ async function partsFor(sketch: Sketch, supplied: Params, seed: number): Promise
  * the canvas, so the lab skips the exact clipping `renderPly` does for plotting (exports still use `draw`). Exported
  * from the sketch's module as `labSheets`.
  */
-export type LabSheets = (ctx: SketchContext) => { ply: string; parts: Part[]; cuts: Point[][] }[] | Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]>;
+export type LabSheets = (ctx: SketchContext, quality?: 'draft' | 'full') => { ply: string; parts: Part[]; cuts: Point[][] }[] | Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]>;
 
-export async function renderSheets(sketch: Sketch, supplied: Params, seed: number, preview?: LabSheets): Promise<Sheet[]> {
+export async function renderSheets(sketch: Sketch, supplied: Params, seed: number, preview?: LabSheets, quality: 'draft' | 'full' = 'full'): Promise<Sheet[]> {
   const pens = new Map(sketch.pens.map(p => [p.id, p]));
   const layersOf = (parts: Part[], skip?: string) => {
     const byPen = new Map<string, Point[][]>();
@@ -119,7 +119,7 @@ export async function renderSheets(sketch: Sketch, supplied: Params, seed: numbe
   const spec = sketch.assembly;
   if (spec && preview) {
     const params = resolveParams(sketch.controls ?? [], supplied);
-    const drawn = await preview(contextFor(sketch, params, seed));
+    const drawn = await preview(contextFor(sketch, params, seed), quality);
     return spec.plies.map(ply => {
       const d = drawn.find(x => x.ply === ply.id);
       return { id: ply.id, paper: ply.paper.color, onlay: !!ply.onlay, cuts: flatten(d?.cuts ?? []), layers: d ? layersOf(d.parts, spec.cutPen) : [] };
@@ -151,7 +151,7 @@ export async function sheetSvg(sketch: Sketch, supplied: Params, seed: number, p
 
 // ── The worker's message loop ────────────────────────────────────────────────────────────────────────────────
 
-type Request = { type: 'meta' | 'render' | 'svg'; id: number; params?: Params; seed?: number; ply?: string };
+type Request = { type: 'meta' | 'render' | 'svg'; id: number; params?: Params; seed?: number; ply?: string; quality?: 'draft' | 'full' };
 interface Scope { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent) => void) | null }
 
 /** Serve a sketch from inside a worker: answer the page's requests (see the module comment). */
@@ -161,14 +161,14 @@ export function serveLab(sketch: Sketch, preview?: LabSheets, scope: Scope = glo
     try {
       if (req.type === 'meta') {
         const spec = sketch.assembly;
-        scope.postMessage({ id: req.id, type: 'meta', name: sketch.name, page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [],
+        scope.postMessage({ id: req.id, type: 'meta', name: sketch.name, page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [], gpu: !!(globalThis as { navigator?: { gpu?: unknown } }).navigator?.gpu,
           assembly: spec ? { control: spec.control, plies: spec.plies.map(p => ({ id: p.id, paper: p.paper, onlay: !!p.onlay })) } : undefined });
         return;
       }
       const seed = req.seed ?? 0, params = req.params ?? {};
       if (req.type === 'render') {
         const t0 = performance.now();
-        const sheets = await renderSheets(sketch, params, seed, preview);
+        const sheets = await renderSheets(sketch, params, seed, preview, req.quality === 'draft' ? 'draft' : 'full');
         const transfer: Transferable[] = [];
         for (const s of sheets) { transfer.push(s.cuts.xy.buffer, s.cuts.starts.buffer); for (const l of s.layers) transfer.push(l.paths.xy.buffer, l.paths.starts.buffer); }
         scope.postMessage({ id: req.id, type: 'render', sheets, ms: Math.round(performance.now() - t0) }, transfer);

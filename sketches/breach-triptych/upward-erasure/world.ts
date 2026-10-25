@@ -7,9 +7,10 @@ import { n } from '../../kit/params.ts';
 import { fitDepthRange, pageOf } from '../../kit/perspective.ts';
 import { hiddenBias, projectStrokes, scalePoints } from '../../kit/strokes.ts';
 import {
-  contourLines, isoLines, meshSdf, modelPoint, perVertex, platesOn, scatterOn, sculptGeometry, toWorld, type IsoLine, type SculptMesh, type SurfacePoint, type V3,
+  atPoint, contourLines, isoLines, meshSdf, modelPoint, perVertex, platesOn, scatterOn, sculptGeometry, toWorld, type IsoLine, type SculptMesh, type SurfacePoint, type V3,
 } from '../../kit/sculpt.ts';
 import { sculptHead } from '../../kit/sculpt-head.ts';
+import type { GpuMesher } from '../../kit/sculpt-gpu.ts';
 import { traceMask } from '../../kit/outline.ts';
 import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
 import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
@@ -182,27 +183,57 @@ const FEATURES: V3[] = [
 ];
 
 /** What the head contributes: its marks on the sheet, where it and the nose cover it, landmarks placed on the sheet. */
-interface HeadStage { seen: Seen[]; onHead: (p: Point) => boolean; onNose: (p: Point) => boolean; at: (p: V3) => Point; head: ReturnType<typeof sculptHead> }
+export interface HeadStage { seen: Seen[]; onHead: (p: Point) => boolean; onNose: (p: Point) => boolean; at: (p: V3) => Point; head: ReturnType<typeof sculptHead> }
 
 /**
  * The head stage, kept for the last parameters it was built for: only the head's own parameters (and the seed) change
  * it, so a host that keeps the module loaded (a live viewer's worker) redraws the visor and the glitch without it.
  */
 let lastHead: { key: string; stage: HeadStage } | undefined;
+const headKey = (ctx: SketchContext, mode: 'cpu' | 'gpu') => JSON.stringify([mode, ctx.seed, ...PARAMS.filter(p => p.head).map(p => num(ctx, p.id))]);
 function headStage(ctx: SketchContext): HeadStage {
-  const key = JSON.stringify([ctx.seed, ...PARAMS.filter(p => p.head).map(p => num(ctx, p.id))]);
+  const key = headKey(ctx, 'cpu');
   if (lastHead?.key !== key) lastHead = { key, stage: buildHead(ctx) };
   return lastHead.stage;
 }
 
-function buildHead(ctx: SketchContext): HeadStage {
+/**
+ * The head stage for a live preview (the sketch lab), meshed by `mesher` (on the GPU where there is one,
+ * `kit/sculpt-gpu.ts`; else `cpuMesher`) and drawn with its lines' head-or-neck tests read from the vertices: a close
+ * likeness of `headStage`'s, cached apart from it so a plot never uses it. `draft` meshes coarser still (`DRAFT_STEP`),
+ * for the first frame while a head control moves. Pass it to `erasure`.
+ */
+const DRAFT_STEP = 0.018;
+const previewHeads = new Map<string, { key: string; stage: HeadStage }>();
+export async function previewHeadStage(ctx: SketchContext, mesher: GpuMesher | CpuMesher, draft = false): Promise<HeadStage> {
+  const step = draft ? Math.max(num(ctx, 'step'), DRAFT_STEP) : num(ctx, 'step');
+  const key = headKey(ctx, 'gpu') + step, slot = draft ? 'draft' : 'full';
+  if (previewHeads.get(slot)?.key !== key) {
+    const { head, transform } = headModel(ctx);
+    previewHeads.set(slot, { key, stage: buildHead(ctx, await mesher.mesh(head.sdf, head.lo, head.hi, step, transform)) });
+  }
+  return previewHeads.get(slot)!.stage;
+}
+
+/** `meshSdf` behind the GPU mesher's interface, for a preview where there is no GPU. */
+export interface CpuMesher { mesh(sdf: Parameters<typeof meshSdf>[0], lo: V3, hi: V3, step: number, transform: THREE.Matrix4): Promise<SculptMesh> }
+export const cpuMesher: CpuMesher = { mesh: async (sdf, lo, hi, step, transform) => meshSdf(sdf, lo, hi, step, transform) };
+
+/** The sculpted head the parameters describe, and its placement in the world. */
+function headModel(ctx: SketchContext): { head: ReturnType<typeof sculptHead>; transform: THREE.Matrix4 } {
   const S = 100;
   const face = Object.fromEntries((['noseWidth', 'bridge', 'chin', 'jaw', 'lips', 'brow', 'cheeks', 'ears', 'cranium'] as const).map(k => [k, num(ctx, k)]));
   const head = sculptHead({ noseShape: 'planar', nose: num(ctx, 'noseLength'), tilt: deg(num(ctx, 'tilt')), turn: deg(num(ctx, 'turn')), neck: num(ctx, 'neckLength'), neckR: num(ctx, 'neckWidth'), ...face });
   // Turned (`yaw`), then leaned about the line of sight (`roll`, toward the left of the sheet).
   const transform = new THREE.Matrix4().makeRotationZ(deg(num(ctx, 'roll'))).multiply(new THREE.Matrix4().makeRotationY(deg(num(ctx, 'yaw'))))
     .multiply(new THREE.Matrix4().makeScale(S, S, S));
-  const mesh = meshSdf(head.sdf, head.lo, head.hi, num(ctx, 'step'), transform);
+  return { head, transform };
+}
+
+function buildHead(ctx: SketchContext, meshed?: SculptMesh): HeadStage {
+  const S = 100;
+  const { head, transform } = headModel(ctx);
+  const mesh = meshed ?? meshSdf(head.sdf, head.lo, head.hi, num(ctx, 'step'), transform);
   const toW = (p: V3) => new THREE.Vector3(...p).applyMatrix4(transform);
   const isHead = (p: V3) => head.parts.head(...head.unplace(...p)) <= head.parts.neck(...p);
 
@@ -248,18 +279,40 @@ function buildHead(ctx: SketchContext): HeadStage {
   // face, so the face turned up into it is dense and the jaw's underside sparse. Every fourth line of a family is
   // drawn everywhere (no plate goes bare by the light alone), every second from `TH[1]`, all from `TH[2]`.
   const light = new THREE.Vector3(num(ctx, 'lightX'), 1, num(ctx, 'lightZ')).normalize();
-  const brightness = (sp: SurfacePoint) => Math.max(0, new THREE.Vector3(...sp.n).transformDirection(transform).dot(light)) ** 0.8;
+  const exactBrightness = (n: V3) => Math.max(0, new THREE.Vector3(...n).transformDirection(transform).dot(light)) ** 0.8;
+  // A preview reads it at the vertices once and interpolates along the edges.
+  let brightAt: Float64Array | undefined;
+  const brightness = (sp: SurfacePoint) => {
+    if (!fast || sp.a === undefined) return exactBrightness(sp.n);
+    brightAt ??= perVertex(mesh, (_, n) => exactBrightness(n));
+    return atPoint(brightAt, sp);
+  };
   const TH = [-1, 0.18, 0.42];
   const tier = (i: number) => (i % 4 === 0 ? 0 : i % 2 === 0 ? 1 : 2);
   const ear = head.at.ears[1];
   const headNy = (p: V3, nv: V3) => { const q = head.unplace(...p), q2 = head.unplace(p[0] + nv[0] * 0.01, p[1] + nv[1] * 0.01, p[2] + nv[2] * 0.01); return (q2[1] - q[1]) / 0.01; };
   const facing = (sp: SurfacePoint) => sp.n[0] * (eyeM[0] - sp.p[0]) + sp.n[1] * (eyeM[1] - sp.p[1]) + sp.n[2] * (eyeM[2] - sp.p[2]) > 0;
   /** Neck, the ear's whorl, the head's plates; lines stop a little short of the crease where the jaw meets the neck. */
-  const zoneOf = (p: V3): 'neck' | 'ear' | 'plate' | undefined => {
-    const seam = head.parts.head(...head.unplace(...p)) - head.parts.neck(...p);
+  type Zone = 'neck' | 'ear' | 'plate' | undefined;
+  const zoneBy = (seam: number, p: V3): Zone => {
     if (seam > 0.004) return 'neck';
     if (seam > -0.01) return undefined;
     return Math.hypot(p[0] - ear[0], p[1] - ear[1], p[2] - ear[2]) < 0.12 ? 'ear' : 'plate';
+  };
+  const zoneOf = (p: V3): Zone => zoneBy(head.parts.head(...head.unplace(...p)) - head.parts.neck(...p), p);
+  // A preview's head (meshed on the GPU, a likeness already) reads the head-or-neck field at the vertices once and
+  // interpolates it along the edges, instead of evaluating it at every point of every line.
+  const fast = meshed !== undefined;
+  const seamAt = fast ? perVertex(mesh, p => head.parts.head(...head.unplace(...p)) - head.parts.neck(...p)) : undefined;
+  const zoneAt = (sp: SurfacePoint): Zone => (seamAt ? zoneBy(atPoint(seamAt, sp), sp.p) : zoneOf(sp.p));
+  /** A preview's lines of one zone are found among the triangles with a vertex near it; a plot's, on the whole mesh. */
+  const near = (keep: (p: V3, v: number) => boolean): SculptMesh => {
+    if (!fast) return mesh;
+    const ok = new Uint8Array(mesh.pos.length / 3);
+    for (let v = 0; v < ok.length; v++) ok[v] = keep([mesh.pos[3 * v], mesh.pos[3 * v + 1], mesh.pos[3 * v + 2]], v) ? 1 : 0;
+    const tri: number[] = [];
+    for (let t = 0; t < mesh.tri.length; t += 3) if (ok[mesh.tri[t]] || ok[mesh.tri[t + 1]] || ok[mesh.tri[t + 2]]) tri.push(mesh.tri[t], mesh.tri[t + 1], mesh.tri[t + 2]);
+    return { ...mesh, tri: Uint32Array.from(tri) };
   };
   const marks: Mark[] = [];
   const keepRuns = (lines: IsoLine[], ok: (sp: SurfacePoint) => boolean, toned: boolean, pen: Pen, rank: number, id: string, step = 1) => {
@@ -276,7 +329,7 @@ function buildHead(ctx: SketchContext): HeadStage {
 
   // The plates: seeds on the features and scattered over the rest of the head, in the head's own frame.
   const rng = ctx.random('erasure-plates');
-  const seeds = scatterOn(mesh, num(ctx, 'plateMm') / headMm, rng, p => zoneOf(p) === 'plate', FEATURES.map(head.place), p => head.unplace(...p));
+  const seeds = scatterOn(mesh, num(ctx, 'plateMm') / headMm, rng, (p, v) => (seamAt ? zoneBy(seamAt[v], p) : zoneOf(p)) === 'plate', FEATURES.map(head.place), p => head.unplace(...p));
   const plates = platesOn(mesh, seeds, p => head.unplace(...p));
   // Each plate's and each seam's own triangles (all three vertices border it): the lines of one are found among those
   // alone, as every other triangle has no value for it.
@@ -310,7 +363,7 @@ function buildHead(ctx: SketchContext): HeadStage {
         value[v] = q[0] * d.x + q[1] * d.y + q[2] * d.z;
       }
       const spacing = pitch * (j ? 1.7 : 1);
-      keepRuns(isoLines(only(`p${k}`), value, spacing, rng() * spacing), sp => { const q = plates.at(sp.p); return q.plate === k && q.gap > SEAM && zoneOf(sp.p) === 'plate'; }, true, 'silver', 2, 'plate');
+      keepRuns(isoLines(only(`p${k}`), value, spacing, rng() * spacing), sp => { const q = fast ? { plate: plates.plate[(sp.t ?? 0) < 0.5 ? sp.a! : sp.b!], gap: atPoint(plates.gap, sp) } : plates.at(sp.p); return q.plate === k && q.gap > SEAM && zoneAt(sp) === 'plate'; }, true, 'silver', 2, 'plate');
     }
   });
   // The seams: a gold line where two plates meet, the zero of the difference of their seeds' distances (smooth, where
@@ -326,19 +379,20 @@ function buildHead(ctx: SketchContext): HeadStage {
       const q = head.unplace(mesh.pos[3 * v], mesh.pos[3 * v + 1], mesh.pos[3 * v + 2]);
       value[v] = Math.hypot(q[0] - sa[0], q[1] - sa[1], q[2] - sa[2]) - Math.hypot(q[0] - sb[0], q[1] - sb[1], q[2] - sb[2]);
     }
-    keepRuns(isoLines(only(`s${a}-${b}`), value, 1, 0, [0]), sp => zoneOf(sp.p) === 'plate', false, 'gold', 1, 'seam');
+    keepRuns(isoLines(only(`s${a}-${b}`), value, 1, 0, [0]), sp => zoneAt(sp) === 'plate', false, 'gold', 1, 'seam');
   }
   // The ear, one silver whorl.
   const earQ = head.unplace(...ear), turn = pitch * 1.3;
   const spiral = { values: hq(q => Math.atan2(q[1] - earQ[1], q[2] - earQ[2])), period: 2 * Math.PI };
-  keepRuns(isoLines(mesh, hq(q => Math.hypot(q[1] - earQ[1], q[2] - earQ[2]) / turn * 2 * Math.PI), 2 * Math.PI, 0, undefined, spiral), sp => zoneOf(sp.p) === 'ear', false, 'silver', 2, 'ear');
+  keepRuns(isoLines(near(p => Math.hypot(p[0] - ear[0], p[1] - ear[1], p[2] - ear[2]) < 0.14), hq(q => Math.hypot(q[1] - earQ[1], q[2] - earQ[2]) / turn * 2 * Math.PI), 2 * Math.PI, 0, undefined, spiral), sp => zoneAt(sp) === 'ear', false, 'silver', 2, 'ear');
   // The neck: lines along it, and three gold rings that make it segments.
-  keepRuns(isoLines(mesh, perVertex(mesh, p => Math.atan2(p[0], p[2] + 0.03)), pitch / 0.15), sp => zoneOf(sp.p) === 'neck', true, 'silver', 2, 'neck');
-  for (let r = 0; r < num(ctx, 'neckRings'); r++) for (const y of [-0.5 - 0.12 * r]) keepRuns(isoLines(mesh, perVertex(mesh, p => p[1]), 1, 0, [y]), sp => zoneOf(sp.p) === 'neck', false, 'gold', 1, 'ring');
+  const neckMesh = near((_, v) => seamAt![v] > -0.02);
+  keepRuns(isoLines(neckMesh, perVertex(mesh, p => Math.atan2(p[0], p[2] + 0.03)), pitch / 0.15), sp => zoneAt(sp) === 'neck', true, 'silver', 2, 'neck');
+  for (let r = 0; r < num(ctx, 'neckRings'); r++) for (const y of [-0.5 - 0.12 * r]) keepRuns(isoLines(neckMesh, perVertex(mesh, p => p[1]), 1, 0, [y]), sp => zoneAt(sp) === 'neck', false, 'gold', 1, 'ring');
   // The silhouette, and the creases: the jaw's edge (where the face turns under) and the line the jaw meets the neck.
   for (const l of contourLines(mesh, eyeM)) marks.push({ points: toWorld(mesh, l.points), pen: 'gold', rank: 0, id: 'outline' });
-  const jawEdge = perVertex(mesh, (p, nv) => (isHead(p) && head.unplace(...p)[1] < JAW ? headNy(p, nv) : 1));
-  keepRuns(isoLines(mesh, jawEdge, 1, 0, [-0.35]), sp => zoneOf(sp.p) !== 'ear', false, 'gold', 1, 'crease');
+  const jawEdge = perVertex(mesh, (p, nv, v) => ((seamAt ? seamAt[v] <= 0 : isHead(p)) && head.unplace(...p)[1] < JAW ? headNy(p, nv) : 1));
+  keepRuns(isoLines(mesh, jawEdge, 1, 0, [-0.35]), sp => zoneAt(sp) !== 'ear', false, 'gold', 1, 'crease');
   keepRuns(isoLines(mesh, perVertex(mesh, p => head.parts.head(...head.unplace(...p)) - head.parts.neck(...p)), 1, 0, [0.004]), () => true, false, 'gold', 1, 'crease');
   // The nose's edges, in gold: the bridge's ridge down the middle, and where its sides turn under to the tip.
   const inNose = (sp: SurfacePoint) => { const q = head.unplace(...sp.p); return Math.abs(q[0]) < 0.07 && q[2] > 0.33 && q[1] > -0.18 && q[1] < 0.04; };
@@ -372,8 +426,8 @@ function buildHead(ctx: SketchContext): HeadStage {
   return { seen, onHead, onNose, at, head };
 }
 
-export function erasure(ctx: SketchContext): Erasure {
-  const { seen, onHead, onNose, at, head } = headStage(ctx);
+export function erasure(ctx: SketchContext, stage?: HeadStage, options: { preview?: boolean } = {}): Erasure {
+  const { seen, onHead, onNose, at, head } = stage ?? headStage(ctx);
 
   // ── The suit ──────────────────────────────────────────────────────
   const collarY = -num(ctx, 'collarAt');
@@ -565,7 +619,8 @@ export function erasure(ctx: SketchContext): Erasure {
     const inGroup = (g: number) => here.some(o => o.group === g && o.holds(p));
     return (inGroup(0) && !onNose(p)) || (inGroup(1) && !suit.tie.some(r => insideRing(r, p))) || (inGroup(2) && !onHead(p));
   };
-  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 1.2, minArea: 6 });
+  // A preview traces the window at half the resolution: the knife's line only matters on the plotted sheet.
+  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
 
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,

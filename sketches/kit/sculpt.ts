@@ -8,32 +8,58 @@ import * as THREE from 'three';
  * interpolated contour). Units are the model's own; place it in the world with a matrix (`SculptMesh.transform`).
  */
 
-/** A signed distance: negative inside the solid. */
-export type Sdf = (x: number, y: number, z: number) => number;
+/** A signed distance: negative inside the solid. Built from the primitives below, it carries its `node`. */
+export type Sdf = ((x: number, y: number, z: number) => number) & { node?: SdfNode };
 export type V3 = [number, number, number];
+
+/**
+ * What a field is made of, recorded by each primitive and blend beside its closure: enough to evaluate it elsewhere
+ * (`sculpt-wgsl.ts` writes it as a GPU shader). The closures stay the field's definition; the node describes them.
+ */
+export type SdfNode =
+  | { kind: 'sphere'; c: V3; r: number }
+  | { kind: 'ellipsoid'; c: V3; r: V3 }
+  | { kind: 'capsule'; a: V3; b: V3; ra: number; rb: number }
+  | { kind: 'hull'; planes: [number, number, number, number][] }
+  | { kind: 'blend'; base: SdfNode; parts: [SdfNode, number][] }
+  | { kind: 'min'; a: SdfNode; b: SdfNode }
+  | { kind: 'smin'; a: SdfNode; b: SdfNode; k: number }
+  /** `child` read in a frame turned about `pivot`: x' = x·cu − z·su, z' = x·su + z·cu, then y'' = y·ct − z'·st, z'' = y·st + z'·ct. */
+  | { kind: 'turned'; child: SdfNode; pivot: V3; ct: number; st: number; cu: number; su: number }
+  | { kind: 'constant'; value: number };
+
+/** The closure, carrying its node. */
+export function tagged(f: (x: number, y: number, z: number) => number, node: SdfNode | undefined): Sdf {
+  if (node) (f as Sdf).node = node;
+  return f as Sdf;
+}
+const nodeOf = (f: Sdf): SdfNode | undefined => f.node;
+
+/** The lesser of two fields (a hard union), recorded. */
+export const minOf = (a: Sdf, b: Sdf): Sdf => tagged((x, y, z) => Math.min(a(x, y, z), b(x, y, z)), nodeOf(a) && nodeOf(b) ? { kind: 'min', a: nodeOf(a)!, b: nodeOf(b)! } : undefined);
 
 // ── Primitives and blends ────────────────────────────────────────────
 
-export const sphere = (c: V3, r: number): Sdf => (x, y, z) => Math.hypot(x - c[0], y - c[1], z - c[2]) - r;
+export const sphere = (c: V3, r: number): Sdf => tagged((x, y, z) => Math.hypot(x - c[0], y - c[1], z - c[2]) - r, { kind: 'sphere', c, r });
 
 /** An ellipsoid (Quilez's bound: exact on the axes, close elsewhere). */
 export function ellipsoid(c: V3, r: V3): Sdf {
-  return (x, y, z) => {
+  return tagged((x, y, z) => {
     const px = (x - c[0]) / r[0], py = (y - c[1]) / r[1], pz = (z - c[2]) / r[2];
     const k0 = Math.hypot(px, py, pz);
     const k1 = Math.hypot(px / r[0], py / r[1], pz / r[2]);
     return k1 === 0 ? -Math.min(...r) : k0 * (k0 - 1) / k1;
-  };
+  }, { kind: 'ellipsoid', c, r });
 }
 
 /** A round cone: a capsule from `a` (radius `ra`) to `b` (radius `rb`). */
 export function capsule(a: V3, b: V3, ra: number, rb = ra): Sdf {
   const bx = b[0] - a[0], by = b[1] - a[1], bz = b[2] - a[2], l2 = bx * bx + by * by + bz * bz || 1;
-  return (x, y, z) => {
+  return tagged((x, y, z) => {
     const px = x - a[0], py = y - a[1], pz = z - a[2];
     const t = Math.max(0, Math.min(1, (px * bx + py * by + pz * bz) / l2));
     return Math.hypot(px - t * bx, py - t * by, pz - t * bz) - (ra + (rb - ra) * t);
-  };
+  }, { kind: 'capsule', a, b, ra, rb });
 }
 
 /**
@@ -55,8 +81,8 @@ export function hull(points: V3[]): Sdf {
     else if (side.every(x => x >= -1e-9)) { nx = -nx; ny = -ny; nz = -nz; d = -d; planes.push([nx, ny, nz, d]); }
   }
   // Points that span no volume (fewer than four, or all on a line) bound nothing: everywhere is outside.
-  if (!planes.length) return () => 1e9;
-  return (x, y, z) => { let m = -Infinity; for (const [a, b, c, d] of planes) m = Math.max(m, a * x + b * y + c * z - d); return m; };
+  if (!planes.length) return tagged(() => 1e9, { kind: 'constant', value: 1e9 });
+  return tagged((x, y, z) => { let m = -Infinity; for (const [a, b, c, d] of planes) m = Math.max(m, a * x + b * y + c * z - d); return m; }, { kind: 'hull', planes });
 }
 
 /** A polynomial smooth minimum over `k` (0 = a hard union). */
@@ -68,14 +94,15 @@ export function smin(a: number, b: number, k: number): number {
 
 /** Shapes blended smoothly into the first: `[shape, k]` pairs, `k` < 0 carving the shape away instead. */
 export function blend(base: Sdf, ...parts: [Sdf, number][]): Sdf {
-  return (x, y, z) => {
+  const nodes = parts.map(([s]) => nodeOf(s));
+  return tagged((x, y, z) => {
     let d = base(x, y, z);
     for (const [s, k] of parts) {
       const e = s(x, y, z);
       d = k >= 0 ? smin(d, e, k) : -smin(-d, e, -k);
     }
     return d;
-  };
+  }, nodeOf(base) && nodes.every(Boolean) ? { kind: 'blend', base: nodeOf(base)!, parts: parts.map(([, k], i) => [nodes[i]!, k]) } : undefined);
 }
 
 /** The field's gradient by central differences (not normalised). */
@@ -143,6 +170,18 @@ export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new TH
       if (!exact[v]) val[v] = dc;
     }
   }
+  const { pos, tri } = netsFromGrid(val, nx, ny, nz, lo, step);
+  const { pos: P, nrm: N } = snapToField(f, pos);
+  return { pos: P, nrm: N, tri, transform };
+}
+
+/**
+ * Naive surface nets over a grid of field values (`nx` × `ny` × `nz` points from `lo`, `step` apart, x fastest): a vertex
+ * in every cell the surface crosses, at the mean of its edges' crossings, and a quad across every crossed grid edge.
+ * The vertices are not yet on the surface (`snapToField`).
+ */
+export function netsFromGrid(val: ArrayLike<number>, nx: number, ny: number, nz: number, lo: V3, step: number): { pos: Float64Array; tri: Uint32Array } {
+  const at = (i: number, j: number, k: number) => (k * ny + j) * nx + i;
   const cell = new Int32Array((nx - 1) * (ny - 1) * nz).fill(-1);
   const cellAt = (i: number, j: number, k: number) => (k * (ny - 1) + j) * (nx - 1) + i;
   const pos: number[] = [];
@@ -182,6 +221,11 @@ export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new TH
     const a = val[at(i, j, k)], b = val[at(i, j, k + 1)];
     if ((a < 0) !== (b < 0)) quad(cell[cellAt(i - 1, j - 1, k)], cell[cellAt(i, j - 1, k)], cell[cellAt(i, j, k)], cell[cellAt(i - 1, j, k)], a < 0);
   }
+  return { pos: Float64Array.from(pos), tri: Uint32Array.from(tri) };
+}
+
+/** Each vertex moved onto the field's zero by Newton steps along its gradient, and the field's unit normal there. */
+export function snapToField(f: Sdf, pos: Float64Array): { pos: Float64Array; nrm: Float64Array } {
   const P = Float64Array.from(pos), N = new Float64Array(P.length);
   for (let v = 0; v < P.length; v += 3) {
     let x = P[v], y = P[v + 1], z = P[v + 2];
@@ -197,7 +241,7 @@ export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new TH
     const g = gradient(f, x, y, z), l = Math.hypot(...g) || 1;
     N[v] = g[0] / l; N[v + 1] = g[1] / l; N[v + 2] = g[2] / l;
   }
-  return { pos: P, nrm: N, tri: Uint32Array.from(tri), transform };
+  return { pos: P, nrm: N };
 }
 
 /** The mesh in world units, for the depth pass. */
@@ -211,7 +255,12 @@ export function sculptGeometry(m: SculptMesh): THREE.BufferGeometry {
 }
 
 /** A point on a surface line: where it is (model units), the surface's unit normal there, and the level it is on. */
-export interface SurfacePoint { p: V3; n: V3 }
+export interface SurfacePoint { p: V3; n: V3; /** The mesh edge it lies on (vertices `a`, `b`, `t` of the way from `a`). */ a?: number; b?: number; t?: number }
+
+/** A per-vertex scalar at a surface point, interpolated along its edge (NaN for a point that carries no edge). */
+export function atPoint(values: ArrayLike<number>, sp: SurfacePoint): number {
+  return sp.a === undefined || sp.b === undefined || sp.t === undefined ? NaN : values[sp.a] + sp.t * (values[sp.b] - values[sp.a]);
+}
 export interface IsoLine { level: number; index: number; points: SurfacePoint[] }
 
 /**
@@ -258,7 +307,7 @@ export function isoLines(m: SculptMesh, value: Float64Array, spacing: number, le
     const p: V3 = [0, 0, 0], q: V3 = [0, 0, 0];
     for (let k = 0; k < 3; k++) { p[k] = pos[3 * u + k] + t * (pos[3 * v + k] - pos[3 * u + k]); q[k] = nrm[3 * u + k] + t * (nrm[3 * v + k] - nrm[3 * u + k]); }
     const l = Math.hypot(...q) || 1;
-    return { p, n: [q[0] / l, q[1] / l, q[2] / l] };
+    return { p, n: [q[0] / l, q[1] / l, q[2] / l], a: u, b: v, t };
   };
   for (const [i, segs] of byLevel) {
     const L = levelOf(i);
@@ -300,9 +349,9 @@ export function isoLines(m: SculptMesh, value: Float64Array, spacing: number, le
 }
 
 /** A scalar per vertex. */
-export function perVertex(m: SculptMesh, fn: (p: V3, n: V3) => number): Float64Array {
+export function perVertex(m: SculptMesh, fn: (p: V3, n: V3, vertex: number) => number): Float64Array {
   const out = new Float64Array(m.pos.length / 3);
-  for (let v = 0; v < out.length; v++) out[v] = fn([m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]], [m.nrm[3 * v], m.nrm[3 * v + 1], m.nrm[3 * v + 2]]);
+  for (let v = 0; v < out.length; v++) out[v] = fn([m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]], [m.nrm[3 * v], m.nrm[3 * v + 1], m.nrm[3 * v + 2]], v);
   return out;
 }
 
@@ -335,13 +384,13 @@ export function toWorld(m: SculptMesh, pts: SurfacePoint[]): THREE.Vector3[] {
  * Seeds scattered over the mesh, no two nearer than `minDist` (model units, measured in `frame`): the `fixed` first,
  * then vertices in a seeded order wherever `keep` allows and the spacing does. For plates (`platesOn`).
  */
-export function scatterOn(m: SculptMesh, minDist: number, rng: () => number, keep: (p: V3) => boolean, fixed: V3[] = [], frame: (p: V3) => V3 = p => p): V3[] {
+export function scatterOn(m: SculptMesh, minDist: number, rng: () => number, keep: (p: V3, vertex: number) => boolean, fixed: V3[] = [], frame: (p: V3) => V3 = p => p): V3[] {
   const out = fixed.map(frame);
   const count = m.pos.length / 3, order = Array.from({ length: count }, (_, i) => i);
   for (let i = count - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
   for (const v of order) {
     const p: V3 = [m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]];
-    if (!keep(p)) continue;
+    if (!keep(p, v)) continue;
     const q = frame(p);
     if (out.every(s => Math.hypot(s[0] - q[0], s[1] - q[1], s[2] - q[2]) >= minDist)) out.push(q);
   }

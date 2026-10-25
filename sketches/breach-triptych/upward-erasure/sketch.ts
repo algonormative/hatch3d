@@ -5,7 +5,8 @@ import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong, pathLength } from '../../kit/page.ts';
 import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, PAGE, PAPER, pensOf } from '../world.ts';
-import { CONTROLS, erasure, panelStripes, type Erasure, type Pen, type Seen } from './world.ts';
+import { gpuMesher } from '../../kit/sculpt-gpu.ts';
+import { CONTROLS, cpuMesher, erasure, panelStripes, previewHeadStage, type Erasure, type HeadStage, type Pen, type Seen } from './world.ts';
 
 /**
  * Upward Erasure (a Lodestone study, after the character concept of 2026-10-21): see `./world.ts`. Two sheets, as
@@ -23,14 +24,16 @@ const pens = pensOf(['silver', 'gold', 'fluoro-pink', 'black']);
 type Item = Seen & { piece: Point[] };
 
 /** Lines of one sheet kept apart at the pens' pitch (outlines first, then seams and creases, then hatch), by pen. */
-function thinned(items: Item[], pitch: number): Map<string, Point[][]> {
+function thinned(items: Item[], pitch: number, skip = false): Map<string, Point[][]> {
   const out = new Map<string, Point[][]>();
+  // A draft keeps every line (it is on screen for a moment, until the full frame replaces it).
+  if (skip) { for (const i of items) if (pathLength(i.piece) >= 0.6) { const l = out.get(i.pen) ?? []; l.push(i.piece); out.set(i.pen, l); } return out; }
   for (const { item, runs } of thinRanked(items, pitch, { angle: ALONGSIDE_DEG })) for (const r of runs) if (pathLength(r) >= 0.6) { const l = out.get(item.pen) ?? []; l.push(r); out.set(item.pen, l); }
   return out;
 }
 
 /** The two sheets' art. */
-export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
+export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: Part[]; gold: Part[] } {
   const black: Item[] = [], gold: Item[] = [];
   /** Keep the pieces of `s` that pass `test`, each point moved by `move`, into a sheet's list (in `pen`). */
   const keep = (into: Item[], s: Seen, test: (p: Point) => boolean, move?: (p: Point) => Point, pen: Pen = s.pen) => {
@@ -77,9 +80,9 @@ export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
 
   const pink = black.filter(i => i.pen === 'fluoro-pink').map(i => i.piece);
   const byPink = glyphMask(pink, 0.9, 6, PAGE);
-  const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel);
+  const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   lines.set('fluoro-pink', pink);
-  const under = thinned(gold, LINE_PITCH.gel);
+  const under = thinned(gold, LINE_PITCH.gel, options.thin === false);
   return {
     black: [...lines].map(([pen, paths]) => ({ id: `black-${pen}`, pen, paths })),
     gold: [...under].map(([pen, paths]) => ({ id: `gold-${pen}`, pen, paths })),
@@ -91,15 +94,19 @@ export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
  * every ply in turn) builds it once.
  */
 let lastWorld: { key: string; e: Erasure; art: ReturnType<typeof sheets> } | undefined;
-function world(ctx: SketchContext): { e: Erasure; art: ReturnType<typeof sheets> } {
-  const key = JSON.stringify([ctx.seed, Object.entries(ctx.params).filter(([k]) => k !== spec.control).sort(([a], [b]) => (a < b ? -1 : 1))]);
-  if (lastWorld?.key !== key) { const e = erasure(ctx); lastWorld = { key, e, art: sheets(e) }; }
+function world(ctx: SketchContext, stage?: HeadStage, quality?: 'draft' | 'full'): { e: Erasure; art: ReturnType<typeof sheets> } {
+  const key = JSON.stringify([quality ?? 'plot', ctx.seed, Object.entries(ctx.params).filter(([k]) => k !== spec.control).sort(([a], [b]) => (a < b ? -1 : 1))]);
+  if (lastWorld?.key !== key) { const e = erasure(ctx, stage, { preview: quality !== undefined }); lastWorld = { key, e, art: sheets(e, { thin: quality !== 'draft' }) }; }
   return lastWorld;
 }
 
-/** The sketch lab's preview (`cli/sketch/lab/runtime.ts`): each sheet's art unclipped and the black's windows. */
-export function labSheets(ctx: SketchContext): { ply: string; parts: Part[]; cuts: Point[][] }[] {
-  const { e, art } = world(ctx);
+/**
+ * The sketch lab's preview (`cli/sketch/lab/runtime.ts`): each sheet's art unclipped and the black's windows, the head
+ * meshed on the GPU where there is one, a `draft` coarser still (exports still draw through `draw`, exactly).
+ */
+export async function labSheets(ctx: SketchContext, quality: 'draft' | 'full' = 'full'): Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]> {
+  const mesher = (await gpuMesher()) ?? cpuMesher;
+  const { e, art } = world(ctx, await previewHeadStage(ctx, mesher, quality === 'draft'), quality);
   return [{ ply: 'gold', parts: art.gold, cuts: [] }, { ply: 'black', parts: art.black, cuts: e.window }];
 }
 

@@ -1,4 +1,4 @@
-import { blend, capsule, ellipsoid, hull, smin, sphere, type Sdf, type V3 } from './sculpt.ts';
+import { blend, capsule, ellipsoid, hull, minOf, smin, sphere, tagged, type Sdf, type V3 } from './sculpt.ts';
 
 /**
  * A sculpted head and neck for the pen: an androgynous, idealised head (a mannequin's or a statue's), about 1 unit from
@@ -34,8 +34,8 @@ export interface Head {
   /** A point in the head's own frame (before the tilt and turn) in the mesh's, and back. */
   place: (q: V3) => V3;
   unplace: (x: number, y: number, z: number) => V3;
-  /** The head alone in its own frame, and the neck alone in the mesh's: which is nearer says head or neck. */
-  parts: { head: Sdf; neck: Sdf };
+  /** The head alone in its own frame, the neck alone in the mesh's (which is nearer says head or neck), and the head in the mesh's frame (`turned`). */
+  parts: { head: Sdf; neck: Sdf; turned: Sdf };
   /** The box the head and neck lie in, for meshing. */
   lo: V3; hi: V3;
   /** Landmarks, on or just off the surface, in the mesh's frame; `throat` and `neckBase` sit on the neck (they do not tip or turn with the head). */
@@ -46,7 +46,7 @@ export interface Head {
 }
 
 const mirror = (p: V3): V3 => [-p[0], p[1], p[2]];
-const both = (p: V3, f: (q: V3) => Sdf): Sdf => { const a = f(p), b = f(mirror(p)); return (x, y, z) => Math.min(a(x, y, z), b(x, y, z)); };
+const both = (p: V3, f: (q: V3) => Sdf): Sdf => minOf(f(p), f(mirror(p)));
 
 /** Where the head pivots on the neck (the top of the spine, under the skull). */
 const PIVOT: V3 = [0, -0.2, -0.08];
@@ -116,12 +116,15 @@ export function sculptHead(options: HeadOptions = {}): Head {
     [capsule(behind[0], [0.05, neckEnd[1] + 0.1, 0.13], 0.045), 0.08],
     [capsule(behind[1], [-0.05, neckEnd[1] + 0.1, 0.13], 0.045), 0.08],
   );
-  const sdf: Sdf = (x, y, z) => { const q = unplace(x, y, z); return smin(head(q[0], q[1], q[2]), neckSdf(x, y, z), 0.1); };
+  const turnedHead = tagged((x, y, z) => { const q = unplace(x, y, z); return head(q[0], q[1], q[2]); },
+    head.node && { kind: 'turned', child: head.node, pivot: PIVOT, ct, st, cu, su });
+  const sdf: Sdf = tagged((x, y, z) => { const q = unplace(x, y, z); return smin(head(q[0], q[1], q[2]), neckSdf(x, y, z), 0.1); },
+    turnedHead.node && neckSdf.node && { kind: 'smin', a: turnedHead.node, b: neckSdf.node, k: 0.1 });
   const P = place;
   return {
     sdf,
     lo: [-0.6, neckEnd[1] - 0.05, -0.75], hi: [0.6, 0.75, 0.75],
-    place, unplace, parts: { head, neck: neckSdf },
+    place, unplace, parts: { head, neck: neckSdf, turned: turnedHead },
     at: {
       noseTip: P([tip[0], tip[1], tip[2] + 0.045]), noseRoot: P([0, 0.04, 0.39]),
       nostrils: [P([0.028, -0.165, 0.43 + 0.03 * nose]), P([-0.028, -0.165, 0.43 + 0.03 * nose])],
