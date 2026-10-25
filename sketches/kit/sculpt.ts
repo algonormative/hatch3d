@@ -36,6 +36,27 @@ export function capsule(a: V3, b: V3, ra: number, rb = ra): Sdf {
   };
 }
 
+/**
+ * The convex hull of a few points, sharp-edged: the greatest of its face planes' distances (exact inside and near the
+ * faces, a lower bound off the edges and corners). For planar, faceted forms (a nose cut as a wedge).
+ */
+export function hull(points: V3[]): Sdf {
+  const planes: [number, number, number, number][] = [];
+  const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) for (let k = j + 1; k < points.length; k++) {
+    const u = sub(points[j], points[i]), v = sub(points[k], points[i]);
+    let nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+    const l = Math.hypot(nx, ny, nz);
+    if (l < 1e-12) continue;
+    nx /= l; ny /= l; nz /= l;
+    let d = nx * points[i][0] + ny * points[i][1] + nz * points[i][2];
+    const side = points.map(p => nx * p[0] + ny * p[1] + nz * p[2] - d);
+    if (side.every(x => x <= 1e-9)) planes.push([nx, ny, nz, d]);
+    else if (side.every(x => x >= -1e-9)) { nx = -nx; ny = -ny; nz = -nz; d = -d; planes.push([nx, ny, nz, d]); }
+  }
+  return (x, y, z) => { let m = -Infinity; for (const [a, b, c, d] of planes) m = Math.max(m, a * x + b * y + c * z - d); return m; };
+}
+
 /** A polynomial smooth minimum over `k` (0 = a hard union). */
 export function smin(a: number, b: number, k: number): number {
   if (k <= 0) return Math.min(a, b);

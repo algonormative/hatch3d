@@ -1,4 +1,4 @@
-import { blend, capsule, ellipsoid, smin, sphere, type Sdf, type V3 } from './sculpt.ts';
+import { blend, capsule, ellipsoid, hull, smin, sphere, type Sdf, type V3 } from './sculpt.ts';
 
 /**
  * A sculpted head and neck for the pen: an androgynous, idealised head (a mannequin's or a statue's), about 1 unit from
@@ -17,6 +17,12 @@ export interface HeadOptions {
   nose?: number;
   /** How full the nose's tip and wings are (1 = the canon's round tip; less is finer, more pointed). */
   bulb?: number;
+  /** The nose round (the canon's) or planar: a wedge with a sharp bridge, flat sides and a flat underside. */
+  noseShape?: 'round' | 'planar';
+  /** Feature scales, 1 = the canon each: how far the chin stands out, how full the lips are, how heavy the brow, the
+   * cheekbones' size, the ears' size, the skull's height, the nose's width at the wings and how far its bridge stands
+   * out between the eyes. */
+  chin?: number; lips?: number; brow?: number; cheeks?: number; ears?: number; cranium?: number; noseWidth?: number; bridge?: number;
   /** How far the head tips back on the neck (radians; the face turns up). */
   tilt?: number;
   /** How far it turns to its left on the neck (radians). */
@@ -62,15 +68,25 @@ export function sculptHead(options: HeadOptions = {}): Head {
     const x1 = x * cu - z * su, z1 = x * su + z * cu;
     return [PIVOT[0] + x1, PIVOT[1] + y * ct - z1 * st, PIVOT[2] + y * st + z1 * ct];
   };
-  const base = ellipsoid([0, 0.13, -0.07], [0.30, 0.39, 0.40]);
+  const f = { chin: 1, lips: 1, brow: 1, cheeks: 1, ears: 1, cranium: 1, noseWidth: 1, bridge: 1, ...Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined)) } as Required<HeadOptions>;
+  const base = ellipsoid([0, 0.13 + 0.06 * (f.cranium - 1), -0.07], [0.30, 0.39 * f.cranium, 0.40]);
   const tip: V3 = [0, -0.125, 0.40 + 0.075 * nose];
-  const chin: V3 = [0, -0.405, 0.28 + 0.03 * jaw];
+  // The nose: round (the bridge to the tip, the tip, the wings), or a planar wedge from the root between the eyes to
+  // the tip, its underside a triangle back to the wings, set into the face from behind.
+  const noseParts: [Sdf, number][] = options.noseShape === 'planar'
+    ? [[hull([[0, 0.05, 0.33 + 0.025 * f.bridge], [0, 0.02, 0.33], tip, [0, tip[1] - 0.012, tip[2] - 0.03], [0.055 * f.noseWidth, -0.165, 0.36 + 0.03 * nose], [-0.055 * f.noseWidth, -0.165, 0.36 + 0.03 * nose], [0.035, -0.02, 0.32], [-0.035, -0.02, 0.32]]), 0.02]]
+    : [
+      [capsule([0, 0.04, 0.36], [tip[0], tip[1] + 0.005, tip[2] - 0.005], 0.03 * (0.6 + 0.4 * bulb), 0.045 * bulb), 0.05],
+      [sphere(tip, 0.045 * bulb), 0.03 * bulb],
+      [both([0.04 + 0.005 * bulb, -0.15, 0.36 + 0.05 * nose], p => sphere(p, 0.035 * bulb)), 0.03 * bulb],
+    ];
+  const chin: V3 = [0, -0.405, 0.25 + 0.03 * jaw + 0.03 * f.chin];
   const neckEnd: V3 = [0, -0.22 - neck, -0.01];
   const head = blend(base,
     // The face's mass, the cheekbones, the brow.
     [ellipsoid([0, -0.08, 0.10], [0.27, 0.36, 0.30]), 0.12],
-    [both([0.18, -0.02, 0.21], p => sphere(p, 0.08)), 0.12],
-    [capsule([-0.19, 0.11, 0.30], [0.19, 0.11, 0.30], 0.05), 0.08],
+    [both([0.18, -0.02, 0.21], p => sphere(p, 0.08 * f.cheeks)), 0.12],
+    [capsule([-0.19, 0.11, 0.28 + 0.02 * f.brow], [0.19, 0.11, 0.28 + 0.02 * f.brow], 0.05 * f.brow), 0.08],
     // The jaw from below the ears to the chin, and the chin.
     [both([0.25, -0.18, -0.04], p => capsule(p, [Math.sign(p[0]) * 0.08, -0.40, 0.25 + 0.02 * jaw], 0.06 * jaw)), 0.08],
     [ellipsoid(chin, [0.09, 0.07, 0.07]), 0.06],
@@ -80,20 +96,18 @@ export function sculptHead(options: HeadOptions = {}): Head {
     // The underside of the jaw, from the chin back toward the neck: the plane an upturned face shows.
     [capsule([0, -0.44, 0.20], [0, -0.36, -0.04], 0.075, 0.09), 0.09],
     // The nose: the bridge to the tip, the tip, the wings.
-    [capsule([0, 0.04, 0.36], [tip[0], tip[1] + 0.005, tip[2] - 0.005], 0.03 * (0.6 + 0.4 * bulb), 0.045 * bulb), 0.05],
-    [sphere(tip, 0.045 * bulb), 0.03 * bulb],
-    [both([0.04 + 0.005 * bulb, -0.15, 0.36 + 0.05 * nose], p => sphere(p, 0.035 * bulb)), 0.03 * bulb],
+    ...noseParts,
     // The lips: the upper with its bow, the lower, their parting, and the groove under the lower.
     [ellipsoid([0, -0.25, 0.30], [0.12, 0.10, 0.10]), 0.06],
-    [capsule([-0.055, -0.235, 0.385], [0.055, -0.235, 0.385], 0.024), 0.05],
-    [sphere([0, -0.228, 0.398], 0.026), 0.03],
-    [capsule([-0.045, -0.28, 0.37], [0.045, -0.28, 0.37], 0.028), 0.05],
+    [capsule([-0.055, -0.235, 0.385], [0.055, -0.235, 0.385], 0.024 * f.lips), 0.05],
+    [sphere([0, -0.228, 0.398], 0.026 * f.lips), 0.03],
+    [capsule([-0.045, -0.28, 0.37], [0.045, -0.28, 0.37], 0.028 * f.lips), 0.05],
     [capsule([-0.07, -0.256, 0.42], [0.07, -0.256, 0.42], 0.006), -0.012],
     [capsule([-0.05, -0.33, 0.37], [0.05, -0.33, 0.37], 0.012), -0.03],
     // The ears.
-    [both([0.31, -0.02, -0.04], p => ellipsoid(p, [0.035, 0.12, 0.075])), 0.03],
+    [both([0.31, -0.02, -0.04], p => ellipsoid(p, [0.035, 0.12 * f.ears, 0.075 * f.ears])), 0.03],
     // Each ear's bowl, inside its rim.
-    [both([0.35, -0.03, -0.035], p => ellipsoid(p, [0.03, 0.085, 0.05])), -0.015],
+    [both([0.35, -0.03, -0.035], p => ellipsoid(p, [0.03, 0.085 * f.ears, 0.05 * f.ears])), -0.015],
   );
   // The neck, upright, its two long muscles from behind the ears (where the head has put them) to the collarbones'
   // notch; the head on it.
