@@ -99,15 +99,50 @@ export interface SculptMesh {
 }
 
 /**
+ * How much faster than distance a field may change (1 for an exact distance). The narrow band keeps this margin over
+ * the ellipsoid bound and the smooth blends, which can run a little steeper than distance.
+ */
+const LIPSCHITZ = 1.5;
+/** Grid cells per side of a narrow-band block. */
+const BLOCK = 6;
+
+/**
  * Mesh `f` inside the box `lo`..`hi` at cell size `step` (naive surface nets: a vertex in every cell the surface
  * crosses, a quad across every crossed grid edge), each vertex then snapped onto the surface by Newton steps along the
  * gradient, its normal the field's.
+ *
+ * The grid is filled in a narrow band: the field is read at the middle of each block of `BLOCK` cells, and a block the
+ * surface cannot reach (farther than its half-diagonal and one cell, at `LIPSCHITZ`) takes that value's sign at every
+ * point without evaluating them. No cell the surface crosses touches such a point, so the mesh is the one the full grid
+ * gives (`band: false` evaluates every point, for checking that).
  */
-export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new THREE.Matrix4()): SculptMesh {
+export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new THREE.Matrix4(), options: { band?: boolean } = {}): SculptMesh {
   const nx = Math.ceil((hi[0] - lo[0]) / step) + 1, ny = Math.ceil((hi[1] - lo[1]) / step) + 1, nz = Math.ceil((hi[2] - lo[2]) / step) + 1;
   const at = (i: number, j: number, k: number) => (k * ny + j) * nx + i;
   const val = new Float64Array(nx * ny * nz);
-  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) val[at(i, j, k)] = f(lo[0] + i * step, lo[1] + j * step, lo[2] + k * step);
+  const point = (i: number, j: number, k: number) => f(lo[0] + i * step, lo[1] + j * step, lo[2] + k * step);
+  if (options.band === false) {
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) val[at(i, j, k)] = point(i, j, k);
+  } else {
+    // Exact blocks first, then far blocks fill only the points no exact block has (a shared face keeps exact values).
+    const exact = new Uint8Array(nx * ny * nz);
+    const far: [number, number, number, number, number, number, number][] = [];
+    const cellDiag = step * Math.sqrt(3);
+    for (let k0 = 0; k0 < nz - 1; k0 += BLOCK) for (let j0 = 0; j0 < ny - 1; j0 += BLOCK) for (let i0 = 0; i0 < nx - 1; i0 += BLOCK) {
+      const i1 = Math.min(i0 + BLOCK, nx - 1), j1 = Math.min(j0 + BLOCK, ny - 1), k1 = Math.min(k0 + BLOCK, nz - 1);
+      const dc = f(lo[0] + (i0 + i1) / 2 * step, lo[1] + (j0 + j1) / 2 * step, lo[2] + (k0 + k1) / 2 * step);
+      const half = 0.5 * step * Math.hypot(i1 - i0, j1 - j0, k1 - k0);
+      if (Math.abs(dc) > LIPSCHITZ * (half + cellDiag)) { far.push([i0, i1, j0, j1, k0, k1, dc]); continue; }
+      for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const v = at(i, j, k);
+        if (!exact[v]) { val[v] = point(i, j, k); exact[v] = 1; }
+      }
+    }
+    for (const [i0, i1, j0, j1, k0, k1, dc] of far) for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const v = at(i, j, k);
+      if (!exact[v]) val[v] = dc;
+    }
+  }
   const cell = new Int32Array((nx - 1) * (ny - 1) * nz).fill(-1);
   const cellAt = (i: number, j: number, k: number) => (k * (ny - 1) + j) * (nx - 1) + i;
   const pos: number[] = [];
@@ -151,7 +186,10 @@ export function meshSdf(f: Sdf, lo: V3, hi: V3, step: number, transform = new TH
   for (let v = 0; v < P.length; v += 3) {
     let x = P[v], y = P[v + 1], z = P[v + 2];
     for (let it = 0; it < 4; it++) {
-      const dist = f(x, y, z), g = gradient(f, x, y, z), g2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
+      const dist = f(x, y, z);
+      // On the surface already (to well under a nanometre at plotter scale): the remaining steps would not move it.
+      if (Math.abs(dist) < 1e-13) break;
+      const g = gradient(f, x, y, z), g2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
       if (g2 < 1e-12) break;
       x -= dist * g[0] / g2; y -= dist * g[1] / g2; z -= dist * g[2] / g2;
     }

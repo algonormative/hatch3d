@@ -46,17 +46,23 @@ export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
   const spillable = (p: Point) => (noseU - e.toBar(p).u) * faceSide > 30;
   const spilled = (p: Point) => { const v = e.toBar(p).v; return spillable(p) && e.spill.some(b => v >= b.v0 && v < b.v1); };
   for (const s of e.head) {
+    // The piece's extent in the visor's frame: a band or a cell it does not reach cannot take any of it (the frame is
+    // affine, so a polyline stays within its vertices' extent), and is skipped without testing its points.
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const p of s.piece) { const b = e.toBar(p); u0 = Math.min(u0, b.u); u1 = Math.max(u1, b.u); v0 = Math.min(v0, b.v); v1 = Math.max(v1, b.v); }
+    const reaches = (bu0: number, bu1: number, bv0: number, bv1: number) => u1 >= bu0 && u0 <= bu1 && v1 >= bv0 && v0 <= bv1;
     // On the black: the head where the glitch leaves it, the bands below the visor drawn shifted along it.
     keep(black, s, p => !e.bySuit(p) && !e.erased(p) && !spilled(p));
-    for (const b of e.spill) keep(black, s, p => !e.bySuit(p) && spillable(p) && inBox(-1e9, 1e9, b.v0, b.v1)(p), shift(b.du, 0));
+    for (const b of e.spill) if (reaches(-Infinity, Infinity, b.v0, b.v1)) keep(black, s, p => !e.bySuit(p) && spillable(p) && inBox(-1e9, 1e9, b.v0, b.v1)(p), shift(b.du, 0));
     if (s.pen === 'fluoro-pink') continue;
     // On the gold, in black ink: the eyes behind the visor in shifted bands, the head smeared up the gold columns, and
     // the pieces lifted onto the gold. On the black, the pieces lifted there.
-    for (const b of e.visorBands) keep(gold, s, inBox(-1e9, 1e9, b.v0, b.v1), shift(b.du, 0), 'black');
+    for (const b of e.visorBands) if (reaches(-Infinity, Infinity, b.v0, b.v1)) keep(gold, s, inBox(-1e9, 1e9, b.v0, b.v1), shift(b.du, 0), 'black');
     for (const c of e.cells) {
       if (c.kind === 'base') continue;
-      const from = c.kind === 'rise' ? inBox(c.u0 + 0.6, c.u1 - 0.6, c.v0, c.v1 - c.dv) : inBox(c.u0 + 0.6, c.u1 - 0.6, c.v0 + 0.6, c.v1 - 0.6);
-      keep(c.kind === 'black' ? black : gold, s, from, shift(0, c.dv), c.kind === 'black' ? s.pen : 'black');
+      const box: [number, number, number, number] = c.kind === 'rise' ? [c.u0 + 0.6, c.u1 - 0.6, c.v0, c.v1 - c.dv] : [c.u0 + 0.6, c.u1 - 0.6, c.v0 + 0.6, c.v1 - 0.6];
+      if (!reaches(...box)) continue;
+      keep(c.kind === 'black' ? black : gold, s, inBox(...box), shift(0, c.dv), c.kind === 'black' ? s.pen : 'black');
     }
   }
   for (const c of e.cells) if (c.kind === 'black') {
@@ -85,10 +91,20 @@ export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
  * every ply in turn) builds it once.
  */
 let lastWorld: { key: string; e: Erasure; art: ReturnType<typeof sheets> } | undefined;
-function draw(ctx: SketchContext): Part[] {
+function world(ctx: SketchContext): { e: Erasure; art: ReturnType<typeof sheets> } {
   const key = JSON.stringify([ctx.seed, Object.entries(ctx.params).filter(([k]) => k !== spec.control).sort(([a], [b]) => (a < b ? -1 : 1))]);
   if (lastWorld?.key !== key) { const e = erasure(ctx); lastWorld = { key, e, art: sheets(e) }; }
-  const { e, art } = lastWorld;
+  return lastWorld;
+}
+
+/** The sketch lab's preview (`cli/sketch/lab/runtime.ts`): each sheet's art unclipped and the black's windows. */
+export function labSheets(ctx: SketchContext): { ply: string; parts: Part[]; cuts: Point[][] }[] {
+  const { e, art } = world(ctx);
+  return [{ ply: 'gold', parts: art.gold, cuts: [] }, { ply: 'black', parts: art.black, cuts: e.window }];
+}
+
+function draw(ctx: SketchContext): Part[] {
+  const { e, art } = world(ctx);
   const parts = renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art });
   return [...parts, ...landmarks(e)];
 }

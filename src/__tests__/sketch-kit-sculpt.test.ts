@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { area, traceMask } from '../../sketches/kit/outline.ts';
 import { contourLines, isoLines, meshSdf, perVertex, platesOn, scatterOn, sphere } from '../../sketches/kit/sculpt.ts';
+import { sculptHead } from '../../sketches/kit/sculpt-head.ts';
 
 const unit = () => meshSdf(sphere([0, 0, 0], 1), [-1.2, -1.2, -1.2], [1.2, 1.2, 1.2], 0.05);
 
@@ -12,6 +13,17 @@ describe('sketch kit: sculpted solids', () => {
       const r = Math.hypot(m.pos[v], m.pos[v + 1], m.pos[v + 2]);
       expect(Math.abs(r - 1)).toBeLessThan(1e-4);
       expect(m.nrm[v] * m.pos[v] + m.nrm[v + 1] * m.pos[v + 1] + m.nrm[v + 2] * m.pos[v + 2]).toBeGreaterThan(0.999);
+    }
+  });
+
+  it('meshes in a narrow band exactly as on the full grid', () => {
+    // A tipped, turned head with a planar nose and every feature off its canon, at a coarse step to stay quick.
+    const h = sculptHead({ noseShape: 'planar', nose: 1.6, tilt: 0.6, turn: -0.4, chin: 2, brow: 1.8, ears: 1.4, neck: 1.2 });
+    for (const step of [0.025, 0.035]) {
+      const band = meshSdf(h.sdf, h.lo, h.hi, step), full = meshSdf(h.sdf, h.lo, h.hi, step, undefined, { band: false });
+      expect(band.tri.length).toBeGreaterThan(1000);
+      expect(Array.from(band.tri)).toEqual(Array.from(full.tri));
+      expect(Array.from(band.pos)).toEqual(Array.from(full.pos));
     }
   });
 

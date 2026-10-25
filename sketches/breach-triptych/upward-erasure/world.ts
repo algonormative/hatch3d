@@ -278,6 +278,17 @@ function buildHead(ctx: SketchContext): HeadStage {
   const rng = ctx.random('erasure-plates');
   const seeds = scatterOn(mesh, num(ctx, 'plateMm') / headMm, rng, p => zoneOf(p) === 'plate', FEATURES.map(head.place), p => head.unplace(...p));
   const plates = platesOn(mesh, seeds, p => head.unplace(...p));
+  // Each plate's and each seam's own triangles (all three vertices border it): the lines of one are found among those
+  // alone, as every other triangle has no value for it.
+  const trisOf = new Map<string, number[]>();
+  const borders = (v: number) => [plates.plate[v], plates.second[v]];
+  const pairOf = (v: number) => { const a = plates.plate[v], b = plates.second[v]; return `${Math.min(a, b)}-${Math.max(a, b)}`; };
+  for (let t = 0; t < mesh.tri.length; t += 3) {
+    const [a, b, c] = [mesh.tri[t], mesh.tri[t + 1], mesh.tri[t + 2]];
+    for (const k of new Set(borders(a))) if (borders(b).includes(k) && borders(c).includes(k)) { const l = trisOf.get(`p${k}`) ?? []; l.push(a, b, c); trisOf.set(`p${k}`, l); }
+    if (pairOf(a) === pairOf(b) && pairOf(a) === pairOf(c)) { const l = trisOf.get(`s${pairOf(a)}`) ?? []; l.push(a, b, c); trisOf.set(`s${pairOf(a)}`, l); }
+  }
+  const only = (key: string): SculptMesh => ({ ...mesh, tri: Uint32Array.from(trisOf.get(key) ?? []) });
   seeds.forEach((s, k) => {
     // Each plate's lines: level planes of the head turned to their own angle. Down the face the planes run along it (they
     // draw the profile again), under the jaw and on the crown they lie level; each is then turned by a seeded angle about
@@ -299,7 +310,7 @@ function buildHead(ctx: SketchContext): HeadStage {
         value[v] = q[0] * d.x + q[1] * d.y + q[2] * d.z;
       }
       const spacing = pitch * (j ? 1.7 : 1);
-      keepRuns(isoLines(mesh, value, spacing, rng() * spacing), sp => plates.at(sp.p).plate === k && plates.at(sp.p).gap > SEAM && zoneOf(sp.p) === 'plate', true, 'silver', 2, 'plate');
+      keepRuns(isoLines(only(`p${k}`), value, spacing, rng() * spacing), sp => { const q = plates.at(sp.p); return q.plate === k && q.gap > SEAM && zoneOf(sp.p) === 'plate'; }, true, 'silver', 2, 'plate');
     }
   });
   // The seams: a gold line where two plates meet, the zero of the difference of their seeds' distances (smooth, where
@@ -315,7 +326,7 @@ function buildHead(ctx: SketchContext): HeadStage {
       const q = head.unplace(mesh.pos[3 * v], mesh.pos[3 * v + 1], mesh.pos[3 * v + 2]);
       value[v] = Math.hypot(q[0] - sa[0], q[1] - sa[1], q[2] - sa[2]) - Math.hypot(q[0] - sb[0], q[1] - sb[1], q[2] - sb[2]);
     }
-    keepRuns(isoLines(mesh, value, 1, 0, [0]), sp => zoneOf(sp.p) === 'plate', false, 'gold', 1, 'seam');
+    keepRuns(isoLines(only(`s${a}-${b}`), value, 1, 0, [0]), sp => zoneOf(sp.p) === 'plate', false, 'gold', 1, 'seam');
   }
   // The ear, one silver whorl.
   const earQ = head.unplace(...ear), turn = pitch * 1.3;
@@ -527,8 +538,33 @@ export function erasure(ctx: SketchContext): Erasure {
   // The visor (less the lower nose, which stands over it), the gold columns, pieces, fragments and drips, the shirt
   // and collar.
   const shirtRings = suit.shirt;
-  const windowAt = (p: Point) => ((assembled && insideRing(bar, p)) || inCell(p, ['rise', 'gold']) || fragments.some(f => insideRing(f, p)) || drips.some(d => insideRing(d, p))) && !onNose(p)
-    || (shirtRings.some(r => insideRing(r, p)) && !suit.tie.some(r => insideRing(r, p))) || (insideRing(suit.back, p) && !onHead(p));
+  // Each shape that opens a window, in one of three groups (the visor and the glitch, less the nose; the shirt, less
+  // the tie; the collar's back, less the neck), indexed on a coarse grid of the page by its bounds, so a point is tested
+  // only against the shapes that can hold it.
+  type Opening = { group: 0 | 1 | 2; holds: (p: Point) => boolean; ring: Point[] };
+  const openings: Opening[] = [
+    ...(assembled ? [{ group: 0 as const, holds: (p: Point) => insideRing(bar, p), ring: bar }] : []),
+    ...cells.filter(c => c.kind === 'rise' || c.kind === 'gold').map(c => {
+      const dv = c.kind === 'rise' ? 0 : c.dv, ring = quad(c.u0, c.u1, c.v0 + dv, c.v1 + dv);
+      return { group: 0 as const, ring, holds: (p: Point) => { const q = toBar(p); return q.u >= c.u0 && q.u <= c.u1 && q.v >= c.v0 + dv && q.v <= c.v1 + dv; } };
+    }),
+    ...[...fragments, ...drips].map(r => ({ group: 0 as const, ring: r, holds: (p: Point) => insideRing(r, p) })),
+    ...shirtRings.map(r => ({ group: 1 as const, ring: r, holds: (p: Point) => insideRing(r, p) })),
+    { group: 2 as const, ring: suit.back, holds: (p: Point) => insideRing(suit.back, p) },
+  ];
+  const COARSE = 4, gx = Math.ceil(PAGE.width / COARSE) + 1, gy = Math.ceil(PAGE.height / COARSE) + 1;
+  const coarse: Opening[][] = Array.from({ length: gx * gy }, () => []);
+  const clampG = (v: number, n: number) => Math.max(0, Math.min(n - 1, Math.floor(v / COARSE)));
+  for (const o of openings) {
+    const xs = o.ring.map(q => q.x), ys = o.ring.map(q => q.y);
+    for (let j = clampG(Math.min(...ys), gy); j <= clampG(Math.max(...ys), gy); j++) for (let i = clampG(Math.min(...xs), gx); i <= clampG(Math.max(...xs), gx); i++) coarse[j * gx + i].push(o);
+  }
+  const windowAt = (p: Point) => {
+    const here = coarse[clampG(p.y, gy) * gx + clampG(p.x, gx)];
+    if (!here.length) return false;
+    const inGroup = (g: number) => here.some(o => o.group === g && o.holds(p));
+    return (inGroup(0) && !onNose(p)) || (inGroup(1) && !suit.tie.some(r => insideRing(r, p))) || (inGroup(2) && !onHead(p));
+  };
   const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 1.2, minArea: 6 });
 
   return {

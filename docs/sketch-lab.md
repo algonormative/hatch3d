@@ -27,3 +27,7 @@ npm run sketch -- crops <image.png> --page WxH[,margin] [--trimmed] [--result re
 ```
 
 `--result` takes the landmarks from a render's `result.json` (via `landmarksOf`); each `--at` adds or overrides a point.
+
+## A fast preview for assemblies
+
+An assembly's sheets are each drawn through `renderPly`, whose exact clipping is what the plotter needs but the page does not (it clips on the canvas). A sketch module may also export `labSheets(ctx)`, returning each ply's art unclipped and the rings cut from it (`LabSheets` in `cli/sketch/lab/runtime.ts`); the lab then previews from it, and still exports SVGs through `draw`. Upward Erasure's preview redraws its visor and glitch in about 0.8 s this way (against about 4.5 s through `draw`), and the two share one cached world.

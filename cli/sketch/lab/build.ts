@@ -17,7 +17,7 @@ export async function buildLab(options: { entry: string; out: string; title?: st
   const out = resolve(options.out);
   await mkdir(out, { recursive: true });
   const worker = join(out, 'worker.js');
-  const contents = `import sketch from ${JSON.stringify(pathToFileURL(entry).pathname)};\nimport { serveLab } from ${JSON.stringify(join(here, 'runtime.ts'))};\nserveLab(sketch);\n`;
+  const contents = `import * as mod from ${JSON.stringify(pathToFileURL(entry).pathname)};\nimport { serveLab } from ${JSON.stringify(join(here, 'runtime.ts'))};\nserveLab(mod.default, mod.labSheets);\n`;
   const result = await build({
     stdin: { contents, resolveDir: ROOT, loader: 'ts', sourcefile: 'lab-entry.ts' },
     bundle: true, format: 'iife', platform: 'browser', target: 'es2020', minify: true, outfile: worker, logLevel: 'silent', metafile: true,

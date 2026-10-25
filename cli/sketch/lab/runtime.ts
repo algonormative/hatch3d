@@ -102,7 +102,14 @@ async function partsFor(sketch: Sketch, supplied: Params, seed: number): Promise
   return { params, parts: finalParts(await sketch.draw(contextFor(sketch, params, seed)), sketch, undefined, seed) };
 }
 
-export async function renderSheets(sketch: Sketch, supplied: Params, seed: number): Promise<Sheet[]> {
+/**
+ * A sketch's optional preview for the lab: each ply's art unclipped and the rings cut out of it, which the page clips on
+ * the canvas, so the lab skips the exact clipping `renderPly` does for plotting (exports still use `draw`). Exported
+ * from the sketch's module as `labSheets`.
+ */
+export type LabSheets = (ctx: SketchContext) => { ply: string; parts: Part[]; cuts: Point[][] }[] | Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]>;
+
+export async function renderSheets(sketch: Sketch, supplied: Params, seed: number, preview?: LabSheets): Promise<Sheet[]> {
   const pens = new Map(sketch.pens.map(p => [p.id, p]));
   const layersOf = (parts: Part[], skip?: string) => {
     const byPen = new Map<string, Point[][]>();
@@ -110,6 +117,14 @@ export async function renderSheets(sketch: Sketch, supplied: Params, seed: numbe
     return sketch.pens.filter(p => byPen.has(p.id)).map(p => ({ pen: p.id, color: pens.get(p.id)!.color, width: pens.get(p.id)!.width, paths: flatten(byPen.get(p.id)!) }));
   };
   const spec = sketch.assembly;
+  if (spec && preview) {
+    const params = resolveParams(sketch.controls ?? [], supplied);
+    const drawn = await preview(contextFor(sketch, params, seed));
+    return spec.plies.map(ply => {
+      const d = drawn.find(x => x.ply === ply.id);
+      return { id: ply.id, paper: ply.paper.color, onlay: !!ply.onlay, cuts: flatten(d?.cuts ?? []), layers: d ? layersOf(d.parts, spec.cutPen) : [] };
+    });
+  }
   if (!spec) {
     const { parts } = await partsFor(sketch, supplied, seed);
     return [{ id: 'sheet', paper: sketch.page.paper ?? '#ffffff', onlay: false, cuts: flatten([]), layers: layersOf(parts) }];
@@ -140,7 +155,7 @@ type Request = { type: 'meta' | 'render' | 'svg'; id: number; params?: Params; s
 interface Scope { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent) => void) | null }
 
 /** Serve a sketch from inside a worker: answer the page's requests (see the module comment). */
-export function serveLab(sketch: Sketch, scope: Scope = globalThis as unknown as Scope): void {
+export function serveLab(sketch: Sketch, preview?: LabSheets, scope: Scope = globalThis as unknown as Scope): void {
   scope.onmessage = async (e: MessageEvent) => {
     const req = e.data as Request;
     try {
@@ -153,7 +168,7 @@ export function serveLab(sketch: Sketch, scope: Scope = globalThis as unknown as
       const seed = req.seed ?? 0, params = req.params ?? {};
       if (req.type === 'render') {
         const t0 = performance.now();
-        const sheets = await renderSheets(sketch, params, seed);
+        const sheets = await renderSheets(sketch, params, seed, preview);
         const transfer: Transferable[] = [];
         for (const s of sheets) { transfer.push(s.cuts.xy.buffer, s.cuts.starts.buffer); for (const l of s.layers) transfer.push(l.paths.xy.buffer, l.paths.starts.buffer); }
         scope.postMessage({ id: req.id, type: 'render', sheets, ms: Math.round(performance.now() - t0) }, transfer);

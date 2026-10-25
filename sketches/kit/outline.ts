@@ -26,8 +26,8 @@ export function traceMask(inside: (p: Point) => boolean, box: Rect, cell = 0.25,
     // Closing (grow, then shrink) fills notches and inner corners; opening (shrink, then grow) rounds spikes and outer
     // corners. Cells off the box are outside again afterwards, so a region running off the box keeps its edge there.
     // Grown cells stay inside the box, so the shrink after a grow still erodes from the box's side.
-    const grow = (g: Uint8Array) => { const d = distanceTo(g, nx, ny, 1); return Uint8Array.from(d, (v, k) => (v <= r && inBox[k] ? 1 : 0)); };
-    const shrink = (g: Uint8Array) => { const d = distanceTo(g, nx, ny, 0); return Uint8Array.from(d, v => (v > r ? 1 : 0)); };
+    const grow = (g: Uint8Array) => { const d = distanceTo(g, nx, ny, 1), out = new Uint8Array(d.length); for (let k = 0; k < d.length; k++) out[k] = d[k] <= r && inBox[k] ? 1 : 0; return out; };
+    const shrink = (g: Uint8Array) => { const d = distanceTo(g, nx, ny, 0), out = new Uint8Array(d.length); for (let k = 0; k < d.length; k++) out[k] = d[k] > r ? 1 : 0; return out; };
     grid = shrink(grow(grid));
     grid = grow(shrink(grid));
     for (let k = 0; k < grid.length; k++) if (!inBox[k]) grid[k] = 0;
