@@ -11,7 +11,7 @@ import {
 } from '../../kit/sculpt.ts';
 import { sculptHead } from '../../kit/sculpt-head.ts';
 import { traceMask } from '../../kit/outline.ts';
-import { clipToTrim, rect, stripeFill } from '../lodestone-cuts.ts';
+import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
 import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
 
 /**
@@ -35,13 +35,6 @@ export type Pen = 'silver' | 'gold' | 'fluoro-pink' | 'black';
 /** A projected, visible mark, and how the thinning ranks it (0 outlines, 1 seams and creases, 2 hatch). */
 export interface Seen { pen: Pen; rank: number; id: string; piece: Point[] }
 
-/**
- * A window of a crown slice: where it was on the head (`y0`..`y1`) and how far up it is drawn (`dy`). A `base` stays
- * where it was; a `black` piece is drawn again higher on the black, framed in gold; a `gold` piece is cut out of the
- * black and drawn again in black ink on the gold beneath.
- */
-export interface SliceWindow { y0: number; y1: number; dy: number; kind: 'base' | 'black' | 'gold' }
-export interface Slice { x0: number; x1: number; windows: SliceWindow[] }
 
 /** A line of the suit; `behind` the neck (the collar's back), hidden where the neck is. */
 export interface SuitLine { pen: Pen; path: Point[]; behind?: boolean }
@@ -49,24 +42,40 @@ export interface SuitLine { pen: Pen; path: Point[]; behind?: boolean }
 /** A panel of the suit, striped at `angle`, `pitch` apart, in `pen` (on the gold for a `window`). */
 export interface Panel { id: string; ring: Point[]; angle: number; pitch: number; pen: Pen; cross?: number; window?: boolean }
 
+/**
+ * A cell of the glitch in the visor's frame (u along it, v up from its top edge, mm): a `rise` is a gold column out of
+ * the visor's top edge (its art the head's smeared up by `dv`); a `base` keeps the head where it is; a `black` piece
+ * of the head (from `v0`..`v1`) is drawn `dv` higher on the black, framed in gold; a `gold` piece is cut out of the
+ * black and drawn `dv` higher in black ink on the gold.
+ */
+export interface Cell { u0: number; u1: number; v0: number; v1: number; dv: number; kind: 'rise' | 'base' | 'black' | 'gold' }
+
 export interface Erasure {
   head: Seen[];
   onHead: (p: Point) => boolean;
-  /** Where the nose covers the bar (grown by a little black round it). */
+  /** Where the lower nose covers the visor (grown by a little black round it). */
   onNose: (p: Point) => boolean;
   bar: Point[];
-  barTop: (x: number) => number;
-  slices: Slice[];
-  /** Gold-yellow fragments above the bar: plain windows. */
+  /** The visor's frame: a point (u along it, v up from its top edge) on the page, and back; its height. */
+  toPage: (u: number, v: number) => Point;
+  toBar: (p: Point) => { u: number; v: number };
+  barH: number;
+  cells: Cell[];
+  /** Where the head is taken apart (above the visor, outside the kept cells). */
+  erased: (p: Point) => boolean;
+  /** Gold-yellow fragments and drips: plain windows. */
   fragments: Point[][];
+  drips: Point[][];
+  /** Black-ink streaks up the gold columns. */
+  streaks: Point[][];
+  /** Bands of the visor (the eyes behind it, on the gold) and below it (the face, on the black) shifted along it. */
+  visorBands: { v0: number; v1: number; du: number }[];
+  spill: { v0: number; v1: number; du: number }[];
   panels: Panel[];
   suitLines: SuitLine[];
-  /** Covered by the suit or the shirt's collar (in front of the neck). */
   bySuit: (p: Point) => boolean;
-  /** The shirt's and collar's rings (windows onto the gold), the collar's back less the neck. */
   shirt: Point[][];
   collarBack: Point[];
-  /** The black's windows. */
   window: Point[][];
   ribbons: { pen: Pen; path: Point[] }[];
   page: { eyes: Point[]; noseTip: Point; chin: Point; neck: { left: Point; right: Point } };
@@ -78,9 +87,12 @@ const slider = (id: string, label: string, d: number, min: number, max: number, 
   ({ type: 'slider', id, label, default: d, min, max, step, group, ...(units ? { units } : {}) });
 
 export const CONTROLS: Control[] = [
-  slider('tilt', 'How far the head tips back on the neck', 26, 0, 70, 1, 'Pose', '°'),
-  slider('turn', 'How far the head turns on the neck (to its right)', -8, -40, 40, 1, 'Pose', '°'),
-  slider('yaw', 'How far the figure turns from the camera (negative: its face toward the left of the sheet)', -46, -90, 90, 1, 'Pose', '°'),
+  slider('tilt', 'How far the head tips back on the neck', 18, 0, 70, 1, 'Pose', '°'),
+  slider('turn', 'How far the head turns on the neck', 6, -40, 40, 1, 'Pose', '°'),
+  slider('yaw', 'How far the figure turns from the camera (positive: its face toward the right of the sheet)', 40, -90, 90, 1, 'Pose', '°'),
+  slider('roll', 'How far the head and neck lean toward the left of the sheet (the crown left, the chin right)', 8, -40, 40, 1, 'Pose', '°'),
+  slider('noseBulb', 'Nose tip fullness (1: round)', 0.5, 0.3, 1.4, 0.05, 'Pose'),
+  slider('noseLength', 'Nose length', 1.05, 0.6, 1.6, 0.05, 'Pose'),
   slider('lookUp', 'Camera look up', 8, 0, 60, 1, 'Camera', '°'),
   slider('headMm', 'Head height on the sheet (chin to crown)', 190, 60, 330, 1, 'Camera', 'mm'),
   slider('crownY', 'Crown height on the sheet', 120, 20, 250, 1, 'Camera', 'mm'),
@@ -89,10 +101,12 @@ export const CONTROLS: Control[] = [
   slider('pitchMm', 'Densest engraving pitch on the sheet', 0.95, 0.8, 3, 0.05, 'Lines', 'mm'),
   slider('plateMm', 'Plate size on the head (seed spacing)', 27, 10, 80, 1, 'Lines', 'mm'),
   slider('step', 'Mesh cell (head units)', 0.009, 0.004, 0.03, 0.001, 'Lines'),
-  slider('barMm', 'Bar height', 32, 16, 60, 0.5, 'Bar', 'mm'),
-  slider('barTilt', 'Bar tilt (negative: down to the left)', -9, -25, 25, 0.5, 'Bar', '°'),
-  slider('barPast', 'How far the bar runs past the nose\'s tip', 30, 0, 120, 1, 'Bar', 'mm'),
-  slider('erosion', 'How much of the crown comes away', 0.85, 0, 1, 0.01, 'Crown'),
+  slider('barMm', 'Visor height', 30, 16, 60, 0.5, 'Visor', 'mm'),
+  slider('barTilt', 'Visor tilt off the line of the eyes', 0, -25, 25, 0.5, 'Visor', '°'),
+  slider('barPast', 'How far the visor runs past the nose\'s tip', 6, -20, 80, 1, 'Visor', 'mm'),
+  slider('erosion', 'How much of the crown comes away', 0.85, 0, 1, 0.01, 'Glitch'),
+  slider('riseMm', 'How high the visor\'s gold columns rise', 80, 10, 200, 1, 'Glitch', 'mm'),
+  slider('spillMm', 'How far below the visor the face spills sideways', 26, 0, 80, 1, 'Glitch', 'mm'),
   { type: 'select', id: 'view', label: 'What to draw', default: 'assembly', options: ['assembly', 'head'],
     optionLabels: { assembly: 'The sheet as cut', head: 'The head alone (no bar, no erasure)' }, group: 'Crown' },
 ];
@@ -116,8 +130,10 @@ const FEATURES: V3[] = [
 
 export function erasure(ctx: SketchContext): Erasure {
   const S = 100;
-  const head = sculptHead({ tilt: deg(n(ctx, 'tilt', 26, 0, 70)), turn: deg(n(ctx, 'turn', -8, -40, 40)), neck: 1.6 });
-  const transform = new THREE.Matrix4().makeRotationY(deg(n(ctx, 'yaw', -46, -90, 90))).multiply(new THREE.Matrix4().makeScale(S, S, S));
+  const head = sculptHead({ bulb: n(ctx, 'noseBulb', 0.5, 0.3, 1.4), nose: n(ctx, 'noseLength', 1.05, 0.6, 1.6), tilt: deg(n(ctx, 'tilt', 18, 0, 70)), turn: deg(n(ctx, 'turn', 6, -40, 40)), neck: 1.6 });
+  // Turned (`yaw`), then leaned about the line of sight (`roll`, toward the left of the sheet).
+  const transform = new THREE.Matrix4().makeRotationZ(deg(n(ctx, 'roll', 8, -40, 40))).multiply(new THREE.Matrix4().makeRotationY(deg(n(ctx, 'yaw', 40, -90, 90))))
+    .multiply(new THREE.Matrix4().makeScale(S, S, S));
   const mesh = meshSdf(head.sdf, head.lo, head.hi, n(ctx, 'step', 0.009, 0.004, 0.03), transform);
   const toW = (p: V3) => new THREE.Vector3(...p).applyMatrix4(transform);
   const isHead = (p: V3) => head.parts.head(...head.unplace(...p)) <= head.parts.neck(...p);
@@ -155,7 +171,7 @@ export function erasure(ctx: SketchContext): Erasure {
   fitDepthRange(view, [geo], 0.1, { exact: true });
   const depth = renderDepthBufferCPU([geo], view, W, H);
   const onHead = meshCoverage([geo], view, PAGE, 0);
-  const noseGeo = subMesh(mesh, p => { const q = head.unplace(...p); return Math.abs(q[0]) < 0.08 && q[2] > 0.34 && q[1] > -0.19 && q[1] < 0.05; });
+  const noseGeo = subMesh(mesh, p => { const q = head.unplace(...p); return Math.abs(q[0]) < 0.08 && q[2] > 0.36 && q[1] > -0.19 && q[1] < -0.02; });
   const onNose = meshCoverage([noseGeo], view, PAGE, 1.0);
   noseGeo.dispose();
   const eyeM = modelPoint(mesh, view.position);
@@ -163,11 +179,11 @@ export function erasure(ctx: SketchContext): Erasure {
   // On black the silver is the light: lit surfaces carry the most lines. Light from above and a little ahead of the
   // face, so the face turned up into it is dense and the jaw's underside sparse. Every fourth line of a family is
   // drawn everywhere (no plate goes bare by the light alone), every second from `TH[1]`, all from `TH[2]`.
-  const light = new THREE.Vector3(-0.35, 1, 0.55).normalize();
+  const light = new THREE.Vector3(0.35, 1, 0.55).normalize();
   const brightness = (sp: SurfacePoint) => Math.max(0, new THREE.Vector3(...sp.n).transformDirection(transform).dot(light)) ** 0.8;
-  const TH = [-1, 0.3, 0.55];
+  const TH = [-1, 0.18, 0.42];
   const tier = (i: number) => (i % 4 === 0 ? 0 : i % 2 === 0 ? 1 : 2);
-  const ear = head.at.ears[0];
+  const ear = head.at.ears[1];
   const headNy = (p: V3, nv: V3) => { const q = head.unplace(...p), q2 = head.unplace(p[0] + nv[0] * 0.01, p[1] + nv[1] * 0.01, p[2] + nv[2] * 0.01); return (q2[1] - q[1]) / 0.01; };
   const facing = (sp: SurfacePoint) => sp.n[0] * (eyeM[0] - sp.p[0]) + sp.n[1] * (eyeM[1] - sp.p[1]) + sp.n[2] * (eyeM[2] - sp.p[2]) > 0;
   /** Neck, the ear's whorl, the head's plates; lines stop a little short of the crease where the jaw meets the neck. */
@@ -280,117 +296,151 @@ export function erasure(ctx: SketchContext): Erasure {
   const bySuit = (p: Point) => suit.front.some(r => insideRing(r, p));
   const page = { eyes: head.at.eyes.map(at), noseTip: at(head.at.noseTip), chin: at(head.at.chin), neck: { left, right } };
 
-  // ── The bar, and the crown above it ───────────────────────────────
+  // ── The visor, and the glitch it bleeds into ──────────────────────
+  // The visor lies on the face like glasses: along the line of the eyes, over them, resting on the bridge of the nose
+  // (the nose's tip and wings stand in front of it), from off the edge behind the head to a little past the tip. In its
+  // own frame (u along it, v up from its top edge, both mm) the glitch grows out of it: its top edge breaks into stepped
+  // gold columns rising into the crown, the head above is taken apart into slices lifted up the sheet, fragments break
+  // off higher, and a few bands of the face spill sideways below it.
   const assembled = ctx.params.view !== 'head';
-  const barH = n(ctx, 'barMm', 32, 16, 60), tilt = deg(n(ctx, 'barTilt', -9, -25, 25));
+  const barH = n(ctx, 'barMm', 30, 16, 60);
+  const eyesAt = page.eyes;
+  const eyeLine = Math.atan2(eyesAt[1].y - eyesAt[0].y, eyesAt[1].x - eyesAt[0].x);
+  const tilt = (Math.abs(eyeLine) > Math.PI / 2 ? eyeLine - Math.sign(eyeLine) * Math.PI : eyeLine) + deg(n(ctx, 'barTilt', 0, -25, 25));
   const dir = { x: Math.cos(tilt), y: Math.sin(tilt) }, nrm = { x: -dir.y, y: dir.x };
-  // Over the nearer eye (in the bar's upper part, so the brow and the crown show above), from off the edge behind the
-  // head to `barPast` beyond the nose's tip: the nose stands over it.
-  const nearer = head.at.eyes.map(toW).map(p => p.distanceTo(view.position));
-  const eyeAt = page.eyes[nearer[0] < nearer[1] ? 0 : 1];
-  const eyeMid = { x: eyeAt.x, y: eyeAt.y + 0.22 * barH };
-  const along = (p: Point) => (p.x - eyeMid.x) * dir.x + (p.y - eyeMid.y) * dir.y;
-  const faceLeft = page.noseTip.x < eyeAt.x;
-  const sBack = along({ x: faceLeft ? TRIM.x1 + 8 : TRIM.x0 - 8, y: eyeMid.y });
-  const sFace = along(page.noseTip) + (faceLeft ? -1 : 1) * n(ctx, 'barPast', 30, 0, 120);
-  const [s0, s1] = [Math.min(sBack, sFace), Math.max(sBack, sFace)];
-  const corner = (s: number, o: number): Point => ({ x: eyeMid.x + dir.x * s + nrm.x * o, y: eyeMid.y + dir.y * s + nrm.y * o });
-  const bar = clipToTrim([corner(s0, -barH / 2), corner(s1, -barH / 2), corner(s1, barH / 2), corner(s0, barH / 2)]);
-  const barTop = (x: number) => eyeMid.y + (x - eyeMid.x) * Math.tan(tilt) - barH / 2 / Math.cos(tilt);
-  const barBottom = (x: number) => barTop(x) + barH / Math.cos(tilt);
+  const eyeMid = { x: (eyesAt[0].x + eyesAt[1].x) / 2, y: (eyesAt[0].y + eyesAt[1].y) / 2 };
+  const centre = { x: eyeMid.x + nrm.x * 0.08 * barH, y: eyeMid.y + nrm.y * 0.08 * barH };
+  /** A point of the visor's frame on the page, and back. */
+  const toPage = (u: number, v: number): Point => ({ x: centre.x + dir.x * u - nrm.x * (barH / 2 + v), y: centre.y + dir.y * u - nrm.y * (barH / 2 + v) });
+  const toBar = (p: Point) => ({ u: (p.x - centre.x) * dir.x + (p.y - centre.y) * dir.y, v: -((p.x - centre.x) * nrm.x + (p.y - centre.y) * nrm.y) - barH / 2 });
+  const quad = (u0: number, u1: number, v0: number, v1: number): Point[] => [toPage(u0, v1), toPage(u1, v1), toPage(u1, v0), toPage(u0, v0)];
+  const faceDir = Math.sign(toBar(page.noseTip).u - toBar(eyeMid).u) || 1;
+  // Off the sheet behind the head: far enough along the visor that its whole height is past the trim.
+  let uBack = 0;
+  while (uBack * -faceDir < 600) { const a = toPage(uBack, 0), b = toPage(uBack, -barH); if ([a, b].every(q => q.x < TRIM.x0 - 4 || q.x > TRIM.x1 + 4 || q.y < TRIM.y0 - 4 || q.y > TRIM.y1 + 4)) break; uBack -= faceDir; }
+  const uFace = toBar(page.noseTip).u + faceDir * n(ctx, 'barPast', 6, -20, 80);
+  const [u0, u1] = [Math.min(uBack, uFace), Math.max(uBack, uFace)];
+  const bar = clipToTrim(quad(u0, u1, -barH, 0));
 
-  // The crown's slices: across the head where it rises above the bar, seeded widths of 4 to 13 mm. Each keeps a base
-  // that steps down the skull's curve and loses the rest: lifted off and drawn higher up the sheet in two to four pieces
-  // (taken from anywhere on the head above the bar's lower edge, the forehead under the bar too), each further from the
-  // last, on the black or cut out onto the gold; or (a few) a gold-yellow fragment in its place.
-  const crng = ctx.random('erasure-crown');
-  const erosion = n(ctx, 'erosion', 0.85, 0, 1);
-  const tops = new Map<number, number>();
-  const headTop = (x: number) => {
-    const k = Math.round(x * 4);
-    if (!tops.has(k)) { let y = TRIM.y0; while (y < barTop(x) && !onHead({ x, y })) y += 0.25; tops.set(k, y); }
-    return tops.get(k)!;
-  };
-  let cx0 = Infinity, cx1 = -Infinity;
-  for (let x = TRIM.x0; x <= TRIM.x1; x += 0.5) if (headTop(x) < barTop(x) - 4) { cx0 = Math.min(cx0, x); cx1 = Math.max(cx1, x); }
-  const slices: Slice[] = [];
-  const fragments: Point[][] = [];
+  const crng = ctx.random('erasure-glitch');
+  const erosion = n(ctx, 'erosion', 0.85, 0, 1), reach = n(ctx, 'riseMm', 80, 10, 200);
+  const cells: Cell[] = [], fragments: Point[][] = [], drips: Point[][] = [], streaks: Point[][] = [];
   const ribbons: { pen: Pen; path: Point[] }[] = [];
-  const LIFT_TOP = TRIM.y0 + 10;
-  const snap = (y: number) => Math.round(y / 1.5) * 1.5;
-  if (assembled && cx0 < cx1) {
-    let x = cx0;
-    while (x < cx1 - 2) {
-      const w = Math.min(cx1 - x, 4 + 9 * crng() ** 1.4);
-      if (w < 4) break;
-      const a = x, b = x + w;
-      x = b;
-      let top = -Infinity;
-      for (let t = a; t <= b; t += 0.5) top = Math.max(top, headTop(t));
-      const bottom = Math.max(barTop(a), barTop(b)) + 4;
-      const height = barTop((a + b) / 2) - top;
-      const windows: SliceWindow[] = [];
-      if (height < 5) { slices.push({ x0: a, x1: b, windows: [{ y0: snap(top), y1: bottom, dy: 0, kind: 'base' }] }); continue; }
-      const eroded = crng() < erosion;
-      const keepTo = eroded ? top + height * (0.45 + 0.55 * crng()) : top + height * 0.1 * crng();
-      windows.push({ y0: keepTo, y1: bottom, dy: 0, kind: 'base' });
-      const fate = crng();
-      if (eroded && fate < 0.8) {
-        const floor = Math.min(barBottom(a), barBottom(b)) - 3;
-        let ceiling = keepTo;
-        const pieces = 2 + Math.floor(3 * crng());
-        for (let k = 0; k < pieces; k++) {
-          const h = 4 + 10 * crng();
-          const y0 = top + (floor - h - top) * crng(), y1 = y0 + h;
-          const destBottom = ceiling - (5 + 30 * crng() * (k + 1) ** 0.6);
-          if (destBottom - h < LIFT_TOP) break;
-          windows.push({ y0, y1, dy: y1 - destBottom, kind: crng() < 0.45 ? 'gold' : 'black' });
-          ceiling = destBottom - h;
-        }
-      } else if (eroded && fragments.length < 5) {
-        const fh = Math.max(4, Math.min(12, (keepTo - top) * 0.7)), fy = keepTo - 5 - fh - 30 * crng();
-        if (fy > LIFT_TOP) fragments.push(rect(a + 0.6, fy, b - 0.6, fy + fh));
+  const inTrim = (q: Point) => q.x > TRIM.x0 + 6 && q.x < TRIM.x1 - 6 && q.y > TRIM.y0 + 6 && q.y < TRIM.y1 - 6;
+  const fits = (a: number, b: number, v0: number, v1: number) => quad(a, b, v0, v1).every(inTrim);
+  const snap = (v: number) => Math.round(v / 1.5) * 1.5;
+  /** How far the head rises above the visor's top edge across [a, b] (the lowest of its tops there). */
+  const headRise = (a: number, b: number) => {
+    let rise = Infinity;
+    for (let u = a; u <= b; u += 0.5) { let v = 0; while (v < 400 && onHead(toPage(u, v + 0.5))) v += 0.5; rise = Math.min(rise, v); }
+    return rise;
+  };
+  // Where the crown is taken apart: over the head, above the visor.
+  let h0 = Infinity, h1 = -Infinity;
+  for (let u = u0; u <= u1; u += 0.5) if (onHead(toPage(u, 2))) { h0 = Math.min(h0, u); h1 = Math.max(h1, u); }
+  const glitch = { u0: u0, u1: u1 };
+  if (assembled) {
+    let u = u0;
+    while (u < u1 - 3) {
+      const w = Math.min(u1 - u, 3 + 10 * crng() ** 1.3);
+      if (w < 3) break;
+      const a = u, b = u + w, mid = (a + b) / 2;
+      u = b;
+      // Nearer the head the glitch is stronger: the columns taller and more of them lifted.
+      const near = h0 < h1 ? Math.max(0, 1 - Math.max(0, h0 - mid, mid - h1) / 90) : 0;
+      const rise = headRise(a, b);
+      const over = Number.isFinite(rise) && rise > 3;
+      const roll = crng();
+      let top = 0;
+      if (roll < 0.35 + 0.15 * near) {
+        // A gold column out of the visor's top edge: smeared upward.
+        top = snap(reach * (0.08 + 0.92 * crng() ** 1.6) * (0.4 + 0.6 * near));
+        while (top > 3 && !fits(a, b, 0, top)) top -= 1.5;
+        if (top > 3) cells.push({ u0: a, u1: b, v0: -2, v1: top, dv: snap(2 + 6 * crng()), kind: 'rise' });
+        else top = 0;
+      } else if (over && crng() > erosion * 0.5) {
+        // The head kept, from the visor up to a seeded height of its rise.
+        top = snap(rise * (0.3 + 0.7 * crng()));
+        cells.push({ u0: a, u1: b, v0: -2, v1: top, dv: 0, kind: 'base' });
       }
-      slices.push({ x0: a, x1: b, windows: windows.map(wd => ({ ...wd, y0: snap(wd.y0), y1: wd.dy ? snap(wd.y1) : wd.y1, dy: snap(wd.dy) })) });
-    }
-    // The ribbons: silver (a few gold), falling from the top edge toward the slices; some step sideways onto the next
-    // slice, some are doubled, some end in a short bar.
-    for (const [si, sl] of slices.entries()) {
-      const count = Math.floor((sl.x1 - sl.x0) / 3) + (crng() < 0.5 ? 1 : 0);
-      const highest = Math.min(...sl.windows.map(wd => wd.y0 - wd.dy));
-      for (let k = 0; k < count; k++) {
-        if (crng() < 0.25) continue;
-        const pen: Pen = crng() < 0.2 ? 'gold' : 'silver';
-        const xr = sl.x0 + 1.4 + (sl.x1 - sl.x0 - 2.8) * (count === 1 ? 0.5 : k / (count - 1));
-        const end = TRIM.y0 + (highest - 6 - TRIM.y0) * (0.3 + 0.7 * crng());
-        if (end - TRIM.y0 < 8) continue;
-        const kind = crng();
-        const next = slices[si + 1];
-        if (kind < 0.25 && next) {
-          const nextTop = Math.min(...next.windows.map(wd => wd.y0 - wd.dy)) - 6;
-          const xs = next.x0 + 1.4 + (next.x1 - next.x0 - 2.8) * crng();
-          const yStep = TRIM.y0 + (Math.min(end, nextTop) - TRIM.y0) * (0.25 + 0.4 * crng());
-          ribbons.push({ pen, path: [{ x: xr, y: TRIM.y0 - 2 }, { x: xr, y: yStep }, { x: xs, y: yStep }, { x: xs, y: Math.max(yStep + 6, Math.min(end, nextTop)) }] });
-        } else if (kind < 0.45) {
-          ribbons.push({ pen, path: [{ x: xr - 0.6, y: TRIM.y0 - 2 }, { x: xr - 0.6, y: end }, { x: xr + 0.6, y: end }, { x: xr + 0.6, y: TRIM.y0 - 2 }] });
-        } else {
-          ribbons.push({ pen, path: [{ x: xr, y: TRIM.y0 - 2 }, { x: xr, y: end }] });
-          if (crng() < 0.4) ribbons.push({ pen, path: [{ x: xr - 0.9, y: end + 2 }, { x: xr + 0.9, y: end + 2 }, { x: xr + 0.9, y: end + 6 }, { x: xr - 0.9, y: end + 6 }, { x: xr - 0.9, y: end + 2 }] });
+      // Lifted pieces above: taken from the head (the crown, or the brow under the visor), on the black or the gold.
+      if (over && crng() < erosion) {
+        let ceiling = top;
+        const pieces = 2 + Math.floor(4 * crng() * (0.5 + near));
+        for (let k = 0; k < pieces; k++) {
+          const h = 3 + 10 * crng();
+          const v0 = -barH + 3 + (rise - h + barH - 3) * crng();
+          const dest = ceiling + 4 + 28 * crng() * (k + 1) ** 0.6;
+          if (!fits(a, b, dest, dest + h)) break;
+          cells.push({ u0: a, u1: b, v0: snap(v0), v1: snap(v0) + snap(h), dv: snap(dest - v0), kind: crng() < 0.45 ? 'gold' : 'black' });
+          ceiling = dest + h;
         }
+        top = ceiling;
+      } else if (crng() < 0.3 + 0.3 * near) {
+        const h = 3 + 9 * crng(), v0 = top + 5 + 40 * crng() * (0.5 + near);
+        if (fits(a + 0.6, b - 0.6, v0, v0 + h)) { fragments.push(quad(a + 0.6, b - 0.6, snap(v0), snap(v0 + h))); top = v0 + h; }
+      }
+      // A drip below the visor now and then.
+      if (crng() < 0.12 + 0.12 * near) {
+        const h = 2 + 7 * crng();
+        const drip = quad(a, b, -barH - h, -barH + 2);
+        if (drip.every(inTrim)) drips.push(drip);
+      }
+      // Ribbons: from the top edge down along the visor's upward direction, stopping above the column.
+      const count = Math.floor(w / 3) + (crng() < 0.5 ? 1 : 0);
+      for (let k = 0; k < count; k++) {
+        if (crng() < 0.55) continue;
+        const pen: Pen = crng() < 0.2 ? 'gold' : 'silver';
+        const ur = a + 1.2 + (w - 2.4) * (count === 1 ? 0.5 : k / Math.max(1, count - 1));
+        const end = top + 6 + 30 * crng();
+        let vTop = end;
+        while (vTop < 600 && toPage(ur, vTop).y > TRIM.y0 - 2) vTop += 2;
+        if (vTop - end < 10) continue;
+        const kind = crng();
+        if (kind < 0.3) ribbons.push({ pen, path: [toPage(ur - 0.6, vTop), toPage(ur - 0.6, end), toPage(ur + 0.6, end), toPage(ur + 0.6, vTop)] });
+        else {
+          ribbons.push({ pen, path: [toPage(ur, vTop), toPage(ur, end)] });
+          if (crng() < 0.35) ribbons.push({ pen, path: [toPage(ur - 0.9, end - 2), toPage(ur + 0.9, end - 2), toPage(ur + 0.9, end - 6), toPage(ur - 0.9, end - 6), toPage(ur - 0.9, end - 2)] });
+        }
+      }
+    }
+    // The gold columns smeared: streaks up each, at a seeded spacing, from inside the visor to a seeded height.
+    for (const c of cells) if (c.kind === 'rise') {
+      for (let us = c.u0 + 0.9; us < c.u1 - 0.6; us += 1.0 + 1.4 * crng()) {
+        if (crng() < 0.3) continue;
+        streaks.push([toPage(us, -barH + 2), toPage(us, Math.min(c.v1 - 1, (c.v1 + 2) * (0.3 + 0.75 * crng())))]);
       }
     }
   }
+  // Bands of the visor and just below it, each drawn shifted along the visor: the eyes behind it on the gold, the face
+  // spilling below on the black.
+  const bands = (from: number, to: number, chance: number, shift: number) => {
+    const out: { v0: number; v1: number; du: number }[] = [];
+    for (let v = from; v < to;) { const h = 1.5 + 4.5 * crng(); if (crng() < chance) out.push({ v0: v, v1: Math.min(to, v + h), du: (crng() * 2 - 1) * shift }); v += h; }
+    return out;
+  };
+  const visorBands = assembled ? bands(-barH, 0, 1, 7) : [];
+  const spill = assembled ? bands(-barH - n(ctx, 'spillMm', 26, 0, 80), -barH, 0.4, 9) : [];
+
+  // Where a cell shows: a lifted piece `dv` up from where it was taken; a column or a base where it stands.
+  const inCell = (p: Point, kinds: Cell['kind'][]) => {
+    const b = toBar(p);
+    return cells.some(c => { const dv = c.kind === 'rise' || c.kind === 'base' ? 0 : c.dv; return kinds.includes(c.kind) && b.u >= c.u0 && b.u <= c.u1 && b.v >= c.v0 + dv && b.v <= c.v1 + dv; });
+  };
+  /** Where the head is taken apart: above the visor's top edge, all along it. */
+  const erased = (p: Point) => { if (!assembled) return false; const b = toBar(p); return b.v > -2 && b.u >= glitch.u0 && b.u <= glitch.u1 && !inCell(p, ['base']); };
 
   // ── The black's windows ───────────────────────────────────────────
-  // The bar (less the nose, which stands over it), the slices cut onto the gold, the fragments, the shirt and collar.
-  const inGoldSlice = (p: Point) => slices.some(sl => p.x >= sl.x0 && p.x <= sl.x1 && sl.windows.some(wd => wd.kind === 'gold' && p.y >= wd.y0 - wd.dy && p.y <= wd.y1 - wd.dy));
+  // The visor (less the lower nose, which stands over it), the gold columns, pieces, fragments and drips, the shirt
+  // and collar.
   const shirtRings = suit.shirt;
-  const windowAt = (p: Point) => (assembled && insideRing(bar, p) && !onNose(p)) || inGoldSlice(p) || fragments.some(f => insideRing(f, p))
+  const windowAt = (p: Point) => ((assembled && insideRing(bar, p)) || inCell(p, ['rise', 'gold']) || fragments.some(f => insideRing(f, p)) || drips.some(d => insideRing(d, p))) && !onNose(p)
     || (shirtRings.some(r => insideRing(r, p)) && !suit.tie.some(r => insideRing(r, p))) || (insideRing(suit.back, p) && !onHead(p));
-  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 0.5, minArea: 12 });
+  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, 0.25, { simplify: 0.08, minRadius: 0.5, minArea: 6 });
 
   return {
-    head: seen, onHead, onNose, bar, barTop, slices, fragments, panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page,
+    head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,
+    panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page,
   };
 }
 

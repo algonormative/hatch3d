@@ -3,7 +3,6 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { thinRanked } from '../../kit/density.ts';
 import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, keepAlong, pathLength } from '../../kit/page.ts';
-import { rect } from '../lodestone-cuts.ts';
 import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, PAGE, PAPER, pensOf } from '../world.ts';
 import { CONTROLS, erasure, panelStripes, type Erasure, type Pen, type Seen } from './world.ts';
@@ -32,29 +31,39 @@ function thinned(items: Item[], pitch: number): Map<string, Point[][]> {
 
 /** The two sheets' art. */
 export function sheets(e: Erasure): { black: Part[]; gold: Part[] } {
-  const assembled = e.slices.length > 0;
-  const inCrown = (p: Point) => assembled && e.slices.some(sl => p.x >= sl.x0 && p.x <= sl.x1) && p.y < e.barTop(p.x) + 4;
-  const inBase = (p: Point) => e.slices.some(sl => p.x >= sl.x0 && p.x <= sl.x1 && sl.windows.some(w => w.kind === 'base' && p.y >= w.y0 && p.y <= w.y1));
   const black: Item[] = [], gold: Item[] = [];
-  const keep = (into: Item[], s: Seen, test: (p: Point) => boolean, dy = 0, pen: Pen = s.pen) => {
+  /** Keep the pieces of `s` that pass `test`, each point moved by `move`, into a sheet's list (in `pen`). */
+  const keep = (into: Item[], s: Seen, test: (p: Point) => boolean, move?: (p: Point) => Point, pen: Pen = s.pen) => {
     for (const piece of keepAlong(s.piece, test, 0.15)) {
-      const moved = dy ? piece.map(p => ({ x: p.x, y: p.y - dy })) : piece;
+      const moved = move ? piece.map(move) : piece;
       for (const inside of clipToRect(moved, ART)) if (pathLength(inside) >= 0.6) into.push({ ...s, pen, piece: inside });
     }
   };
+  const inBox = (u0: number, u1: number, v0: number, v1: number) => (p: Point) => { const b = e.toBar(p); return b.u >= u0 && b.u <= u1 && b.v >= v0 && b.v <= v1; };
+  const shift = (du: number, dv: number) => (p: Point) => { const b = e.toBar(p); return e.toPage(b.u + du, b.v + dv); };
+  // The spill keeps off the nose and mouth (it would scramble the face's one profile): only behind them along the visor.
+  const noseU = e.toBar(e.page.noseTip).u, faceSide = Math.sign(noseU - e.toBar(e.page.eyes[0]).u) || 1;
+  const spillable = (p: Point) => (noseU - e.toBar(p).u) * faceSide > 30;
+  const spilled = (p: Point) => { const v = e.toBar(p).v; return spillable(p) && e.spill.some(b => v >= b.v0 && v < b.v1); };
   for (const s of e.head) {
-    keep(black, s, p => !e.bySuit(p) && (!inCrown(p) || inBase(p)));
-    // The lifted pieces: drawn again higher, on the black or (in black ink) on the gold through a window.
-    for (const sl of e.slices) for (const w of sl.windows) {
-      if (w.kind === 'base' || s.pen === 'fluoro-pink') continue;
-      keep(w.kind === 'gold' ? gold : black, s, p => p.x >= sl.x0 + 0.6 && p.x <= sl.x1 - 0.6 && p.y >= w.y0 + 0.6 && p.y <= w.y1 - 0.6, w.dy, w.kind === 'gold' ? 'black' : s.pen);
+    // On the black: the head where the glitch leaves it, the bands below the visor drawn shifted along it.
+    keep(black, s, p => !e.bySuit(p) && !e.erased(p) && !spilled(p));
+    for (const b of e.spill) keep(black, s, p => !e.bySuit(p) && spillable(p) && inBox(-1e9, 1e9, b.v0, b.v1)(p), shift(b.du, 0));
+    if (s.pen === 'fluoro-pink') continue;
+    // On the gold, in black ink: the eyes behind the visor in shifted bands, the head smeared up the gold columns, and
+    // the pieces lifted onto the gold. On the black, the pieces lifted there.
+    for (const b of e.visorBands) keep(gold, s, inBox(-1e9, 1e9, b.v0, b.v1), shift(b.du, 0), 'black');
+    for (const c of e.cells) {
+      if (c.kind === 'base') continue;
+      const from = c.kind === 'rise' ? inBox(c.u0 + 0.6, c.u1 - 0.6, c.v0, c.v1 - c.dv) : inBox(c.u0 + 0.6, c.u1 - 0.6, c.v0 + 0.6, c.v1 - 0.6);
+      keep(c.kind === 'black' ? black : gold, s, from, shift(0, c.dv), c.kind === 'black' ? s.pen : 'black');
     }
   }
-  // Each piece lifted on the black framed in gold.
-  for (const sl of e.slices) for (const w of sl.windows) if (w.kind === 'black') {
-    const r = rect(sl.x0, w.y0 - w.dy, sl.x1, w.y1 - w.dy);
+  for (const c of e.cells) if (c.kind === 'black') {
+    const r = [e.toPage(c.u0, c.v0 + c.dv), e.toPage(c.u1, c.v0 + c.dv), e.toPage(c.u1, c.v1 + c.dv), e.toPage(c.u0, c.v1 + c.dv)];
     black.push({ pen: 'gold', rank: 0, id: 'frame', piece: [...r, r[0]] });
   }
+  for (const st of e.streaks) for (const piece of clipToRect(st, ART)) gold.push({ pen: 'black', rank: 1, id: 'streak', piece });
   const grow = spec.bleed + FILL_OVER;
   for (const p of e.panels) for (const piece of panelStripes(p, p.window ? grow : 0)) (p.window ? gold : black).push({ pen: p.pen, rank: 2, id: p.id, piece });
   for (const l of e.suitLines) for (const piece of clipToRect(l.path, ART)) black.push({ pen: l.pen, rank: 0, id: 'suit-line', piece });

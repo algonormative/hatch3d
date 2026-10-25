@@ -15,6 +15,8 @@ export interface HeadOptions {
   jaw?: number;
   /** Nose length (1 = the canon). */
   nose?: number;
+  /** How full the nose's tip and wings are (1 = the canon's round tip; less is finer, more pointed). */
+  bulb?: number;
   /** How far the head tips back on the neck (radians; the face turns up). */
   tilt?: number;
   /** How far it turns to its left on the neck (radians). */
@@ -44,7 +46,7 @@ const both = (p: V3, f: (q: V3) => Sdf): Sdf => { const a = f(p), b = f(mirror(p
 const PIVOT: V3 = [0, -0.2, -0.08];
 
 export function sculptHead(options: HeadOptions = {}): Head {
-  const neck = options.neck ?? 1.0, neckR = options.neckR ?? 0.15, jaw = options.jaw ?? 1, nose = options.nose ?? 1.25;
+  const neck = options.neck ?? 1.0, neckR = options.neckR ?? 0.15, jaw = options.jaw ?? 1, nose = options.nose ?? 1.25, bulb = options.bulb ?? 1;
   // The head's frame on the neck's: tipped back by `tilt` (about x, the face toward +y), then turned by `turn` (about y).
   const tilt = options.tilt ?? 0, turn = options.turn ?? 0;
   const ct = Math.cos(tilt), st = Math.sin(tilt), cu = Math.cos(turn), su = Math.sin(turn);
@@ -78,9 +80,9 @@ export function sculptHead(options: HeadOptions = {}): Head {
     // The underside of the jaw, from the chin back toward the neck: the plane an upturned face shows.
     [capsule([0, -0.44, 0.20], [0, -0.36, -0.04], 0.075, 0.09), 0.09],
     // The nose: the bridge to the tip, the tip, the wings.
-    [capsule([0, 0.04, 0.36], [tip[0], tip[1] + 0.005, tip[2] - 0.005], 0.03, 0.045), 0.05],
-    [sphere(tip, 0.045), 0.03],
-    [both([0.045, -0.15, 0.36 + 0.05 * nose], p => sphere(p, 0.035)), 0.03],
+    [capsule([0, 0.04, 0.36], [tip[0], tip[1] + 0.005, tip[2] - 0.005], 0.03 * (0.6 + 0.4 * bulb), 0.045 * bulb), 0.05],
+    [sphere(tip, 0.045 * bulb), 0.03 * bulb],
+    [both([0.04 + 0.005 * bulb, -0.15, 0.36 + 0.05 * nose], p => sphere(p, 0.035 * bulb)), 0.03 * bulb],
     // The lips: the upper with its bow, the lower, their parting, and the groove under the lower.
     [ellipsoid([0, -0.25, 0.30], [0.12, 0.10, 0.10]), 0.06],
     [capsule([-0.055, -0.235, 0.385], [0.055, -0.235, 0.385], 0.024), 0.05],
