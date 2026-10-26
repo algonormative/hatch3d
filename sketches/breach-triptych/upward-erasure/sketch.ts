@@ -2,7 +2,7 @@ import type { AssemblySpec, Part, Point, Sketch, SketchContext } from '../../../
 import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { thinRanked } from '../../kit/density.ts';
 import { glyphMask } from '../../kit/lettering.ts';
-import { clipToRect, keepAlong, pathLength } from '../../kit/page.ts';
+import { clipToRect, insideRing, keepAlong, pathLength } from '../../kit/page.ts';
 import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, PAGE, PAPER, pensOf } from '../world.ts';
 import { gpuMesher } from '../../kit/sculpt-gpu.ts';
@@ -78,11 +78,21 @@ export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: P
   for (const l of e.suitLines) for (const piece of clipToRect(l.path, ART)) black.push({ pen: l.pen, rank: 0, id: 'suit-line', piece });
   for (const r of e.ribbons) for (const piece of clipToRect(r.path, ART)) black.push({ pen: r.pen, rank: 1, id: 'ribbon', piece });
 
-  const pink = black.filter(i => i.pen === 'fluoro-pink').map(i => i.piece);
+  // The slogans keep their own lines: what else would cross them is cleared round their letters, and they are never thinned.
+  const byText = (rings: Point[][]) => {
+    if (!rings.length) return () => false;
+    const xs = rings.flat().map(q => q.x), ys = rings.flat().map(q => q.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    return (p: Point) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 && rings.some(r => insideRing(r, p));
+  };
+  const byRising = byText(e.slogan.clearBlack), byReadout = byText(e.slogan.clearGold);
+  const pink = [...black.filter(i => i.pen === 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byRising(p), 0.15)), ...(e.slogan.pen === 'fluoro-pink' ? e.slogan.black : [])];
   const byPink = glyphMask(pink, 0.9, 6, PAGE);
-  const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
+  const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p) && !byRising(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   lines.set('fluoro-pink', pink);
-  const under = thinned(gold, LINE_PITCH.gel, options.thin === false);
+  if (e.slogan.pen !== 'fluoro-pink' && e.slogan.black.length) lines.set(e.slogan.pen, [...(lines.get(e.slogan.pen) ?? []), ...e.slogan.black]);
+  const under = thinned(gold.flatMap(i => keepAlong(i.piece, p => !byReadout(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
+  if (e.slogan.gold.length) under.set('black', [...(under.get('black') ?? []), ...e.slogan.gold]);
   return {
     black: [...lines].map(([pen, paths]) => ({ id: `black-${pen}`, pen, paths })),
     gold: [...under].map(([pen, paths]) => ({ id: `gold-${pen}`, pen, paths })),

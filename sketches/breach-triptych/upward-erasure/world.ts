@@ -12,6 +12,7 @@ import {
 import { sculptHead } from '../../kit/sculpt-head.ts';
 import type { GpuMesher } from '../../kit/sculpt-gpu.ts';
 import { traceMask } from '../../kit/outline.ts';
+import { NO_SLOGAN, SLOGAN_CONTROLS, slogans, type SloganInk } from './slogans.ts';
 import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
 import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
 
@@ -80,6 +81,8 @@ export interface Erasure {
   window: Point[][];
   ribbons: { pen: Pen; path: Point[] }[];
   page: { eyes: Point[]; noseTip: Point; chin: Point; neck: { left: Point; right: Point } };
+  /** The slogans' ink (`./slogans.ts`): the readout on the gold, the rising slogan on the black. */
+  slogan: SloganInk;
 }
 
 // ── Controls ─────────────────────────────────────────────────────────
@@ -155,6 +158,7 @@ export const CONTROLS: Control[] = [
   ...PARAMS.map((p): Control => ({ type: 'slider', id: p.id, label: p.label, default: p.d, min: p.min, max: p.max, step: p.step, group: p.group, ...(p.units ? { units: p.units } : {}), ...(p.head ? { expensive: true } : {}) })),
   { type: 'select', id: 'view', label: 'What to draw', default: 'assembly', options: ['assembly', 'head'],
     optionLabels: { assembly: 'The sheet as cut', head: 'The head alone (no visor, no glitch)' }, group: 'Glitch' },
+  ...SLOGAN_CONTROLS,
 ];
 
 // ── The head ─────────────────────────────────────────────────────────
@@ -622,9 +626,10 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
   // A preview traces the window at half the resolution: the knife's line only matters on the plotted sheet.
   const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
 
+  const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page }) : NO_SLOGAN;
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,
-    panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page,
+    panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page, slogan,
   };
 }
 
