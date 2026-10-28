@@ -29,7 +29,7 @@ export const SLOGAN_CONTROLS: Control[] = [
     optionLabels: { off: 'No slogan', visor: 'Readout in the visor', rise: 'Rising off a column, coming apart', both: 'Both' }, group: 'Slogan' },
   { type: 'select', id: 'slogan', label: 'Slogan', default: 'forgetting', options: [...Object.keys(SLOGANS), 'custom'],
     optionLabels: { ...SLOGANS, custom: 'Custom (the text below)' }, group: 'Slogan' },
-  { type: 'text', id: 'sloganText', label: 'Custom slogan', default: 'THIS WAS MADE BY A MACHINE', maxLength: 40, group: 'Slogan' },
+  { type: 'text', id: 'sloganText', label: 'Custom slogan', default: 'THIS WAS MADE BY A MACHINE', maxLength: 64, group: 'Slogan' },
   { type: 'select', id: 'sloganFace', label: 'Lettering', default: 'matrix', options: FACES,
     optionLabels: { matrix: 'Dot matrix', wire: 'Wire', sans: 'Hershey sans' }, group: 'Slogan' },
   { type: 'slider', id: 'sloganMm', label: 'Letter height', default: 6, min: 2.2, max: 9, step: 0.1, units: 'mm', group: 'Slogan' },
@@ -99,43 +99,75 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
     const down = { x: -along.y, y: along.x };
     // Which way is the glyphs' down in the visor's v: toward the lower edge or away from it.
     const downIsLower = down.x * up.x + down.y * up.y < 0;
-    // The stretch of the visor clear of the nose: from 28 mm back from its tip, back along the visor while the visor's
-    // middle stays on the art.
-    const inner = (u: number) => { const q = f.toPage(u, -f.barH / 2); return q.x > ART.x0 + 6 && q.x < ART.x1 - 6 && q.y > ART.y0 + 6 && q.y < ART.y1 - 6; };
-    const start = noseU - faceSide * 28;
-    let end = start;
-    while (Math.abs(end - start) < 600 && inner(end - faceSide)) end -= faceSide;
-    const lo = Math.min(start, end), hi = Math.max(start, end);
-    let size = Math.min(h, f.barH * 0.3);
-    const style = () => ({ face, height: size });
-    const cursorW = size * 0.7, gap = size * 0.5;
-    while (size > 2.2 && measureStrokeText(text, style()) + gap + cursorW > hi - lo) size -= 0.1;
-    const width = measureStrokeText(text, style()) + gap + size * 0.7;
-    if (width <= hi - lo) {
-      const margin = Math.max(2.5, f.barH * 0.1);
-      const vText = downIsLower ? -f.barH + margin + size : -f.barH + margin;
-      // Text start in u: the left end of the stretch on the page.
-      const uMid = (lo + hi) / 2, uStart = uMid - s * width / 2;
-      const origin = f.toPage(uStart, vText);
-      const letters = place2d(strokeText(text, 0, 0, style()), origin, along);
-      // The block cursor after the text, hatched solid.
-      const cx0 = measureStrokeText(text, style()) + gap, block: Point[][] = [];
-      for (let x = 0; x <= size * 0.7; x += 0.35) block.push([{ x: cx0 + x, y: 0 }, { x: cx0 + x, y: size }]);
+    const margin = Math.max(2.5, f.barH * 0.1), lead = 1.6;
+    const inVisor = (p: Point) => insideRing(f.bar, p) && !f.onNose(p);
+    const inArt = (p: Point) => p.x > ART.x0 + 4 && p.x < ART.x1 - 4 && p.y > ART.y0 + 4 && p.y < ART.y1 - 4;
+    /** The readout's band, in the visor's v, for lines of `size` (lowest and highest v). */
+    const band = (lines: number, size: number) => ({ v0: -f.barH + margin, v1: -f.barH + margin + size * (1 + lead * (lines - 1)) });
+    /** The longest run of the visor along u where the whole band shows (inside the visor, clear of the nose, on the art). */
+    const longestRun = (v0: number, v1: number) => {
+      let best = { lo: 0, hi: 0 }, from: number | undefined;
+      for (let u = -600; u <= 601; u += 1) {
+        const shows = u <= 600 && [0, 0.25, 0.5, 0.75, 1].every(k => { const q = f.toPage(u, v0 + (v1 - v0) * k); return inArt(q) && inVisor(q); });
+        if (shows) from ??= u;
+        else if (from !== undefined) { if (u - 1 - from > best.hi - best.lo) best = { lo: from, hi: u - 1 }; from = undefined; }
+      }
+      return best;
+    };
+    // One line, or two split at the word nearest the middle, whichever lets the letters stand taller.
+    const words = text.split(' ');
+    const layouts: string[][] = [[text]];
+    if (words.length > 1) {
+      let split = 1, worst = Infinity;
+      for (let i = 1; i < words.length; i++) {
+        const w = Math.max(measureStrokeText(words.slice(0, i).join(' '), { face, height: 1 }), measureStrokeText(words.slice(i).join(' '), { face, height: 1 }));
+        if (w < worst) { worst = w; split = i; }
+      }
+      layouts.push([words.slice(0, split).join(' '), words.slice(split).join(' ')]);
+    }
+    let pick: { lines: string[]; size: number; run: { lo: number; hi: number } } | undefined;
+    for (const lines of layouts) {
+      const tallest = Math.min(h, (f.barH - 2 * margin) / (1 + lead * (lines.length - 1)), f.barH * 0.3);
+      const { v0, v1 } = band(lines.length, tallest);
+      const run = longestRun(v0, v1);
+      // The block's width at `size`: its widest line, and the cursor after the last line.
+      const widthAt = (size: number) => Math.max(...lines.map((l, i) => measureStrokeText(l, { face, height: size }) + (i === lines.length - 1 ? size * 1.2 : 0)));
+      let size = tallest;
+      while (size > 2.2 && widthAt(size) > run.hi - run.lo - 4) size -= 0.1;
+      if (widthAt(size) > run.hi - run.lo - 4) continue;
+      if (!pick || size > pick.size + 0.05) pick = { lines, size, run };
+    }
+    if (pick) {
+      const { lines, size, run } = pick;
+      const style = { face, height: size };
+      const widths = lines.map(l => measureStrokeText(l, style));
+      const width = Math.max(...widths.map((w, i) => w + (i === lines.length - 1 ? size * 1.2 : 0)));
+      const { v0, v1 } = band(lines.length, size);
+      // The block's top-left on the page: centred on the run; its top is the band's edge the glyphs' tops face.
+      const uStart = (run.lo + run.hi) / 2 - s * width / 2;
+      const origin = f.toPage(uStart, downIsLower ? v1 : v0);
+      const step = size * lead;
+      // Lines stack down the block, read in order.
+      const glyphs = lines.flatMap((l, i) => strokeText(l, 0, i * step, style));
+      // The block cursor after the last line, hatched solid.
+      const last = lines.length - 1, cx0 = widths[last] + size * 0.5, block: Point[][] = [];
+      for (let x = 0; x <= size * 0.7; x += 0.35) block.push([{ x: cx0 + x, y: last * step }, { x: cx0 + x, y: last * step + size }]);
       // A rule along the readout, on the side toward the visor's middle.
-      const ruleY = downIsLower ? -size * 0.45 : size * 1.45;
+      const blockH = last * step + size;
+      const ruleY = downIsLower ? -size * 0.45 : blockH + size * 0.45;
       const rule = [[{ x: -size, y: ruleY }, { x: width + size, y: ruleY }]];
-      const inVisor = (p: Point) => insideRing(f.bar, p) && !f.onNose(p);
-      out.gold.push(...clipped([...letters, ...place2d(block, origin, along), ...place2d(rule, origin, along)], inVisor));
+      out.gold.push(...clipped(place2d([...glyphs, ...block, ...rule], origin, along), inVisor));
       // The screen: the readout's band, from the rule past the letters' foot.
-      out.clearGold.push(...place2d(box(-size, Math.min(ruleY, 0) - 0.8, width + size, Math.max(ruleY, size) + 0.8), origin, along));
+      out.clearGold.push(...place2d(box(-size, Math.min(ruleY, 0) - 0.8, width + size, Math.max(ruleY, blockH) + 0.8), origin, along));
     }
   }
 
   if (place === 'rise' || place === 'both') {
     // Up the page from a column's top: along the visor's v, reading upward.
     const len = Math.hypot(up.x, up.y), along = { x: up.x / len, y: up.y / len };
-    const style = { face, height: h };
-    const width = measureStrokeText(text, style);
+    // The slogan's run at height 1, with the drift its letters gather as they come apart (about a quarter of a letter
+    // height per letter at full decay): its length scales with the letter height.
+    const perMm = measureStrokeText(text, { face, height: 1 }) + decay * 0.25 * [...text].length;
     const inArt = (p: Point) => p.x > ART.x0 + 2 && p.x < ART.x1 - 2 && p.y > ART.y0 + 2 && p.y < ART.y1 - 2;
     // The rise column with the most air above it, back from the face, whose slogan fits up to the art's edge.
     let best: { c: Cell; room: number } | undefined;
@@ -144,14 +176,17 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
       const u = (c.u0 + c.u1) / 2;
       let room = 0;
       while (room < 400 && inArt(f.toPage(u, c.v1 + 4 + room)) && inArt(f.toPage(u + h, c.v1 + 4 + room)) && inArt(f.toPage(u - h, c.v1 + 4 + room))) room += 1;
-      if (room >= width * 0.6 && (!best || room > best.room)) best = { c, room };
+      if (room >= 30 && (!best || room > best.room)) best = { c, room };
     }
     if (best) {
+      // As tall as asked, or smaller so the whole slogan rises within the art.
+      const hs = Math.max(3, Math.min(h, best.room / perMm));
+      const style = { face, height: hs };
       const u = (best.c.u0 + best.c.u1) / 2;
       // The glyphs' down is `along` turned a quarter clockwise: the text box sits centred on the column's middle.
       const down = { x: -along.y, y: along.x };
       const base = f.toPage(u, best.c.v1 + 4);
-      const origin = { x: base.x - down.x * h / 2, y: base.y - down.y * h / 2 };
+      const origin = { x: base.x - down.x * hs / 2, y: base.y - down.y * hs / 2 };
       const chars = [...text], letters: Point[][] = [];
       let drift = 0;
       chars.forEach((ch, i) => {
@@ -159,13 +194,13 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
         const t = chars.length > 1 ? i / (chars.length - 1) : 0;
         // Fixed draws per letter, so one letter's fate never shifts the next one's.
         const gone = rng(), side = rng() * 2 - 1, gap = rng(), dotSeed = rng();
-        drift += decay * t * gap * h * 0.9;
+        drift += decay * t * gap * hs * 0.9;
         if (gone < decay * 0.7 * t ** 1.6) return;
         const x = measureStrokeText(text.slice(0, i + 1), style) - measureStrokeText(ch, style) + drift;
         const dots = ctx.random(`erasure-slogan-${i}-${Math.floor(dotSeed * 1e6)}`);
-        const glyph = strokeText(ch, x, side * decay * t * h * 0.6, style).filter(() => dots() >= decay * t * 0.55);
+        const glyph = strokeText(ch, x, side * decay * t * hs * 0.6, style).filter(() => dots() >= decay * t * 0.55);
         letters.push(...glyph);
-        if (glyph.length) out.clearBlack.push(...place2d(box(x - 0.7, side * decay * t * h * 0.6 - 0.7, x + measureStrokeText(ch, style) + 0.7, side * decay * t * h * 0.6 + h + 0.7), origin, along));
+        if (glyph.length) out.clearBlack.push(...place2d(box(x - 0.7, side * decay * t * hs * 0.6 - 0.7, x + measureStrokeText(ch, style) + 0.7, side * decay * t * hs * 0.6 + hs + 0.7), origin, along));
       });
       const onWindow = (p: Point) => f.window.some(r => insideRing(r, p));
       out.black.push(...clipped(place2d(letters, origin, along), p => inArt(p) && !onWindow(p)));
