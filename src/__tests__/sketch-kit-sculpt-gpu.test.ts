@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smin, type SdfNode, type V3 } from '../../sketches/kit/sculpt.ts';
+import { capsule, smin, sphere, type SdfNode, type V3 } from '../../sketches/kit/sculpt.ts';
 import { sculptHead } from '../../sketches/kit/sculpt-head.ts';
 import { wgslField } from '../../sketches/kit/sculpt-wgsl.ts';
 
@@ -16,12 +16,20 @@ function evalNode(n: SdfNode, p: V3): number {
     case 'min': return Math.min(evalNode(n.a, p), evalNode(n.b, p));
     case 'smin': return smin(evalNode(n.a, p), evalNode(n.b, p), n.k);
     case 'blend': { let d = evalNode(n.base, p); for (const [part, k] of n.parts) { const e = evalNode(part, p); d = k >= 0 ? smin(d, e, k) : -smin(-d, e, -k); } return d; }
-    case 'turned': { const x = sub(p, n.pivot), x1 = x[0] * n.cu - x[2] * n.su, z1 = x[0] * n.su + x[2] * n.cu; return evalNode(n.child, [n.pivot[0] + x1, n.pivot[1] + x[1] * n.ct - z1 * n.st, n.pivot[2] + x[1] * n.st + z1 * n.ct]); }
+    case 'turned': {
+      const x = sub(p, n.pivot), x1 = x[0] * n.cu - x[2] * n.su, z1 = x[0] * n.su + x[2] * n.cu;
+      const cr = n.cr ?? 1, sr = n.sr ?? 0, xr = x1 * cr + x[1] * sr, yr = -x1 * sr + x[1] * cr;
+      return evalNode(n.child, [n.pivot[0] + xr, n.pivot[1] + yr * n.ct - z1 * n.st, n.pivot[2] + yr * n.st + z1 * n.ct]);
+    }
   }
 }
 
 describe('sketch kit: the head\'s field described for the GPU', () => {
-  const heads = [sculptHead({ noseShape: 'planar', nose: 1.4, tilt: 0.5, turn: -0.3, chin: 1.8, ears: 1.3 }), sculptHead({ tilt: 0.2, bulb: 0.7 })];
+  const heads = [
+    sculptHead({ noseShape: 'planar', nose: 1.4, tilt: 0.5, turn: -0.3, chin: 1.8, ears: 1.3 }), sculptHead({ tilt: 0.2, bulb: 0.7 }),
+    // Cocked on the neck, with extras blended in (a bun and a spike).
+    sculptHead({ tilt: -0.1, turn: 0.2, cock: 0.3, extras: [[sphere([0.2, 0.42, -0.1], 0.13), 0.035], [capsule([0.25, 0.5, -0.1], [0.35, 0.62, -0.1], 0.03, 0.004), 0.015]] }),
+  ];
 
   it('records a node tree that agrees with the field\'s closures everywhere', () => {
     let s = 3;

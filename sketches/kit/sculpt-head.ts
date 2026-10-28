@@ -27,6 +27,11 @@ export interface HeadOptions {
   tilt?: number;
   /** How far it turns to its left on the neck (radians). */
   turn?: number;
+  /** How far it cocks on the neck, about the line it faces along after the tilt (radians; positive raises its left ear). */
+  cock?: number;
+  /** More parts blended into the head in its own frame, each with its blend radius (negative carves): buns, horns, a crest.
+   * They widen the meshing box by 0.25 all round. */
+  extras?: [Sdf, number][];
 }
 
 export interface Head {
@@ -54,19 +59,22 @@ const PIVOT: V3 = [0, -0.2, -0.08];
 export function sculptHead(options: HeadOptions = {}): Head {
   const neck = options.neck ?? 1.0, neckR = options.neckR ?? 0.15, jaw = options.jaw ?? 1, nose = options.nose ?? 1.25, bulb = options.bulb ?? 1;
   // The head's frame on the neck's: tipped back by `tilt` (about x, the face toward +y), then turned by `turn` (about y).
-  const tilt = options.tilt ?? 0, turn = options.turn ?? 0;
-  const ct = Math.cos(tilt), st = Math.sin(tilt), cu = Math.cos(turn), su = Math.sin(turn);
+  const tilt = options.tilt ?? 0, turn = options.turn ?? 0, cock = options.cock ?? 0;
+  const ct = Math.cos(tilt), st = Math.sin(tilt), cu = Math.cos(turn), su = Math.sin(turn), cr = Math.cos(cock), sr = Math.sin(cock);
   /** A point of the head (its own frame) in the neck's. */
   const place = (q: V3): V3 => {
-    const x = q[0] - PIVOT[0], y = q[1] - PIVOT[1], z = q[2] - PIVOT[2];
-    const y1 = y * ct + z * st, z1 = -y * st + z * ct;
+    const x0 = q[0] - PIVOT[0], y = q[1] - PIVOT[1], z = q[2] - PIVOT[2];
+    const y0 = y * ct + z * st, z1 = -y * st + z * ct;
+    // The cock (a roll about z), between the tilt and the turn; none leaves the arithmetic as it was.
+    const x = sr ? x0 * cr - y0 * sr : x0, y1 = sr ? x0 * sr + y0 * cr : y0;
     return [PIVOT[0] + x * cu + z1 * su, PIVOT[1] + y1, PIVOT[2] - x * su + z1 * cu];
   };
   /** The inverse: a point of the neck's frame in the head's. */
   const unplace = (x0: number, y0: number, z0: number): V3 => {
     const x = x0 - PIVOT[0], y = y0 - PIVOT[1], z = z0 - PIVOT[2];
-    const x1 = x * cu - z * su, z1 = x * su + z * cu;
-    return [PIVOT[0] + x1, PIVOT[1] + y * ct - z1 * st, PIVOT[2] + y * st + z1 * ct];
+    const x2 = x * cu - z * su, z1 = x * su + z * cu;
+    const x1 = sr ? x2 * cr + y * sr : x2, yr = sr ? -x2 * sr + y * cr : y;
+    return [PIVOT[0] + x1, PIVOT[1] + yr * ct - z1 * st, PIVOT[2] + yr * st + z1 * ct];
   };
   const f = { chin: 1, lips: 1, brow: 1, cheeks: 1, ears: 1, cranium: 1, noseWidth: 1, bridge: 1, ...Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined)) } as Required<HeadOptions>;
   const base = ellipsoid([0, 0.13 + 0.06 * (f.cranium - 1), -0.07], [0.30, 0.39 * f.cranium, 0.40]);
@@ -108,6 +116,7 @@ export function sculptHead(options: HeadOptions = {}): Head {
     [both([0.31, -0.02, -0.04], p => ellipsoid(p, [0.035, 0.12 * f.ears, 0.075 * f.ears])), 0.03],
     // Each ear's bowl, inside its rim.
     [both([0.35, -0.03, -0.035], p => ellipsoid(p, [0.03, 0.085 * f.ears, 0.05 * f.ears])), -0.015],
+    ...(options.extras ?? []),
   );
   // The neck, upright, its two long muscles from behind the ears (where the head has put them) to the collarbones'
   // notch; the head on it.
@@ -117,13 +126,14 @@ export function sculptHead(options: HeadOptions = {}): Head {
     [capsule(behind[1], [-0.05, neckEnd[1] + 0.1, 0.13], 0.045), 0.08],
   );
   const turnedHead = tagged((x, y, z) => { const q = unplace(x, y, z); return head(q[0], q[1], q[2]); },
-    head.node && { kind: 'turned', child: head.node, pivot: PIVOT, ct, st, cu, su });
+    head.node && { kind: 'turned', child: head.node, pivot: PIVOT, ct, st, cu, su, ...(sr ? { cr, sr } : {}) });
   const sdf: Sdf = tagged((x, y, z) => { const q = unplace(x, y, z); return smin(head(q[0], q[1], q[2]), neckSdf(x, y, z), 0.1); },
     turnedHead.node && neckSdf.node && { kind: 'smin', a: turnedHead.node, b: neckSdf.node, k: 0.1 });
   const P = place;
+  const pad = options.extras?.length ? 0.25 : 0;
   return {
     sdf,
-    lo: [-0.6, neckEnd[1] - 0.05, -0.75], hi: [0.6, 0.75, 0.75],
+    lo: [-0.6 - pad, neckEnd[1] - 0.05, -0.75 - pad], hi: [0.6 + pad, 0.75 + pad, 0.75 + pad],
     place, unplace, parts: { head, neck: neckSdf, turned: turnedHead },
     at: {
       noseTip: P([tip[0], tip[1], tip[2] + 0.045]), noseRoot: P([0, 0.04, 0.39]),

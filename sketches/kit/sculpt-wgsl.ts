@@ -48,8 +48,14 @@ export function wgslField(node: SdfNode, name = 'field'): string {
       }
       case 'turned': {
         const x = v(), x1 = v(), z1 = v(), q = v();
-        lines.push(`let ${x} = ${p} - ${v3(nd.pivot)};`, `let ${x1} = ${x}.x * ${f(nd.cu)} - ${x}.z * ${f(nd.su)};`, `let ${z1} = ${x}.x * ${f(nd.su)} + ${x}.z * ${f(nd.cu)};`,
-          `let ${q} = vec3f(${f(nd.pivot[0])} + ${x1}, ${f(nd.pivot[1])} + ${x}.y * ${f(nd.ct)} - ${z1} * ${f(nd.st)}, ${f(nd.pivot[2])} + ${x}.y * ${f(nd.st)} + ${z1} * ${f(nd.ct)});`);
+        lines.push(`let ${x} = ${p} - ${v3(nd.pivot)};`, `let ${x1} = ${x}.x * ${f(nd.cu)} - ${x}.z * ${f(nd.su)};`, `let ${z1} = ${x}.x * ${f(nd.su)} + ${x}.z * ${f(nd.cu)};`);
+        // The roll, when there is one, between the turn and the tilt.
+        let xr = x1, yr = `${x}.y`;
+        if (nd.sr) {
+          xr = v(); yr = v();
+          lines.push(`let ${xr} = ${x1} * ${f(nd.cr ?? 1)} + ${x}.y * ${f(nd.sr)};`, `let ${yr} = -${x1} * ${f(nd.sr)} + ${x}.y * ${f(nd.cr ?? 1)};`);
+        }
+        lines.push(`let ${q} = vec3f(${f(nd.pivot[0])} + ${xr}, ${f(nd.pivot[1])} + ${yr} * ${f(nd.ct)} - ${z1} * ${f(nd.st)}, ${f(nd.pivot[2])} + ${yr} * ${f(nd.st)} + ${z1} * ${f(nd.ct)});`);
         const c = emit(nd.child, q);
         lines.push(`let ${out} = ${c};`);
         break;

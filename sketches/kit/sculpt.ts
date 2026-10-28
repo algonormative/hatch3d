@@ -24,8 +24,9 @@ export type SdfNode =
   | { kind: 'blend'; base: SdfNode; parts: [SdfNode, number][] }
   | { kind: 'min'; a: SdfNode; b: SdfNode }
   | { kind: 'smin'; a: SdfNode; b: SdfNode; k: number }
-  /** `child` read in a frame turned about `pivot`: x' = x·cu − z·su, z' = x·su + z·cu, then y'' = y·ct − z'·st, z'' = y·st + z'·ct. */
-  | { kind: 'turned'; child: SdfNode; pivot: V3; ct: number; st: number; cu: number; su: number }
+  /** `child` read in a frame turned about `pivot`: x' = x·cu − z·su, z' = x·su + z·cu; then, with a roll, x'' = x'·cr + y·sr,
+   * y' = −x'·sr + y·cr; then y'' = y'·ct − z'·st, z'' = y'·st + z'·ct. */
+  | { kind: 'turned'; child: SdfNode; pivot: V3; ct: number; st: number; cu: number; su: number; cr?: number; sr?: number }
   | { kind: 'constant'; value: number };
 
 /** The closure, carrying its node. */
