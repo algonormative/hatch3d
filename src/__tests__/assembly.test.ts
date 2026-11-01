@@ -809,13 +809,13 @@ describe('per-cut guide options', () => {
 });
 
 describe('materials', () => {
-  it('has the three papers and the ink table', () => {
-    expect(Object.fromEntries(Object.entries(PAPERS).map(([id, paper]) => [id, paper.color]))).toEqual({ black: '#141416', 'gold-yellow': '#e0b13a', white: '#f7f6f2' });
+  it('has the four papers and the ink table', () => {
+    expect(Object.fromEntries(Object.entries(PAPERS).map(([id, paper]) => [id, paper.color]))).toEqual({ black: '#141416', 'gold-yellow': '#e0b13a', white: '#f7f6f2', magenta: '#d01f72' });
     const table = Object.fromEntries(['gold', 'silver', 'fluoro-pink', 'fluoro-orange', 'fluoro-green', 'fluoro-yellow', 'black'].map((id) => [id, [INKS[id].color, INKS[id].reads, INKS[id].trial ?? []]]));
     expect(table).toEqual({
       gold: ['#c9a54a', ['black'], ['gold-yellow']], silver: ['#c4c8cc', ['black'], ['white']],
       'fluoro-pink': ['#ff4fa3', ['black'], ['white']], 'fluoro-orange': ['#ff8a2a', ['black'], ['white']],
-      'fluoro-green': ['#7dff5a', ['black'], []], 'fluoro-yellow': ['#f2ff3a', ['black'], []], black: ['#1c1c1e', ['gold-yellow', 'white'], []],
+      'fluoro-green': ['#7dff5a', ['black'], []], 'fluoro-yellow': ['#f2ff3a', ['black'], []], black: ['#1c1c1e', ['gold-yellow', 'white'], ['magenta']],
     });
     expect(INKS.black.width).toBe(0.35);
     // The gels are drawn at the width the R13 calibration measured on black (it replaced the 0.5 mm placeholder).

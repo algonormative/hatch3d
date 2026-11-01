@@ -50,6 +50,8 @@ export const PAPERS: Record<string, Paper> = {
   black: { id: 'black', label: 'Black', color: '#141416' },
   'gold-yellow': { id: 'gold-yellow', label: 'Gold-yellow', color: '#e0b13a' },
   white: { id: 'white', label: 'White', color: '#f7f6f2' },
+  // Hot magenta stock, for the plies behind a black sheet (Kawaii Aggro); not yet calibrated.
+  magenta: { id: 'magenta', label: 'Magenta', color: '#d01f72' },
 };
 
 // ── Measurements (assembly calibration R13) ──────────────────────────
@@ -137,7 +139,7 @@ export const INKS: Record<string, Ink> = {
   'gel-teal': moonlight('gel-teal', 'Teal gel', '#1fb5a8', 'teal', { reads: [], trial: ['black'], measured: onBlack(0.24, 'thin, starved-looking') }),
   // Nick's white gel pens are touchy; the Signo is tried first.
   'gel-white': gel('gel-white', 'White gel', '#f4f3ee', 'Signo 1.0mm white', { reads: [], trial: ['black'], measured: onBlack(0.36, 'streaky dropouts in fills; fine as lines') }),
-  black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'], pen: 'Micron 08 black', nominal: 0.5, measured: MICRON_08_BLACK },
+  black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'], trial: ['magenta'], pen: 'Micron 08 black', nominal: 0.5, measured: MICRON_08_BLACK },
   // The Breach cards' own inks (the colours and the 0.25 mm art pen of `sketches/kit/format.ts`), and the Pigma Micron
   // drawing each; vermilion and acid have no pen yet.
   carbon: { id: 'carbon', label: 'Carbon', color: '#22282c', width: 0.25, reads: ['white', 'gold-yellow'], pen: 'Micron 01 black', nominal: 0.25, measured: MICRON_01_BLACK },

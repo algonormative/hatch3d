@@ -51,6 +51,7 @@ export const PAPER = {
   black: { id: 'black', color: '#141416' },
   gold: { id: 'gold-yellow', color: '#e0b13a' },
   white: { id: 'white', color: '#f7f6f2' },
+  magenta: { id: 'magenta', color: '#d01f72' },
 };
 
 // ── Controls, shared by every panel ──────────────────────────────────
