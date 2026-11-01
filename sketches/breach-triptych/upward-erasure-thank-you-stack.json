@@ -1,0 +1,52 @@
+{
+  "title": "Breach / Lodestone: Upward Erasure, Thank You for Your Attention to This Matter (the gold-yellow behind, the black in front)",
+  "out": ".sketch-output/finalize/upward-erasure-thank-you",
+  "edition": 1,
+  "page": {
+    "width": 279.4,
+    "height": 431.8,
+    "margin": 11
+  },
+  "border": {
+    "style": "cropmarks",
+    "pen": "cut"
+  },
+  "defaults": {
+    "center": "none",
+    "mergeSameColor": false,
+    "trialInks": true,
+    "gelSpeed": true
+  },
+  "params": {
+    "yaw": -70,
+    "barTilt": 25,
+    "barMm": 60,
+    "slogan": "custom",
+    "sloganText": "THANK YOU FOR YOUR ATTENTION TO THIS MATTER",
+    "sloganPlace": "both",
+    "sloganFace": "matrix",
+    "frameMm": 5
+  },
+  "pieces": [
+    {
+      "name": "upward-erasure-thank-you-gold",
+      "title": "Upward Erasure, Thank You for Your Attention: gold-yellow sheet",
+      "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts",
+      "seed": 1,
+      "assembly": "upward-erasure",
+      "params": {
+        "ply": "gold"
+      }
+    },
+    {
+      "name": "upward-erasure-thank-you-black",
+      "title": "Upward Erasure, Thank You for Your Attention: black sheet",
+      "sketch": "sketches/breach-triptych/upward-erasure/sketch.ts",
+      "seed": 1,
+      "assembly": "upward-erasure",
+      "params": {
+        "ply": "black"
+      }
+    }
+  ]
+}
