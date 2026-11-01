@@ -5,8 +5,7 @@ import { clipToRect, type Rect } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { traceMask } from '../../kit/outline.ts';
 import { rect, stripeFill } from '../lodestone-cuts.ts';
-import { pensOf } from '../world.ts';
-import { sheets, spec } from '../upward-erasure/sketch.ts';
+import { pens, sheets, spec } from '../upward-erasure/sketch.ts';
 import { CONTROLS, erasure } from '../upward-erasure/world.ts';
 
 /**
@@ -25,7 +24,6 @@ import { CONTROLS, erasure } from '../upward-erasure/world.ts';
 const PAGE = { width: 210, height: 297, margin: 11 };
 const TEST = { w: 120, h: 160, at: { x: (PAGE.width - 120) / 2, y: 22 } };
 const PATCH = { y: 200, h: 16, w: 36, xs: [20, 64, 108, 152], pitches: [0.8, 0.95, 1.1, 1.3] };
-const pens = pensOf(['silver', 'gold', 'fluoro-pink', 'black']);
 
 const controls: Control[] = [
   plyControl(spec),

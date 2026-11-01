@@ -3,23 +3,27 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { thinRanked } from '../../kit/density.ts';
 import { glyphMask } from '../../kit/lettering.ts';
 import { clipToRect, insideRing, keepAlong, pathLength } from '../../kit/page.ts';
+import { distanceToRings } from '../../../src/sketch/region.ts';
 import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, PAGE, PAPER, pensOf } from '../world.ts';
 import { gpuMesher } from '../../kit/sculpt-gpu.ts';
-import { CONTROLS, cpuMesher, erasure, frameRings, panelStripes, previewHeadStage, type Erasure, type HeadStage, type Pen, type Seen } from './world.ts';
+import { CONTROLS, cpuMesher, erasure, FILL_PITCH, frameRings, panelStripes, previewHeadStage, type Erasure, type HeadStage, type Pen, type Seen } from './world.ts';
 
 /**
  * Upward Erasure (a Lodestone study, after the character concept of 2026-10-21): see `./world.ts`. Two sheets, as
  * Lodestone L: the gold-yellow behind (Micron 08 black where it shows), the black in front (silver, gold and fluoro
- * pink gels), cut with the bar, the shirt and collar, and some of the crown's slices.
+ * pink gels, and copper when the lapels take it), cut with the bar, the shirt and collar, and some of the crown's
+ * slices. The small slices' fill, when there is one, is a gold layer of its own (`gold-fill`) drawn before the cut
+ * guides, so the guides lie on it.
  */
 
 const plies = [
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
-  { id: 'black', paper: PAPER.black, pens: ['silver', 'gold', 'fluoro-pink'], cutInk: 'silver' },
+  { id: 'black', paper: PAPER.black, pens: ['silver', 'gold', 'gold-fill', 'copper', 'fluoro-pink'], cutInk: 'silver' },
 ];
 export const spec: AssemblySpec = { ...LODESTONE_ASSEMBLY, plies };
-const pens = pensOf(['silver', 'gold', 'fluoro-pink', 'black']);
+/** In plotting order: the gold's fill right after its line work (the same pen, still in the holder). */
+export const pens = pensOf(['silver', 'gold', 'gold-fill', 'copper', 'fluoro-pink', 'black']);
 
 type Item = Seen & { piece: Point[] };
 
@@ -32,8 +36,8 @@ function thinned(items: Item[], pitch: number, skip = false): Map<string, Point[
   return out;
 }
 
-/** The two sheets' art. */
-export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: Part[]; gold: Part[] } {
+/** The two sheets' art, and the black's fill of its small windows (drawn over them, so outside `renderPly`'s clip). */
+export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: Part[]; gold: Part[]; fill: Part[] } {
   const black: Item[] = [], gold: Item[] = [];
   /** Keep the pieces of `s` that pass `test`, each point moved by `move`, into a sheet's list (in `pen`). */
   const keep = (into: Item[], s: Seen, test: (p: Point) => boolean, move?: (p: Point) => Point, pen: Pen = s.pen) => {
@@ -91,6 +95,18 @@ export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: P
   const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p) && !byRising(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   lines.set('fluoro-pink', pink);
   if (e.slogan.pen !== 'fluoro-pink' && e.slogan.black.length) lines.set(e.slogan.pen, [...(lines.get(e.slogan.pen) ?? []), ...e.slogan.black]);
+  // The small windows' fill: the black's other lines give way to it, a clean pitch clear of its outline.
+  if (e.fill) {
+    const outline = e.fill.outline, boxes = outline.map(r => { const xs = r.map(q => q.x), ys = r.map(q => q.y); return { x0: Math.min(...xs) - FILL_PITCH, x1: Math.max(...xs) + FILL_PITCH, y0: Math.min(...ys) - FILL_PITCH, y1: Math.max(...ys) + FILL_PITCH }; });
+    const near = (p: Point) => boxes.some(b => p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1);
+    // A path is tested along its length only where its box meets a fill's (a long segment can cross one between vertices).
+    const meets = (path: Point[]) => {
+      const xs = path.map(q => q.x), ys = path.map(q => q.y), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      return boxes.some(b => x1 >= b.x0 && x0 <= b.x1 && y1 >= b.y0 && y0 <= b.y1);
+    };
+    const byFill = (p: Point) => near(p) && (outline.some(r => insideRing(r, p)) || distanceToRings(p, outline) < FILL_PITCH);
+    for (const [pen, paths] of lines) lines.set(pen, paths.flatMap(path => (meets(path) ? keepAlong(path, p => !byFill(p), 0.15) : [path])).filter(path => pathLength(path) >= 0.6));
+  }
   // The frame: the black's art held inside it, then its gold and silver bands (never thinned).
   if (e.frame) {
     const inner = e.frame.inner;
@@ -102,6 +118,7 @@ export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: P
   return {
     black: [...lines].map(([pen, paths]) => ({ id: `black-${pen}`, pen, paths })),
     gold: [...under].map(([pen, paths]) => ({ id: `gold-${pen}`, pen, paths })),
+    fill: e.fill ? [{ id: 'black-gold-fill', pen: 'gold-fill', paths: [...e.fill.outline, ...e.fill.hatch] }] : [],
   };
 }
 
@@ -123,13 +140,14 @@ function world(ctx: SketchContext, stage?: HeadStage, quality?: 'draft' | 'full'
 export async function labSheets(ctx: SketchContext, quality: 'draft' | 'full' = 'full'): Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]> {
   const mesher = (await gpuMesher()) ?? cpuMesher;
   const { e, art } = world(ctx, await previewHeadStage(ctx, mesher, quality === 'draft'), quality);
-  return [{ ply: 'gold', parts: art.gold, cuts: [] }, { ply: 'black', parts: art.black, cuts: e.window }];
+  return [{ ply: 'gold', parts: art.gold, cuts: [] }, { ply: 'black', parts: [...art.black, ...art.fill], cuts: e.window }];
 }
 
 function draw(ctx: SketchContext): Part[] {
   const { e, art } = world(ctx);
-  const parts = renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art });
-  return [...parts, ...landmarks(e)];
+  const parts = renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: e.window, label: 'W' }] }, art: { black: art.black, gold: art.gold } });
+  // The fill covers its windows (they may be left uncut), so it joins the black after renderPly's clip to its windows.
+  return [...parts, ...(ctx.params[spec.control] === 'black' ? art.fill : []), ...landmarks(e)];
 }
 
 /**

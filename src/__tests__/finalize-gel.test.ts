@@ -14,11 +14,11 @@ const asm = { cutPen: 'cut', cutInk: 'silver' };
 describe('gel pens in the catalog', () => {
   it('marks every gel ink, and only those, with the provisional pen-down speed of 15 percent', () => {
     for (const ink of Object.values(INKS)) {
-      const isGel = /^(Signo|Moonlight) /.test(ink.pen ?? '');
+      const isGel = /^(Signo|Moonlight) |^Copper gel$/.test(ink.pen ?? '');
       expect(ink.gel === true, `${ink.id} gel`).toBe(isGel);
       expect(ink.speedPendown, `${ink.id} speedPendown`).toBe(isGel ? 15 : undefined);
     }
-    expect(Object.values(INKS).filter((ink) => ink.gel)).toHaveLength(13);
+    expect(Object.values(INKS).filter((ink) => ink.gel)).toHaveLength(15);
   });
 });
 

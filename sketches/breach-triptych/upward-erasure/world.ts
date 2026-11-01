@@ -12,8 +12,10 @@ import {
 import { sculptHead } from '../../kit/sculpt-head.ts';
 import type { GpuMesher } from '../../kit/sculpt-gpu.ts';
 import { traceMask } from '../../kit/outline.ts';
+import { distanceToRings } from '../../../src/sketch/region.ts';
 import { NO_SLOGAN, SLOGAN_CONTROLS, slogans, type SloganInk } from './slogans.ts';
 import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
+import { LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
 
 /**
@@ -31,8 +33,11 @@ import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
 
 const deg = THREE.MathUtils.degToRad;
 
-/** The pens: the black's silver, gold and fluoro pink gels, and the Micron 08 on the gold. */
-export type Pen = 'silver' | 'gold' | 'fluoro-pink' | 'black';
+/**
+ * The pens: the black's silver, gold and fluoro pink gels (and copper, for the lapels, on trial), the gold again as a
+ * layer of its own for the small windows' fill, and the Micron 08 on the gold.
+ */
+export type Pen = 'silver' | 'gold' | 'gold-fill' | 'copper' | 'fluoro-pink' | 'black';
 
 /** A projected, visible mark, and how the thinning ranks it (0 outlines, 1 seams and creases, 2 hatch). */
 export interface Seen { pen: Pen; rank: number; id: string; piece: Point[] }
@@ -79,6 +84,8 @@ export interface Erasure {
   shirt: Point[][];
   collarBack: Point[];
   window: Point[][];
+  /** The small windows filled in a gold layer of their own (`fillUnderMm`), when any are. */
+  fill?: WindowFill;
   ribbons: { pen: Pen; path: Point[] }[];
   page: { eyes: Point[]; noseTip: Point; chin: Point; neck: { left: Point; right: Point } };
   /** The slogans' ink (`./slogans.ts`): the readout on the gold, the rising slogan on the black. */
@@ -120,6 +127,8 @@ export const PARAMS: Param[] = [
   P('collarAt', 'Collar on the neck', 0.56, 0.4, 1.6, 0.01, 'Framing'),
   P('frameMm', 'Gold and silver frame width (0 for none)', 0, 0, 10, 0.5, 'Framing', 'mm'),
   P('frameInset', 'Frame in from the trim', 4, 2, 15, 0.5, 'Framing', 'mm'),
+  P('fillUnderMm', 'Fill the glitch\'s cut-outs this small in a gold layer of their own (0 for none)', 0, 0, 30, 0.5, 'Cut-outs', 'mm'),
+  P('fillMargin', 'The fill past the cut', 2.5, 0.5, 6, 0.5, 'Cut-outs', 'mm'),
   P('pitchMm', 'Densest line pitch', 0.95, 0.8, 3, 0.05, 'Plates', 'mm', HEAD),
   P('plateMm', 'Plate size', 27, 10, 80, 1, 'Plates', 'mm', HEAD),
   P('bareShare', 'Plates left bare', 0.12, 0, 0.6, 0.01, 'Plates', undefined, HEAD),
@@ -158,12 +167,25 @@ export function num(ctx: SketchContext, id: string): number {
   return n(ctx, id, p.d, p.min, p.max);
 }
 
+const LAPEL_INKS = ['silver', 'copper', 'fluoro-pink', 'gold'] as const;
+
 export const CONTROLS: Control[] = [
   ...PARAMS.map((p): Control => ({ type: 'slider', id: p.id, label: p.label, default: p.d, min: p.min, max: p.max, step: p.step, group: p.group, ...(p.units ? { units: p.units } : {}), ...(p.head ? { expensive: true } : {}) })),
   { type: 'select', id: 'view', label: 'What to draw', default: 'assembly', options: ['assembly', 'head'],
     optionLabels: { assembly: 'The sheet as cut', head: 'The head alone (no visor, no glitch)' }, group: 'Glitch' },
+  { type: 'select', id: 'lapelInk', label: 'The lapels', default: 'silver', options: [...LAPEL_INKS],
+    optionLabels: { silver: 'Silver gel, with the jacket', copper: 'Copper gel, a layer of their own', 'fluoro-pink': 'Fluoro pink gel', gold: 'Gold gel' }, group: 'Suit' },
+  { type: 'select', id: 'tieInk', label: 'The tie', default: 'silver', options: ['silver', 'blank'],
+    optionLabels: { silver: 'Silver, cross-hatched, edged in gold', blank: 'Blank (the black paper)' }, group: 'Suit' },
   ...SLOGAN_CONTROLS,
 ];
+
+/** How the suit is drawn: the lapels' gel (striped as the jacket's, or in a gel of their own), the tie silver or blank. */
+export interface SuitLook { lapels: (typeof LAPEL_INKS)[number]; tie: 'silver' | 'blank' }
+export function suitLook(ctx: SketchContext): SuitLook {
+  const lapels = String(ctx.params.lapelInk ?? 'silver'), tie = String(ctx.params.tieInk ?? 'silver');
+  return { lapels: (LAPEL_INKS as readonly string[]).includes(lapels) ? lapels as SuitLook['lapels'] : 'silver', tie: tie === 'blank' ? 'blank' : 'silver' };
+}
 
 // ── The frame ────────────────────────────────────────────────────────
 
@@ -198,6 +220,66 @@ export function frameRings(f: Frame, band: Frame['bands'][number], pitch: number
     rings.push([{ x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 }, { x: r.x0, y: r.y0 }]);
   }
   return rings;
+}
+
+// ── The small windows' fill ──────────────────────────────────────────
+
+/**
+ * The glitch's windows no bigger than `fillUnderMm` across, filled on the black in a gold layer of their own
+ * (`gold-fill`) out to `fillMargin` past the cut, so each may be cut or left: cut, it shows the gold-yellow in a gold
+ * rim; left, a gold patch. The fill keeps the art's margin off every other window, stays inside `art` and off `keepOut`;
+ * it is an outline and a hatch along the visor (`along`), a clean gel pitch apart, the hatch that far inside the outline.
+ * The gold behind each window is drawn as before.
+ */
+export interface WindowFill { windows: Point[][]; outline: Point[][]; hatch: Point[][] }
+/** The fill's pitch: a clean gel pitch, with a hair to spare for the prepared SVG's rounding. */
+export const FILL_PITCH = LINE_PITCH.gel + 0.05;
+
+type Box = { x0: number; y0: number; x1: number; y1: number };
+const boxOf = (r: Point[], grow = 0): Box => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of r) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+  return { x0: x0 - grow, y0: y0 - grow, x1: x1 + grow, y1: y1 + grow };
+};
+/** The distance from `p` to the nearest of `rings` whose box holds it; Infinity when none does. */
+const nearRings = (p: Point, rings: { ring: Point[]; box: Box }[]) => distanceToRings(p, rings.filter(r => inRect(r.box, p)).map(r => r.ring));
+
+function windowFill(ctx: SketchContext, window: Point[][], inGlitch: (p: Point) => boolean, keepOut: (p: Point) => boolean, art: Rect, along: Point): WindowFill | undefined {
+  const under = num(ctx, 'fillUnderMm'), margin = num(ctx, 'fillMargin');
+  if (under <= 0) return undefined;
+  const centroid = (r: Point[]) => ({ x: r.reduce((a, q) => a + q.x, 0) / r.length, y: r.reduce((a, q) => a + q.y, 0) / r.length });
+  const span = (r: Point[]) => { const b = boxOf(r); return Math.max(b.x1 - b.x0, b.y1 - b.y0); };
+  const windows = window.filter(r => span(r) <= under && inGlitch(centroid(r)));
+  if (!windows.length) return undefined;
+  const clear = LODESTONE_ASSEMBLY.margin;
+  const small = windows.map(ring => ({ ring, box: boxOf(ring, margin) }));
+  const others = window.filter(r => !windows.includes(r)).map(ring => ({ ring, box: boxOf(ring, clear) }));
+  const inside = (p: Point) => {
+    if (!inRect(art, p) || !small.some(s => inRect(s.box, p))) return false;
+    if (!small.some(s => insideRing(s.ring, p)) && !(nearRings(p, small) <= margin)) return false;
+    if (keepOut(p)) return false;
+    return !others.some(o => inRect(o.box, p) && insideRing(o.ring, p)) && nearRings(p, others) >= clear;
+  };
+  const all = small.map(s => s.box).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }));
+  const outline = traceMask(inside, all, 0.25, { simplify: 0.08, minRadius: 1.0, minArea: 6 });
+  // The hatch: lines along the visor on one grid for the whole sheet, inside each outer ring and out of its holes (a
+  // ring inside another), a pitch in from every edge.
+  const across = { x: -along.y, y: along.x };
+  const hatch: Point[][] = [];
+  const isHole = (r: Point[]) => outline.some(o => o !== r && insideRing(o, r[0]));
+  for (const ring of outline.filter(r => !isHole(r))) {
+    const holes = outline.filter(h => h !== ring && isHole(h) && insideRing(ring, h[0])), edges = [ring, ...holes];
+    const box = boxOf(ring);
+    const corners = [{ x: box.x0, y: box.y0 }, { x: box.x1, y: box.y0 }, { x: box.x1, y: box.y1 }, { x: box.x0, y: box.y1 }];
+    const a = corners.map(q => q.x * along.x + q.y * along.y), c = corners.map(q => q.x * across.x + q.y * across.y);
+    const a0 = Math.min(...a), a1 = Math.max(...a);
+    const held = (p: Point) => insideRing(ring, p) && !holes.some(h => insideRing(h, p)) && distanceToRings(p, edges) >= FILL_PITCH;
+    for (let k = Math.ceil(Math.min(...c) / FILL_PITCH); k * FILL_PITCH <= Math.max(...c); k++) {
+      const at = (t: number): Point => ({ x: along.x * t + across.x * k * FILL_PITCH, y: along.y * t + across.y * k * FILL_PITCH });
+      for (const piece of keepAlong([at(a0), at(a1)], held, 0.1)) if (pathLength(piece) >= 0.6) hatch.push([piece[0], piece[piece.length - 1]]);
+    }
+  }
+  return { windows, outline: outline.map(r => [...r, r[0]]), hatch };
 }
 
 // ── The head ─────────────────────────────────────────────────────────
@@ -477,7 +559,7 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
   const ring: Point[] = [];
   for (let k = 0; k < 48; k++) { const a = 2 * Math.PI * k / 48; ring.push(at([0.15 * Math.sin(a), collarY, -0.04 + 0.15 * Math.cos(a)])); }
   const left = ring.reduce((a, b) => (b.x < a.x ? b : a)), right = ring.reduce((a, b) => (b.x > a.x ? b : a));
-  const suit = suitOf(left, right);
+  const suit = suitOf(left, right, suitLook(ctx));
   const bySuit = (p: Point) => suit.front.some(r => insideRing(r, p));
   const page = { eyes: head.at.eyes.map(at), noseTip: at(head.at.noseTip), chin: at(head.at.chin), neck: { left, right } };
 
@@ -669,10 +751,13 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
   const window = traceMask(p => windowAt(p) && (!frame || inGlitch(p) || inRect(frame.inner, p)), { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
 
   const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page, art: frame?.inner ?? ART }) : NO_SLOGAN;
+  // The small windows' fill keeps clear of the rising slogan and of the pieces lifted onto the black (and their frames).
+  const onBlackPiece = (p: Point) => { const b = toBar(p); return cells.some(c => c.kind === 'black' && b.u >= c.u0 - FILL_PITCH && b.u <= c.u1 + FILL_PITCH && b.v >= c.v0 + c.dv - FILL_PITCH && b.v <= c.v1 + c.dv + FILL_PITCH); };
+  const fill = assembled ? windowFill(ctx, window, inGlitch, p => onBlackPiece(p) || slogan.clearBlack.some(r => insideRing(r, p)), frame?.inner ?? ART, { x: dir.x, y: dir.y }) : undefined;
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,
     panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page, slogan,
-    ...(frame ? { frame } : {}),
+    ...(frame ? { frame } : {}), ...(fill ? { fill } : {}),
   };
 }
 
@@ -691,9 +776,9 @@ function subMesh(m: SculptMesh, keep: (p: V3) => boolean): THREE.BufferGeometry 
  * The suit as flat panels laid out from the neck's two sides where the collar meets it (its width `w` the unit), as
  * Lodestone L's: the jacket and lapels in silver stripes on the black, edged in gold, the tie silver cross-hatched;
  * the shirt and the collar's leaves cut out of the black, the gold behind striped in black ink. The collar's back is
- * seen behind the neck.
+ * seen behind the neck. `look` can stripe the lapels in a gel of their own and leave the tie blank.
  */
-function suitOf(left: Point, right: Point): { panels: Panel[]; lines: SuitLine[]; front: Point[][]; shirt: Point[][]; back: Point[]; tie: Point[][] } {
+function suitOf(left: Point, right: Point, look: SuitLook): { panels: Panel[]; lines: SuitLine[]; front: Point[][]; shirt: Point[][]; back: Point[]; tie: Point[][] } {
   const c = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 }, w = right.x - left.x;
   const slope = (right.y - left.y) / (right.x - left.x);
   const P = (u: number, v: number): Point => ({ x: c.x + u * w, y: c.y + v * w + u * w * slope });
@@ -712,13 +797,17 @@ function suitOf(left: Point, right: Point): { panels: Panel[]; lines: SuitLine[]
   const angleOf = (a: Point, b: Point) => Math.atan2(b.y - a.y, b.x - a.x);
   const aL = angleOf(P(-1.1, 0.98), { x: P(-0.42, 0).x, y: bottom }), aR = angleOf(P(1.04, 0.9), { x: P(0.62, 0).x, y: bottom });
   const tieAxis = angleOf(P(0.03, 0.82), { x: P(0.1, 0).x, y: bottom });
+  // A blank tie is the black paper, unedged: the shirt's window and the collar's leaves draw it.
+  const tie = look.tie === 'silver';
   const panels: Panel[] = [
     { id: 'jacket-l', ring: jacketL, angle: aL, pitch: 1.0, pen: 'silver', cross: aL + 0.8 },
     { id: 'jacket-r', ring: jacketR, angle: aR, pitch: 1.0, pen: 'silver', cross: aR - 0.8 },
-    { id: 'lapel-l', ring: lapelL, angle: angleOf(P(-1.28, 0.78), { x: P(-0.42, 0).x, y: bottom }) + 0.12, pitch: 0.9, pen: 'silver' },
-    { id: 'lapel-r', ring: lapelR, angle: angleOf(P(1.2, 0.7), { x: P(0.62, 0).x, y: bottom }) - 0.12, pitch: 0.9, pen: 'silver' },
-    { id: 'tie', ring: blade, angle: -0.7, pitch: 1.0, pen: 'silver', cross: 0.7 },
-    { id: 'knot', ring: knot, angle: 0.5, pitch: 0.9, pen: 'silver', cross: -0.9 },
+    { id: 'lapel-l', ring: lapelL, angle: angleOf(P(-1.28, 0.78), { x: P(-0.42, 0).x, y: bottom }) + 0.12, pitch: 0.9, pen: look.lapels },
+    { id: 'lapel-r', ring: lapelR, angle: angleOf(P(1.2, 0.7), { x: P(0.62, 0).x, y: bottom }) - 0.12, pitch: 0.9, pen: look.lapels },
+    ...(tie ? [
+      { id: 'tie', ring: blade, angle: -0.7, pitch: 1.0, pen: 'silver', cross: 0.7 },
+      { id: 'knot', ring: knot, angle: 0.5, pitch: 0.9, pen: 'silver', cross: -0.9 },
+    ] satisfies Panel[] : []),
     // On the gold under the windows, in black ink.
     { id: 'shirt', ring: shirt, angle: tieAxis, pitch: 1.3, pen: 'black', window: true },
     { id: 'leaf-l', ring: leafL, angle: angleOf(P(-0.8, 0.24), P(-0.34, 1.0)), pitch: 1.4, pen: 'black', window: true },
@@ -727,7 +816,7 @@ function suitOf(left: Point, right: Point): { panels: Panel[]; lines: SuitLine[]
   ];
   const close = (r: Point[]) => [...r, r[0]];
   const lines: SuitLine[] = [
-    ...[lapelL, lapelR, knot, blade, jacketL, jacketR].map(r => ({ pen: 'gold' as const, path: close(r) })),
+    ...[lapelL, lapelR, ...(tie ? [knot, blade] : []), jacketL, jacketR].map(r => ({ pen: 'gold' as const, path: close(r) })),
   ];
   return { panels, lines, front: [leafL, leafR, knot, blade, shirt, lapelL, lapelR, jacketL, jacketR], shirt: [leafL, leafR, shirt], back, tie: [knot, blade] };
 }

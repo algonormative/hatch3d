@@ -121,8 +121,12 @@ const moonlight = (id: string, label: string, color: string, colour: string, opt
   gel(id, label, color, `Moonlight 10 ${colour}`, { nominal: 0.5, ...options });
 const signo = (id: string, label: string, color: string, colour: string, trial: string[], measured: MeasuredTable): Ink => gel(id, label, color, `Signo 1.0mm ${colour}`, { trial, measured });
 
+const GOLD = signo('gold', 'Gold gel', '#c9a54a', 'gold', ['gold-yellow'], SIGNO_GOLD);
 export const INKS: Record<string, Ink> = {
-  gold: signo('gold', 'Gold gel', '#c9a54a', 'gold', ['gold-yellow'], SIGNO_GOLD),
+  gold: GOLD,
+  // The gold gel again, as a layer of its own: a fill a sheet may plot or leave out, apart from its gold line work. The
+  // same pen, so the same readings.
+  'gold-fill': { ...GOLD, id: 'gold-fill', label: 'Gold gel (a layer of its own)' },
   silver: signo('silver', 'Silver gel', '#c4c8cc', 'silver', ['white'], SIGNO_SILVER),
   'fluoro-pink': moonlight('fluoro-pink', 'Fluoro pink gel', '#ff4fa3', 'fl pink', { trial: ['white'], measured: withWhite(onBlack(0.45)) }),
   'fluoro-orange': moonlight('fluoro-orange', 'Fluoro orange gel', '#ff8a2a', 'fl orange', {
@@ -137,6 +141,8 @@ export const INKS: Record<string, Ink> = {
   'gel-purple': moonlight('gel-purple', 'Purple gel', '#8a4fd6', 'purple', { reads: [], trial: ['black'], measured: onBlack(0.35) }),
   'gel-blue': moonlight('gel-blue', 'Blue gel', '#3a6fe0', 'blue', { reads: [], trial: ['black'], measured: onBlack(0.32) }),
   'gel-teal': moonlight('gel-teal', 'Teal gel', '#1fb5a8', 'teal', { reads: [], trial: ['black'], measured: onBlack(0.24, 'thin, starved-looking') }),
+  // Nick's copper gel: its make is not recorded yet, and it is tried on black before it is trusted.
+  copper: gel('copper', 'Copper gel', '#c07a4a', 'Copper gel', { reads: [], trial: ['black'] }),
   // Nick's white gel pens are touchy; the Signo is tried first.
   'gel-white': gel('gel-white', 'White gel', '#f4f3ee', 'Signo 1.0mm white', { reads: [], trial: ['black'], measured: onBlack(0.36, 'streaky dropouts in fills; fine as lines') }),
   black: { id: 'black', label: 'Black fineliner', color: '#1c1c1e', width: 0.35, reads: ['gold-yellow', 'white'], trial: ['magenta'], pen: 'Micron 08 black', nominal: 0.5, measured: MICRON_08_BLACK },
