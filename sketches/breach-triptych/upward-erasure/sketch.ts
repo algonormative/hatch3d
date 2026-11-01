@@ -95,7 +95,7 @@ export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: P
   if (e.frame) {
     const inner = e.frame.inner;
     for (const [pen, paths] of lines) lines.set(pen, paths.flatMap(path => clipToRect(path, inner)).filter(path => pathLength(path) >= 0.6));
-    for (const band of e.frame.bands) lines.set(band.pen, [...(lines.get(band.pen) ?? []), ...frameRings(e.frame, band, LINE_PITCH.gel)]);
+    for (const band of e.frame.bands) lines.set(band.pen, [...(lines.get(band.pen) ?? []), ...frameRings(e.frame, band, LINE_PITCH.gel + 0.05)]);
   }
   const under = thinned(gold.flatMap(i => keepAlong(i.piece, p => !byReadout(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   if (e.slogan.gold.length) under.set('black', [...(under.get('black') ?? []), ...e.slogan.gold]);

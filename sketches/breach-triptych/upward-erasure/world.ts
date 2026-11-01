@@ -185,12 +185,16 @@ export function frameOf(ctx: SketchContext): Frame | undefined {
   return { outer, inner: inset(outer, w + 1.2), bands: [{ pen: 'gold', from: 0, to: w * 0.44 }, { pen: 'silver', from: w * 0.64, to: w }] };
 }
 
-/** A frame band as concentric rings, `pitch` apart, filling it. */
+/**
+ * A frame band as concentric rings exactly `pitch` apart (never closer, so the gel keeps them apart), as many as fit
+ * across it with a pen's width to spare, centred in it.
+ */
 export function frameRings(f: Frame, band: Frame['bands'][number], pitch: number): Point[][] {
   const rings: Point[][] = [];
-  const n = Math.max(1, Math.round((band.to - band.from) / pitch));
+  const n = Math.max(1, Math.floor((band.to - band.from - 0.4) / pitch + 1e-9) + 1);
+  const mid = (band.from + band.to) / 2;
   for (let k = 0; k < n; k++) {
-    const r = inset(f.outer, band.from + (band.to - band.from) * (k + 0.5) / n);
+    const r = inset(f.outer, mid + (k - (n - 1) / 2) * pitch);
     rings.push([{ x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 }, { x: r.x0, y: r.y0 }]);
   }
   return rings;
