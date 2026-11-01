@@ -34,10 +34,10 @@ import { ART, H, MM_X, MM_Y, PAGE, TRIM, W } from '../world.ts';
 const deg = THREE.MathUtils.degToRad;
 
 /**
- * The pens: the black's silver, gold and fluoro pink gels (and copper, for the lapels, on trial), the gold again as a
- * layer of its own for the small windows' fill, and the Micron 08 on the gold.
+ * The pens: the black's silver, gold and fluoro pink gels (and copper, for the lapels, on trial), the silver and the gold
+ * again as layers of their own for the lapels and the small windows' fill, and the Micron 08 on the gold.
  */
-export type Pen = 'silver' | 'gold' | 'gold-fill' | 'copper' | 'fluoro-pink' | 'black';
+export type Pen = 'silver' | 'silver-lapels' | 'gold' | 'gold-fill' | 'copper' | 'fluoro-pink' | 'black';
 
 /** A projected, visible mark, and how the thinning ranks it (0 outlines, 1 seams and creases, 2 hatch). */
 export interface Seen { pen: Pen; rank: number; id: string; piece: Point[] }
@@ -129,6 +129,7 @@ export const PARAMS: Param[] = [
   P('frameInset', 'Frame in from the trim', 4, 2, 15, 0.5, 'Framing', 'mm'),
   P('fillUnderMm', 'Fill the glitch\'s cut-outs this small in a gold layer of their own (0 for none)', 0, 0, 30, 0.5, 'Cut-outs', 'mm'),
   P('fillMargin', 'The fill past the cut', 2.5, 0.5, 6, 0.5, 'Cut-outs', 'mm'),
+  P('lapelPitch', 'The lapels\' stripes apart (pinstripes when wide)', 0.9, 0.8, 8, 0.1, 'Suit', 'mm'),
   P('pitchMm', 'Densest line pitch', 0.95, 0.8, 3, 0.05, 'Plates', 'mm', HEAD),
   P('plateMm', 'Plate size', 27, 10, 80, 1, 'Plates', 'mm', HEAD),
   P('bareShare', 'Plates left bare', 0.12, 0, 0.6, 0.01, 'Plates', undefined, HEAD),
@@ -167,24 +168,27 @@ export function num(ctx: SketchContext, id: string): number {
   return n(ctx, id, p.d, p.min, p.max);
 }
 
-const LAPEL_INKS = ['silver', 'copper', 'fluoro-pink', 'gold'] as const;
+const LAPEL_INKS = ['silver', 'silver-lapels', 'copper', 'fluoro-pink', 'gold'] as const;
 
 export const CONTROLS: Control[] = [
   ...PARAMS.map((p): Control => ({ type: 'slider', id: p.id, label: p.label, default: p.d, min: p.min, max: p.max, step: p.step, group: p.group, ...(p.units ? { units: p.units } : {}), ...(p.head ? { expensive: true } : {}) })),
   { type: 'select', id: 'view', label: 'What to draw', default: 'assembly', options: ['assembly', 'head'],
     optionLabels: { assembly: 'The sheet as cut', head: 'The head alone (no visor, no glitch)' }, group: 'Glitch' },
   { type: 'select', id: 'lapelInk', label: 'The lapels', default: 'silver', options: [...LAPEL_INKS],
-    optionLabels: { silver: 'Silver gel, with the jacket', copper: 'Copper gel, a layer of their own', 'fluoro-pink': 'Fluoro pink gel', gold: 'Gold gel' }, group: 'Suit' },
+    optionLabels: { silver: 'Silver gel, with the jacket', 'silver-lapels': 'Silver gel, a layer of their own', copper: 'Copper gel, a layer of their own', 'fluoro-pink': 'Fluoro pink gel', gold: 'Gold gel' }, group: 'Suit' },
   { type: 'select', id: 'tieInk', label: 'The tie', default: 'silver', options: ['silver', 'blank'],
     optionLabels: { silver: 'Silver, cross-hatched, edged in gold', blank: 'Blank (the black paper)' }, group: 'Suit' },
   ...SLOGAN_CONTROLS,
 ];
 
-/** How the suit is drawn: the lapels' gel (striped as the jacket's, or in a gel of their own), the tie silver or blank. */
-export interface SuitLook { lapels: (typeof LAPEL_INKS)[number]; tie: 'silver' | 'blank' }
+/**
+ * How the suit is drawn: the lapels' gel (with the jacket's silver, or a layer of their own) and how far apart their
+ * stripes run, the tie silver or blank.
+ */
+export interface SuitLook { lapels: (typeof LAPEL_INKS)[number]; lapelPitch: number; tie: 'silver' | 'blank' }
 export function suitLook(ctx: SketchContext): SuitLook {
   const lapels = String(ctx.params.lapelInk ?? 'silver'), tie = String(ctx.params.tieInk ?? 'silver');
-  return { lapels: (LAPEL_INKS as readonly string[]).includes(lapels) ? lapels as SuitLook['lapels'] : 'silver', tie: tie === 'blank' ? 'blank' : 'silver' };
+  return { lapels: (LAPEL_INKS as readonly string[]).includes(lapels) ? lapels as SuitLook['lapels'] : 'silver', lapelPitch: num(ctx, 'lapelPitch'), tie: tie === 'blank' ? 'blank' : 'silver' };
 }
 
 // ── The frame ────────────────────────────────────────────────────────
@@ -776,7 +780,8 @@ function subMesh(m: SculptMesh, keep: (p: V3) => boolean): THREE.BufferGeometry 
  * The suit as flat panels laid out from the neck's two sides where the collar meets it (its width `w` the unit), as
  * Lodestone L's: the jacket and lapels in silver stripes on the black, edged in gold, the tie silver cross-hatched;
  * the shirt and the collar's leaves cut out of the black, the gold behind striped in black ink. The collar's back is
- * seen behind the neck. `look` can stripe the lapels in a gel of their own and leave the tie blank.
+ * seen behind the neck. `look` can stripe the lapels in a gel or a layer of their own, as wide apart as pinstripes, and
+ * leave the tie blank.
  */
 function suitOf(left: Point, right: Point, look: SuitLook): { panels: Panel[]; lines: SuitLine[]; front: Point[][]; shirt: Point[][]; back: Point[]; tie: Point[][] } {
   const c = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 }, w = right.x - left.x;
@@ -802,8 +807,8 @@ function suitOf(left: Point, right: Point, look: SuitLook): { panels: Panel[]; l
   const panels: Panel[] = [
     { id: 'jacket-l', ring: jacketL, angle: aL, pitch: 1.0, pen: 'silver', cross: aL + 0.8 },
     { id: 'jacket-r', ring: jacketR, angle: aR, pitch: 1.0, pen: 'silver', cross: aR - 0.8 },
-    { id: 'lapel-l', ring: lapelL, angle: angleOf(P(-1.28, 0.78), { x: P(-0.42, 0).x, y: bottom }) + 0.12, pitch: 0.9, pen: look.lapels },
-    { id: 'lapel-r', ring: lapelR, angle: angleOf(P(1.2, 0.7), { x: P(0.62, 0).x, y: bottom }) - 0.12, pitch: 0.9, pen: look.lapels },
+    { id: 'lapel-l', ring: lapelL, angle: angleOf(P(-1.28, 0.78), { x: P(-0.42, 0).x, y: bottom }) + 0.12, pitch: look.lapelPitch, pen: look.lapels },
+    { id: 'lapel-r', ring: lapelR, angle: angleOf(P(1.2, 0.7), { x: P(0.62, 0).x, y: bottom }) - 0.12, pitch: look.lapelPitch, pen: look.lapels },
     ...(tie ? [
       { id: 'tie', ring: blade, angle: -0.7, pitch: 1.0, pen: 'silver', cross: 0.7 },
       { id: 'knot', ring: knot, angle: 0.5, pitch: 0.9, pen: 'silver', cross: -0.9 },

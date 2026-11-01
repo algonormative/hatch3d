@@ -5,7 +5,7 @@ const pairs = Object.values(INKS).flatMap((ink) => Object.entries(ink.measured ?
 
 describe('measured pen data (assembly calibration R13)', () => {
   it('is keyed by known inks and papers, with sane numbers and a source', () => {
-    expect(pairs).toHaveLength(26); // 14 on black, 5 on gold-yellow, 7 on white (the gold fill repeats the gold's two)
+    expect(pairs).toHaveLength(28); // 15 on black, 5 on gold-yellow, 8 on white (the gold fill and the silver lapels repeat their pens' two)
     for (const { ink, paper, m } of pairs) {
       const at = `${ink} on ${paper}`;
       expect(Object.keys(PAPERS), at).toContain(paper);
@@ -32,7 +32,7 @@ describe('measured pen data (assembly calibration R13)', () => {
 
   it('keeps the gels’ drawn width at their measured width on black, and the Microns’ at the cards’ width', () => {
     const gels = Object.values(INKS).filter((ink) => ink.pen?.startsWith('Signo') || ink.pen?.startsWith('Moonlight'));
-    expect(gels).toHaveLength(14); // the gold fill is the gold's Signo again
+    expect(gels).toHaveLength(15); // the gold fill and the silver lapels are the gold's and silver's Signos again
     for (const ink of gels) {
       expect(ink.width, ink.id).toBe(ink.measured?.black?.width);
       expect(ink.note, ink.id).toBeUndefined();

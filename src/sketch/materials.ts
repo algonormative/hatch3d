@@ -122,12 +122,15 @@ const moonlight = (id: string, label: string, color: string, colour: string, opt
 const signo = (id: string, label: string, color: string, colour: string, trial: string[], measured: MeasuredTable): Ink => gel(id, label, color, `Signo 1.0mm ${colour}`, { trial, measured });
 
 const GOLD = signo('gold', 'Gold gel', '#c9a54a', 'gold', ['gold-yellow'], SIGNO_GOLD);
+const SILVER = signo('silver', 'Silver gel', '#c4c8cc', 'silver', ['white'], SIGNO_SILVER);
 export const INKS: Record<string, Ink> = {
   gold: GOLD,
-  // The gold gel again, as a layer of its own: a fill a sheet may plot or leave out, apart from its gold line work. The
-  // same pen, so the same readings.
+  // The gold and silver gels again, each as a layer of its own (the same pen, so the same readings): a fill a sheet may
+  // plot or leave out apart from its gold line work, and a suit's lapels drawn apart from the rest of it, so their pen
+  // can be changed at the plotter.
   'gold-fill': { ...GOLD, id: 'gold-fill', label: 'Gold gel (a layer of its own)' },
-  silver: signo('silver', 'Silver gel', '#c4c8cc', 'silver', ['white'], SIGNO_SILVER),
+  silver: SILVER,
+  'silver-lapels': { ...SILVER, id: 'silver-lapels', label: 'Silver gel (the lapels, a layer of their own)' },
   'fluoro-pink': moonlight('fluoro-pink', 'Fluoro pink gel', '#ff4fa3', 'fl pink', { trial: ['white'], measured: withWhite(onBlack(0.45)) }),
   'fluoro-orange': moonlight('fluoro-orange', 'Fluoro orange gel', '#ff8a2a', 'fl orange', {
     trial: ['white'], measured: withWhite(onBlack(0.39, 'strip streaky at one end'), 'pen-down blob at the first corner'),

@@ -25,7 +25,11 @@
     "sloganText": "THANK YOU FOR YOUR ATTENTION TO THIS MATTER",
     "sloganPlace": "both",
     "sloganFace": "matrix",
-    "frameMm": 5
+    "frameMm": 5,
+    "fillUnderMm": 15,
+    "lapelInk": "silver-lapels",
+    "lapelPitch": 3.5,
+    "tieInk": "blank"
   },
   "pieces": [
     {

@@ -12,18 +12,18 @@ import { CONTROLS, cpuMesher, erasure, FILL_PITCH, frameRings, panelStripes, pre
 /**
  * Upward Erasure (a Lodestone study, after the character concept of 2026-10-21): see `./world.ts`. Two sheets, as
  * Lodestone L: the gold-yellow behind (Micron 08 black where it shows), the black in front (silver, gold and fluoro
- * pink gels, and copper when the lapels take it), cut with the bar, the shirt and collar, and some of the crown's
+ * pink gels, and copper when the lapels take it; the lapels' silver may be a layer of its own), cut with the bar, the shirt and collar, and some of the crown's
  * slices. The small slices' fill, when there is one, is a gold layer of its own (`gold-fill`) drawn before the cut
  * guides, so the guides lie on it.
  */
 
 const plies = [
   { id: 'gold', paper: PAPER.gold, pens: ['black'], cutInk: 'black' },
-  { id: 'black', paper: PAPER.black, pens: ['silver', 'gold', 'gold-fill', 'copper', 'fluoro-pink'], cutInk: 'silver' },
+  { id: 'black', paper: PAPER.black, pens: ['silver', 'silver-lapels', 'gold', 'gold-fill', 'copper', 'fluoro-pink'], cutInk: 'silver' },
 ];
 export const spec: AssemblySpec = { ...LODESTONE_ASSEMBLY, plies };
-/** In plotting order: the gold's fill right after its line work (the same pen, still in the holder). */
-export const pens = pensOf(['silver', 'gold', 'gold-fill', 'copper', 'fluoro-pink', 'black']);
+/** In plotting order: each pen's own layer right after its line work (the lapels' silver, the gold's fill), still in the holder. */
+export const pens = pensOf(['silver', 'silver-lapels', 'gold', 'gold-fill', 'copper', 'fluoro-pink', 'black']);
 
 type Item = Seen & { piece: Point[] };
 

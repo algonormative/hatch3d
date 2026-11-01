@@ -18,7 +18,7 @@ describe('gel pens in the catalog', () => {
       expect(ink.gel === true, `${ink.id} gel`).toBe(isGel);
       expect(ink.speedPendown, `${ink.id} speedPendown`).toBe(isGel ? 15 : undefined);
     }
-    expect(Object.values(INKS).filter((ink) => ink.gel)).toHaveLength(15);
+    expect(Object.values(INKS).filter((ink) => ink.gel)).toHaveLength(16);
   });
 });
 
