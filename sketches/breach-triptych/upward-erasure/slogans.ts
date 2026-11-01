@@ -1,8 +1,7 @@
 import type { Control, Point, SketchContext } from '../../../src/sketch/types.ts';
 import { measureStrokeText, strokeText, type StrokeFace } from '../../../src/sketch/stroke-text.ts';
-import { clipToRect, insideRing, keepAlong } from '../../kit/page.ts';
+import { clipToRect, insideRing, keepAlong, type Rect } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
-import { ART } from '../world.ts';
 import type { Cell, Pen } from './world.ts';
 
 /**
@@ -53,6 +52,8 @@ export interface SloganFrame {
   onNose: (p: Point) => boolean;
   window: Point[][];
   page: { eyes: Point[]; noseTip: Point };
+  /** Where the black's art may go (the trim, or inside the frame). */
+  art: Rect;
 }
 
 export const NO_SLOGAN: SloganInk = { gold: [], black: [], pen: 'silver', clearGold: [], clearBlack: [] };
@@ -87,7 +88,7 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
     return paths.map(path => path.map(p => ({ x: origin.x + along.x * p.x + down.x * p.y, y: origin.y + along.y * p.x + down.y * p.y })));
   };
   const clipped = (paths: Point[][], keep: (p: Point) => boolean) =>
-    paths.flatMap(path => keepAlong(path, keep, 0.05)).flatMap(path => clipToRect(path, ART)).filter(path => path.length >= 2);
+    paths.flatMap(path => keepAlong(path, keep, 0.05)).flatMap(path => clipToRect(path, f.art)).filter(path => path.length >= 2);
 
   const out: SloganInk = { gold: [], black: [], pen, clearGold: [], clearBlack: [] };
   const box = (x0: number, y0: number, x1: number, y1: number): Point[][] => [[{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }, { x: x0, y: y0 }]];
@@ -101,7 +102,7 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
     const downIsLower = down.x * up.x + down.y * up.y < 0;
     const margin = Math.max(2.5, f.barH * 0.1), lead = 1.6;
     const inVisor = (p: Point) => insideRing(f.bar, p) && !f.onNose(p);
-    const inArt = (p: Point) => p.x > ART.x0 + 4 && p.x < ART.x1 - 4 && p.y > ART.y0 + 4 && p.y < ART.y1 - 4;
+    const inArt = (p: Point) => p.x > f.art.x0 + 4 && p.x < f.art.x1 - 4 && p.y > f.art.y0 + 4 && p.y < f.art.y1 - 4;
     /** The readout's band, in the visor's v, for lines of `size` (lowest and highest v). */
     const band = (lines: number, size: number) => ({ v0: -f.barH + margin, v1: -f.barH + margin + size * (1 + lead * (lines - 1)) });
     /** The longest run of the visor along u where the whole band shows (inside the visor, clear of the nose, on the art). */
@@ -168,7 +169,7 @@ export function slogans(ctx: SketchContext, f: SloganFrame): SloganInk {
     // The slogan's run at height 1, with the drift its letters gather as they come apart (about a quarter of a letter
     // height per letter at full decay): its length scales with the letter height.
     const perMm = measureStrokeText(text, { face, height: 1 }) + decay * 0.25 * [...text].length;
-    const inArt = (p: Point) => p.x > ART.x0 + 2 && p.x < ART.x1 - 2 && p.y > ART.y0 + 2 && p.y < ART.y1 - 2;
+    const inArt = (p: Point) => p.x > f.art.x0 + 2 && p.x < f.art.x1 - 2 && p.y > f.art.y0 + 2 && p.y < f.art.y1 - 2;
     // The rise column with the most air above it, back from the face, whose slogan fits up to the art's edge.
     let best: { c: Cell; room: number } | undefined;
     for (const c of f.cells) {

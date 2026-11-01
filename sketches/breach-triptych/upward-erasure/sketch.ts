@@ -6,7 +6,7 @@ import { clipToRect, insideRing, keepAlong, pathLength } from '../../kit/page.ts
 import { ALONGSIDE_DEG, FILL_OVER, LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { ART, PAGE, PAPER, pensOf } from '../world.ts';
 import { gpuMesher } from '../../kit/sculpt-gpu.ts';
-import { CONTROLS, cpuMesher, erasure, panelStripes, previewHeadStage, type Erasure, type HeadStage, type Pen, type Seen } from './world.ts';
+import { CONTROLS, cpuMesher, erasure, frameRings, panelStripes, previewHeadStage, type Erasure, type HeadStage, type Pen, type Seen } from './world.ts';
 
 /**
  * Upward Erasure (a Lodestone study, after the character concept of 2026-10-21): see `./world.ts`. Two sheets, as
@@ -91,6 +91,12 @@ export function sheets(e: Erasure, options: { thin?: boolean } = {}): { black: P
   const lines = thinned(black.filter(i => i.pen !== 'fluoro-pink').flatMap(i => keepAlong(i.piece, p => !byPink(p) && !byRising(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   lines.set('fluoro-pink', pink);
   if (e.slogan.pen !== 'fluoro-pink' && e.slogan.black.length) lines.set(e.slogan.pen, [...(lines.get(e.slogan.pen) ?? []), ...e.slogan.black]);
+  // The frame: the black's art held inside it, then its gold and silver bands (never thinned).
+  if (e.frame) {
+    const inner = e.frame.inner;
+    for (const [pen, paths] of lines) lines.set(pen, paths.flatMap(path => clipToRect(path, inner)).filter(path => pathLength(path) >= 0.6));
+    for (const band of e.frame.bands) lines.set(band.pen, [...(lines.get(band.pen) ?? []), ...frameRings(e.frame, band, LINE_PITCH.gel)]);
+  }
   const under = thinned(gold.flatMap(i => keepAlong(i.piece, p => !byReadout(p), 0.15).map(piece => ({ ...i, piece }))), LINE_PITCH.gel, options.thin === false);
   if (e.slogan.gold.length) under.set('black', [...(under.get('black') ?? []), ...e.slogan.gold]);
   return {

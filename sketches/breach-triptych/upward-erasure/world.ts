@@ -83,6 +83,8 @@ export interface Erasure {
   page: { eyes: Point[]; noseTip: Point; chin: Point; neck: { left: Point; right: Point } };
   /** The slogans' ink (`./slogans.ts`): the readout on the gold, the rising slogan on the black. */
   slogan: SloganInk;
+  /** The gold and silver frame on the black, when there is one (`frameOf`). */
+  frame?: Frame;
 }
 
 // ── Controls ─────────────────────────────────────────────────────────
@@ -116,6 +118,8 @@ export const PARAMS: Param[] = [
   P('headX', 'Head across the sheet', 150, 40, 240, 1, 'Framing', 'mm', HEAD),
   P('lookUp', 'Camera looking up', 8, 0, 40, 1, 'Framing', '°', HEAD),
   P('collarAt', 'Collar on the neck', 0.56, 0.4, 1.6, 0.01, 'Framing'),
+  P('frameMm', 'Gold and silver frame width (0 for none)', 0, 0, 10, 0.5, 'Framing', 'mm'),
+  P('frameInset', 'Frame in from the trim', 4, 2, 15, 0.5, 'Framing', 'mm'),
   P('pitchMm', 'Densest line pitch', 0.95, 0.8, 3, 0.05, 'Plates', 'mm', HEAD),
   P('plateMm', 'Plate size', 27, 10, 80, 1, 'Plates', 'mm', HEAD),
   P('bareShare', 'Plates left bare', 0.12, 0, 0.6, 0.01, 'Plates', undefined, HEAD),
@@ -160,6 +164,37 @@ export const CONTROLS: Control[] = [
     optionLabels: { assembly: 'The sheet as cut', head: 'The head alone (no visor, no glitch)' }, group: 'Glitch' },
   ...SLOGAN_CONTROLS,
 ];
+
+// ── The frame ────────────────────────────────────────────────────────
+
+/**
+ * A double frame on the black, `frameMm` wide and `frameInset` in from the trim: a gold band outside, a silver band
+ * inside, a hair of black between. The black's art and its shirt and collar windows stay inside it (`inner`); the
+ * erasure's windows run on through it to the trim, so the frame is broken only where the glitch takes it.
+ */
+export interface Frame { outer: Rect; inner: Rect; bands: { pen: Pen; from: number; to: number }[] }
+
+const inRect = (r: Rect, p: Point) => p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
+const inset = (r: Rect, d: number): Rect => ({ x0: r.x0 + d, y0: r.y0 + d, x1: r.x1 - d, y1: r.y1 - d });
+
+export function frameOf(ctx: SketchContext): Frame | undefined {
+  const w = num(ctx, 'frameMm');
+  if (w <= 0) return undefined;
+  const outer = inset(TRIM, num(ctx, 'frameInset'));
+  // The art keeps 1.2 mm off the silver band (the knife's clearance, where a window meets the frame).
+  return { outer, inner: inset(outer, w + 1.2), bands: [{ pen: 'gold', from: 0, to: w * 0.44 }, { pen: 'silver', from: w * 0.64, to: w }] };
+}
+
+/** A frame band as concentric rings, `pitch` apart, filling it. */
+export function frameRings(f: Frame, band: Frame['bands'][number], pitch: number): Point[][] {
+  const rings: Point[][] = [];
+  const n = Math.max(1, Math.round((band.to - band.from) / pitch));
+  for (let k = 0; k < n; k++) {
+    const r = inset(f.outer, band.from + (band.to - band.from) * (k + 0.5) / n);
+    rings.push([{ x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 }, { x: r.x0, y: r.y0 }]);
+  }
+  return rings;
+}
 
 // ── The head ─────────────────────────────────────────────────────────
 
@@ -623,13 +658,17 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
     const inGroup = (g: number) => here.some(o => o.group === g && o.holds(p));
     return (inGroup(0) && !onNose(p)) || (inGroup(1) && !suit.tie.some(r => insideRing(r, p))) || (inGroup(2) && !onHead(p));
   };
+  // The frame (when there is one) holds the shirt and collar's windows inside it; only the erasure breaks through it.
+  const frame = frameOf(ctx);
+  const inGlitch = (p: Point) => { const here = coarse[clampG(p.y, gy) * gx + clampG(p.x, gx)]; return here.some(o => o.group === 0 && o.holds(p)) && !onNose(p); };
   // A preview traces the window at half the resolution: the knife's line only matters on the plotted sheet.
-  const window = traceMask(windowAt, { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
+  const window = traceMask(p => windowAt(p) && (!frame || inGlitch(p) || inRect(frame.inner, p)), { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
 
-  const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page }) : NO_SLOGAN;
+  const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page, art: frame?.inner ?? ART }) : NO_SLOGAN;
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,
     panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page, slogan,
+    ...(frame ? { frame } : {}),
   };
 }
 
