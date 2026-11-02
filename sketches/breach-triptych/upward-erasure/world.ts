@@ -11,7 +11,7 @@ import {
 } from '../../kit/sculpt.ts';
 import { sculptHead } from '../../kit/sculpt-head.ts';
 import type { GpuMesher } from '../../kit/sculpt-gpu.ts';
-import { sharpenCorners, traceMask } from '../../kit/outline.ts';
+import { sharpenCorners, simplifyRing, traceMask } from '../../kit/outline.ts';
 import { distanceToRings, ringsSimple } from '../../../src/sketch/region.ts';
 import { NO_SLOGAN, SLOGAN_CONTROLS, slogans, type SloganInk } from './slogans.ts';
 import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
@@ -267,9 +267,37 @@ const barBox = (r: Rect, toBar: (p: Point) => Bar): Rect => {
 };
 /** How an outline's corners are sharpened (`sharpenCorners`) once traced square: only the grid's relaxing rounds them. */
 const SHARPEN = { edge: 1.5, run: 4, reach: 1.5 };
-/** Rings with their corners sharpened, each kept as traced where sharpening would make it cross itself or another. */
+/** Whether every ring of `a` keeps at least `gap` mm from every ring of `b`. */
+function apart(a: Point[][], b: Point[][], gap: number): boolean {
+  return a.every(ra => {
+    const box = boxOf(ra, gap);
+    return b.every(rb => {
+      const other = boxOf(rb);
+      if (other.x0 > box.x1 || other.x1 < box.x0 || other.y0 > box.y1 || other.y1 < box.y0) return true;
+      return ringsSimple([ra, rb]) && !insideRing(ra, rb[0]) && !insideRing(rb, ra[0]) && ra.every(q => distanceToRings(q, [rb]) >= gap) && rb.every(q => distanceToRings(q, [ra]) >= gap);
+    });
+  });
+}
+
+/** The least paper a sharpened corner may leave between two windows (mm), unless the rounded one left less. */
+const MIN_BRIDGE = 1.5;
+/** How far a sharp outline's straight cuts may stand off what curves it had (mm). */
+const STRAIGHT = 0.25;
+/**
+ * Rings with their corners sharpened: a corner only where it leaves `MIN_BRIDGE` to every other ring (or no less than
+ * its rounding did), what curves are left drawn as straight cuts within `STRAIGHT` of them, and each ring kept as
+ * traced where that would make it cross itself or another.
+ */
 function sharpened(rings: Point[][]): Point[][] {
-  const out = rings.map(r => sharpenCorners(r, SHARPEN)).map((r, i) => (ringsSimple([r]) ? r : rings[i]));
+  const out = rings.slice(), near = rings.map(r => boxOf(r, MIN_BRIDGE + 2));
+  const along = (line: Point[]) => line.slice(1).flatMap((b, k) => { const a = line[k], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.25)); return Array.from({ length: n + 1 }, (_, t) => ({ x: a.x + ((b.x - a.x) * t) / n, y: a.y + ((b.y - a.y) * t) / n })); });
+  for (let i = 0; i < rings.length; i++) {
+    // The paper from `pts` to the nearest other ring, as sharpened so far.
+    const gap = (pts: Point[]) => Math.min(...pts.map(q => distanceToRings(q, out.filter((_, j) => j !== i && inRect(near[j], q)))));
+    const keep = (line: Point[], run: Point[]) => gap(along(line)) >= Math.min(MIN_BRIDGE, gap(run));
+    const s = simplifyRing(sharpenCorners(rings[i], { ...SHARPEN, keep }), STRAIGHT);
+    out[i] = ringsSimple([s]) ? s : rings[i];
+  }
   const boxes = out.map(r => boxOf(r, 0.05));
   const meet = (a: Box, b: Box) => a.x1 >= b.x0 && b.x1 >= a.x0 && a.y1 >= b.y0 && b.y1 >= a.y0;
   for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) {
@@ -818,14 +846,20 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
   const frame = frameOf(ctx);
   const inGlitch = (p: Point) => { const here = coarse[clampG(p.y, gy) * gx + clampG(p.x, gx)]; return here.some(o => o.group === 0 && o.holds(p)) && !onNose(p); };
   // A preview traces the window at half the resolution: the knife's line only matters on the plotted sheet.
-  // Sharp corners (for straight cuts): traced square to the visor, cleared by the knife's square rather than its disc,
-  // so the glitch's corners stay; what the grid's relaxing rounds is sharpened back.
   const trim = { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 };
-  const opening = (p: Point) => windowAt(p) && (!frame || inRect(frame.inner, p));
+  const inFrame = (p: Point) => !frame || inRect(frame.inner, p);
+  const opening = (p: Point) => windowAt(p) && inFrame(p);
   const cell = options.preview ? 0.5 : 0.25, tracing = { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 };
-  const window = ctx.params.corners === 'sharp'
-    ? sharpened(traceSquare(p => inRect(trim, p) && opening(p), toPage, barBox(trim, toBar), cell, tracing))
-    : traceMask(opening, trim, cell, tracing);
+  let window: Point[][];
+  if (ctx.params.corners === 'sharp') {
+    // Sharp corners (for straight cuts): the glitch, square to the visor, is traced on a grid square to it and cleared
+    // by a square, so its corners stay; the shirt and collar, at angles of their own, are traced as before (the knife's
+    // disc keeps the paper between their points). What either tracing rounds is sharpened back where that paper allows.
+    const square = (inside: (p: Point) => boolean) => traceSquare(p => inRect(trim, p) && inside(p), toPage, barBox(trim, toBar), cell, tracing);
+    const glitch = square(p => inGlitch(p) && inFrame(p)), rest = traceMask(p => opening(p) && !inGlitch(p), trim, cell, tracing);
+    // The two apart (as here), or the glitch and the suit's windows traced as one where they meet.
+    window = sharpened(apart(glitch, rest, 1) ? [...glitch, ...rest] : square(opening));
+  } else window = traceMask(opening, trim, cell, tracing);
 
   const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page, art: frame?.inner ?? ART }) : NO_SLOGAN;
   // The small windows' fill keeps clear of the rising slogan and of the pieces lifted onto the black (and their frames).

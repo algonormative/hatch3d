@@ -163,9 +163,10 @@ function dp(line: Point[], eps: number): Point[] {
  * through), the run is squared off across its farthest point instead; where they run on parallel but stepped (a step
  * rounded into an S), the step is put back square across the middle of the run. Each stands in only where the run keeps within
  * `reach` of it, so a feature between two edges (a bump, a notch) is kept, as are curves (runs of short edges with no
- * long edge either side).
+ * long edge either side); and only where `keep`, given the new line through the corner and the run it replaces,
+ * allows, or failing that a straight bevel across the run where `keep` allows that.
  */
-export function sharpenCorners(ring: Point[], options: { edge?: number; run?: number; reach?: number; turn?: number } = {}): Point[] {
+export function sharpenCorners(ring: Point[], options: { edge?: number; run?: number; reach?: number; turn?: number; keep?: (line: Point[], run: Point[]) => boolean } = {}): Point[] {
   const { edge = 2, run = 6, reach = 2, turn = 40 } = options;
   const n = ring.length;
   if (n < 4) return ring;
@@ -211,6 +212,10 @@ export function sharpenCorners(ring: Point[], options: { edge?: number; run?: nu
     }
     const line = [p1, ...stand, q0];
     if (stand.some(q => !Number.isFinite(q.x) || !Number.isFinite(q.y)) || runPoints.some(p => distanceToLine(p, line) > reach)) continue;
+    if (options.keep && !options.keep(line, runPoints)) {
+      if (!options.keep([p1, q0], runPoints)) continue;
+      stand = [p1, q0];
+    }
     for (let i = 1; i <= gap; i++) removed.add((a + i) % n);
     placed.set((a + 1) % n, stand);
   }
