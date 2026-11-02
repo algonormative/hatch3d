@@ -9,7 +9,7 @@ import { pens, sheets, spec } from '../upward-erasure/sketch.ts';
 import { CONTROLS, erasure } from '../upward-erasure/world.ts';
 
 /**
- * Upward Erasure's test sheet (vault-l9j56): before the full 11 x 17 sheets, an A4 pair (black over gold-yellow, cut
+ * Upward Erasure's test sheet: before the full 11 x 17 sheets, an A4 pair (black over gold-yellow, cut
  * as the piece is) that proves the inks and the cutting on a window of the real drawing, `TEST.w` x `TEST.h` mm from
  * (`testX`, `testY`) on the full sheet (by default round the nose and the visor: plates, seams, the nose over the
  * visor, the pink line, the glitch's first pieces), and a strip below it for `plotter widths`:
