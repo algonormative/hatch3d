@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { area, traceMask } from '../../sketches/kit/outline.ts';
+import { area, sharpenCorners, traceMask } from '../../sketches/kit/outline.ts';
 import { contourLines, isoLines, meshSdf, perVertex, platesOn, scatterOn, sphere } from '../../sketches/kit/sculpt.ts';
 import { sculptHead } from '../../sketches/kit/sculpt-head.ts';
 
@@ -140,5 +140,20 @@ describe('sketch kit: outlines traced from an inside test', () => {
     const inFrom = (ring: { x: number; y: number }[]) => Math.min(...corners.map(c => Math.min(...ring.map(p => Math.hypot(p.x - c[0], p.y - c[1])))));
     expect(inFrom(sharp)).toBeLessThan(0.45);
     expect(inFrom(round)).toBeGreaterThan(1.5 * (Math.SQRT2 - 1) * 0.85);
+  });
+
+  it('sharpens a rounded square\'s corners back to the square\'s, square to the grid or turned, and leaves a disc round', () => {
+    for (const deg of [0, 25]) {
+      const c = Math.cos((deg * Math.PI) / 180), s = Math.sin((deg * Math.PI) / 180);
+      const local = (p: { x: number; y: number }) => ({ u: (p.x - 30) * c + (p.y - 30) * s, v: -(p.x - 30) * s + (p.y - 30) * c });
+      const [round] = traceMask(p => { const q = local(p); return Math.abs(q.u) < 15 && Math.abs(q.v) < 15; }, box, 0.25, { minRadius: 1.5, simplify: 0.08 });
+      const sharp = sharpenCorners(round);
+      const corners = [[-15, -15], [15, -15], [15, 15], [-15, 15]].map(([u, v]) => ({ x: 30 + u * c - v * s, y: 30 + u * s + v * c }));
+      const off = (ring: { x: number; y: number }[]) => Math.max(...corners.map(k => Math.min(...ring.map(p => Math.hypot(p.x - k.x, p.y - k.y)))));
+      expect(off(round)).toBeGreaterThan(0.5);
+      expect(off(sharp)).toBeLessThan(0.2);
+    }
+    const [disc] = traceMask(p => Math.hypot(p.x - 30, p.y - 30) < 12, box, 0.25);
+    expect(sharpenCorners(disc)).toEqual(disc);
   });
 });

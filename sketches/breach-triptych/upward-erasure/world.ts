@@ -11,8 +11,8 @@ import {
 } from '../../kit/sculpt.ts';
 import { sculptHead } from '../../kit/sculpt-head.ts';
 import type { GpuMesher } from '../../kit/sculpt-gpu.ts';
-import { traceMask } from '../../kit/outline.ts';
-import { distanceToRings } from '../../../src/sketch/region.ts';
+import { sharpenCorners, traceMask } from '../../kit/outline.ts';
+import { distanceToRings, ringsSimple } from '../../../src/sketch/region.ts';
 import { NO_SLOGAN, SLOGAN_CONTROLS, slogans, type SloganInk } from './slogans.ts';
 import { clipToTrim, stripeFill } from '../lodestone-cuts.ts';
 import { LINE_PITCH, LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
@@ -129,6 +129,7 @@ export const PARAMS: Param[] = [
   P('frameInset', 'Frame in from the trim', 4, 2, 15, 0.5, 'Framing', 'mm'),
   P('fillUnderMm', 'Fill the glitch\'s cut-outs this small in a gold layer of their own (0 for none)', 0, 0, 30, 0.5, 'Cut-outs', 'mm'),
   P('fillMargin', 'The fill past the cut', 2.5, 0.5, 6, 0.5, 'Cut-outs', 'mm'),
+  P('fillBehindMm', 'The fill behind them on the gold-yellow, this far past the cut (0 for none)', 0, 0, 8, 0.5, 'Cut-outs', 'mm'),
   P('lapelPitch', 'The lapels\' stripes apart (pinstripes when wide)', 0.9, 0.8, 8, 0.1, 'Suit', 'mm'),
   P('pitchMm', 'Densest line pitch', 0.95, 0.8, 3, 0.05, 'Plates', 'mm', HEAD),
   P('plateMm', 'Plate size', 27, 10, 80, 1, 'Plates', 'mm', HEAD),
@@ -178,6 +179,8 @@ export const CONTROLS: Control[] = [
     optionLabels: { silver: 'Silver gel, with the jacket', 'silver-lapels': 'Silver gel, a layer of their own', copper: 'Copper gel, a layer of their own', 'fluoro-pink': 'Fluoro pink gel', gold: 'Gold gel' }, group: 'Suit' },
   { type: 'select', id: 'tieInk', label: 'The tie', default: 'silver', options: ['silver', 'blank'],
     optionLabels: { silver: 'Silver, cross-hatched, edged in gold', blank: 'Blank (the black paper)' }, group: 'Suit' },
+  { type: 'select', id: 'corners', label: 'The cut-outs\' corners', default: 'round', options: ['round', 'sharp'],
+    optionLabels: { round: 'Rounded to the knife\'s radius', sharp: 'Sharp, for straight cuts' }, group: 'Cut-outs' },
   ...SLOGAN_CONTROLS,
 ];
 
@@ -229,45 +232,83 @@ export function frameRings(f: Frame, band: Frame['bands'][number], pitch: number
 // ── The small windows' fill ──────────────────────────────────────────
 
 /**
- * The glitch's windows no bigger than `fillUnderMm` across, filled on the black in a gold layer of their own
- * (`gold-fill`) out to `fillMargin` past the cut, so each may be cut or left: cut, it shows the gold-yellow in a gold
- * rim; left, a gold patch. The fill keeps the art's margin off every other window, stays inside `art` and off `keepOut`;
- * it is an outline and a hatch along the visor (`along`), a clean gel pitch apart, the hatch that far inside the outline.
- * The gold behind each window is drawn as before.
+ * The glitch's windows no bigger than `fillUnderMm` across, filled in a gold layer of their own (`gold-fill`), so each
+ * may be cut or left. On the black, out to `fillMargin` past the cut: cut, it shows the gold-yellow in a gold rim; left,
+ * a gold patch. Behind them on the gold-yellow (with `fillBehindMm`), that far past the cut, so a cut a little off its
+ * line still opens onto gold. Each fill grows from its windows by a square set square to the visor, so it reaches the
+ * margin every way and keeps the windows' corners sharp (for straight cuts); it keeps the art's margin off every other
+ * window the same way, stays inside `art` and (on the black) off `keepOut`. It is an outline and a hatch along the
+ * visor (`along`), a clean gel pitch apart, the hatch that far inside the outline.
  */
-export interface WindowFill { windows: Point[][]; outline: Point[][]; hatch: Point[][] }
+export interface WindowFill { windows: Point[][]; outline: Point[][]; hatch: Point[][]; behind?: { outline: Point[][]; hatch: Point[][] } }
 /** The fill's pitch: a clean gel pitch, with a hair to spare for the prepared SVG's rounding. */
 export const FILL_PITCH = LINE_PITCH.gel + 0.05;
-
 type Box = { x0: number; y0: number; x1: number; y1: number };
 const boxOf = (r: Point[], grow = 0): Box => {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const q of r) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
   return { x0: x0 - grow, y0: y0 - grow, x1: x1 + grow, y1: y1 + grow };
 };
-/** The distance from `p` to the nearest of `rings` whose box holds it; Infinity when none does. */
-const nearRings = (p: Point, rings: { ring: Point[]; box: Box }[]) => distanceToRings(p, rings.filter(r => inRect(r.box, p)).map(r => r.ring));
 
-function windowFill(ctx: SketchContext, window: Point[][], inGlitch: (p: Point) => boolean, keepOut: (p: Point) => boolean, art: Rect, along: Point): WindowFill | undefined {
-  const under = num(ctx, 'fillUnderMm'), margin = num(ctx, 'fillMargin');
-  if (under <= 0) return undefined;
-  const centroid = (r: Point[]) => ({ x: r.reduce((a, q) => a + q.x, 0) / r.length, y: r.reduce((a, q) => a + q.y, 0) / r.length });
-  const span = (r: Point[]) => { const b = boxOf(r); return Math.max(b.x1 - b.x0, b.y1 - b.y0); };
-  const windows = window.filter(r => span(r) <= under && inGlitch(centroid(r)));
-  if (!windows.length) return undefined;
-  const clear = LODESTONE_ASSEMBLY.margin;
-  const small = windows.map(ring => ({ ring, box: boxOf(ring, margin) }));
-  const others = window.filter(r => !windows.includes(r)).map(ring => ({ ring, box: boxOf(ring, clear) }));
-  const inside = (p: Point) => {
-    if (!inRect(art, p) || !small.some(s => inRect(s.box, p))) return false;
-    if (!small.some(s => insideRing(s.ring, p)) && !(nearRings(p, small) <= margin)) return false;
-    if (keepOut(p)) return false;
-    return !others.some(o => inRect(o.box, p) && insideRing(o.ring, p)) && nearRings(p, others) >= clear;
-  };
-  const all = small.map(s => s.box).reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }));
-  const outline = traceMask(inside, all, 0.25, { simplify: 0.08, minRadius: 1.0, minArea: 6 });
-  // The hatch: lines along the visor on one grid for the whole sheet, inside each outer ring and out of its holes (a
-  // ring inside another), a pitch in from every edge.
+/**
+ * A region traced square to the visor: sampled on a grid in its frame (`toPage` from it), closed and opened by a square
+ * set square to it, so shapes square to the visor keep their corners; `box` is the frame's extent to sample.
+ */
+function traceSquare(inside: (p: Point) => boolean, toPage: (u: number, v: number) => Point, box: Rect, cell: number, options: { simplify: number; minRadius: number; minArea: number }): Point[][] {
+  // The frame may be a mirror of the page's: the rings are turned back to the page's way round.
+  const o = toPage(0, 0), pu = toPage(1, 0), pv = toPage(0, 1);
+  const mirrored = (pu.x - o.x) * (pv.y - o.y) - (pu.y - o.y) * (pv.x - o.x) < 0;
+  return traceMask(q => inside(toPage(q.x, q.y)), box, cell, { ...options, square: true }).map(r => { const page = r.map(q => toPage(q.x, q.y)); return mirrored ? page.reverse() : page; });
+}
+/** The visor-frame extent of a page rectangle. */
+const barBox = (r: Rect, toBar: (p: Point) => Bar): Rect => {
+  const c = [{ x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 }].map(toBar);
+  return { x0: Math.min(...c.map(q => q.u)), x1: Math.max(...c.map(q => q.u)), y0: Math.min(...c.map(q => q.v)), y1: Math.max(...c.map(q => q.v)) };
+};
+/** How an outline's corners are sharpened (`sharpenCorners`) once traced square: only the grid's relaxing rounds them. */
+const SHARPEN = { edge: 1.5, run: 4, reach: 1.5 };
+/** Rings with their corners sharpened, each kept as traced where sharpening would make it cross itself or another. */
+function sharpened(rings: Point[][]): Point[][] {
+  const out = rings.map(r => sharpenCorners(r, SHARPEN)).map((r, i) => (ringsSimple([r]) ? r : rings[i]));
+  const boxes = out.map(r => boxOf(r, 0.05));
+  const meet = (a: Box, b: Box) => a.x1 >= b.x0 && b.x1 >= a.x0 && a.y1 >= b.y0 && b.y1 >= a.y0;
+  for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) {
+    if (meet(boxes[i], boxes[j]) && !ringsSimple([out[i], out[j]])) { out[i] = rings[i]; out[j] = rings[j]; }
+  }
+  return out;
+}
+
+/** A point in the visor's frame (`toBar`): `u` along it, `v` across. */
+type Bar = { u: number; v: number };
+/** A ring in the visor's frame, with its extent there grown by `grow`. */
+type BarRing = { bar: Bar[]; u0: number; u1: number; v0: number; v1: number };
+const barRing = (bar: Bar[], grow: number): BarRing => ({
+  bar, u0: Math.min(...bar.map(q => q.u)) - grow, u1: Math.max(...bar.map(q => q.u)) + grow, v0: Math.min(...bar.map(q => q.v)) - grow, v1: Math.max(...bar.map(q => q.v)) + grow,
+});
+/** Whether the square `half` either side of `b` in the visor's frame meets the ring: holds a point of it or is inside it. */
+function squareMeets(b: Bar, ring: Bar[], half: number): boolean {
+  const u0 = b.u - half, u1 = b.u + half, v0 = b.v - half, v1 = b.v + half;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const p = ring[i], q = ring[j];
+    if ((p.v > b.v) !== (q.v > b.v) && b.u < ((q.u - p.u) * (b.v - p.v)) / (q.v - p.v) + p.u) inside = !inside;
+    // The edge clipped to the square (Liang-Barsky): any of it left, and they meet.
+    const du = q.u - p.u, dv = q.v - p.v;
+    let t0 = 0, t1 = 1, out = false;
+    const clip = (den: number, num: number) => {
+      if (den === 0) { if (num < 0) out = true; return; }
+      const t = num / den;
+      if (den < 0) { if (t > t1) out = true; else if (t > t0) t0 = t; } else if (t < t0) out = true; else if (t < t1) t1 = t;
+    };
+    clip(-du, p.u - u0); clip(du, u1 - p.u); clip(-dv, p.v - v0); clip(dv, v1 - p.v);
+    if (!out) return true;
+  }
+  return inside;
+}
+const nearSquare = (b: Bar, rings: BarRing[], half: number) => rings.some(r => b.u >= r.u0 && b.u <= r.u1 && b.v >= r.v0 && b.v <= r.v1 && squareMeets(b, r.bar, half));
+
+/** Lines along `along` on one grid for the whole sheet, inside each outer ring of `outline` and out of its holes (a ring inside another), a pitch in from every edge. */
+function hatchInside(outline: Point[][], along: Point): Point[][] {
   const across = { x: -along.y, y: along.x };
   const hatch: Point[][] = [];
   const isHole = (r: Point[]) => outline.some(o => o !== r && insideRing(o, r[0]));
@@ -283,7 +324,31 @@ function windowFill(ctx: SketchContext, window: Point[][], inGlitch: (p: Point) 
       for (const piece of keepAlong([at(a0), at(a1)], held, 0.1)) if (pathLength(piece) >= 0.6) hatch.push([piece[0], piece[piece.length - 1]]);
     }
   }
-  return { windows, outline: outline.map(r => [...r, r[0]]), hatch };
+  return hatch;
+}
+
+function windowFill(ctx: SketchContext, window: Point[][], inGlitch: (p: Point) => boolean, keepOut: (p: Point) => boolean, art: Rect, toBar: (p: Point) => Bar, toPage: (u: number, v: number) => Point, along: Point): WindowFill | undefined {
+  const under = num(ctx, 'fillUnderMm'), margin = num(ctx, 'fillMargin'), behind = num(ctx, 'fillBehindMm');
+  if (under <= 0) return undefined;
+  const centroid = (r: Point[]) => ({ x: r.reduce((a, q) => a + q.x, 0) / r.length, y: r.reduce((a, q) => a + q.y, 0) / r.length });
+  const span = (r: Point[]) => { const b = boxOf(r); return Math.max(b.x1 - b.x0, b.y1 - b.y0); };
+  const windows = window.filter(r => span(r) <= under && inGlitch(centroid(r)));
+  if (!windows.length) return undefined;
+  const clear = LODESTONE_ASSEMBLY.margin, reach = Math.max(margin, behind);
+  const small = windows.map(r => barRing(r.map(toBar), reach));
+  const others = window.filter(r => !windows.includes(r)).map(r => barRing(r.map(toBar), clear));
+  const region = (past: number, off: (p: Point) => boolean) => (p: Point) => {
+    if (!inRect(art, p)) return false;
+    const b = toBar(p);
+    return nearSquare(b, small, past) && !off(p) && !nearSquare(b, others, clear);
+  };
+  const all = { x0: Math.min(...small.map(r => r.u0)), x1: Math.max(...small.map(r => r.u1)), y0: Math.min(...small.map(r => r.v0)), y1: Math.max(...small.map(r => r.v1)) };
+  const trace = (inside: (p: Point) => boolean) => sharpened(traceSquare(inside, toPage, all, 0.25, { simplify: 0.08, minRadius: 1.0, minArea: 6 }));
+  const closed = (rings: Point[][]) => rings.map(r => [...r, r[0]]);
+  const outline = trace(region(margin, keepOut));
+  const fill: WindowFill = { windows, outline: closed(outline), hatch: hatchInside(outline, along) };
+  if (behind > 0) { const back = trace(region(behind, () => false)); fill.behind = { outline: closed(back), hatch: hatchInside(back, along) }; }
+  return fill;
 }
 
 // ── The head ─────────────────────────────────────────────────────────
@@ -748,16 +813,24 @@ export function erasure(ctx: SketchContext, stage?: HeadStage, options: { previe
     const inGroup = (g: number) => here.some(o => o.group === g && o.holds(p));
     return (inGroup(0) && !onNose(p)) || (inGroup(1) && !suit.tie.some(r => insideRing(r, p))) || (inGroup(2) && !onHead(p));
   };
-  // The frame (when there is one) holds the shirt and collar's windows inside it; only the erasure breaks through it.
+  // The frame (when there is one) holds every window inside it: the visor runs under it, so the black stays whole
+  // round its edge.
   const frame = frameOf(ctx);
   const inGlitch = (p: Point) => { const here = coarse[clampG(p.y, gy) * gx + clampG(p.x, gx)]; return here.some(o => o.group === 0 && o.holds(p)) && !onNose(p); };
   // A preview traces the window at half the resolution: the knife's line only matters on the plotted sheet.
-  const window = traceMask(p => windowAt(p) && (!frame || inGlitch(p) || inRect(frame.inner, p)), { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 }, options.preview ? 0.5 : 0.25, { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 });
+  // Sharp corners (for straight cuts): traced square to the visor, cleared by the knife's square rather than its disc,
+  // so the glitch's corners stay; what the grid's relaxing rounds is sharpened back.
+  const trim = { x0: TRIM.x0 + 0.2, x1: TRIM.x1 - 0.2, y0: TRIM.y0 + 0.2, y1: TRIM.y1 - 0.2 };
+  const opening = (p: Point) => windowAt(p) && (!frame || inRect(frame.inner, p));
+  const cell = options.preview ? 0.5 : 0.25, tracing = { simplify: options.preview ? 0.15 : 0.08, minRadius: 1.2, minArea: 6 };
+  const window = ctx.params.corners === 'sharp'
+    ? sharpened(traceSquare(p => inRect(trim, p) && opening(p), toPage, barBox(trim, toBar), cell, tracing))
+    : traceMask(opening, trim, cell, tracing);
 
   const slogan = assembled ? slogans(ctx, { bar, toPage, toBar, barH, cells, onNose, window, page, art: frame?.inner ?? ART }) : NO_SLOGAN;
   // The small windows' fill keeps clear of the rising slogan and of the pieces lifted onto the black (and their frames).
   const onBlackPiece = (p: Point) => { const b = toBar(p); return cells.some(c => c.kind === 'black' && b.u >= c.u0 - FILL_PITCH && b.u <= c.u1 + FILL_PITCH && b.v >= c.v0 + c.dv - FILL_PITCH && b.v <= c.v1 + c.dv + FILL_PITCH); };
-  const fill = assembled ? windowFill(ctx, window, inGlitch, p => onBlackPiece(p) || slogan.clearBlack.some(r => insideRing(r, p)), frame?.inner ?? ART, { x: dir.x, y: dir.y }) : undefined;
+  const fill = assembled ? windowFill(ctx, window, inGlitch, p => onBlackPiece(p) || slogan.clearBlack.some(r => insideRing(r, p)), frame?.inner ?? ART, toBar, toPage, { x: dir.x, y: dir.y }) : undefined;
   return {
     head: seen, onHead, onNose, bar, toPage, toBar, barH, cells, erased, fragments, drips, streaks, visorBands, spill,
     panels: suit.panels, suitLines: suit.lines, bySuit, shirt: shirtRings, collarBack: suit.back, window, ribbons, page, slogan,

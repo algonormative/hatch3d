@@ -29,7 +29,9 @@
     "fillUnderMm": 15,
     "lapelInk": "silver-lapels",
     "lapelPitch": 3.5,
-    "tieInk": "blank"
+    "tieInk": "blank",
+    "corners": "sharp",
+    "fillBehindMm": 3
   },
   "pieces": [
     {
