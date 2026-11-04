@@ -13,9 +13,9 @@ import close from './traces/04c-close.json';
 export type Px = [number, number];
 export interface Trace { silver: number[][][]; gold: number[][][]; black: number[][][]; windows: number[][][] }
 /** Columns off the line `from`-`to`, running along `dir` (degrees, 0 = to the right, 90 = down the sheet). */
-export interface Stream { from: Px; to: Px; dir: number; reachMm: number; backMm?: number; gaps?: number; widths?: number }
+export interface Stream { from: Px; to: Px; dir: number; reachMm: number; backMm?: number; gaps?: number; widths?: number; fragments?: number }
 /** Where a slogan may go: from `at` along `dir` (degrees), up to `room` mm long; `stack` sets it a word a line at each `lines`. */
-export interface SloganSpot { at: Px; dir: number; mm: number; room: number; apart?: boolean; lines?: Px[] }
+export interface SloganSpot { at: Px; dir: number; mm: number; room: number; apart?: boolean; lines?: Px[]; curve?: Px[] }
 export interface Figure {
   trace: Trace;
   treated?: boolean;
@@ -26,9 +26,19 @@ export interface Figure {
   visorDeg?: number;
   /** Lines of the head the visor hides, drawn on it. */
   under?: Px[][];
+  /** A sculpted face behind the visor, set by the traced nose tip and chin. */
+  hidden?: { noseTip: Px; chin: Px; yaw: number; tilt: number };
+  /** The visor as its own field: it and its streams slide in slices of their own, and this stays in front of it (the nose). */
+  field?: { deg: number; inFront?: Px[]; frontLines?: Px[][] };
   /** The slices' direction, the band of the sheet (the face) they barely move, and how few of them move there (1 = as many as anywhere). */
-  sliceDeg?: number; face?: [Px, Px]; faceShare?: number;
-  body?: { ring: Px[]; plateMm?: number; angle?: number; flow?: number }[];
+  sliceDeg?: number; face?: [Px, Px]; faceShare?: number; sliceMinMm?: number;
+  body?: { ring: Px[]; plateMm?: number; angle?: number; flow?: number; bare?: number; pitch?: number }[];
+  /** The dress as long panels between seams (each three points, neck to hem), its neckline a gold line. */
+  gores?: { seams: Px[][]; neckline: Px[]; fills: { angle: number; pitch: number; cross?: number; bare?: boolean }[] };
+  /** Choices for what is cut below the figure: panels of the dress in colour, or a shape of its own. */
+  lowers?: Record<string, { gores?: number[]; ring?: Px[] }>;
+  /** Traced windows taken out, whose lines are joined back across the gap they leave. */
+  heal?: number[];
   /** Traced windows covered in plates of black ink. */
   colour?: number[]; colourDeg?: number;
   /** Big shapes of colour cut anew, drawn as curves through these points and covered the same way. */
@@ -80,24 +90,64 @@ export const FIGURES: Record<string, Figure> = {
   quiet: { trace: quiet },
   close: {
     trace: close, treated: true,
-    visorWindows: [3, 5], visorDeg: 16,
+    // The traced visor and the slits above the bun give way to a larger bar with straight edges.
+    dropWindows: [0, 1, 2, 3, 4, 5],
+    visor: [[378, 322], [1000, 505], [1000, 700], [378, 517]], visorDeg: 16,
+    field: {
+      deg: 16.4,
+      inFront: [[770, 672], [772, 606], [798, 580], [826, 590], [848, 642], [806, 676]],
+      frontLines: [[[772, 612], [798, 582], [826, 592], [846, 636]]],
+    },
+    hidden: { noseTip: [850, 702], chin: [760, 914], yaw: 46, tilt: -6 },
+    // Two strands of hair falling across the bar.
     under: [
-      [[636, 508], [670, 524], [706, 526], [734, 516]], [[636, 508], [622, 500]],
-      [[846, 552], [876, 566], [906, 568], [928, 560]],
-      [[612, 450], [660, 448], [716, 464], [752, 484]], [[838, 498], [884, 508], [924, 526]],
+      [[652, 372], [628, 430], [612, 500], [590, 560]],
+      [[692, 372], [668, 440], [640, 520], [602, 590]],
     ],
-    sliceDeg: 16, face: [[760, 40], [760, 1000]], faceShare: 0.22,
+    sliceDeg: 16.4, face: [[760, 40], [760, 1060]], faceShare: 0.1, sliceMinMm: 4,
     body: [
-      { ring: [[335, 640], [300, 720], [265, 850], [200, 960], [80, 1140], [380, 1150], [520, 900], [470, 740], [430, 640]], plateMm: 42, angle: 70, flow: 0.55 },
-      { ring: [[520, 905], [640, 882], [780, 874], [890, 960], [945, 1060], [905, 1150], [385, 1150]], plateMm: 58, angle: 25, flow: 0.5 },
+      { ring: [[335, 640], [300, 720], [265, 850], [200, 960], [80, 1140], [380, 1110], [520, 900], [470, 740], [430, 640]], plateMm: 42, angle: 70, flow: 0.55 },
+      { ring: [[520, 905], [640, 882], [780, 874], [890, 960], [945, 1060], [760, 1085], [380, 1110]], plateMm: 58, angle: 25, flow: 0.5 },
     ],
-    masses: [[[170, 1536], [430, 1352], [720, 1236], [1024, 1176], [1024, 1536]]], massMm: 78, colourDeg: 118,
-    streams: [{ from: [190, 268], to: [640, 400], dir: -74, reachMm: 62, backMm: 2, gaps: 0.6, widths: 0.6 }],
+    heal: [0, 1, 2],
+    gores: {
+      neckline: [[0, 1228], [80, 1150], [280, 1122], [520, 1092], [760, 1088], [948, 1082]],
+      seams: [
+        [[0, 1228], [-20, 1380], [-40, 1536]],
+        [[80, 1150], [130, 1340], [205, 1536]],
+        [[280, 1122], [300, 1330], [352, 1536]],
+        [[520, 1092], [502, 1320], [476, 1536]],
+        [[760, 1088], [706, 1320], [640, 1536]],
+        [[948, 1082], [972, 1300], [1016, 1536]],
+      ],
+      fills: [
+        { angle: 62, pitch: 1.2 },
+        { angle: 0, pitch: 0, bare: true },
+        { angle: 104, pitch: 1.5, cross: 28 },
+        { angle: 0, pitch: 0, bare: true },
+        { angle: 118, pitch: 2.2 },
+      ],
+    },
+    lowers: {
+      gores: {},
+      one: { gores: [2] },
+      two: { gores: [1, 3] },
+      sash: { ring: [[0, 1140], [1016, 1440], [1016, 1530], [0, 1236]] },
+    },
+    colourDeg: 118, massMm: 60,
+    streams: [
+      { from: [386, 330], to: [1000, 512], dir: -73.6, reachMm: 24, backMm: 2, gaps: 0.55, widths: 0.9, fragments: 0.35 },
+      { from: [378, 517], to: [760, 630], dir: 106.4, reachMm: 9, backMm: 2, gaps: 0.78, widths: 0.7, fragments: 0 },
+    ],
     spots: {
-      visor: { at: [590, 470], dir: 16, mm: 6, room: 92 },
-      mass: { at: [0, 0], dir: 0, mm: 13, room: 150, lines: [[700, 1340], [700, 1440]] },
-      stream: { at: [660, 300], dir: -74, mm: 5.5, room: 80, apart: true },
-      edge: { at: [40, 1190], dir: -90, mm: 6, room: 280 },
+      visor: { at: [430, 468], dir: 16.4, mm: 6.5, room: 84 },
+      visorHigh: { at: [650, 426], dir: 16.4, mm: 6.5, room: 84 },
+      mass: { at: [120, 1212], dir: 16.4, mm: 11, room: 240 },
+      spine: { at: [372, 742], dir: 108, mm: 5.5, room: 92 },
+      jaw: { at: [0, 0], dir: 0, mm: 5.5, room: 90, curve: [[500, 806], [600, 868], [700, 898], [800, 884], [860, 840]] },
+      bun: { at: [0, 0], dir: 0, mm: 6, room: 170, curve: [[36, 600], [18, 470], [50, 320], [130, 210], [250, 140], [360, 118]] },
+      garment: { at: [0, 0], dir: 0, mm: 13, room: 170, lines: [[300, 1300], [300, 1400], [300, 1490]] },
+      hem: { at: [60, 1486], dir: 0, mm: 5.5, room: 200 },
     },
   },
 };

@@ -7,6 +7,7 @@ import { measureStrokeText, strokeText, type StrokeFace } from '../../../src/ske
 import { distanceToRings, offsetRing, ringsSimple } from '../../../src/sketch/region.ts';
 import { ALONGSIDE_DEG, LINE_PITCH } from '../lodestone-world.ts';
 import { ART, PAGE, TRIM } from '../world.ts';
+import { hiddenFace } from './hidden-face.ts';
 import { FIGURES, type Figure, type Px, type SloganSpot, type Stream, type Trace } from './figures.ts';
 
 /**
@@ -19,7 +20,7 @@ import { FIGURES, type Figure, type Px, type SloganSpot, type Stream, type Trace
  */
 
 type Pen = 'silver' | 'gold' | 'black';
-export interface Stroke { pen: Pen; rank: number; piece: Point[]; backOnly?: boolean; frontOnly?: boolean }
+export interface Stroke { pen: Pen; rank: number; piece: Point[]; backOnly?: boolean; frontOnly?: boolean; local?: boolean }
 interface Cell { ring: Point[]; kind: 'flow' | 'hatch' | 'cross' | 'bare'; angle: number }
 
 const MM = (PAGE.height - 2 * TRIM.y0) / 1536, X0 = (PAGE.width - 1024 * MM) / 2;
@@ -33,6 +34,7 @@ const P = (ctx: SketchContext) => ({
   colourMm: num(ctx, 'colourPlateMm', 46, 14, 120), inkShare: num(ctx, 'inkShare', 0.6, 0, 1), inkMm: num(ctx, 'inkMm', 2.2, 0.8, 6),
   visorMm: num(ctx, 'visorPlateMm', 22, 8, 70), visorInk: num(ctx, 'visorInk', 0.55, 0, 1),
   sliceShare: num(ctx, 'sliceShare', 0.32, 0, 1), shiftMm: num(ctx, 'shiftMm', 30, 0, 80), sliceMin: num(ctx, 'sliceMin', 1.6, 1, 8), sliceMax: num(ctx, 'sliceMax', 20, 3, 60), faceCap: num(ctx, 'faceCap', 5, 0, 30),
+  visorShift: num(ctx, 'visorShift', 14, 0, 70), visorSlices: num(ctx, 'visorSlices', 0.34, 0, 1), bites: num(ctx, 'visorBites', 0.45, 0, 3), facePitch: num(ctx, 'facePitch', 0.95, 0.8, 3), facePlate: num(ctx, 'facePlate', 25, 10, 60), faceCross: num(ctx, 'faceCross', 0.3, 0, 1),
   reach: num(ctx, 'reach', 1, 0, 2), colMin: num(ctx, 'colMin', 3.5, 2, 12), colMax: num(ctx, 'colMax', 15, 4, 40), gaps: num(ctx, 'colGaps', 0.32, 0, 0.9), pieces: num(ctx, 'pieces', 0.6, 0, 1.5), fragments: num(ctx, 'fragments', 1, 0, 3), streaks: num(ctx, 'streaks', 1, 0, 3),
 });
 type Params = ReturnType<typeof P>;
@@ -152,7 +154,7 @@ function streamOf(s: Stream, p: Params, rng: () => number): StreamArt {
     u = u1;
   }
   // Fragments out past the columns: some cut, some only an outline with lines in it.
-  const count = Math.round(len / 9 * p.fragments);
+  const count = Math.round(len / 9 * p.fragments * (s.fragments ?? 1));
   for (let i = 0; i < count; i++) {
     const u0 = rng() * len, v0 = reach * (0.45 + 0.9 * rng()), w = 3.5 + 13 * rng() ** 1.5, h = 3.5 + 11 * rng() ** 1.5, kind = rng(), rA = rng();
     const ring = rect(u0, u0 + w, v0, v0 + h);
@@ -176,7 +178,7 @@ function slicesOf(f: Figure, p: Params, rng: () => number): SliceFrame {
   const face = f.face ? f.face.map(q => toFrame(at(q)).v) : undefined;
   for (let v = Math.min(...corners); v < vMax;) {
     const rT = rng(), rA = rng(), rS = rng();
-    const v1 = Math.min(vMax, v + p.sliceMin + (p.sliceMax - p.sliceMin) * rT ** 2.2);
+    const least = Math.max(p.sliceMin, f.sliceMinMm ?? 0), v1 = Math.min(vMax, v + least + (p.sliceMax - least) * rT ** 2.2);
     const onFace = face && v1 > Math.min(...face) && v < Math.max(...face);
     const signed = rS * 2 - 1, raw = Math.sign(signed) * Math.abs(signed) ** 1.5 * p.shiftMm;
     const share = p.sliceShare * (onFace ? f.faceShare ?? 1 : 1);
@@ -207,6 +209,66 @@ function slid(piece: Point[], f: SliceFrame): Point[][] {
   }
   flush();
   return out;
+}
+
+/** The visor's own slices: thin and many, moving far, only across the visor and just past it. */
+function fieldSlices(f: Figure, visor: Point[], p: Params, rng: () => number): SliceFrame & { bounds: { u0: number; u1: number; v0: number; v1: number } } {
+  const a = deg(f.field!.deg), ux = Math.cos(a), uy = Math.sin(a);
+  const toPage = (u: number, v: number): Point => ({ x: ux * u - uy * v, y: uy * u + ux * v });
+  const toFrame = (q: Point) => ({ u: q.x * ux + q.y * uy, v: -q.x * uy + q.y * ux });
+  const qs = visor.map(toFrame), v0 = Math.min(...qs.map(q => q.v)) - 45, v1 = Math.max(...qs.map(q => q.v)) + 25;
+  const slices: Slice[] = [{ v0: -1e5, v1: v0, du: 0 }];
+  for (let v = v0; v < v1;) {
+    const rT = rng(), rA = rng(), rS = rng(), e = Math.min(v1, v + 2.5 + 20 * rT ** 1.6);
+    const signed = rS * 2 - 1;
+    slices.push({ v0: v, v1: e, du: rA < p.visorSlices ? Math.sign(signed) * Math.abs(signed) ** 1.4 * p.visorShift : 0 });
+    v = e;
+  }
+  slices.push({ v0: v1, v1: 1e5, du: 0 });
+  return { toPage, toFrame, slices, bounds: { u0: Math.min(...qs.map(q => q.u)), u1: Math.max(...qs.map(q => q.u)), v0: Math.min(...qs.map(q => q.v)), v1: Math.max(...qs.map(q => q.v)) } };
+}
+/** Square bites out of the visor's long edges. */
+function bitesOf(visor: Point[], f: SliceFrame, p: Params, rng: () => number): Point[][] {
+  const qs = visor.map(f.toFrame), u0 = Math.min(...qs.map(q => q.u)), u1 = Math.max(...qs.map(q => q.u)), v0 = Math.min(...qs.map(q => q.v)), v1 = Math.max(...qs.map(q => q.v));
+  const out: Point[][] = [], count = Math.round((u1 - u0) / 11 * p.bites);
+  for (let i = 0; i < count; i++) {
+    const u = u0 + rng() * (u1 - u0), w = 3 + 12 * rng() ** 1.6, d = 2.5 + 8 * rng() ** 1.4, lower = rng() < 0.6;
+    const a = lower ? v1 - d : v0 - 1, b = lower ? v1 + 1 : v0 + d;
+    out.push([f.toPage(u, a), f.toPage(u + w, a), f.toPage(u + w, b), f.toPage(u, b)]);
+  }
+  return out;
+}
+
+/** Lines cut by a window that is no longer there, joined back across it, end to end where they point at each other. */
+function healed(lines: Point[][], gaps: Point[][]): Point[][] {
+  const out = lines.map(l => l.slice());
+  for (const gap of gaps) {
+    const xs = gap.map(q => q.x), ys = gap.map(q => q.y), x0 = Math.min(...xs) - 3, x1 = Math.max(...xs) + 3, y0 = Math.min(...ys) - 3, y1 = Math.max(...ys) + 3;
+    const near = (q: Point) => q.x > x0 && q.x < x1 && q.y > y0 && q.y < y1;
+    const heading = (l: Point[], atEnd: boolean) => {
+      const a = atEnd ? l[l.length - 1] : l[0], b = atEnd ? l[Math.max(0, l.length - 4)] : l[Math.min(l.length - 1, 3)], d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      return { x: (a.x - b.x) / d, y: (a.y - b.y) / d };
+    };
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i];
+      if (!a.length || !near(a[a.length - 1])) continue;
+      const end = a[a.length - 1], ha = heading(a, true);
+      let best = -1, bestAt = false, bestD = 11;
+      for (let j = 0; j < out.length; j++) {
+        if (j === i || !out[j].length) continue;
+        for (const atEnd of [false, true]) {
+          const q = atEnd ? out[j][out[j].length - 1] : out[j][0];
+          if (!near(q)) continue;
+          const d = Math.hypot(q.x - end.x, q.y - end.y);
+          if (d < 0.5 || d >= bestD) continue;
+          const toward = (q.x - end.x) / d * ha.x + (q.y - end.y) / d * ha.y, hb = heading(out[j], atEnd);
+          if (toward > 0.8 && -(ha.x * hb.x + ha.y * hb.y) > 0.75) { best = j; bestAt = atEnd; bestD = d; }
+        }
+      }
+      if (best >= 0) { out[i] = [...a, ...(bestAt ? out[best].slice().reverse() : out[best])]; out[best] = []; i--; }
+    }
+  }
+  return out.filter(l => l.length >= 2);
 }
 
 // ── A mask of the windows, for the many tests along the lines ────────
@@ -300,6 +362,28 @@ function sloganAt(spot: SloganSpot, text: string, face: StrokeFace, rng: () => n
     return { lines, screen };
   };
   const out = { lines: [] as Point[][], screens: [] as Point[][] };
+  if (spot.curve) {
+    // Along a curve: each letter set on the curve at its place, turned to it; the box a band along the same stretch.
+    const path = spline(spot.curve.map(at), 24), lens = [0];
+    for (let i = 1; i < path.length; i++) lens.push(lens[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
+    const total = lens[lens.length - 1], w0 = measureStrokeText(text, { face, height: spot.mm }), size = w0 > total ? spot.mm * total / w0 : spot.mm;
+    const style = { face, height: size }, width = measureStrokeText(text, style), start = (total - width) / 2;
+    const pose = (s: number) => {
+      let k = 1;
+      while (k < lens.length - 1 && lens[k] < s) k++;
+      const a = path[k - 1], b = path[k], t = (s - lens[k - 1]) / (lens[k] - lens[k - 1] || 1), d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { p: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, along: { x: (b.x - a.x) / d, y: (b.y - a.y) / d } };
+    };
+    [...text].forEach((ch, i) => {
+      if (ch === ' ') return;
+      const w = measureStrokeText(ch, style), x = measureStrokeText(text.slice(0, i + 1), style) - w, m = pose(start + x + w / 2), down = { x: -m.along.y, y: m.along.x };
+      for (const line of strokeText(ch, 0, 0, style)) out.lines.push(line.map(q => ({ x: m.p.x + m.along.x * (q.x - w / 2) + down.x * q.y, y: m.p.y + m.along.y * (q.x - w / 2) + down.y * q.y })));
+    });
+    const up: Point[] = [], low: Point[] = [], margin = size * 0.45;
+    for (let k = 0; k <= 40; k++) { const m = pose(start + width * k / 40), down = { x: -m.along.y, y: m.along.x }; up.push({ x: m.p.x - down.x * margin, y: m.p.y - down.y * margin }); low.push({ x: m.p.x + down.x * (size + margin), y: m.p.y + down.y * (size + margin) }); }
+    out.screens.push([...up, ...low.reverse()]);
+    return out;
+  }
   const fit = (words: string, mm: number, room: number) => { const w = measureStrokeText(words, { face, height: mm }); return w > room ? mm * room / w : mm; };
   if (spot.lines) {
     // A word a line, each centred on its spot, set as large as the longest allows.
@@ -335,9 +419,16 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   const frame = slicesOf(f, p, rngOf('slices'));
 
   // The windows, before the slices: the traced ones, the visor, the streams.
-  const visorRing = f.visor?.map(at), base: Point[][] = [...f.trace.windows.filter((_, i) => !f.dropWindows?.includes(i)).map(points), ...(visorRing ? [visorRing] : [])];
+  const visorRing = f.visor?.map(at), base: Point[][] = f.trace.windows.filter((_, i) => !f.dropWindows?.includes(i)).map(points);
+  // With a field of its own, the visor and its streams slide apart from the rest of the sheet.
+  const local: Point[][] = [], own = f.field ? local : base;
+  if (visorRing) own.push(visorRing);
   const strokes: Stroke[] = [];
-  f.streams?.forEach((s, i) => { const art = streamOf(s, p, rngOf('stream' + i)); base.push(...art.rings); strokes.push(...art.strokes); });
+  f.streams?.forEach((s, i) => { const art = streamOf(s, p, rngOf('stream' + i)); own.push(...art.rings); strokes.push(...art.strokes.map(k => ({ ...k, local: !!f.field }))); });
+  const lower = f.lowers?.[String(ctx.params.lower ?? 'gores')];
+  const goreRings = f.gores ? f.gores.fills.map((_, i) => [...spline(f.gores!.seams[i].map(at)), ...spline(f.gores!.seams[i + 1].map(at)).reverse()]) : [];
+  const lowerRings = [...(lower?.ring ? [lower.ring.map(at)] : []), ...(lower?.gores ?? []).map(i => goreRings[i])];
+  base.push(...lowerRings);
   const masses = (f.masses ?? []).map(curve => spline(curve.map(at)));
   base.push(...masses);
   const boxes = base.map(r => ({ x0: Math.min(...r.map(q => q.x)), x1: Math.max(...r.map(q => q.x)), y0: Math.min(...r.map(q => q.y)), y1: Math.max(...r.map(q => q.y)) }));
@@ -346,10 +437,18 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
     for (let i = 0; i < base.length; i++) { const b = boxes[i]; if (q.x >= b.x0 && q.x <= b.x1 && q.y >= b.y0 && q.y <= b.y1 && insideRing(base[i], q)) c = true; }
     return c;
   };
+  // The visor's own slices, and the bites out of its edges.
+  const fieldFrame = f.field ? fieldSlices(f, visorRing!, p, rngOf('field')) : undefined;
+  const bites = fieldFrame ? bitesOf(visorRing!, fieldFrame, p, rngOf('bites')) : [];
+  const inFront = f.field?.inFront?.map(at);
+  const inLocal = (q: Point) => local.some(r => insideRing(r, q)) && !bites.some(r => insideRing(r, q));
   const windowAt = (q: Point) => {
     if (q.x <= TRIM.x0 + 0.2 || q.x >= TRIM.x1 - 0.2 || q.y <= TRIM.y0 + 0.2 || q.y >= TRIM.y1 - 0.2) return false;
     const r = frame.toFrame(q);
-    return inBase(frame.toPage(r.u - frame.slices[sliceAt(frame.slices, r.v)].du, r.v));
+    if (inBase(frame.toPage(r.u - frame.slices[sliceAt(frame.slices, r.v)].du, r.v))) return true;
+    if (!fieldFrame || (inFront && insideRing(inFront, q))) return false;
+    const c = fieldFrame.toFrame(q);
+    return inLocal(fieldFrame.toPage(c.u - fieldFrame.slices[sliceAt(fieldFrame.slices, c.v)].du, c.v));
   };
   // Traced square to the slices, so their steps keep their corners.
   const cs = [{ x: 0, y: 0 }, { x: PAGE.width, y: 0 }, { x: PAGE.width, y: PAGE.height }, { x: 0, y: PAGE.height }].map(frame.toFrame);
@@ -362,7 +461,7 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   const clears: Point[][] = [], under: Point[][] = [];
   const bodies = f.body ?? [];
   bodies.forEach((region, i) => {
-    const r = region.ring.map(at), made = platesIn(r, region.plateMm ?? p.plateMm, deg(region.angle ?? 60), p, { flow: region.flow ?? p.flow, bare: p.bare, cross: p.cross }, { line: 'silver', seam: 'gold', pitch: p.hatchMm }, rngOf('body' + i));
+    const r = region.ring.map(at), made = platesIn(r, region.plateMm ?? p.plateMm, deg(region.angle ?? 60), p, { flow: region.flow ?? p.flow, bare: region.bare ?? p.bare, cross: p.cross }, { line: 'silver', seam: 'gold', pitch: region.pitch ?? p.hatchMm }, rngOf('body' + i));
     strokes.push(...made.strokes);
     for (const cell of made.cells) if (cell.kind !== 'flow') clears.push(cell.ring);
     under.push(r);
@@ -375,18 +474,42 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   });
   // The visor: partly covered. Plates of it are inked, and only those keep what passes behind them.
   const visors = visorRing ? [visorRing] : (f.visorWindows ?? []).map(i => points(f.trace.windows[i])), clearVisor: Point[][] = [];
-  for (const visor of visors) {
+  if (f.hidden && visorRing) {
+    // A hidden face in place of plates of ink: only the lines of it inside the visor (and a little past, as it slides).
+    const fit = { noseTip: at(f.hidden.noseTip), chin: at(f.hidden.chin), yaw: f.hidden.yaw, tilt: f.hidden.tilt, plateMm: p.facePlate, pitchMm: p.facePitch, cross: p.faceCross };
+    const seen = hiddenFace(ctx, fit, preview ? 0.012 : 0.01);
+    const near = (q: Point) => { const c = fieldFrame!.toFrame(q), box = fieldFrame!.bounds; return c.v > box.v0 - 14 && c.v < box.v1 + 14 && c.u > box.u0 - 40 && c.u < box.u1 + 40; };
+    for (const [paths, rank] of [[seen.features, 0.4], [seen.seams, 0.8], [seen.lines, 3]] as const) for (const line of paths) for (const piece of keepAlong(line, near, 0.25)) strokes.push({ pen: 'black', rank, piece, backOnly: true, local: true });
+  } else for (const visor of visors) {
     const made = platesIn(visor, p.visorMm, deg(f.visorDeg ?? 20), p, { flow: 1 - p.visorInk, bare: 0, cross: p.visorInk * 0.35 }, { line: 'black', seam: 'black', pitch: p.inkMm * 0.75 }, rngOf('visor'));
     strokes.push(...made.strokes.map(s => ({ ...s, backOnly: true })));
     for (const cell of made.cells) if (cell.kind === 'flow') clearVisor.push(cell.ring);
   }
+  lowerRings.forEach((ring, i) => {
+    const made = platesIn(ring, f.massMm ?? p.colourMm, deg(f.colourDeg ?? 35), p, { flow: 1 - p.inkShare, bare: 0, cross: p.inkShare * 0.25 }, { line: 'black', seam: 'black', pitch: p.inkMm }, rngOf('lower' + i));
+    strokes.push(...made.strokes.map(s => ({ ...s, backOnly: true })));
+  });
+  // The dress: long panels, their seams and neckline in gold, what the skin's lines left behind cleared from under them.
+  if (f.gores) {
+    goreRings.forEach((ring, i) => {
+      const fill = f.gores!.fills[i], inside = (q: Point) => insideRing(ring, q);
+      clears.push(ring); under.push(ring);
+      if (fill.bare || lower?.gores?.includes(i)) return;
+      for (const line of hatch(ring, deg(fill.angle), fill.pitch)) for (const piece of within(line, inside)) strokes.push({ pen: 'silver', rank: 3, piece });
+      if (fill.cross) for (const line of hatch(ring, deg(fill.cross), fill.pitch * 1.5)) for (const piece of within(line, inside)) strokes.push({ pen: 'silver', rank: 3.5, piece });
+    });
+    for (const seam of f.gores.seams) strokes.push({ pen: 'gold', rank: 0, piece: spline(seam.map(at)), frontOnly: true });
+    strokes.push({ pen: 'gold', rank: 0, piece: spline(f.gores.neckline.map(at)), frontOnly: true });
+  }
+  for (const line of f.field?.frontLines ?? []) strokes.push({ pen: 'silver', rank: 0.2, piece: spline(line.map(at)), frontOnly: true });
   const clearedByVisor = (q: Point) => clearVisor.some(r => insideRing(r, q));
   // The traced lines, off the plates that took their place; and what the visor hides, drawn on it.
   const keepTraced = (q: Point) => !inCleared(q) && !clearedByVisor(q);
-  for (const [pen, lines] of [['gold', f.trace.gold], ['silver', f.trace.silver], ['black', f.trace.black]] as const) for (const line of lines) {
-    for (const piece of keepAlong(points(line), keepTraced, 0.2)) if (pathLength(piece) >= min) strokes.push({ pen: pen === 'black' ? 'silver' : pen, rank: (pen === 'gold' ? 0 : 1) + 1 / pathLength(piece), piece });
+  const silver = f.heal ? healed(f.trace.silver.map(points), f.heal.map(i => points(f.trace.windows[i]))) : f.trace.silver.map(points);
+  for (const [pen, lines] of [['gold', f.trace.gold.map(points)], ['silver', silver], ['black', f.trace.black.map(points)]] as const) for (const line of lines) {
+    for (const piece of keepAlong(line, keepTraced, 0.2)) if (pathLength(piece) >= min) strokes.push({ pen: pen === 'black' ? 'silver' : pen, rank: (pen === 'gold' ? 0 : 1) + 1 / pathLength(piece), piece });
   }
-  for (const line of f.under ?? []) strokes.push({ pen: 'silver', rank: 0.2, piece: line.map(at) });
+  for (const line of f.under ?? []) strokes.push({ pen: 'black', rank: 0.2, piece: spline(line.map(at)), backOnly: true });
 
   // The slogan: set clean over the glitch, on whichever sheet each part of it lands, with its box kept clear of other lines.
   const place = String(ctx.params.sloganPlace ?? 'off'), spot = f.spots?.[place];
@@ -397,7 +520,7 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
 
   // Every line slid through its slice, then routed to its sheet.
   const clear = mask.grown(0.5), behind = mask.grown(4.5), front: Stroke[] = [], back: Stroke[] = [];
-  for (const s of strokes) for (const moved of slid(s.piece, frame)) for (const piece of clipToRect(moved, ART)) {
+  for (const s of strokes) for (const moved of slid(s.piece, s.local && fieldFrame ? fieldFrame : frame)) for (const piece of clipToRect(moved, ART)) {
     if (!s.backOnly) for (const run of keepAlong(piece, q => !clear(q), 0.2)) if (pathLength(run) >= 0.8) front.push({ ...s, piece: run });
     if (!s.frontOnly) for (const run of keepAlong(piece, behind, 0.2)) if (pathLength(run) >= 0.8 && run.some(mask.has)) back.push({ ...s, pen: 'black', piece: run });
   }
