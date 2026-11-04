@@ -8,6 +8,7 @@ import { distanceToRings, offsetRing, ringsSimple } from '../../../src/sketch/re
 import { ALONGSIDE_DEG, LINE_PITCH } from '../lodestone-world.ts';
 import { ART, PAGE, TRIM } from '../world.ts';
 import { hiddenFace } from './hidden-face.ts';
+import { PATTERNS, patternIn, type PatternKind } from './patterns.ts';
 import { FIGURES, type Figure, type Px, type SloganSpot, type Stream, type Trace } from './figures.ts';
 
 /**
@@ -32,6 +33,7 @@ const P = (ctx: SketchContext) => ({
   plateMm: num(ctx, 'plateMm', 30, 12, 90), hatchMm: num(ctx, 'hatchMm', 1.5, 0.8, 5), bare: num(ctx, 'bareShare', 0.12, 0, 0.8), cross: num(ctx, 'crossShare', 0.2, 0, 0.8),
   flow: num(ctx, 'flowShare', 0.4, 0, 1), swing: num(ctx, 'plateSwing', 0.8, 0, 1.6),
   colourMm: num(ctx, 'colourPlateMm', 46, 14, 120), inkShare: num(ctx, 'inkShare', 0.6, 0, 1), inkMm: num(ctx, 'inkMm', 2.2, 0.8, 6),
+  patternMm: num(ctx, 'patternMm', 2.4, 1, 6), patternScale: num(ctx, 'patternScale', 16, 5, 60), patternCover: num(ctx, 'patternCover', 0.85, 0.1, 1),
   visorMm: num(ctx, 'visorPlateMm', 22, 8, 70), visorInk: num(ctx, 'visorInk', 0.55, 0, 1),
   sliceShare: num(ctx, 'sliceShare', 0.32, 0, 1), shiftMm: num(ctx, 'shiftMm', 30, 0, 80), sliceMin: num(ctx, 'sliceMin', 1.6, 1, 8), sliceMax: num(ctx, 'sliceMax', 20, 3, 60), faceCap: num(ctx, 'faceCap', 5, 0, 30),
   visorShift: num(ctx, 'visorShift', 14, 0, 70), visorSlices: num(ctx, 'visorSlices', 0.34, 0, 1), bites: num(ctx, 'visorBites', 0.45, 0, 3), facePitch: num(ctx, 'facePitch', 0.95, 0.8, 3), facePlate: num(ctx, 'facePlate', 25, 10, 60), faceCross: num(ctx, 'faceCross', 0.3, 0, 1),
@@ -468,7 +470,15 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   });
   const inCleared = (q: Point) => under.some(r => insideRing(r, q)) && clears.some(r => insideRing(r, q));
   const colour = [...(f.colour ?? []).map(i => points(f.trace.windows[i])), ...masses];
+  const pattern = String(ctx.params.pattern ?? 'plates');
   colour.forEach((ring, i) => {
+    if (pattern in PATTERNS) {
+      // Each shape its own way round. Whole plates of it are left clean, so the colour is only partly covered.
+      const cells = platesOf(ring, p.colourMm, 0, rngOf('cover' + i)), coverRng = rngOf('coverKeep' + i), clean = cells.filter(() => coverRng() >= p.patternCover);
+      const lines = patternIn(pattern as PatternKind, ring, { pitch: p.patternMm, scale: p.patternScale, angle: deg((f.colourDeg ?? 35) + i * 47), focus: f.patternFocus?.[i] ? at(f.patternFocus[i]) : undefined });
+      for (const line of lines) for (const piece of keepAlong(line, q => !clean.some(c => insideRing(c, q)), 0.3)) if (pathLength(piece) >= 1.2) strokes.push({ pen: 'black', rank: 3, piece, backOnly: true });
+      return;
+    }
     const made = platesIn(ring, masses.includes(ring) ? f.massMm ?? p.colourMm : p.colourMm, deg(f.colourDeg ?? 35), p, { flow: 1 - p.inkShare, bare: 0, cross: p.inkShare * 0.25 }, { line: 'black', seam: 'black', pitch: p.inkMm }, rngOf('colour' + i));
     strokes.push(...made.strokes.map(s => ({ ...s, backOnly: true })));
   });

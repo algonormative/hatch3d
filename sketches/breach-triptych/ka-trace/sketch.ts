@@ -3,6 +3,7 @@ import { plyControl, renderPly } from '../../../src/sketch/assembly.ts';
 import { LODESTONE_ASSEMBLY } from '../lodestone-world.ts';
 import { PAGE, PAPER, pensOf } from '../world.ts';
 import { FIGURES } from './figures.ts';
+import { PATTERNS } from './patterns.ts';
 import { world, type World } from './world.ts';
 
 /**
@@ -41,6 +42,11 @@ const CONTROLS: Control[] = [
   slider('bareShare', 'Plates left bare', 0.12, 0, 0.8, 0.01, 'Plates'),
   slider('crossShare', 'Plates cross-hatched', 0.2, 0, 0.8, 0.01, 'Plates'),
   slider('plateSwing', 'Plates\' line angles vary', 0.8, 0, 1.6, 0.05, 'Plates'),
+  { type: 'select', id: 'pattern', label: 'Pattern on the colour (Column, Profile)', default: 'plates', options: ['plates', ...Object.keys(PATTERNS)], group: 'Covered colour',
+    optionLabels: { plates: 'Plates of hatching', ...PATTERNS } },
+  slider('patternMm', 'Pattern: lines apart', 2.4, 1, 6, 0.1, 'Covered colour', 'mm'),
+  slider('patternScale', 'Pattern: size of its figure', 16, 5, 60, 1, 'Covered colour', 'mm'),
+  slider('patternCover', 'Pattern: how much of the colour it covers', 0.85, 0.1, 1, 0.01, 'Covered colour'),
   slider('colourPlateMm', 'Colour plate size', 46, 14, 120, 1, 'Covered colour', 'mm'),
   slider('inkShare', 'Colour plates inked', 0.6, 0, 1, 0.01, 'Covered colour'),
   slider('inkMm', 'Ink lines on the colour apart', 2.2, 0.8, 6, 0.1, 'Covered colour', 'mm'),

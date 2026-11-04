@@ -43,6 +43,8 @@ export interface Figure {
   colour?: number[]; colourDeg?: number;
   /** Big shapes of colour cut anew, drawn as curves through these points and covered the same way. */
   masses?: Px[][]; massMm?: number;
+  /** Where each colour shape's pleats fan from. */
+  patternFocus?: Px[];
   streams?: Stream[];
   spots?: Record<string, SloganSpot>;
   /** The slogan chosen for this figure, where it goes, and the dress it needs. */
@@ -61,6 +63,7 @@ export const FIGURES: Record<string, Figure> = {
     face: [[0, 210], [0, 420]],
     body: [{ ring: [[420, 405], [437, 480], [443, 545], [400, 568], [330, 590], [305, 640], [318, 735], [345, 700], [420, 665], [510, 648], [590, 660], [628, 700], [625, 790], [600, 870], [640, 850], [690, 700], [700, 620], [680, 570], [600, 550], [545, 520], [530, 400], [505, 380]], plateMm: 24, angle: 70 }],
     colour: [0, 1, 2, 3], colourDeg: 30,
+    patternFocus: [[470, 600], [420, 780], [520, 960], [470, 1140]],
     streams: [
       { from: [618, 150], to: [618, 270], dir: 0, reachMm: 75, backMm: 2 },
       { from: [268, 240], to: [268, 330], dir: 180, reachMm: 52, backMm: 2 },
@@ -81,7 +84,7 @@ export const FIGURES: Record<string, Figure> = {
     visor: [[400, 446], [978, 446], [978, 508], [400, 508]], visorDeg: 12,
     face: [[0, 500], [0, 730]],
     body: [{ ring: [[312, 640], [305, 712], [500, 788], [525, 702], [470, 640]], plateMm: 22, angle: 85 }],
-    colour: [6], colourDeg: 35,
+    colour: [6], colourDeg: 35, patternFocus: [[420, 640]],
     streams: [{ from: [412, 390], to: [412, 650], dir: 180, reachMm: 118, backMm: 2 }],
     spots: {
       visor: { at: [716, 470], dir: 0, mm: 6, room: 66 },
