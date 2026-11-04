@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseBox, signDirectory, signSvg } from '../../cli/sign.ts';
+import { parseBox, parseHeight, signDirectory, signSvg } from '../../cli/sign.ts';
 import { BREACH_SVG, sha256, writeBreachEntry } from './helpers/sign-fixture.ts';
 
 const run = { handle: '@algonormative', dry: false };
@@ -111,5 +111,19 @@ describe('sign in a print-queue directory', () => {
     withFrontmatter(configured, 'sign_pen: carbon');
     signDirectory(configured, run);
     expect(layers(read(configured, 'plot-ready.svg'))).toBe(2);
+  });
+
+  it('takes a cap height for a wide pen, by flag or from the entry, and refuses a bad one', () => {
+    const height = (dir: string) => { const ink = signature(read(dir, 'plot-ready.svg')); return ink.y1 - ink.y0; };
+    const dir = entry();
+    signDirectory(dir, { ...run, heightMm: 1 });
+    const small = height(dir);
+    withFrontmatter(dir, 'sign_height: 1.5');
+    signDirectory(dir, run);
+    expect(height(dir)).toBeCloseTo(small * 1.5, 1);
+    // The flag wins over the entry.
+    signDirectory(dir, { ...run, heightMm: 1 });
+    expect(height(dir)).toBeCloseTo(small, 5);
+    expect(() => parseHeight('none')).toThrow(/cap height/);
   });
 });

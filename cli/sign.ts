@@ -15,8 +15,9 @@
  *
  *   --pen <id>             sign into the existing layer with that data-pen-id, in its ink, instead of the lettering layer
  *   --box x0,y0,x1,y1      right-align the signature at the bottom of this box (millimetres) instead of below the art
+ *   --height <mm>          the cap height, for a wide pen whose line would close the default's letters
  *
- * In a print-queue directory, `sign_pen` and `sign_box` in index.md's frontmatter stand in for the flags (the flags win),
+ * In a print-queue directory, `sign_pen`, `sign_box` and `sign_height` in index.md's frontmatter stand in for the flags (the flags win),
  * and an entry with `sign: false` is skipped. A directory with a config.json is never given a new layer: plotter-server
  * rejects a changed layer count, so it must be signed into a layer it already has.
  */
@@ -95,6 +96,8 @@ export interface SignOptions {
   pen?: string;
   /** Right-align at the bottom of this box (millimetres) rather than below the art. */
   box?: SignBox;
+  /** Cap height in mm, rather than the one that suits the sheet's size on a fine pen. */
+  heightMm?: number;
   /** False: never append a layer (throw instead). */
   newLayer?: boolean;
 }
@@ -111,7 +114,7 @@ export function signSvg(source: string, text: string, options: SignOptions = {})
   const perMm = width ? W / (Number(width[1]) * MM_PER[width[2] ?? '']) : 1;
   const [Wmm, Hmm] = [W / perMm, H / perMm];
   // Cap height in mm: 0.7 on a pocket card, ~1.8 on an 11 x 17 or A3 sheet.
-  const heightMm = Math.min(1.1, Math.max(0.7, Wmm / 250)) * (Wmm > 100 ? 1.6 : 1);
+  const heightMm = options.heightMm ?? Math.min(1.1, Math.max(0.7, Wmm / 250)) * (Wmm > 100 ? 1.6 : 1);
   const height = heightMm * perMm;
   const style = { face: 'sans' as const, height };
   let x: number, top: number;
@@ -170,9 +173,10 @@ export interface SignRun {
   text?: string;
   handle: string;
   dry: boolean;
-  /** Flags; in a directory they win over `sign_pen` and `sign_box` in index.md. */
+  /** Flags; in a directory they win over `sign_pen`, `sign_box` and `sign_height` in index.md. */
   pen?: string;
   box?: SignBox;
+  heightMm?: number;
 }
 
 /** `x0,y0,x1,y1` in millimetres, with the box wider and taller than nothing. */
@@ -180,6 +184,13 @@ export function parseBox(value: string): SignBox {
   const n = value.split(',').map(Number);
   if (n.length !== 4 || n.some(v => !Number.isFinite(v)) || !(n[2] > n[0]) || !(n[3] > n[1])) throw new Error(`--box must be x0,y0,x1,y1 in millimetres, with x1 > x0 and y1 > y0 (got ${JSON.stringify(value)})`);
   return { x0: n[0], y0: n[1], x1: n[2], y1: n[3] };
+}
+
+/** A cap height in millimetres. */
+export function parseHeight(value: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--height must be a cap height in millimetres (got ${JSON.stringify(value)})`);
+  return n;
 }
 
 /** Sign one print-queue directory; returns what to report. An entry marked `sign: false` is left alone. */
@@ -192,10 +203,11 @@ export function signDirectory(target: string, run: SignRun): string {
   if (!existsSync(file) || !created) throw new Error('needs plot-ready.svg or render.svg, and created in index.md');
   const line = run.text ?? [run.handle, edition, build, created].filter(Boolean).join('  ');
   const before = readFileSync(file, 'utf8');
-  const recorded = frontmatter(index, 'sign_box');
+  const recorded = frontmatter(index, 'sign_box'), recordedHeight = frontmatter(index, 'sign_height');
   const { svg, note } = signSvg(before, line, {
     pen: run.pen ?? frontmatter(index, 'sign_pen'),
     box: run.box ?? (recorded ? parseBox(recorded) : undefined),
+    heightMm: run.heightMm ?? (recordedHeight ? parseHeight(recordedHeight) : undefined),
     // plotter-server rejects a changed layer count, so a configured entry takes no new layer.
     newLayer: !existsSync(join(target, 'config.json')),
   });
@@ -221,19 +233,20 @@ function main() {
   const handle = take('--handle') ?? '@algonormative';
   const pen = take('--pen');
   const boxArg = take('--box');
+  const heightArg = take('--height');
   const dry = args.includes('--dry');
   const targets = args.filter(a => a !== '--dry');
-  if (!targets.length) { console.error('usage: npm run sign -- [--dry] [--handle @name] [--pen <id>] [--box x0,y0,x1,y1] (<print-queue-dir>... | --text "<line>" <file.svg>...)'); process.exit(2); }
+  if (!targets.length) { console.error('usage: npm run sign -- [--dry] [--handle @name] [--pen <id>] [--box x0,y0,x1,y1] [--height <mm>] (<print-queue-dir>... | --text "<line>" <file.svg>...)'); process.exit(2); }
 
   let failed = 0;
   for (const target of targets) {
     try {
-      const run: SignRun = { text, handle, dry, pen, ...(boxArg ? { box: parseBox(boxArg) } : {}) };
+      const run: SignRun = { text, handle, dry, pen, ...(boxArg ? { box: parseBox(boxArg) } : {}), ...(heightArg ? { heightMm: parseHeight(heightArg) } : {}) };
       if (statSync(target).isDirectory()) {
         console.log(signDirectory(target, run));
       } else {
         if (!text) throw new Error('loose files need --text');
-        const { svg, note } = signSvg(readFileSync(target, 'utf8'), text, { pen: run.pen, box: run.box });
+        const { svg, note } = signSvg(readFileSync(target, 'utf8'), text, { pen: run.pen, box: run.box, heightMm: run.heightMm });
         console.log(`${dry ? 'would sign' : 'signed'} ${target}  ${note}`);
         if (!dry) writeFileSync(target, svg);
       }
