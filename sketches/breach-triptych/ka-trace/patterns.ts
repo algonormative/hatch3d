@@ -17,7 +17,7 @@ export const PATTERNS: Record<PatternKind, string> = {
   field: 'Magnetic field lines between two poles',
 };
 
-interface Options { pitch: number; scale: number; angle: number; focus?: Point }
+interface Options { pitch: number; scale: number; angle: number; focus?: Point; poles?: [Point, Point] }
 
 function frameOf(ring: Point[], angle: number) {
   const ux = Math.cos(angle), uy = Math.sin(angle), xs = ring.map(q => q.x), ys = ring.map(q => q.y);
@@ -119,13 +119,14 @@ function contour(ring: Point[], o: Options): Point[][] {
 
 function field(ring: Point[], o: Options): Point[][] {
   // Field lines of two poles: the level sets of cos a - cos b, the angles at the poles measured from the line between them.
-  const f = frameOf(ring, o.angle), b = box(ring), span = o.scale * 2.4, p = f.at(-span, 0), q = f.at(span, 0), dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy);
+  const f = frameOf(ring, o.angle), b = box(ring), span = o.scale * 2.4, [p, q] = o.poles ?? [f.at(-span, 0), f.at(span, 0)], dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy);
   const psi = (s: Point) => {
     const ax = s.x - p.x, ay = s.y - p.y, bx = s.x - q.x, by = s.y - q.y;
     return (ax * dx + ay * dy) / (len * (Math.hypot(ax, ay) || 1)) - (bx * dx + by * dy) / (len * (Math.hypot(bx, by) || 1));
   };
-  const out: Point[][] = [], levels = Math.round(len / (o.pitch * 1.5));
-  const interior = (s: Point) => s.x > b.x0 + 0.6 && s.x < b.x1 - 0.6 && s.y > b.y0 + 0.6 && s.y < b.y1 - 0.6;
+  const out: Point[][] = [], levels = Math.max(24, Math.min(64, Math.round(len / (o.pitch * 1.5))));
+  // Each level is traced as an area; only its curved edge is a field line, not the box's edge or the line between the poles.
+  const interior = (s: Point) => s.x > b.x0 + 0.6 && s.x < b.x1 - 0.6 && s.y > b.y0 + 0.6 && s.y < b.y1 - 0.6 && Math.abs((s.x - p.x) * dy - (s.y - p.y) * dx) / len > 0.9;
   for (let i = 1; i < levels; i++) {
     const level = 2 * i / levels * 0.98 + 0.01;
     // Above and below the line between the poles, each a line of its own.

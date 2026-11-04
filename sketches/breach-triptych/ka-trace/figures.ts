@@ -45,16 +45,18 @@ export interface Figure {
   masses?: Px[][]; massMm?: number;
   /** Where each colour shape's pleats fan from. */
   patternFocus?: Px[];
+  /** Where field lines' two poles may sit (they can lie off the shape, or off the sheet). */
+  fieldPoles?: Record<string, [Px, Px]>;
   streams?: Stream[];
   spots?: Record<string, SloganSpot>;
   /** The slogan chosen for this figure, where it goes, and the dress it needs. */
-  picks?: { text: string; place: string; lower?: string };
+  picks?: { text: string; place: string; lower?: string; pattern?: string };
 }
 
 export const FIGURES: Record<string, Figure> = {
   slipped: {
     trace: slipped, treated: true,
-    picks: { text: 'ALL BETTER NOW', place: 'visor' },
+    picks: { text: 'ALL BETTER NOW', place: 'visor', pattern: 'scales' },
     visor: [[268, 252], [618, 178], [618, 240], [268, 315]], visorDeg: -12,
     under: [
       [[300, 300], [322, 290], [352, 288]], [[452, 262], [478, 254], [508, 254]],
@@ -80,11 +82,19 @@ export const FIGURES: Record<string, Figure> = {
   hem: { trace: hem },
   collar: {
     trace: collar, treated: true,
-    picks: { text: 'PLEASE HOLD STILL', place: 'visor' },
+    picks: { text: 'PLEASE HOLD STILL', place: 'visor', pattern: 'pleats' },
     visor: [[400, 446], [978, 446], [978, 508], [400, 508]], visorDeg: 12,
     face: [[0, 500], [0, 730]],
     body: [{ ring: [[312, 640], [305, 712], [500, 788], [525, 702], [470, 640]], plateMm: 22, angle: 85 }],
     colour: [6], colourDeg: 35, patternFocus: [[420, 640]],
+    fieldPoles: {
+      body: [[190, 985], [650, 1285]],
+      drape: [[385, 765], [385, 1720]],
+      through: [[-140, 1040], [930, 1400]],
+      edges: [[48, 1145], [628, 1110]],
+      low: [[235, 1400], [520, 1400]],
+      collar: [[285, 730], [492, 805]],
+    },
     streams: [{ from: [412, 390], to: [412, 650], dir: 180, reachMm: 118, backMm: 2 }],
     spots: {
       visor: { at: [716, 470], dir: 0, mm: 6, room: 66 },

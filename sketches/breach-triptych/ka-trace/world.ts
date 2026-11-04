@@ -470,12 +470,13 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   });
   const inCleared = (q: Point) => under.some(r => insideRing(r, q)) && clears.some(r => insideRing(r, q));
   const colour = [...(f.colour ?? []).map(i => points(f.trace.windows[i])), ...masses];
-  const pattern = String(ctx.params.pattern ?? 'plates');
+  const askedPattern = String(ctx.params.pattern ?? 'picked'), pattern = askedPattern === 'picked' ? f.picks?.pattern ?? 'plates' : askedPattern;
+  const poles = f.fieldPoles?.[String(ctx.params.fieldPoles ?? 'body')];
   colour.forEach((ring, i) => {
     if (pattern in PATTERNS) {
       // Each shape its own way round. Whole plates of it are left clean, so the colour is only partly covered.
       const cells = platesOf(ring, p.colourMm, 0, rngOf('cover' + i)), coverRng = rngOf('coverKeep' + i), clean = cells.filter(() => coverRng() >= p.patternCover);
-      const lines = patternIn(pattern as PatternKind, ring, { pitch: p.patternMm, scale: p.patternScale, angle: deg((f.colourDeg ?? 35) + i * 47), focus: f.patternFocus?.[i] ? at(f.patternFocus[i]) : undefined });
+      const lines = patternIn(pattern as PatternKind, ring, { pitch: p.patternMm, scale: p.patternScale, angle: deg((f.colourDeg ?? 35) + i * 47), focus: f.patternFocus?.[i] ? at(f.patternFocus[i]) : undefined, poles: poles && [at(poles[0]), at(poles[1])] });
       for (const line of lines) for (const piece of keepAlong(line, q => !clean.some(c => insideRing(c, q)), 0.3)) if (pathLength(piece) >= 1.2) strokes.push({ pen: 'black', rank: 3, piece, backOnly: true });
       return;
     }
