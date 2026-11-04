@@ -21,7 +21,7 @@ import { FIGURES, type Figure, type Px, type SloganSpot, type Stream, type Trace
  */
 
 type Pen = 'silver' | 'gold' | 'black';
-export interface Stroke { pen: Pen; rank: number; piece: Point[]; backOnly?: boolean; frontOnly?: boolean; local?: boolean }
+export interface Stroke { pen: Pen; rank: number; piece: Point[]; backOnly?: boolean; frontOnly?: boolean; local?: boolean; fused?: boolean }
 interface Cell { ring: Point[]; kind: 'flow' | 'hatch' | 'cross' | 'bare'; angle: number }
 
 const MM = (PAGE.height - 2 * TRIM.y0) / 1536, X0 = (PAGE.width - 1024 * MM) / 2;
@@ -33,6 +33,7 @@ const P = (ctx: SketchContext) => ({
   plateMm: num(ctx, 'plateMm', 30, 12, 90), hatchMm: num(ctx, 'hatchMm', 1.5, 0.8, 5), bare: num(ctx, 'bareShare', 0.12, 0, 0.8), cross: num(ctx, 'crossShare', 0.2, 0, 0.8),
   flow: num(ctx, 'flowShare', 0.4, 0, 1), swing: num(ctx, 'plateSwing', 0.8, 0, 1.6),
   colourMm: num(ctx, 'colourPlateMm', 46, 14, 120), inkShare: num(ctx, 'inkShare', 0.6, 0, 1), inkMm: num(ctx, 'inkMm', 2.2, 0.8, 6),
+  fieldSpacing: num(ctx, 'fieldSpacing', 0, 0, 40), fieldWeight: num(ctx, 'fieldWeight', 0, 0, 8), fieldSwell: num(ctx, 'fieldSwell', 0, 0, 1), fieldEvery: num(ctx, 'fieldEvery', 1, 1, 6),
   patternMm: num(ctx, 'patternMm', 2.4, 1, 6), patternScale: num(ctx, 'patternScale', 16, 5, 60), patternCover: num(ctx, 'patternCover', 0.85, 0.1, 1),
   visorMm: num(ctx, 'visorPlateMm', 22, 8, 70), visorInk: num(ctx, 'visorInk', 0.55, 0, 1),
   sliceShare: num(ctx, 'sliceShare', 0.32, 0, 1), shiftMm: num(ctx, 'shiftMm', 30, 0, 80), sliceMin: num(ctx, 'sliceMin', 1.6, 1, 8), sliceMax: num(ctx, 'sliceMax', 20, 3, 60), faceCap: num(ctx, 'faceCap', 5, 0, 30),
@@ -332,8 +333,10 @@ function forTheKnife(ring: Point[]): Point[][] {
 function partsOf(items: Stroke[], prefix: string, thin: boolean): Part[] {
   const byPen = new Map<string, Point[][]>();
   const put = (pen: string, piece: Point[]) => { if (pathLength(piece) >= 0.6) byPen.set(pen, [...(byPen.get(pen) ?? []), piece]); };
-  if (thin) for (const { item, runs } of thinRanked(items, LINE_PITCH.gel, { angle: ALONGSIDE_DEG })) for (const run of runs) put(item.pen, run);
-  else for (const item of items) put(item.pen, item.piece);
+  // Passes meant to fuse into one wide line are never thinned against each other.
+  if (thin) for (const { item, runs } of thinRanked(items.filter(i => !i.fused), LINE_PITCH.gel, { angle: ALONGSIDE_DEG })) for (const run of runs) put(item.pen, run);
+  else for (const item of items) if (!item.fused) put(item.pen, item.piece);
+  for (const item of items) if (item.fused) put(item.pen, item.piece);
   return [...byPen].map(([pen, paths]) => ({ id: prefix + '-' + pen, pen, paths }));
 }
 
@@ -476,8 +479,8 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
     if (pattern in PATTERNS) {
       // Each shape its own way round. Whole plates of it are left clean, so the colour is only partly covered.
       const cells = platesOf(ring, p.colourMm, 0, rngOf('cover' + i)), coverRng = rngOf('coverKeep' + i), clean = cells.filter(() => coverRng() >= p.patternCover);
-      const lines = patternIn(pattern as PatternKind, ring, { pitch: p.patternMm, scale: p.patternScale, angle: deg((f.colourDeg ?? 35) + i * 47), focus: f.patternFocus?.[i] ? at(f.patternFocus[i]) : undefined, poles: poles && [at(poles[0]), at(poles[1])] });
-      for (const line of lines) for (const piece of keepAlong(line, q => !clean.some(c => insideRing(c, q)), 0.3)) if (pathLength(piece) >= 1.2) strokes.push({ pen: 'black', rank: 3, piece, backOnly: true });
+      const lines = patternIn(pattern as PatternKind, ring, { pitch: p.patternMm, scale: p.patternScale, angle: deg((f.colourDeg ?? 35) + i * 47), focus: f.patternFocus?.[i] ? at(f.patternFocus[i]) : undefined, poles: poles && [at(poles[0]), at(poles[1])], spacing: p.fieldSpacing, weight: p.fieldWeight, swell: p.fieldSwell, every: p.fieldEvery });
+      for (const line of lines) for (const piece of keepAlong(line, q => !clean.some(c => insideRing(c, q)), 0.3)) if (pathLength(piece) >= 1.2) strokes.push({ pen: 'black', rank: 3, piece, backOnly: true, fused: pattern === 'field' && p.fieldWeight > 0 });
       return;
     }
     const made = platesIn(ring, masses.includes(ring) ? f.massMm ?? p.colourMm : p.colourMm, deg(f.colourDeg ?? 35), p, { flow: 1 - p.inkShare, bare: 0, cross: p.inkShare * 0.25 }, { line: 'black', seam: 'black', pitch: p.inkMm }, rngOf('colour' + i));

@@ -17,7 +17,13 @@ export const PATTERNS: Record<PatternKind, string> = {
   field: 'Magnetic field lines between two poles',
 };
 
-interface Options { pitch: number; scale: number; angle: number; focus?: Point; poles?: [Point, Point] }
+interface Options {
+  pitch: number; scale: number; angle: number; focus?: Point; poles?: [Point, Point];
+  /** Field lines: how far apart to lay them, even across the shape (mm; 0 spaces them by the field, so they thin out with distance). */
+  spacing?: number;
+  /** Field lines: how wide to draw them (mm), in passes close enough to fuse; how much they taper to their ends (0 to 1); and, past 1, only every so many at that width, the rest a single line. */
+  weight?: number; swell?: number; every?: number;
+}
 
 function frameOf(ring: Point[], angle: number) {
   const ux = Math.cos(angle), uy = Math.sin(angle), xs = ring.map(q => q.x), ys = ring.map(q => q.y);
@@ -117,6 +123,35 @@ function contour(ring: Point[], o: Options): Point[][] {
   return out;
 }
 
+/** How far apart Micron 08 passes run to fuse into one wide line (it stays separate at 0.66 mm and up). */
+export const FUSE_MM = 0.45;
+/** A line drawn wide, in passes side by side; with `swell` each pass short of the ends, as an engraver's line swells and tapers. */
+function bundle(piece: Point[], width: number, swell: number): Point[][] {
+  if (width < FUSE_MM * 1.5 || piece.length < 2) return [piece];
+  const pts: Point[] = [];
+  for (let i = 0; i + 1 < piece.length; i++) {
+    const a = piece[i], b = piece[i + 1], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 1.2));
+    for (let k = 0; k < n; k++) pts.push({ x: a.x + (b.x - a.x) * k / n, y: a.y + (b.y - a.y) * k / n });
+  }
+  pts.push(piece[piece.length - 1]);
+  const lens = [0];
+  for (let i = 1; i < pts.length; i++) lens.push(lens[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  const total = lens[lens.length - 1], passes = Math.ceil(width / FUSE_MM), out: Point[][] = [];
+  for (let k = 0; k < passes; k++) {
+    const d = (k - (passes - 1) / 2) * FUSE_MM;
+    let run: Point[] = [];
+    const flush = () => { if (run.length >= 2) out.push(run); run = []; };
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], h = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const here = width * (1 - swell + swell * Math.sin(Math.PI * lens[i] / total) ** 0.8);
+      if (Math.abs(d) <= here / 2 + 1e-6) run.push({ x: pts[i].x - (b.y - a.y) / h * d, y: pts[i].y + (b.x - a.x) / h * d });
+      else flush();
+    }
+    flush();
+  }
+  return out;
+}
+
 function field(ring: Point[], o: Options): Point[][] {
   // Field lines of two poles: the level sets of cos a - cos b, the angles at the poles measured from the line between them.
   const f = frameOf(ring, o.angle), b = box(ring), span = o.scale * 2.4, [p, q] = o.poles ?? [f.at(-span, 0), f.at(span, 0)], dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy);
@@ -125,21 +160,30 @@ function field(ring: Point[], o: Options): Point[][] {
     return (ax * dx + ay * dy) / (len * (Math.hypot(ax, ay) || 1)) - (bx * dx + by * dy) / (len * (Math.hypot(bx, by) || 1));
   };
   const out: Point[][] = [], levels = Math.max(24, Math.min(64, Math.round(len / (o.pitch * 1.5))));
+  // Evenly spaced lines: the field's value at equal steps out from between the poles, toward the shape.
+  const list: number[] = [];
+  if (o.spacing) {
+    const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    const side0 = (cx - mid.x) * -dy + (cy - mid.y) * dx >= 0 ? 1 : -1, nx = -dy / len * side0, ny = dx / len * side0, far = Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
+    for (let t = o.spacing * 0.7; t < far; t += o.spacing) list.push(psi({ x: mid.x + nx * t, y: mid.y + ny * t }));
+  } else for (let i = 1; i < levels; i++) list.push(2 * i / levels * 0.98 + 0.01);
   // Each level is traced as an area; only its curved edge is a field line, not the box's edge or the line between the poles.
   const interior = (s: Point) => s.x > b.x0 + 0.6 && s.x < b.x1 - 0.6 && s.y > b.y0 + 0.6 && s.y < b.y1 - 0.6 && Math.abs((s.x - p.x) * dy - (s.y - p.y) * dx) / len > 0.9;
-  for (let i = 1; i < levels; i++) {
-    const level = 2 * i / levels * 0.98 + 0.01;
+  // The lines stop short of each pole, which is a small ring of its own: where they would meet, no pen could keep them apart.
+  const clear = o.scale * 0.42, off = (s: Point) => Math.hypot(s.x - p.x, s.y - p.y) > clear && Math.hypot(s.x - q.x, s.y - q.y) > clear;
+  const width = o.weight ?? 0, swell = o.swell ?? 0, every = Math.max(1, Math.round(o.every ?? 1));
+  list.forEach((level, i) => {
     // Above and below the line between the poles, each a line of its own.
     for (const side of [1, -1]) {
       const test = (s: Point) => psi(s) > level && ((s.x - p.x) * -dy + (s.y - p.y) * dx) * side > 0;
-      for (const r of traceMask(test, b, 0.5, { simplify: 0.12 })) out.push(...keepAlong([...r, r[0]], interior, 0.3));
+      for (const r of traceMask(test, b, 0.5, { simplify: 0.12 })) for (const line of keepAlong([...r, r[0]], s => interior(s) && off(s) && insideRing(ring, s), 0.3)) {
+        if (pathLength(line) < 3) continue;
+        out.push(...bundle(line, i % every === 0 ? width : 0, swell));
+      }
     }
-  }
-  // The lines stop short of each pole, which is a small ring of its own: where they would meet, no pen could keep them apart.
-  const clear = o.scale * 0.42, off = (s: Point) => Math.hypot(s.x - p.x, s.y - p.y) > clear && Math.hypot(s.x - q.x, s.y - q.y) > clear;
-  const kept = out.flatMap(line => keepAlong(line, off, 0.3));
-  for (const pole of [p, q]) for (const rad of [clear, clear * 0.5]) kept.push(Array.from({ length: 41 }, (_, k) => ({ x: pole.x + rad * Math.cos(k / 40 * 2 * Math.PI), y: pole.y + rad * Math.sin(k / 40 * 2 * Math.PI) })));
-  return kept;
+  });
+  for (const pole of [p, q]) for (const rad of [clear, clear * 0.5]) out.push(...bundle(Array.from({ length: 41 }, (_, k) => ({ x: pole.x + rad * Math.cos(k / 40 * 2 * Math.PI), y: pole.y + rad * Math.sin(k / 40 * 2 * Math.PI) })), Math.min(width, 1.3), 0));
+  return out;
 }
 
 /** The pattern's lines inside the ring, long enough to draw. */
