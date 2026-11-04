@@ -425,7 +425,7 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   if (visorRing) own.push(visorRing);
   const strokes: Stroke[] = [];
   f.streams?.forEach((s, i) => { const art = streamOf(s, p, rngOf('stream' + i)); own.push(...art.rings); strokes.push(...art.strokes.map(k => ({ ...k, local: !!f.field }))); });
-  const lower = f.lowers?.[String(ctx.params.lower ?? 'gores')];
+  const lowerId = String(ctx.params.lower ?? 'picked'), lower = f.lowers?.[lowerId === 'picked' ? f.picks?.lower ?? 'gores' : lowerId];
   const goreRings = f.gores ? f.gores.fills.map((_, i) => [...spline(f.gores!.seams[i].map(at)), ...spline(f.gores!.seams[i + 1].map(at)).reverse()]) : [];
   const lowerRings = [...(lower?.ring ? [lower.ring.map(at)] : []), ...(lower?.gores ?? []).map(i => goreRings[i])];
   base.push(...lowerRings);
@@ -453,7 +453,7 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   // Traced square to the slices, so their steps keep their corners.
   const cs = [{ x: 0, y: 0 }, { x: PAGE.width, y: 0 }, { x: PAGE.width, y: PAGE.height }, { x: 0, y: PAGE.height }].map(frame.toFrame);
   const box = { x0: Math.min(...cs.map(c => c.u)), x1: Math.max(...cs.map(c => c.u)), y0: Math.min(...cs.map(c => c.v)), y1: Math.max(...cs.map(c => c.v)) };
-  const traced = traceMask(q => windowAt(frame.toPage(q.x, q.y)), box, preview ? 0.35 : 0.25, { simplify: 0.08, minRadius: 0.75, minArea: 7, square: true }).map(r => r.map(q => frame.toPage(q.x, q.y)));
+  const traced = traceMask(q => windowAt(frame.toPage(q.x, q.y)), box, preview ? 0.35 : 0.25, { simplify: 0.08, minRadius: 0.85, minArea: 7, square: true }).map(r => r.map(q => frame.toPage(q.x, q.y)));
   const windows = traced.flatMap(forTheKnife);
   const mask = maskOf(windows);
 
@@ -512,9 +512,9 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   for (const line of f.under ?? []) strokes.push({ pen: 'black', rank: 0.2, piece: spline(line.map(at)), backOnly: true });
 
   // The slogan: set clean over the glitch, on whichever sheet each part of it lands, with its box kept clear of other lines.
-  const place = String(ctx.params.sloganPlace ?? 'off'), spot = f.spots?.[place];
+  const asked = String(ctx.params.sloganPlace ?? 'picked'), place = asked === 'picked' ? f.picks?.place : asked, spot = place ? f.spots?.[place] : undefined;
   const face = FACES.includes(ctx.params.sloganFace as StrokeFace) ? ctx.params.sloganFace as StrokeFace : 'matrix';
-  const text = String(ctx.params.sloganText ?? 'SLOGAN GOES HERE').toUpperCase();
+  const text = (String(ctx.params.sloganText ?? '').trim() || f.picks?.text || '').toUpperCase();
   const set = spot && text.trim() ? sloganAt(spot, text.trim(), face, rngOf('slogan')) : undefined;
   const off = (q: Point) => !set?.screens.some(r => insideRing(r, q));
 

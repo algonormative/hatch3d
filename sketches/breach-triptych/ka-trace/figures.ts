@@ -45,11 +45,14 @@ export interface Figure {
   masses?: Px[][]; massMm?: number;
   streams?: Stream[];
   spots?: Record<string, SloganSpot>;
+  /** The slogan chosen for this figure, where it goes, and the dress it needs. */
+  picks?: { text: string; place: string; lower?: string };
 }
 
 export const FIGURES: Record<string, Figure> = {
   slipped: {
     trace: slipped, treated: true,
+    picks: { text: 'ALL BETTER NOW', place: 'visor' },
     visor: [[268, 252], [618, 178], [618, 240], [268, 315]], visorDeg: -12,
     under: [
       [[300, 300], [322, 290], [352, 288]], [[452, 262], [478, 254], [508, 254]],
@@ -74,6 +77,7 @@ export const FIGURES: Record<string, Figure> = {
   hem: { trace: hem },
   collar: {
     trace: collar, treated: true,
+    picks: { text: 'PLEASE HOLD STILL', place: 'visor' },
     visor: [[400, 446], [978, 446], [978, 508], [400, 508]], visorDeg: 12,
     face: [[0, 500], [0, 730]],
     body: [{ ring: [[312, 640], [305, 712], [500, 788], [525, 702], [470, 640]], plateMm: 22, angle: 85 }],
@@ -90,6 +94,7 @@ export const FIGURES: Record<string, Figure> = {
   quiet: { trace: quiet },
   close: {
     trace: close, treated: true,
+    picks: { text: 'SEE YOU AGAIN SOON', place: 'mass', lower: 'sash' },
     // The traced visor and the slits above the bun give way to a larger bar with straight edges.
     dropWindows: [0, 1, 2, 3, 4, 5],
     visor: [[378, 322], [1000, 505], [1000, 700], [378, 517]], visorDeg: 16,
