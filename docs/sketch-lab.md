@@ -31,7 +31,7 @@ Every set in a grid, and the current one in the Piece tab, is then **checked for
 }
 ```
 
-`generate.groups` are the groups ticked at first (all, without it). `preview.widths` draws a pen at another width in the page only, for a pen whose declared width is narrower than its line on paper, so that passes meant to fuse look fused. With starts, the page opens on Browse.
+A start's `view` (a ply's id) shows that sheet when it is loaded, for what the assembled view hides; the views also apply to the grids, so a hidden sheet can be browsed by seed. `generate.groups` are the groups ticked at first (all, without it). `preview.widths` draws a pen at another width in the page only, for a pen whose declared width is narrower than its line on paper, so that passes meant to fuse look fused. With starts, the page opens on Browse.
 
 `--brief FILE.html` adds a tab showing an HTML fragment: the place for what someone needs to pick the work back up. Files it links to are published beside the page.
 

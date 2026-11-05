@@ -23,7 +23,7 @@ import { forTheKnife, world, type World } from '../ka-trace/world.ts';
  */
 
 const PAGE = { width: 210, height: 297, margin: 11 };
-const START: Record<string, Params> = Object.fromEntries(starts.starts.map(s => [s.id, s.params as Params]));
+const START = Object.fromEntries(starts.starts.map(s => [s.id, s.params])) as unknown as Record<string, Params>;
 
 interface Crop { id: string; label: string; start: string; from: Point; at: Rect; square?: boolean }
 const box = (x: number, y: number, w: number, h: number): Rect => ({ x0: x, y0: y, x1: x + w, y1: y + h });

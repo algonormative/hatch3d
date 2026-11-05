@@ -24,6 +24,7 @@ export const pens = pensOf(['silver', 'gold', 'black']);
 const slider = (id: string, label: string, d: number, min: number, max: number, step: number, group: string, units?: string, showWhen?: { control: string; equals: string }): Control =>
   ({ type: 'slider', id, label, default: d, min, max, step, group, ...(units ? { units } : {}), ...(showWhen ? { showWhen } : {}) });
 const IF_FIELD = { control: 'pattern', equals: 'field' }, IF_CLOSE = { control: 'figure', equals: 'close' };
+const IF_BEHIND = IF_CLOSE;
 const CONTROLS: Control[] = [
   { type: 'select', id: 'figure', label: 'The figure', default: 'collar', options: Object.keys(FIGURES), group: 'Figure',
     optionLabels: { slipped: 'Column: slipped bands', hem: 'Column: dissolving hem', collar: 'Profile: magenta collar', bob: 'Profile: magenta bob', quiet: 'Turned back: quiet', close: 'Turned back: close' } },
@@ -33,6 +34,9 @@ const CONTROLS: Control[] = [
     optionLabels: { picked: 'As chosen for this figure', off: 'No slogan', visor: 'Readout in the visor', visorHigh: 'High in the visor', mass: 'Large on the colour', stream: 'Out in the glitch, coming apart', edge: 'Up the edge of the sheet', spine: 'Down the nape', jaw: 'Under the jaw, on a curve', bun: 'Round the hair, on a curve', garment: 'Large on the dress', hem: 'Small along the hem' } },
   { type: 'select', id: 'lower', label: 'The dress (Close)', default: 'picked', options: ['picked', 'gores', 'one', 'two', 'sash'], group: 'Figure',
     optionLabels: { picked: 'As chosen', gores: 'Long panels, no colour', one: 'One panel in magenta', two: 'Two panels in magenta', sash: 'A magenta sash parallel to the visor' }, showWhen: IF_CLOSE },
+  { type: 'select', id: 'hiddenPiece', label: 'The piece behind the piece: on the magenta, under the black (Close)', default: 'off', options: ['off', 'glitch-chassis', 'glitch-hair', 'glitch-collapse', 'relief-hair'], group: 'Figure',
+    optionLabels: { off: 'Nothing: the magenta is inked only where it shows', 'glitch-chassis': 'Datamoshed: a synthetic chassis', 'glitch-hair': 'Datamoshed: she keeps her hair', 'glitch-collapse': 'Datamoshed: most of it gone', 'relief-hair': 'Drawn as the visor is: bone and hair' }, showWhen: IF_CLOSE },
+  { type: 'text', id: 'sloganBehind', label: 'The piece behind: its slogan (Close; empty for the one set)', default: '', maxLength: 64, group: 'Slogan', showWhen: IF_CLOSE },
   { type: 'text', id: 'sloganText', label: 'Slogan (empty for the one chosen)', default: '', maxLength: 64, group: 'Slogan' },
   { type: 'select', id: 'sloganFace', label: 'Lettering', default: 'matrix', options: ['matrix', 'wire', 'sans'], group: 'Slogan',
     optionLabels: { matrix: 'Dot matrix', wire: 'Wire', sans: 'Hershey sans' } },
@@ -70,6 +74,17 @@ const CONTROLS: Control[] = [
   slider('facePitch', 'Hidden face: lines apart (Close)', 0.95, 0.8, 3, 0.05, 'Visor', 'mm', IF_CLOSE),
   slider('facePlate', 'Hidden face: plate size (Close)', 25, 10, 60, 1, 'Visor', 'mm', IF_CLOSE),
   slider('faceCross', 'Hidden face: plates cross-hatched (Close)', 0.3, 0, 1, 0.01, 'Visor', undefined, IF_CLOSE),
+  slider('behindPlate', 'Behind: plate size', 13, 6, 60, 1, 'Behind', 'mm', IF_BEHIND),
+  slider('behindPitch', 'Behind: lines apart', 0.95, 0.8, 3, 0.05, 'Behind', 'mm', IF_BEHIND),
+  slider('behindBend', 'Behind: how far lines bend over the form', 26, 0, 60, 1, 'Behind', 'mm', IF_BEHIND),
+  slider('behindCross', 'Behind: plates cross-hatched', 0.28, 0, 1, 0.01, 'Behind', undefined, IF_BEHIND),
+  slider('behindContours', 'Behind: plates of contours', 0.22, 0, 1, 0.01, 'Behind', undefined, IF_BEHIND),
+  slider('behindBare', 'Behind: plates left bare', 0.1, 0, 0.8, 0.01, 'Behind', undefined, IF_BEHIND),
+  slider('behindSlices', 'Behind: slices moved', 0.17, 0, 1, 0.01, 'Behind', undefined, IF_BEHIND),
+  slider('behindShift', 'Behind: largest slice shift', 40, 0, 90, 1, 'Behind', 'mm', IF_BEHIND),
+  slider('behindSliceMax', 'Behind: thickest slice', 22, 3, 60, 1, 'Behind', 'mm', IF_BEHIND),
+  slider('behindBlocks', 'Behind: rectangles moved, repeated or gone', 8, 0, 80, 1, 'Behind', undefined, IF_BEHIND),
+  slider('behindFar', 'Behind: how far a rectangle goes', 60, 0, 140, 1, 'Behind', 'mm', IF_BEHIND),
   slider('reach', 'Columns reach', 1, 0, 2, 0.05, 'Glitch'),
   slider('colMin', 'Narrowest column', 3.5, 2, 12, 0.5, 'Glitch', 'mm'),
   slider('colMax', 'Widest column', 15, 4, 40, 1, 'Glitch', 'mm'),
@@ -88,8 +103,8 @@ function worldOf(ctx: SketchContext, thin: boolean, preview: boolean): World {
 
 /** The lab's two sheets; a draft skips the thinning. */
 export async function labSheets(ctx: SketchContext, quality: 'draft' | 'full' = 'full'): Promise<{ ply: string; parts: Part[]; cuts: Point[][] }[]> {
-  const { windows, art } = worldOf(ctx, quality !== 'draft', true);
-  return [{ ply: 'magenta', parts: art.magenta, cuts: [] }, { ply: 'black', parts: art.black, cuts: windows }];
+  const { windows, art, hidden } = worldOf(ctx, quality !== 'draft', true);
+  return [{ ply: 'magenta', parts: [...art.magenta, ...hidden ?? []], cuts: [] }, { ply: 'black', parts: art.black, cuts: windows }];
 }
 
 const sketch: Sketch = {
@@ -100,8 +115,8 @@ const sketch: Sketch = {
   controls: [plyControl(spec), ...CONTROLS],
   assembly: spec,
   draw(ctx) {
-    const { windows, art } = worldOf(ctx, true, false);
-    return renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: windows, label: 'W' }] }, art });
+    const { windows, art, hidden } = worldOf(ctx, true, false);
+    return renderPly(spec, ctx, pens, { cuts: { black: [{ id: 'windows', rings: windows, label: 'W' }] }, art, ...(hidden ? { sealed: { magenta: hidden } } : {}) });
   },
 };
 

@@ -6,7 +6,8 @@ black lines for the magenta sheet behind them, all in page millimetres (the imag
 
 --close is how far (in upscaled pixels) a dark line across the magenta still counts as drawn on it rather than as a gap
 between windows; 0 keeps every gap. --bridge is the least paper to leave between windows (mm), set square to the image
-so shapes square to it keep their corners; a sliver of thin paper under --speck mm² is left alone. --min is the shortest silver line kept (mm). Writes out/name.json and a quick
+so shapes square to it keep their corners; a sliver of thin paper under --speck mm² is left alone. --min is the shortest silver line kept (mm).
+--lines is for a drawing that is all black line on magenta, with no windows (a hidden sheet): every dark line is kept down to 1.5 mm. Writes out/name.json and a quick
 out/name.png. The traces here were made with these settings:
 
   02a-slipped      --close 2  --bridge 3  --speck 1.5
@@ -15,6 +16,7 @@ out/name.png. The traces here were made with these settings:
   03c-magenta-bob  --close 4  --bridge 1.8
   04a-quiet        --close 12
   04c-close        --close 12
+  hidden-hair, hidden-ghost, hidden-bare  --lines --close 4 (flattened onto magenta first: two of the concepts came back transparent)
 """
 import json
 import math
@@ -38,6 +40,7 @@ CLOSE = int(sys.argv[sys.argv.index('--close') + 1]) if '--close' in sys.argv el
 BRIDGE = float(sys.argv[sys.argv.index('--bridge') + 1]) if '--bridge' in sys.argv else 0
 SPECK = float(sys.argv[sys.argv.index('--speck') + 1]) if '--speck' in sys.argv else 0.1
 MIN_SILVER = float(sys.argv[sys.argv.index('--min') + 1]) if '--min' in sys.argv else 1.6
+LINES = '--lines' in sys.argv
 UP = 3
 PAGE = (279.4, 431.8); TRIM = 11.0
 img = Image.open(src).convert('RGB')
@@ -91,6 +94,9 @@ gold = ndi.binary_closing(gold, disk(1)) & clear
 # Lines across a window: anything off-magenta, inside it.
 dark = inside & ~ndi.binary_dilation(magenta, disk(0))
 dark = remove_small_objects(dark, max_size=8 * UP * UP)
+if LINES:
+    dark = remove_small_objects(luma < 0.28, max_size=4 * UP * UP)
+    silver = gold = np.zeros_like(dark)
 
 def skeleton(mask, min_px):
     return skeletonize(remove_small_objects(mask, max_size=min_px))
@@ -192,7 +198,7 @@ def length_mm(s):
 result = {}
 stats = {}
 depth = ndi.distance_transform_edt(closed)
-for name, mask, min_px, min_mm in [('silver', silver, 6*UP, MIN_SILVER), ('gold', gold, 6*UP, 2.5), ('black', dark, 6*UP, 10)]:
+for name, mask, min_px, min_mm in [('silver', silver, 6*UP, MIN_SILVER), ('gold', gold, 6*UP, 2.5), ('black', dark, 6*UP, 1.5 if LINES else 10)]:
     segs = walk(skeleton(mask, min_px))
     n0 = len(segs)
     # Spurs at junctions first, then join across crossings, then across real gaps.
@@ -201,9 +207,9 @@ for name, mask, min_px, min_mm in [('silver', silver, 6*UP, MIN_SILVER), ('gold'
     segs = merge(segs, 6*UP, 0.9)
     segs = merge(segs, 12*UP, 0.94)
     segs = [simplify(smooth(s, 2.2*UP/3*1.4), 0.25) for s in segs if length_mm(s) >= min_mm]
-    if name == 'black' and sum(length_mm(s) for s in segs) < 30:
+    if name == 'black' and not LINES and sum(length_mm(s) for s in segs) < 30:
         segs = []  # Not worth a sheet's pen.
-    if name == 'black':
+    if name == 'black' and not LINES:
         # Run on under the sheet at both ends, so a hand-registered window shows no line ends.
         def deep(p):
             return depth[int(np.clip(p[1], 0, depth.shape[0] - 1)), int(np.clip(p[0], 0, depth.shape[1] - 1))]
@@ -276,7 +282,7 @@ for shape in sorted(shapes, key=lambda s: abs(poly(s['ring']).area)):
         ring = np.array([mid + (u / lu) * ((p - mid) @ (u / lu)) * (lu - 2 * step) / lu + (v / lv) * ((p - mid) @ (v / lv)) * (lv - 2 * step) / lv for p in ring])
     shape['ring'] = ring
     if ring is None: n_gone += 1
-rings = [to_mm(s['ring']) for s in shapes if s['ring'] is not None]
+rings = [] if LINES else [to_mm(s['ring']) for s in shapes if s['ring'] is not None]
 result['windows'] = rings
 stats['windows'] = len(rings); stats['thin_paper_mm2'] = round(float(thin.sum()) * (MM / UP) ** 2) if BRIDGE else 0; stats['islands_filled'] = n_islands; stats['rectangles'] = n_rect; stats['squares_dropped'] = n_gone
 with open(out + '.json', 'w') as f:
@@ -285,7 +291,7 @@ print(stats)
 
 S = 3
 pw, ph = int(PAGE[0] * S), int(PAGE[1] * S)
-prev = Image.new('RGB', (pw, ph), '#141416'); d = ImageDraw.Draw(prev)
+prev = Image.new('RGB', (pw, ph), '#d01f72' if LINES else '#141416'); d = ImageDraw.Draw(prev)
 for r in rings: d.polygon([(x*S, y*S) for x, y in r], fill='#d01f72')
 col = {'silver': '#dfe2e6', 'gold': '#d7ae4e', 'black': '#141416'}
 for name in ('black', 'silver', 'gold'):

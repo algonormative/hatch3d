@@ -7,7 +7,8 @@ import { measureStrokeText, strokeText, type StrokeFace } from '../../../src/ske
 import { INKS } from '../../../src/sketch/materials.ts';
 import { distanceToRings, offsetRing, ringsSimple } from '../../../src/sketch/region.ts';
 import { ALONGSIDE_DEG, LINE_PITCH } from '../lodestone-world.ts';
-import { ART, PAGE, TRIM } from '../world.ts';
+import { ART, ASSEMBLY, PAGE, TRIM } from '../world.ts';
+import { blocksOf, reliefLines, throughBlocks, type Drawn } from './behind.ts';
 import { hiddenFace } from './hidden-face.ts';
 import { PATTERNS, patternIn, type PatternKind } from './patterns.ts';
 import { FIGURES, type Figure, type Px, type SloganSpot, type Stream, type Trace } from './figures.ts';
@@ -390,7 +391,8 @@ function partsOf(items: Stroke[], prefix: string, thin: boolean): Part[] {
   return [...byPen].map(([pen, paths]) => ({ id: prefix + '-' + pen, pen, paths }));
 }
 
-export interface World { windows: Point[][]; art: { black: Part[]; magenta: Part[] } }
+/** `hidden` is ink on the magenta sheet that no window shows: the piece behind the piece. */
+export interface World { windows: Point[][]; art: { black: Part[]; magenta: Part[] }; hidden?: Part[] }
 
 // ── The slogan ───────────────────────────────────────────────────────
 
@@ -588,6 +590,22 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
     if (!s.backOnly) for (const run of keepAlong(piece, q => !clear(q), 0.2)) if (pathLength(run) >= 0.8) front.push({ ...s, piece: run });
     if (!s.frontOnly) for (const run of keepAlong(piece, behind, 0.2)) if (pathLength(run) >= 0.8 && run.some(mask.has)) back.push({ ...s, pen: 'black', piece: run });
   }
+  // The piece behind the piece: a whole drawing in black on the magenta, stopping short of what the windows show, so the front
+  // is untouched. Traced, or drawn from a relief map, and taken apart by slices and blocks of its own.
+  const behindKind = String(ctx.params.hiddenPiece ?? 'off'), behindStrokes: Stroke[] = [], seenByWindow = mask.grown(ASSEMBLY.bleed + 0.3), behindText: Point[][] = [];
+  const shown = (q: Point) => !seenByWindow(q);
+  const hiddenSlogan = behindKind !== 'off' && f.hidden?.slogan ? sloganAt(f.hidden.slogan.spot, (String(ctx.params.sloganBehind ?? '').trim() || f.hidden.slogan.text).toUpperCase(), face, rngOf('behind-slogan')) : undefined;
+  const clearOfText = (q: Point) => !hiddenSlogan?.screens.some(r => insideRing(r, q));
+  const putBehind = (s: Stroke, line: Point[]) => { for (const piece of clipToRect(line, ART)) for (const run of keepAlong(piece, q => shown(q) && clearOfText(q), 0.2)) if (pathLength(run) >= 0.8) behindStrokes.push({ ...s, pen: 'black', piece: run }); };
+  const drawing = f.hidden?.drawings?.[behindKind], relief = f.hidden?.reliefs?.[behindKind], drawn: Drawn[] = [];
+  if (drawing) for (const line of drawing.black) { const piece = points(line); drawn.push({ rank: 1 + 1 / pathLength(piece), line: piece }); }
+  if (relief) for (const d of reliefLines(ctx, relief, { plateMm: num(ctx, 'behindPlate', 13, 6, 60), pitchMm: num(ctx, 'behindPitch', 0.95, 0.8, 3), cross: num(ctx, 'behindCross', 0.28, 0, 1), contours: num(ctx, 'behindContours', 0.22, 0, 1), bare: num(ctx, 'behindBare', 0.1, 0, 0.8), bend: num(ctx, 'behindBend', 26, 0, 60), swing: 1 })) drawn.push(d);
+  if (drawn.length) {
+    const cut = slicesOf({ ...f, sliceDeg: f.sliceDeg ?? 0, face: undefined }, { ...p, sliceShare: num(ctx, 'behindSlices', 0.17, 0, 1), shiftMm: num(ctx, 'behindShift', 40, 0, 90), sliceMin: 1.6, sliceMax: num(ctx, 'behindSliceMax', 22, 3, 60) }, rngOf('behind-slices'));
+    const blocks = blocksOf(cut, PAGE.width, PAGE.height, Math.round(num(ctx, 'behindBlocks', 8, 0, 80)), num(ctx, 'behindFar', 60, 0, 140), rngOf('behind-blocks'));
+    for (const { rank, line } of drawn) for (const piece of slid(line, cut)) for (const run of throughBlocks(piece, blocks, cut)) putBehind({ pen: 'black', rank, piece: [] }, run);
+  }
+  if (hiddenSlogan) for (const line of hiddenSlogan.lines) for (const piece of clipToRect(line, ART)) behindText.push(...keepAlong(piece, shown, 0.05));
   const tell = (items: Stroke[]) => (set ? items.flatMap(it => keepAlong(it.piece, off, 0.2).filter(q => pathLength(q) >= 0.8).map(piece => ({ ...it, piece }))) : items);
   const sheets = { black: partsOf(tell(front), 'black', thin), magenta: partsOf(tell(back), 'magenta', thin) };
   if (set) {
@@ -599,5 +617,5 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
     if (onBlack.length) sheets.black.push({ id: 'black-slogan', pen: 'silver', paths: onBlack });
     if (onMagenta.length) sheets.magenta.push({ id: 'magenta-slogan', pen: 'black', paths: onMagenta });
   }
-  return { windows, art: sheets };
+  return { windows, art: sheets, ...(behindKind !== 'off' ? { hidden: [...partsOf(behindStrokes, 'hidden', thin), ...(behindText.length ? [{ id: 'hidden-slogan', pen: 'black', paths: behindText }] : [])] } : {}) };
 }

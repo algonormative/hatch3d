@@ -110,8 +110,8 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
       <button data-tab="piece">Piece</button>
       <button data-tab="brief" id="brief-tab" hidden>Pick up</button>
     </div>
+    <div class="views" id="views" role="group" aria-label="What to show"></div>
     <div class="pane" id="pane-piece" hidden>
-      <div class="views" id="views" role="group" aria-label="What to show"></div>
       <div class="plotline" id="plotline" role="status"></div>
       <div class="canvas-wrap"><canvas id="sheet" width="1000" height="1500" aria-label="The drawing"></canvas></div>
     </div>
@@ -288,6 +288,12 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     }
   }
   function draw() { if (last) paint(canvas, last.sheets, view, 1000, 1600); }
+  function setView(next) {
+    view = next;
+    for (const x of $('views').children) x.setAttribute('aria-pressed', String(x.dataset.view === view));
+    saveDraft(); draw();
+    for (const cell of cells) if (cell.sheets) paint(cell.canvas, cell.sheets, cell.view || view, 360, 560);
+  }
 
   // ── Controls ─────────────────────────────────────────────────────
   const inputs = new Map();
@@ -353,8 +359,8 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     if (!options.includes(view)) view = 'assembled';
     for (const o of options) {
       const b = document.createElement('button'); b.textContent = o === 'assembled' ? (meta.assembly ? 'Assembled' : 'Sheet') : o + ' sheet';
-      b.setAttribute('aria-pressed', String(o === view));
-      b.addEventListener('click', () => { view = o; for (const x of $('views').children) x.setAttribute('aria-pressed', String(x === b)); saveDraft(); draw(); });
+      b.dataset.view = o; b.setAttribute('aria-pressed', String(o === view));
+      b.addEventListener('click', () => setView(o));
       $('views').append(b);
     }
     for (const ply of meta.assembly ? sheets : [undefined]) {
@@ -459,7 +465,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   function setTab(next) {
     tab = next === 'brief' && $('brief-tab').hidden ? 'piece' : next;
     for (const b of $('tabs').children) b.setAttribute('aria-pressed', String(b.dataset.tab === tab));
-    $('pane-piece').hidden = tab !== 'piece'; $('pane-browse').hidden = tab !== 'browse'; $('pane-brief').hidden = tab !== 'brief';
+    $('pane-piece').hidden = tab !== 'piece'; $('pane-browse').hidden = tab !== 'browse'; $('pane-brief').hidden = tab !== 'brief'; $('views').hidden = tab === 'brief';
     $('app').classList.toggle('wide', tab === 'brief');
     saveDraft();
     if (tab === 'browse' && !current) setMode(STARTS.length || saved.length ? 'picks' : 'seeds');
@@ -473,14 +479,14 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
       const name = document.createElement('div'); name.className = 'name'; name.textContent = s.name;
       if (s.note) { const when = document.createElement('span'); when.className = 'when'; when.textContent = s.note; when.style.fontFamily = 'inherit'; name.append(when); }
       const load = document.createElement('button'); load.textContent = 'Load';
-      load.addEventListener('click', () => { loadSet(s.params, s.seed); toast('Loaded ' + s.name); });
+      load.addEventListener('click', () => { loadSet(s.params, s.seed); setView(s.view || 'assembled'); toast('Loaded ' + s.name); });
       row.append(name, load); $('starts').append(row);
     }
   }
 
   // ── Browsing: a grid of sets, drawn by a few workers of their own, each then checked for the plotter ──
   const pool = [];
-  let jobs = [], gridGen = 0, current = null, batch = 1, pieceCheck = 0, pieceTimer = 0;
+  let jobs = [], gridGen = 0, current = null, batch = 1, pieceCheck = 0, pieceTimer = 0, cells = [];
   const gridHistory = [];
   function ensurePool() { if (!pool.length) for (let i = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)); i > 0; i--) pool.push(spawn()); }
   function pumpJobs() {
@@ -530,7 +536,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     const c = document.createElement('canvas'), page = meta.page, trim = page.margin || 0;
     c.width = 360; c.height = Math.round(360 * (page.height - 2 * trim) / (page.width - 2 * trim));
     open.append(c);
-    open.addEventListener('click', () => { loadSet(item.params, item.seed); setTab('piece'); });
+    open.addEventListener('click', () => { loadSet(item.params, item.seed); if (item.picked) setView(item.view || 'assembled'); setTab('piece'); });
     const cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = item.caption;
     const parts = [fig, open, cap];
     if (item.diffs?.length) {
@@ -545,22 +551,23 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     keep.addEventListener('click', async () => { if (await saveSet(nameFor(item), item.params, item.seed)) { keep.textContent = 'Saved'; keep.disabled = true; } });
     row.append(more, keep); parts.push(row);
     fig.append(...parts.slice(1));
-    return { fig, canvas: c, plot };
+    return { fig, canvas: c, plot, view: item.view };
   }
   function showGrid(items, note, remember = true) {
     if (remember && current) gridHistory.push(current);
     current = { items, note };
     const gen = ++gridGen;
     jobs = jobs.filter(j => !j.grid);
-    $('grid').innerHTML = ''; $('grid').scrollTop = 0; $('grid-note').textContent = note; $('grid-back').disabled = !gridHistory.length;
+    cells = []; $('grid').innerHTML = ''; $('grid').scrollTop = 0; $('grid-note').textContent = note; $('grid-back').disabled = !gridHistory.length;
     if (!items.length) { $('grid-note').textContent = note + ' Nothing to show yet.'; return; }
     const checks = [];
     for (const item of items) {
       const cell = makeCell(item);
+      cells.push(cell);
       $('grid').append(cell.fig);
       const set = { params: item.params, seed: item.seed };
       enqueue({ grid: true, msg: { type: 'render', quality: 'full', ...set },
-        done: r => { if (gen !== gridGen) return; paint(cell.canvas, r.sheets, 'assembled', 360, 560); cell.plot.textContent = 'Checking…'; },
+        done: r => { if (gen !== gridGen) return; cell.sheets = r.sheets; paint(cell.canvas, r.sheets, cell.view || view, 360, 560); cell.plot.textContent = 'Checking…'; },
         fail: err => { if (gen === gridGen) { cell.plot.textContent = 'Could not draw: ' + err.message; cell.plot.classList.add('bad'); } } });
       checks.push({ grid: true, msg: { type: 'check', ...set },
         done: r => { if (gen !== gridGen) return; cell.plot.textContent = r.ok ? 'Plots' : plotText(r); cell.plot.title = plotText(r); cell.plot.classList.toggle('bad', !r.ok); },
@@ -571,7 +578,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   const count = () => +$('count').value;
   const here = () => { const first = controls().find(c => c.type === 'select'); return first ? fmtOf(first, valueOf(first)) : 'this set'; };
   function showPicks() {
-    const items = [...STARTS.map(s => ({ name: s.name, caption: s.name, diffs: s.note ? [s.note] : [], params: { ...s.params }, seed: s.seed ?? 0 })),
+    const items = [...STARTS.map(s => ({ name: s.name, caption: s.name, diffs: s.note ? [s.note] : [], params: { ...s.params }, seed: s.seed ?? 0, view: s.view, picked: true })),
       ...saved.map(s => ({ name: s.name, caption: s.name, diffs: [], params: { ...(s.params || {}) }, seed: s.seed ?? 0 }))];
     showGrid(items, STARTS.length ? 'The chosen sets, and any you have saved. Open one to tune it, or ask for more like it.' : 'The sets you have saved.');
   }

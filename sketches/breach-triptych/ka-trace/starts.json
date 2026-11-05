@@ -4,8 +4,9 @@
     {"id": "profile", "name": "Profile: PLEASE HOLD STILL", "note": "Slogan in the visor, pleats on the colour. Profile's default.", "seed": 1, "params": {"figure": "collar"}},
     {"id": "profile-c", "name": "Profile, field lines C: swelling", "note": "Lines from the two collar points, up to 3 mm wide, tapering to points. Fused passes; unproven on paper.", "seed": 1, "params": {"figure": "collar", "pattern": "field", "fieldPoles": "collar", "patternCover": 1, "fieldSpacing": 15, "fieldWeight": 3, "fieldSwell": 1}},
     {"id": "profile-e", "name": "Profile, field lines E: graphic", "note": "Few lines, up to 5 mm wide, tapering to points. Fused passes; unproven on paper.", "seed": 1, "params": {"figure": "collar", "pattern": "field", "fieldPoles": "collar", "patternCover": 1, "fieldSpacing": 22, "fieldWeight": 5, "fieldSwell": 1}},
-    {"id": "close", "name": "Close: SEE YOU AGAIN SOON", "note": "A hidden face behind the visor, the slogan on a magenta sash.", "seed": 1, "params": {"figure": "close"}}
+    {"id": "close", "name": "Close: SEE YOU AGAIN SOON", "note": "A hidden face behind the visor, the slogan on a magenta sash.", "seed": 1, "params": {"figure": "close"}},
+    {"id": "close-behind", "name": "Close: the piece behind the piece", "note": "Close's magenta sheet, datamoshed chassis and STILL SMILING. The front is the same as Close.", "seed": 1, "view": "magenta", "params": {"figure": "close", "hiddenPiece": "glitch-chassis"}}
   ],
-  "generate": {"groups": ["Plates", "Covered colour", "Glitch", "Visor"]},
+  "generate": {"groups": ["Plates", "Covered colour", "Glitch", "Visor", "Behind"]},
   "preview": {"widths": {"black": 0.55}}
 }

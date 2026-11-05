@@ -4,6 +4,12 @@ import collar from './traces/03b-collar.json';
 import bob from './traces/03c-magenta-bob.json';
 import quiet from './traces/04a-quiet.json';
 import close from './traces/04c-close.json';
+import hiddenGlitchChassis from './traces/hidden-glitch-chassis.json';
+import hiddenGlitchCollapse from './traces/hidden-glitch-collapse.json';
+import hiddenGlitchHair from './traces/hidden-glitch-hair.json';
+import reliefHair from './traces/relief-hair.json';
+
+import type { ReliefMap } from './behind.ts';
 
 /**
  * The figures. What each adds to its trace is set in the concept image's pixels (1024 x 1536), so it can be read straight
@@ -26,8 +32,12 @@ export interface Figure {
   visorDeg?: number;
   /** Lines of the head the visor hides, drawn on it. */
   under?: Px[][];
-  /** A sculpted face behind the visor, set by the traced nose tip and chin. */
-  hidden?: { noseTip: Px; chin: Px; yaw: number; tilt: number };
+  /**
+   * A sculpted face behind the visor, set by the traced nose tip and chin. `drawings` are whole drawings for the magenta sheet,
+   * where no window shows them, traced with `--lines`, and `reliefs` relief maps to draw one from (`behind.ts`); `slogan` is
+   * one more line for that sheet.
+   */
+  hidden?: { noseTip: Px; chin: Px; yaw: number; tilt: number; drawings?: Record<string, { black: number[][][] }>; reliefs?: Record<string, ReliefMap>; slogan?: { text: string; spot: SloganSpot } };
   /** The visor as its own field: it and its streams slide in slices of their own, and this stays in front of it (the nose). */
   field?: { deg: number; inFront?: Px[]; frontLines?: Px[][] };
   /** The slices' direction, the band of the sheet (the face) they barely move, and how few of them move there (1 = as many as anywhere). */
@@ -116,7 +126,12 @@ export const FIGURES: Record<string, Figure> = {
       inFront: [[770, 672], [772, 606], [798, 580], [826, 590], [848, 642], [806, 676]],
       frontLines: [[[772, 612], [798, 582], [826, 592], [846, 636]]],
     },
-    hidden: { noseTip: [850, 702], chin: [760, 914], yaw: 46, tilt: -6 },
+    hidden: {
+      noseTip: [850, 702], chin: [760, 914], yaw: 46, tilt: -6,
+      drawings: { 'glitch-chassis': hiddenGlitchChassis, 'glitch-hair': hiddenGlitchHair, 'glitch-collapse': hiddenGlitchCollapse },
+      reliefs: { 'relief-hair': reliefHair },
+      slogan: { text: 'STILL SMILING', spot: { at: [757, 858], dir: 16.4, mm: 5.2, room: 56 } },
+    },
     // Two strands of hair falling across the bar.
     under: [
       [[652, 372], [628, 430], [612, 500], [590, 560]],
