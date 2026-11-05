@@ -12,13 +12,13 @@ import type { ExperimentMatrix } from '../packages/plot-host/src/experiment-type
 import type { FinishingOptions, FormatOptions, Params, RenderResult } from '../src/sketch/types.ts';
 
 function usage(): string {
-  return 'Usage: npm run sketch -- <inspect|render|open|lab|crops|sweep|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. lab [--out DIR] [--seed N] builds a browser tuning page (index.html, worker.js). open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
+  return 'Usage: npm run sketch -- <inspect|render|open|lab|crops|sweep|checkpoint|replay|compare|experiment> <entry.ts|checkpoint-dir|before-result.json|matrix.json> [options]. lab [--out DIR] [--seed N] [--starts FILE.json] [--brief FILE.html] builds a browser tuning page (index.html, worker.js). open accepts --plotprep EXECUTABLE and --plotter-upload when FEED_API_URL and FEED_API_TOKEN are set. See docs/sketches.md';
 }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const flagsByCommand: Record<string, string[]> = {
-  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'], lab: ['out', 'title', 'seed'], crops: ['page', 'trimmed', 'result', 'at', 'size', 'thumb', 'out'], sweep: ['vary', 'params', 'seed', 'out', 'cell', 'exact'],
+  inspect: ['timeout'], render: ['params', 'finishing', 'page', 'format', 'config', 'seed', 'out', 'timeout', 'png-theme', 'png-scale'], open: ['port', 'out', 'plotter-upload', 'plotprep'], lab: ['out', 'title', 'seed', 'starts', 'brief'], crops: ['page', 'trimmed', 'result', 'at', 'size', 'thumb', 'out'], sweep: ['vary', 'params', 'seed', 'out', 'cell', 'exact'],
   checkpoint: ['result', 'out'], replay: ['out', 'png-theme', 'png-scale'], compare: ['after', 'parts', 'boundaries'], experiment: ['out', 'timeout'],
 };
 
@@ -203,7 +203,7 @@ export async function main(args: string[]): Promise<void> {
   }
   if (command === 'lab') {
     const { buildLab } = await import('./sketch/lab/build.ts');
-    const built = await buildLab({ entry, out: flags.out ?? `.sketch-output/${basename(dirname(resolve(entry)))}-lab`, ...(flags.title ? { title: flags.title } : {}), ...(flags.seed ? { seed: integer(flags.seed, 'seed') } : {}) });
+    const built = await buildLab({ entry, out: flags.out ?? `.sketch-output/${basename(dirname(resolve(entry)))}-lab`, ...(flags.title ? { title: flags.title } : {}), ...(flags.seed ? { seed: integer(flags.seed, 'seed') } : {}), ...(flags.starts ? { starts: flags.starts } : {}), ...(flags.brief ? { brief: flags.brief } : {}) });
     console.log(JSON.stringify(built));
     return;
   }

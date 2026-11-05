@@ -9,6 +9,7 @@
  * - `{ type: 'render', params, seed, quality? }`: every sheet (each ply of an assembly, else the one sheet) as flat point buffers
  *   by pen, with its paper and the rings of its own cuts; an onlay ply comes back as its footprint and paper alone.
  * - `{ type: 'svg', params, seed, ply? }`: one sheet's SVG, as the CLI writes it (no finishing).
+ * - `{ type: 'check', params, seed }`: whether every sheet draws for the plotter, and its ink.
  *
  * Kept free of Node modules: it is bundled for the browser.
  */
@@ -149,9 +150,31 @@ export async function sheetSvg(sketch: Sketch, supplied: Params, seed: number, p
   return svgFor({ page: sketch.page, pens: sketch.pens } as Parameters<typeof svgFor>[0], parts);
 }
 
+/** Whether a set draws for the plotter: the sketch's own `draw` on every sheet, which refuses what a pen or knife cannot do; and the ink on each. */
+export interface Check { ok: boolean; error?: string; sheets: { id: string; pens: { pen: string; metres: number; paths: number }[] }[] }
+export async function checkSheets(sketch: Sketch, supplied: Params, seed: number): Promise<Check> {
+  const spec = sketch.assembly, plies = spec ? spec.plies.filter(p => !p.onlay).map(p => p.id) : ['sheet'], sheets: Check['sheets'] = [];
+  try {
+    for (const id of plies) {
+      const { parts } = await partsFor(sketch, spec ? { ...supplied, [spec.control]: id } : supplied, seed);
+      const pens = new Map<string, { pen: string; metres: number; paths: number }>();
+      for (const part of parts) {
+        if (part.diagnostic) continue;
+        const entry = pens.get(part.pen) ?? { pen: part.pen, metres: 0, paths: 0 };
+        for (const path of part.paths) { entry.paths++; for (let i = 1; i < path.length; i++) entry.metres += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y) / 1000; }
+        pens.set(part.pen, entry);
+      }
+      sheets.push({ id, pens: [...pens.values()] });
+    }
+    return { ok: true, sheets };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), sheets };
+  }
+}
+
 // ── The worker's message loop ────────────────────────────────────────────────────────────────────────────────
 
-type Request = { type: 'meta' | 'render' | 'svg'; id: number; params?: Params; seed?: number; ply?: string; quality?: 'draft' | 'full' };
+type Request = { type: 'meta' | 'render' | 'svg' | 'check'; id: number; params?: Params; seed?: number; ply?: string; quality?: 'draft' | 'full' };
 interface Scope { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent) => void) | null }
 
 /** Serve a sketch from inside a worker: answer the page's requests (see the module comment). */
@@ -161,7 +184,7 @@ export function serveLab(sketch: Sketch, preview?: LabSheets, scope: Scope = glo
     try {
       if (req.type === 'meta') {
         const spec = sketch.assembly;
-        scope.postMessage({ id: req.id, type: 'meta', name: sketch.name, page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [], gpu: !!(globalThis as { navigator?: { gpu?: unknown } }).navigator?.gpu,
+        scope.postMessage({ id: req.id, type: 'meta', name: sketch.name, page: sketch.page, pens: sketch.pens, controls: sketch.controls ?? [], preview: !!preview,
           assembly: spec ? { control: spec.control, plies: spec.plies.map(p => ({ id: p.id, paper: p.paper, onlay: !!p.onlay })) } : undefined });
         return;
       }
@@ -176,6 +199,10 @@ export function serveLab(sketch: Sketch, preview?: LabSheets, scope: Scope = glo
       }
       if (req.type === 'svg') {
         scope.postMessage({ id: req.id, type: 'svg', svg: await sheetSvg(sketch, params, seed, req.ply) });
+        return;
+      }
+      if (req.type === 'check') {
+        scope.postMessage({ id: req.id, type: 'check', ...await checkSheets(sketch, params, seed) });
         return;
       }
       throw new Error(`Unknown request ${String(req.type)}`);

@@ -6,9 +6,34 @@ A browser tuning page for any sketch, for publishing as a Claude artifact (or se
 npm run sketch -- lab sketches/breach-triptych/upward-erasure/sketch.ts --seed 1 --out .sketch-output/upward-erasure-lab
 ```
 
-It writes `index.html` (the page, titled with the sketch's name; `--title` overrides, `--seed` sets the seed it opens at) and `worker.js` (the sketch and `cli/sketch/lab/runtime.ts` bundled for the browser). Publish `index.html` with `worker.js` beside it. As a Claude artifact, declare the capabilities `db`, `user` and `downloads`: saved sets live in the artifact's database, in the collection `presets` (`name`, `params`, `seed`, `createdAt`), and exports are offered through downloads.
+It writes `index.html` (the page, titled with the sketch's name; `--title` overrides, `--seed` sets the seed it opens at; `--starts` and `--brief` are below) and `worker.js` (the sketch and `cli/sketch/lab/runtime.ts` bundled for the browser). Publish `index.html` with `worker.js` beside it. As a Claude artifact, declare the capabilities `db`, `user` and `downloads`: saved sets live in the artifact's database, in the collection `presets` (`name`, `params`, `seed`, `createdAt`), and exports are offered through downloads.
 
 The page builds its controls from `sketch.controls` (sliders, toggles, selects and text, with their groups and `showWhen`; `expensive` controls are marked slow). An assembly shows the assembled piece, each ply's paper less its own cuts, bottom to top, onlays as their footprints, and each sheet alone with its cuts dashed. "Drift" steps any slider after every redraw. Exports: each sheet's SVG as the sketch draws it (no finishing), and the parameters as JSON.
+
+**Browse** shows a grid of sets, drawn by a few workers of their own. Each set opens in the Piece tab, can be saved, or can seed a new batch ("More like this"):
+
+- **Picks:** the sketch's named sets (`--starts`), then the saved ones.
+- **Seeds:** the current set at a run of seeds.
+- **One setting:** one control across its range, or every option of a select.
+- **Generate:** a batch around the current set: about half of the visible sliders in the ticked groups each move by a random amount, a little, more or a lot, and optionally a new seed each. A hidden control (one whose `showWhen` is not met) is left alone.
+
+Every set in a grid, and the current one in the Piece tab, is then **checked for the plotter**: the sketch's own `draw` on every sheet, which refuses what a pen or a knife cannot do. The grid says "Plots" (its tooltip has the ink by pen) or "Will not plot" and why. This is the check to trust: a preview from `labSheets` can draw what `draw` then refuses.
+
+"This set, as text" gives the current set as JSON and the commands that render it, and loads a set pasted back in.
+
+`--starts FILE.json` names sets to start from, shipped inside the page, so they need no database:
+
+```json
+{
+  "starts": [{ "id": "column", "name": "Column", "note": "Scales on the colour.", "seed": 1, "params": { "figure": "slipped" } }],
+  "generate": { "groups": ["Plates", "Glitch"] },
+  "preview": { "widths": { "black": 0.55 } }
+}
+```
+
+`generate.groups` are the groups ticked at first (all, without it). `preview.widths` draws a pen at another width in the page only, for a pen whose declared width is narrower than its line on paper, so that passes meant to fuse look fused. With starts, the page opens on Browse.
+
+`--brief FILE.html` adds a tab showing an HTML fragment: the place for what someone needs to pick the work back up. Files it links to are published beside the page.
 
 The worker draws with the CLI's random streams (SHA-256 of `seed\0id`, then mulberry32; `src/__tests__/sketch-lab.test.ts` checks them against `cli/sketch/child.ts`'s), so a set saved from the page renders the same through `npm run sketch -- render --params` and the finalize stack. The worker keeps the sketch module loaded between requests: a sketch that caches a costly stage at module level, keyed by the parameters that shape it, redraws the rest quickly (Upward Erasure keeps its head, and its world across plies).
 

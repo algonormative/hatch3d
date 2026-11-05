@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { cutsByPly, randomStream, renderSheets, sheetSvg } from '../../cli/sketch/lab/runtime.ts';
+import { checkSheets, cutsByPly, randomStream, renderSheets, sheetSvg } from '../../cli/sketch/lab/runtime.ts';
 import type { Part, Sketch } from '../sketch/types.ts';
 
 /** The CLI's stream (cli/sketch/child.ts), with Node's SHA-256. */
@@ -40,6 +40,15 @@ describe('sketch lab runtime', () => {
     expect(xy[2]).toBeCloseTo(60, 5);
     expect(xy[1]).toBeCloseTo(10 + 30 * cliStream(3, 'y')(), 3);
     expect(await sheetSvg(lines, { len: 50 }, 3)).toContain('data-pen-id="ink"');
+  });
+
+  it('checks a set for the plotter: its ink by pen, or the sketch\'s own refusal', async () => {
+    const good = await checkSheets(lines, { len: 50 }, 0);
+    expect(good.ok).toBe(true);
+    expect(good.sheets[0].pens[0]).toMatchObject({ pen: 'ink', paths: 1 });
+    expect(good.sheets[0].pens[0].metres).toBeGreaterThan(0.04);
+    const refusing: Sketch = { ...lines, draw: () => { throw new Error('feature finer than the guide pen'); } };
+    expect(await checkSheets(refusing, {}, 0)).toMatchObject({ ok: false, error: 'feature finer than the guide pen' });
   });
 
   it('reads each ply\'s cuts from the assembly diagnostics, the longest ply id first', () => {

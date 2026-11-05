@@ -21,8 +21,9 @@ export const spec: AssemblySpec = {
 };
 export const pens = pensOf(['silver', 'gold', 'black']);
 
-const slider = (id: string, label: string, d: number, min: number, max: number, step: number, group: string, units?: string): Control =>
-  ({ type: 'slider', id, label, default: d, min, max, step, group, ...(units ? { units } : {}) });
+const slider = (id: string, label: string, d: number, min: number, max: number, step: number, group: string, units?: string, showWhen?: { control: string; equals: string }): Control =>
+  ({ type: 'slider', id, label, default: d, min, max, step, group, ...(units ? { units } : {}), ...(showWhen ? { showWhen } : {}) });
+const IF_FIELD = { control: 'pattern', equals: 'field' }, IF_CLOSE = { control: 'figure', equals: 'close' };
 const CONTROLS: Control[] = [
   { type: 'select', id: 'figure', label: 'The figure', default: 'collar', options: Object.keys(FIGURES), group: 'Figure',
     optionLabels: { slipped: 'Column: slipped bands', hem: 'Column: dissolving hem', collar: 'Profile: magenta collar', bob: 'Profile: magenta bob', quiet: 'Turned back: quiet', close: 'Turned back: close' } },
@@ -31,7 +32,7 @@ const CONTROLS: Control[] = [
   { type: 'select', id: 'sloganPlace', label: 'Where the slogan goes', default: 'picked', options: ['picked', 'off', 'visor', 'visorHigh', 'mass', 'stream', 'edge', 'spine', 'jaw', 'bun', 'garment', 'hem'], group: 'Slogan',
     optionLabels: { picked: 'As chosen for this figure', off: 'No slogan', visor: 'Readout in the visor', visorHigh: 'High in the visor', mass: 'Large on the colour', stream: 'Out in the glitch, coming apart', edge: 'Up the edge of the sheet', spine: 'Down the nape', jaw: 'Under the jaw, on a curve', bun: 'Round the hair, on a curve', garment: 'Large on the dress', hem: 'Small along the hem' } },
   { type: 'select', id: 'lower', label: 'The dress (Close)', default: 'picked', options: ['picked', 'gores', 'one', 'two', 'sash'], group: 'Figure',
-    optionLabels: { picked: 'As chosen', gores: 'Long panels, no colour', one: 'One panel in magenta', two: 'Two panels in magenta', sash: 'A magenta sash parallel to the visor' } },
+    optionLabels: { picked: 'As chosen', gores: 'Long panels, no colour', one: 'One panel in magenta', two: 'Two panels in magenta', sash: 'A magenta sash parallel to the visor' }, showWhen: IF_CLOSE },
   { type: 'text', id: 'sloganText', label: 'Slogan (empty for the one chosen)', default: '', maxLength: 64, group: 'Slogan' },
   { type: 'select', id: 'sloganFace', label: 'Lettering', default: 'matrix', options: ['matrix', 'wire', 'sans'], group: 'Slogan',
     optionLabels: { matrix: 'Dot matrix', wire: 'Wire', sans: 'Hershey sans' } },
@@ -45,11 +46,11 @@ const CONTROLS: Control[] = [
   { type: 'select', id: 'pattern', label: 'Pattern on the colour (Column, Profile)', default: 'picked', options: ['picked', 'plates', ...Object.keys(PATTERNS)], group: 'Covered colour',
     optionLabels: { picked: 'As chosen for this figure', plates: 'Plates of hatching', ...PATTERNS } },
   { type: 'select', id: 'fieldPoles', label: 'Field lines: the poles (Profile)', default: 'body', options: ['body', 'drape', 'through', 'edges', 'low', 'collar'], group: 'Covered colour',
-    optionLabels: { body: 'Shoulder and bust', drape: 'Collar, and off the sheet below', through: 'Both off the garment', edges: 'On its two edges', low: 'A close pair, low', collar: 'The two collar points' } },
-  slider('fieldSpacing', 'Field lines: laid this far apart (0 = by the field)', 0, 0, 40, 0.5, 'Covered colour', 'mm'),
-  slider('fieldWeight', 'Field lines: width (fused passes; 0 = a single line)', 0, 0, 8, 0.1, 'Covered colour', 'mm'),
-  slider('fieldSwell', 'Field lines: how much they taper', 0, 0, 1, 0.01, 'Covered colour'),
-  slider('fieldEvery', 'Field lines: every so many at that width', 1, 1, 6, 1, 'Covered colour'),
+    optionLabels: { body: 'Shoulder and bust', drape: 'Collar, and off the sheet below', through: 'Both off the garment', edges: 'On its two edges', low: 'A close pair, low', collar: 'The two collar points' }, showWhen: IF_FIELD },
+  slider('fieldSpacing', 'Field lines: laid this far apart (0 = by the field)', 0, 0, 40, 0.5, 'Covered colour', 'mm', IF_FIELD),
+  slider('fieldWeight', 'Field lines: width (fused passes; 0 = a single line)', 0, 0, 8, 0.1, 'Covered colour', 'mm', IF_FIELD),
+  slider('fieldSwell', 'Field lines: how much they taper', 0, 0, 1, 0.01, 'Covered colour', undefined, IF_FIELD),
+  slider('fieldEvery', 'Field lines: every so many at that width', 1, 1, 6, 1, 'Covered colour', undefined, IF_FIELD),
   slider('patternMm', 'Pattern: lines apart', 2.4, 1, 6, 0.1, 'Covered colour', 'mm'),
   slider('patternScale', 'Pattern: size of its figure', 16, 5, 60, 1, 'Covered colour', 'mm'),
   slider('patternCover', 'Pattern: how much of the colour it covers', 0.85, 0.1, 1, 0.01, 'Covered colour'),
@@ -63,12 +64,12 @@ const CONTROLS: Control[] = [
   slider('sliceMin', 'Thinnest slice', 1.6, 1, 8, 0.1, 'Glitch', 'mm'),
   slider('sliceMax', 'Thickest slice', 20, 3, 60, 1, 'Glitch', 'mm'),
   slider('faceCap', 'Most the face can shift', 5, 0, 30, 0.5, 'Glitch', 'mm'),
-  slider('visorShift', 'Visor: largest slice shift (Close)', 14, 0, 70, 1, 'Visor', 'mm'),
-  slider('visorSlices', 'Visor: slices moved (Close)', 0.34, 0, 1, 0.01, 'Visor'),
-  slider('visorBites', 'Visor: bites out of its edges (Close)', 0.45, 0, 3, 0.05, 'Visor'),
-  slider('facePitch', 'Hidden face: lines apart (Close)', 0.95, 0.8, 3, 0.05, 'Visor', 'mm'),
-  slider('facePlate', 'Hidden face: plate size (Close)', 25, 10, 60, 1, 'Visor', 'mm'),
-  slider('faceCross', 'Hidden face: plates cross-hatched (Close)', 0.3, 0, 1, 0.01, 'Visor'),
+  slider('visorShift', 'Visor: largest slice shift (Close)', 14, 0, 70, 1, 'Visor', 'mm', IF_CLOSE),
+  slider('visorSlices', 'Visor: slices moved (Close)', 0.34, 0, 1, 0.01, 'Visor', undefined, IF_CLOSE),
+  slider('visorBites', 'Visor: bites out of its edges (Close)', 0.45, 0, 3, 0.05, 'Visor', undefined, IF_CLOSE),
+  slider('facePitch', 'Hidden face: lines apart (Close)', 0.95, 0.8, 3, 0.05, 'Visor', 'mm', IF_CLOSE),
+  slider('facePlate', 'Hidden face: plate size (Close)', 25, 10, 60, 1, 'Visor', 'mm', IF_CLOSE),
+  slider('faceCross', 'Hidden face: plates cross-hatched (Close)', 0.3, 0, 1, 0.01, 'Visor', undefined, IF_CLOSE),
   slider('reach', 'Columns reach', 1, 0, 2, 0.05, 'Glitch'),
   slider('colMin', 'Narrowest column', 3.5, 2, 12, 0.5, 'Glitch', 'mm'),
   slider('colMax', 'Widest column', 15, 4, 40, 1, 'Glitch', 'mm'),
