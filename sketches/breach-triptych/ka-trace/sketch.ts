@@ -19,7 +19,7 @@ export const spec: AssemblySpec = {
     { id: 'black', paper: PAPER.black, pens: ['silver', 'gold'], cutInk: 'silver' },
   ],
 };
-const pens = pensOf(['silver', 'gold', 'black']);
+export const pens = pensOf(['silver', 'gold', 'black']);
 
 const slider = (id: string, label: string, d: number, min: number, max: number, step: number, group: string, units?: string): Control =>
   ({ type: 'slider', id, label, default: d, min, max, step, group, ...(units ? { units } : {}) });

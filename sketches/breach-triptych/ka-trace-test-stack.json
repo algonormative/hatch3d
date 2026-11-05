@@ -1,0 +1,12 @@
+{
+  "title": "Breach / Kawaii Aggro: test sheet (A4, magenta behind, black in front)",
+  "out": ".sketch-output/finalize/ka-trace-test",
+  "edition": 1,
+  "page": { "width": 210, "height": 297, "margin": 11 },
+  "border": { "style": "cropmarks", "pen": "cut" },
+  "defaults": { "center": "none", "mergeSameColor": false, "trialInks": true, "gelSpeed": true },
+  "pieces": [
+    { "name": "ka-trace-test-magenta", "title": "Kawaii Aggro test: magenta sheet", "sketch": "sketches/breach-triptych/ka-trace-test/sketch.ts", "seed": 1, "assembly": "ka-trace-test", "params": { "ply": "magenta" } },
+    { "name": "ka-trace-test-black", "title": "Kawaii Aggro test: black sheet", "sketch": "sketches/breach-triptych/ka-trace-test/sketch.ts", "seed": 1, "assembly": "ka-trace-test", "params": { "ply": "black" } }
+  ]
+}

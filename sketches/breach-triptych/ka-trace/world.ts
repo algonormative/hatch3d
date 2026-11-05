@@ -324,7 +324,7 @@ function guided(ring: Point[]): boolean {
   return false;
 }
 /** The window as sharp as its guide allows: sharpened, then as traced, then re-traced round at the knife's radius. */
-function forTheKnife(ring: Point[]): Point[][] {
+export function forTheKnife(ring: Point[]): Point[][] {
   for (const candidate of [simplifyRing(sharpenCorners(ring, SHARPEN), 0.15), simplifyRing(ring, 0.1), ring]) if (guided(candidate)) return [candidate];
   const xs = ring.map(q => q.x), ys = ring.map(q => q.y), box = { x0: Math.min(...xs) - 1, x1: Math.max(...xs) + 1, y0: Math.min(...ys) - 1, y1: Math.max(...ys) + 1 };
   return traceMask(q => insideRing(ring, q), box, 0.2, { simplify: 0.08, minRadius: 0.8, minArea: 7 }).filter(guided);

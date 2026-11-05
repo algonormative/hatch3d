@@ -126,7 +126,7 @@ function contour(ring: Point[], o: Options): Point[][] {
 /** How far apart Micron 08 passes run to fuse into one wide line (it stays separate at 0.66 mm and up). */
 export const FUSE_MM = 0.45;
 /** A line drawn wide, in passes side by side; with `swell` each pass short of the ends, as an engraver's line swells and tapers. */
-function bundle(piece: Point[], width: number, swell: number): Point[][] {
+export function bundle(piece: Point[], width: number, swell: number): Point[][] {
   if (width < FUSE_MM * 1.5 || piece.length < 2) return [piece];
   const pts: Point[] = [];
   for (let i = 0; i + 1 < piece.length; i++) {
