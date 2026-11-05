@@ -230,7 +230,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   // What to draw next: one full frame, or (after a slow control moves) a draft first and then the full frame. Newer
   // input replaces whatever is still to come.
   let plan = null;
-  function render(progressive) { plan = progressive ? ['draft', 'full'] : ['full']; if (!busy) pump(); }
+  function render(progressive) { forgetCheck(); plan = progressive ? ['draft', 'full'] : ['full']; if (!busy) pump(); }
   async function pump() {
     busy = true;
     while (plan) {
@@ -242,7 +242,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
           last = r; draw();
           setStatus(`${quality === 'draft' ? 'Draft' : 'Drawn'} in ${(r.ms / 1000).toFixed(2)} s${meta.preview ? ' · a preview; exports and the plot check are exact' : ''}`);
           if (quality === 'full') checkPiece();
-        } catch (err) { setStatus('Could not draw: ' + err.message, 'error'); }
+        } catch (err) { forgetCheck(); setStatus('Could not draw: ' + err.message, 'error'); }
         if (plan) break;
       }
     }
@@ -396,6 +396,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   })();
   function listPresets(docs) {
     saved = docs.map(d => d.data());
+    if (mode === 'picks' && current && meta) showPicks(false);
     const root = $('presets'); root.innerHTML = '';
     if (!docs.length) { root.innerHTML = '<p class="empty">No saved sets yet. Name the current settings above and save.</p>'; return; }
     for (const d of docs) {
@@ -456,8 +457,8 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   $('copy-json').addEventListener('click', () => copyFrom('set-json'));
   $('copy-cmd').addEventListener('click', () => copyFrom('set-cmd'));
   $('load-in').addEventListener('click', () => {
-    try { const set = JSON.parse($('set-in').value); loadSet(set.params || {}, set.seed ?? seed); toast('Loaded'); }
-    catch (err) { toast('That is not a set: ' + err.message); }
+    try { const set = JSON.parse($('set-in').value); if (!set || typeof set !== 'object') throw new Error('not a set'); loadSet(set.params || {}, set.seed ?? seed); toast('Loaded'); }
+    catch { toast('That is not a set. It should look like {"seed": 1, "params": {}}'); }
   });
 
   // ── Tabs and the picks ────────────────────────────────────────────
@@ -468,7 +469,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     $('pane-piece').hidden = tab !== 'piece'; $('pane-browse').hidden = tab !== 'browse'; $('pane-brief').hidden = tab !== 'brief'; $('views').hidden = tab === 'brief';
     $('app').classList.toggle('wide', tab === 'brief');
     saveDraft();
-    if (tab === 'browse' && !current) setMode(STARTS.length || saved.length ? 'picks' : 'seeds');
+    if (tab === 'browse' && !current && meta) setMode(STARTS.length || saved.length ? 'picks' : 'seeds');
   }
   for (const b of $('tabs').children) b.addEventListener('click', () => setTab(b.dataset.tab));
   function buildStarts() {
@@ -497,24 +498,24 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
       w.ask(job.msg).then(job.done, job.fail).finally(() => { w.busy = false; pumpJobs(); });
     }
   }
-  const enqueue = job => { ensurePool(); jobs.push(job); pumpJobs(); };
+  const enqueue = (job, first = false) => { ensurePool(); if (first) jobs.unshift(job); else jobs.push(job); pumpJobs(); };
   const penName = id => id === 'cut' ? 'cut guides' : id;
   function plotText(r) {
     if (!r.ok) return `Will not plot: ${r.error}`;
     return r.sheets.map(s => `${s.id}: ${s.pens.map(p => `${penName(p.pen)} ${p.metres.toFixed(1)} m`).join(', ')}`).join(' · ');
   }
+  function forgetCheck() { clearTimeout(pieceTimer); pieceCheck++; $('plotline').textContent = ''; $('plotline').classList.remove('bad'); }
   function checkPiece() {
-    clearTimeout(pieceTimer);
-    const token = ++pieceCheck, set = { params: { ...params }, seed };
-    $('plotline').classList.remove('bad');
+    forgetCheck();
+    const token = pieceCheck, set = { params: { ...params }, seed };
     pieceTimer = setTimeout(() => {
       $('plotline').textContent = 'Checking it for the plotter…';
       enqueue({ msg: { type: 'check', ...set },
         done: r => { if (token === pieceCheck) { $('plotline').textContent = r.ok ? 'Plots. ' + plotText(r) : plotText(r); $('plotline').classList.toggle('bad', !r.ok); } },
-        fail: err => { if (token === pieceCheck) { $('plotline').textContent = 'Could not check it: ' + err.message; $('plotline').classList.add('bad'); } } });
+        fail: err => { if (token === pieceCheck) { $('plotline').textContent = 'Could not check it: ' + err.message; $('plotline').classList.add('bad'); } } }, true);
     }, 700);
   }
-  const fmtOf = (c, v) => c.type === 'slider' ? fmt(c, v) : c.type === 'select' ? ((c.optionLabels && c.optionLabels[v]) || v) : String(v);
+  const fmtOf = (c, v) => c.type === 'slider' ? fmt(c, v) : c.type === 'select' ? ((c.optionLabels && c.optionLabels[v]) || v) : c.type === 'toggle' ? (v ? 'on' : 'off') : String(v);
   const valueIn = (set, c) => (c.id in set ? set[c.id] : c.default);
   function diffsOf(base, set) {
     const out = [];
@@ -555,7 +556,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   }
   function showGrid(items, note, remember = true) {
     if (remember && current) gridHistory.push(current);
-    current = { items, note };
+    current = { items, note, mode };
     const gen = ++gridGen;
     jobs = jobs.filter(j => !j.grid);
     cells = []; $('grid').innerHTML = ''; $('grid').scrollTop = 0; $('grid-note').textContent = note; $('grid-back').disabled = !gridHistory.length;
@@ -577,14 +578,14 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
   }
   const count = () => +$('count').value;
   const here = () => { const first = controls().find(c => c.type === 'select'); return first ? fmtOf(first, valueOf(first)) : 'this set'; };
-  function showPicks() {
+  function showPicks(remember = true) {
     const items = [...STARTS.map(s => ({ name: s.name, caption: s.name, diffs: s.note ? [s.note] : [], params: { ...s.params }, seed: s.seed ?? 0, view: s.view, picked: true })),
       ...saved.map(s => ({ name: s.name, caption: s.name, diffs: [], params: { ...(s.params || {}) }, seed: s.seed ?? 0 }))];
-    showGrid(items, STARTS.length ? 'The chosen sets, and any you have saved. Open one to tune it, or ask for more like it.' : 'The sets you have saved.');
+    showGrid(items, STARTS.length ? 'The chosen sets, and any you have saved. Open one to tune it, or ask for more like it.' : 'The sets you have saved.', remember);
   }
   function showSeeds() {
     const from = Math.max(0, Math.round(+$('seed-from').value || 0));
-    showGrid(Array.from({ length: count() }, (_, i) => ({ caption: `Seed ${from + i}`, params: { ...params }, seed: from + i })), `The current set (${here()}) at ${count()} seeds. The seed moves the plates, the slices and the glitch; nothing else changes.`);
+    showGrid(Array.from({ length: count() }, (_, i) => ({ caption: `Seed ${from + i}`, params: { ...params }, seed: from + i })), `The current set (${here()}) at ${count()} seeds. Only what the sketch leaves to chance changes.`);
   }
   function fillSweep() {
     const box = $('sweep-what'), was = box.value;
@@ -639,7 +640,7 @@ textarea { font: 12px/1.4 var(--font-num); width: 100%; background: var(--ground
     }
     for (const b of $('modes').querySelectorAll('[data-mode]')) b.addEventListener('click', () => setMode(b.dataset.mode));
     $('count').addEventListener('change', () => setMode(mode));
-    $('grid-back').addEventListener('click', () => { const prev = gridHistory.pop(); if (prev) showGrid(prev.items, prev.note, false); });
+    $('grid-back').addEventListener('click', () => { const prev = gridHistory.pop(); if (prev) { setMode(prev.mode, false); showGrid(prev.items, prev.note, false); } });
     $('seed-from').addEventListener('change', showSeeds);
     $('seed-prev').addEventListener('click', () => { $('seed-from').value = Math.max(0, (+$('seed-from').value || 0) - count()); showSeeds(); });
     $('seed-next').addEventListener('click', () => { $('seed-from').value = (+$('seed-from').value || 0) + count(); showSeeds(); });
