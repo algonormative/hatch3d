@@ -347,21 +347,37 @@ function spaced(rings: Point[][]): Point[][] {
   }
   return out;
 }
+/** A window re-traced round at the knife's radius, more each try, until its guide can be drawn. */
+function rounded(ring: Point[]): Point[][] {
+  const box = boxOf(ring);
+  for (const minRadius of [0.8, 1, 1.25, 1.6, 2]) {
+    const round = traceMask(q => insideRing(ring, q), { x0: box.x0 - 1, x1: box.x1 + 1, y0: box.y0 - 1, y1: box.y1 + 1 }, 0.2, { simplify: 0.12, minRadius, minArea: 7 });
+    if (round.every(guided)) return round;
+  }
+  return [];
+}
 /**
  * The windows as sharp as their guides, the paper between them and the trim allow: each sharpened if that keeps its guide,
- * leaves `PAPER_MM` to the others and stays on the sheet, else as traced, else re-traced round at the knife's radius.
+ * leaves `PAPER_MM` to the others and stays on the sheet, else as traced; a jog smaller than the pen (where two slices nearly
+ * line up) is straightened, and failing all that it is re-traced round. A window is never quietly lost: only a fragment may
+ * go, and if much of the area would, the sheet is refused.
  */
 export function forTheKnife(traced: Point[][]): Point[][] {
   const rings = spaced(traced), out: Point[][] = [];
   const onSheet = (r: Point[]) => r.every(q => q.x >= TRIM.x0 && q.x <= TRIM.x1 && q.y >= TRIM.y0 && q.y <= TRIM.y1);
+  const sharp = (r: Point[]) => simplifyRing(sharpenCorners(r, SHARPEN), 0.15);
   rings.forEach((ring, i) => {
-    const others = [...out, ...rings.slice(i + 1)], candidates = [simplifyRing(sharpenCorners(ring, SHARPEN), 0.15), simplifyRing(ring, 0.1), ring].filter(c => guided(c) && onSheet(c));
-    const roomy = candidates.find(c => others.every(o => apart(c, o, PAPER_MM))) ?? candidates[candidates.length - 1];
-    if (roomy) { out.push(roomy); return; }
-    const box = boxOf(ring);
-    out.push(...traceMask(q => insideRing(ring, q), { x0: box.x0 - 1, x1: box.x1 + 1, y0: box.y0 - 1, y1: box.y1 + 1 }, 0.2, { simplify: 0.08, minRadius: 0.8, minArea: 7 }).filter(guided));
+    const others = [...out, ...rings.slice(i + 1)];
+    const candidates = [sharp(ring), simplifyRing(ring, 0.1), ring, sharp(simplifyRing(ring, 0.3)), simplifyRing(ring, 0.3), sharp(simplifyRing(ring, 0.5)), simplifyRing(ring, 0.5)].filter(c => guided(c) && onSheet(c));
+    const roomy = candidates.find(c => others.every(o => apart(c, o, PAPER_MM)));
+    if (roomy) out.push(roomy);
+    else out.push(...rounded(ring));
   });
-  return out;
+  // A window re-traced round can swell into a notch where a neighbour sits: the neighbour gives way.
+  const settled = spaced(out).flatMap(r => (guided(r) ? [r] : rounded(r)));
+  const whole = traced.reduce((t, r) => t + areaOf(r), 0), kept = settled.reduce((t, r) => t + areaOf(r), 0);
+  if (kept < whole * 0.97) throw new Error(`the windows would lose ${Math.round((1 - kept / whole) * 100)}% of their area to the knife's rules`);
+  return settled;
 }
 
 function partsOf(items: Stroke[], prefix: string, thin: boolean): Part[] {
