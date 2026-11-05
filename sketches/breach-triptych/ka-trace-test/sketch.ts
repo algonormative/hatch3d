@@ -67,7 +67,7 @@ function draw(ctx: SketchContext): Part[] {
     const w = worldOf(ctx, c.start), dx = c.at.x0 - c.from.x, dy = c.at.y0 - c.from.y;
     const from: Rect = { x0: c.from.x, y0: c.from.y, x1: c.at.x1 - dx, y1: c.at.y1 - dy };
     const inside = (p: Point) => inRegion({ x: p.x - dx, y: p.y - dy }, { rings: w.windows });
-    rings.push(...traceMask(inside, c.at, 0.25, { simplify: 0.08, minRadius: 0.85, minArea: 7, square: c.square }).flatMap(forTheKnife));
+    rings.push(...forTheKnife(traceMask(inside, c.at, 0.25, { simplify: 0.08, minRadius: 0.85, minArea: 7, square: c.square })));
     const moved = (parts: Part[]) => parts.map(part => ({ ...part, id: `${c.id}-${part.id}`, paths: part.paths.flatMap(path => clipToRect(path, from)).map(path => path.map(p => ({ x: p.x + dx, y: p.y + dy }))) })).filter(part => part.paths.length);
     black.push(...moved(w.art.black));
     magenta.push(...moved(w.art.magenta));

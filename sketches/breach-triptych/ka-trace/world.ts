@@ -4,6 +4,7 @@ import { sharpenCorners, simplifyRing, traceMask } from '../../kit/outline.ts';
 import { clipToRect, insideRing, keepAlong, pathLength } from '../../kit/page.ts';
 import { n } from '../../kit/params.ts';
 import { measureStrokeText, strokeText, type StrokeFace } from '../../../src/sketch/stroke-text.ts';
+import { INKS } from '../../../src/sketch/materials.ts';
 import { distanceToRings, offsetRing, ringsSimple } from '../../../src/sketch/region.ts';
 import { ALONGSIDE_DEG, LINE_PITCH } from '../lodestone-world.ts';
 import { ART, PAGE, TRIM } from '../world.ts';
@@ -312,8 +313,10 @@ function maskOf(rings: Point[][], cell = 0.25): Mask {
 
 export const points = (line: number[][]): Point[] => line.map(([x, y]) => ({ x, y }));
 const SHARPEN = { edge: 1.5, run: 3, reach: 1.2 };
-/** Half the cut pen's width: a window's guide runs this far inside its edge (mm). */
-const GUIDE = 0.175;
+/** Half the cut ink's width: a window's guide runs this far inside its edge (mm). The black sheet's guides are in silver. */
+const GUIDE = INKS.silver.width / 2;
+/** The paper a sharpened corner must leave to the next window (mm). */
+const PAPER_MM = 1.5;
 /** Whether a window's guide line can be drawn at all: inset by half a pen, its outline must stay simple and stay inside. */
 function guided(ring: Point[]): boolean {
   if (!ringsSimple([ring])) return false;
@@ -323,11 +326,42 @@ function guided(ring: Point[]): boolean {
   }
   return false;
 }
-/** The window as sharp as its guide allows: sharpened, then as traced, then re-traced round at the knife's radius. */
-export function forTheKnife(ring: Point[]): Point[][] {
-  for (const candidate of [simplifyRing(sharpenCorners(ring, SHARPEN), 0.15), simplifyRing(ring, 0.1), ring]) if (guided(candidate)) return [candidate];
-  const xs = ring.map(q => q.x), ys = ring.map(q => q.y), box = { x0: Math.min(...xs) - 1, x1: Math.max(...xs) + 1, y0: Math.min(...ys) - 1, y1: Math.max(...ys) + 1 };
-  return traceMask(q => insideRing(ring, q), box, 0.2, { simplify: 0.08, minRadius: 0.8, minArea: 7 }).filter(guided);
+const boxOf = (r: Point[]) => ({ x0: Math.min(...r.map(q => q.x)), x1: Math.max(...r.map(q => q.x)), y0: Math.min(...r.map(q => q.y)), y1: Math.max(...r.map(q => q.y)) });
+/** Whether two windows leave `paper` mm between them: a test on their corners, and that no corner of one lies in the other. */
+function apart(a: Point[], b: Point[], paper: number): boolean {
+  const p = boxOf(a), q = boxOf(b);
+  if (p.x0 > q.x1 + paper || q.x0 > p.x1 + paper || p.y0 > q.y1 + paper || q.y0 > p.y1 + paper) return true;
+  return ringsSimple([a, b]) && a.every(v => !insideRing(b, v) && distanceToRings(v, [b]) >= paper) && b.every(v => !insideRing(a, v) && distanceToRings(v, [a]) >= paper);
+}
+const areaOf = (r: Point[]) => Math.abs(r.reduce((t, q, i) => { const n = r[(i + 1) % r.length]; return t + q.x * n.y - n.x * q.y; }, 0)) / 2;
+/** The windows with `PAPER_MM` of paper kept between them, largest first: each shaved back from those already kept (more each try, as a trace can land a little short), and its pieces tried in turn. */
+function spaced(rings: Point[][]): Point[][] {
+  const out: Point[][] = [], work = rings.map(ring => ({ ring, tries: 0 }));
+  while (work.length) {
+    work.sort((a, b) => areaOf(a.ring) - areaOf(b.ring));
+    const { ring, tries } = work.pop()!, close = out.filter(o => !apart(ring, o, PAPER_MM));
+    if (!close.length) { out.push(ring); continue; }
+    if (tries >= 3) continue;
+    const box = boxOf(ring), keep = PAPER_MM + 0.15 * (tries + 1);
+    for (const piece of traceMask(q => insideRing(ring, q) && close.every(o => !insideRing(o, q) && distanceToRings(q, [o]) >= keep), { x0: box.x0 - 1, x1: box.x1 + 1, y0: box.y0 - 1, y1: box.y1 + 1 }, 0.2, { simplify: 0.08, minRadius: 0.85, minArea: 7 })) work.push({ ring: piece, tries: tries + 1 });
+  }
+  return out;
+}
+/**
+ * The windows as sharp as their guides, the paper between them and the trim allow: each sharpened if that keeps its guide,
+ * leaves `PAPER_MM` to the others and stays on the sheet, else as traced, else re-traced round at the knife's radius.
+ */
+export function forTheKnife(traced: Point[][]): Point[][] {
+  const rings = spaced(traced), out: Point[][] = [];
+  const onSheet = (r: Point[]) => r.every(q => q.x >= TRIM.x0 && q.x <= TRIM.x1 && q.y >= TRIM.y0 && q.y <= TRIM.y1);
+  rings.forEach((ring, i) => {
+    const others = [...out, ...rings.slice(i + 1)], candidates = [simplifyRing(sharpenCorners(ring, SHARPEN), 0.15), simplifyRing(ring, 0.1), ring].filter(c => guided(c) && onSheet(c));
+    const roomy = candidates.find(c => others.every(o => apart(c, o, PAPER_MM))) ?? candidates[candidates.length - 1];
+    if (roomy) { out.push(roomy); return; }
+    const box = boxOf(ring);
+    out.push(...traceMask(q => insideRing(ring, q), { x0: box.x0 - 1, x1: box.x1 + 1, y0: box.y0 - 1, y1: box.y1 + 1 }, 0.2, { simplify: 0.08, minRadius: 0.8, minArea: 7 }).filter(guided));
+  });
+  return out;
 }
 
 function partsOf(items: Stroke[], prefix: string, thin: boolean): Part[] {
@@ -459,7 +493,7 @@ export function world(ctx: SketchContext, thin: boolean, preview = false): World
   const cs = [{ x: 0, y: 0 }, { x: PAGE.width, y: 0 }, { x: PAGE.width, y: PAGE.height }, { x: 0, y: PAGE.height }].map(frame.toFrame);
   const box = { x0: Math.min(...cs.map(c => c.u)), x1: Math.max(...cs.map(c => c.u)), y0: Math.min(...cs.map(c => c.v)), y1: Math.max(...cs.map(c => c.v)) };
   const traced = traceMask(q => windowAt(frame.toPage(q.x, q.y)), box, preview ? 0.35 : 0.25, { simplify: 0.08, minRadius: 0.85, minArea: 7, square: true }).map(r => r.map(q => frame.toPage(q.x, q.y)));
-  const windows = traced.flatMap(forTheKnife);
+  const windows = forTheKnife(traced);
   const mask = maskOf(windows);
 
   // Plates: of the body, of the colour, of the visor.
