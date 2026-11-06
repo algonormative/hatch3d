@@ -96,6 +96,7 @@ export const PALETTES: Palette[] = [
   { id: 'sepia', label: 'Sepia drafting', paper: '#f5efe3', inks: ['#3b2a1e', '#7a4b2a', '#b5542d', '#a88b4a', '#5d4a66', '#7a4b2a', '#b5542d', '#a88b4a'], note: 'Brown inks, rust accents.' },
   { id: 'riso', label: 'Riso brights', paper: '#f7f5ef', inks: ['#1d1d1b', '#0078bf', '#ff48b0', '#ffb511', '#00a95c', '#0078bf', '#ff48b0', '#ffb511'], note: 'Fluorescent pink and yellow accents.' },
   { id: 'night', label: 'Night stock', paper: '#17181a', inks: ['#f2f0ea', '#9fb4ff', '#ff8a70', '#e4d27a', '#c7a8f0', '#9fb4ff', '#ff8a70', '#e4d27a'], note: 'Gel pens on black paper.' },
+  { id: 'gold-silver-black', label: 'Silver and gold on black', paper: '#141416', inks: ['#c4c8cc', '#c9a54a', '#ff4fa3', '#f2ff3a', '#ff5a36', '#7dff5a'], note: 'The calibrated Signo silver and gold, then the fluoro accents, on the black stock. A sketch declares its pens in this order.' },
   { id: 'blueprint', label: 'Blueprint', paper: '#1d3b6e', inks: ['#f4f4ef', '#cfe0ff', '#ffd6c9', '#f4f4ef', '#cfe0ff', '#cfe0ff', '#ffd6c9', '#f4f4ef'], note: 'White pens on blue stock.' },
 ];
 

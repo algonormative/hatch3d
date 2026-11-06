@@ -1,0 +1,12 @@
+{
+  "starts": [
+    {"id": "tall-icon", "name": "Tall icon", "note": "The icon stood upright: the long fall of the robe does the work.", "seed": 1, "params": {"top": 66, "flare": 0.5, "reach": 62, "chips": "crown", "chipSize": 0.62, "busWidth": 10, "keepout": 7}},
+    {"id": "cathedral", "name": "Cathedral", "note": "Bilateral, an octagon over the head and the board as a vault above it.", "seed": 1, "params": {"scale": 1.1, "top": 124, "neck": 12, "flare": 0.55, "halo": "octagon", "reach": 92, "rings": 6, "symmetric": true, "chips": "crown", "chipSize": 0.8, "flaw": 0, "bus": "halo", "busWidth": 12, "skylines": 2}},
+    {"id": "risen", "name": "Risen", "note": "The body comes apart in blocks halfway down; the bottom of the sheet is all machine.", "seed": 1, "params": {"scale": 0.92, "top": 52, "flare": 0.75, "reach": 66, "dissolve": 0.95, "eroded": "hem", "block": 11, "keepout": 3, "density": 1.35, "chips": "ascending", "chipSize": 0.72, "bus": "none", "routes": 70, "mirror": true}},
+    {"id": "tall-mandorla", "name": "Tall mandorla", "note": "A full turn of wires behind a whole standing figure.", "seed": 1, "params": {"scale": 0.8, "top": 108, "flare": 0.42, "haloY": 150, "reach": 165, "span": 1, "rays": 320, "rhythm": 8, "halo": "round", "chips": "none", "bus": "none", "density": 1.3, "routes": 60}},
+    {"id": "tall-colossus", "name": "Colossus", "note": "Head and shoulders fill the sheet; the board only survives down the edges.", "seed": 1, "params": {"scale": 1.9, "top": 26, "flare": 0.62, "halo": "none", "wavelength": 3.8, "taper": 1.8, "chips": "ascending", "chipSize": 0.5, "keepout": 3, "bus": "none", "eyes": "closed", "light": -65, "bend": 0.85, "pitch": 1.1}},
+    {"id": "column", "name": "Column", "note": "A pillar of plumb lines with a chip for a counterweight. The most severe.", "seed": 1, "params": {"top": 48, "flare": 0.15, "hair": 1.2, "neck": 30, "drape": "plumb", "swag": 0, "flaw": 0, "order": 0.05, "shade": 0, "reach": 56, "keepout": 14, "chips": "opposed", "chipSize": 0.72, "busWidth": 16, "density": 0.8, "face": "void", "eyes": "closed", "mouth": false}}
+  ],
+  "generate": {"groups": ["Figure", "Face", "Body", "Halo", "Meeting", "Board"]},
+  "preview": {"widths": {"gold": 0.39, "silver": 0.42}}
+}

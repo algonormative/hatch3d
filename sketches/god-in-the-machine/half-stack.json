@@ -1,0 +1,44 @@
+{
+  "title": "God in the Machine: Half",
+  "out": ".sketch-output/finalize/god-half",
+  "edition": 1,
+  "page": {
+    "width": 431.8,
+    "height": 279.4,
+    "margin": 14
+  },
+  "defaults": {
+    "palette": "gold-silver-black",
+    "center": "none",
+    "mergeSameColor": false,
+    "gelSpeed": true
+  },
+  "pieces": [
+    {
+      "name": "half",
+      "title": "God in the Machine: Half",
+      "sketch": "sketches/god-in-the-machine/sketch.ts",
+      "seed": 1,
+      "params": {
+        "dissolve": 0.95,
+        "eroded": "right",
+        "block": 6,
+        "keepout": 2.5,
+        "density": 1.35,
+        "chips": "swarm",
+        "chipSize": 0.9,
+        "light": 60,
+        "routes": 70,
+        "bus": "none",
+        "accent": "fluoro-pink",
+        "eyes": "lit",
+        "padPitch": 0.8
+      }
+    }
+  ],
+  "penNames": {
+    "silver": "Signo 1.0mm silver",
+    "gold": "Signo 1.0mm gold",
+    "fluoro-pink": "Moonlight 10 fl pink"
+  }
+}
